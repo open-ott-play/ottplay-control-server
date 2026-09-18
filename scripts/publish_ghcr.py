@@ -39,6 +39,20 @@ def registry_require(condition: bool, message: str) -> None:
         raise RegistryError(message)
 
 
+def registry_error_category(stderr: bytes) -> str:
+    """Return an allowlisted hint without emitting credentials, URLs or server text."""
+    error = stderr.decode("utf-8", errors="replace").lower()
+    for category, markers in (
+        ("not-found", ("name_unknown", "name unknown:", "repository does not exist", "404")),
+        ("access-denied", ("unauthorized", "denied", "forbidden", "401", "403")),
+        ("rate-limited", ("too many requests", "429")),
+        ("transport", ("timeout", "tls", "certificate", "connection", "no such host")),
+    ):
+        if any(marker in error for marker in markers):
+            return category
+    return "unclassified"
+
+
 def validate_candidate(raw: bytes, tag: str) -> dict:
     """Extend the toolkit's RC verifier to frozen beta plans without rewriting evidence."""
     rc.require(TAG.fullmatch(tag), "An exact beta, RC or stable release tag is required")
@@ -140,7 +154,7 @@ def tag_for_run(gh, run_id: int) -> str | None:
 
 def command(args: list[str], operation: str = "registry operation", **kwargs) -> subprocess.CompletedProcess:
     result = subprocess.run(args, capture_output=True, check=False, **kwargs)
-    registry_require(result.returncode == 0, "Registry command failed during " + operation)
+    registry_require(result.returncode == 0, "Registry command failed during " + operation + " (" + registry_error_category(result.stderr) + ")")
     return result
 
 
@@ -155,20 +169,22 @@ def publish_archive(archive: Path, tag: str, execute: bool) -> dict:
     if inventory.returncode != 0:
         error = inventory.stderr.decode("utf-8", errors="replace").lower()
         missing = "name_unknown" in error or "name unknown:" in error or "repository does not exist" in error
-        forbidden = "403 forbidden" in error
         # A new GHCR namespace can deny pull-scope token requests before its
-        # first push. A 403 is NOT proof that a version tag is absent. Create
+        # first push; its error text varies across copier and registry versions.
+        # No error proves a tag absent. An authenticated execution may create
         # only content-addressed objects, verify them, then require readable
-        # inventory before any named-tag write. Existing tags remain untouched.
-        if execute and (missing or forbidden):
+        # inventory before any named-tag write. Authorization and TLS failures
+        # still fail the copy itself; existing version tags remain untouched.
+        if execute:
+            print("Registry inventory unreadable (" + registry_error_category(inventory.stderr) + "); attempting verified digest-only bootstrap", file=sys.stderr)
             immutable = "docker://" + IMAGE + "@" + expected
             command(["skopeo", "copy", "--all", "--preserve-digests", "oci-archive:" + str(archive), immutable], operation="immutable namespace bootstrap")
             remote = command(["skopeo", "inspect", "--raw", immutable], operation="immutable bootstrap verification").stdout
             registry_require("sha256:" + rc.digest(remote) == expected, "Immutable bootstrap digest differs from verified archive")
             inventory = subprocess.run(["skopeo", "list-tags", "docker://" + IMAGE], capture_output=True, check=False)
-            registry_require(inventory.returncode == 0, "Registry inventory remains unreadable after immutable bootstrap; no version tag was written")
+            registry_require(inventory.returncode == 0, "Registry inventory remains unreadable after immutable bootstrap (" + registry_error_category(inventory.stderr) + "); no version tag was written")
         elif not (missing and not execute):
-            raise RegistryError("Cannot establish registry tag inventory; no version tag was written")
+            raise RegistryError("Cannot establish registry tag inventory (" + registry_error_category(inventory.stderr) + "); no version tag was written")
     if inventory.returncode == 0:
         data = json.loads(inventory.stdout)
         registry_require(isinstance(data, dict) and "Tags" in data, "Invalid registry tag inventory")
