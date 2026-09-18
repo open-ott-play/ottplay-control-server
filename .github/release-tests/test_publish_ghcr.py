@@ -170,9 +170,10 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(result["state"], "already-published")
         self.assertFalse(any("copy" in call for call in calls))
 
-    def test_conflicting_tag_and_uncertain_inventory_never_copy(self):
-        for outputs in ([(0, b"root", b""), (0, b'{"Tags":["v0.1.0-beta.1"]}', b""), (0, b"different", b"")], [(0, b"root", b""), (1, b"", b"unauthorized")]):
-            with self.assertRaises(rc.ReleaseError): self.call(outputs)
+    def test_conflicting_readable_tag_never_copies(self):
+        with self.assertRaises(rc.ReleaseError):
+            self.call([(0, b"root", b""), (0, b'{"Tags":["v0.1.0-beta.1"]}', b""), (0, b"different", b"")])
+        self.assertFalse(any("copy" in call for call in self.last_calls))
 
     def test_postcopy_digest_must_still_match(self):
         with self.assertRaises(rc.ReleaseError):
@@ -184,7 +185,7 @@ class RegistryTests(unittest.TestCase):
         self.assertFalse(any("copy" in call for call in calls))
 
     def test_first_namespace_bootstrap_uses_only_digest_before_readable_inventory(self):
-        for error in (b"Requesting bearer token: received unexpected HTTP status: 403 Forbidden", b"name unknown: repository name not known to registry"):
+        for error in (b"Requesting bearer token: received unexpected HTTP status: 403 Forbidden", b"name unknown: repository name not known to registry", b"StatusCode: 403", b"unauthorized", b"unrecognized registry response"):
             outputs = [(0, b"root", b""), (1, b"", error), (0, b"", b""), (0, b"root", b""), (0, b'{"Tags":null}', b""), (0, b"", b""), (0, b"root", b"")]
             result, calls = self.call(outputs)
             self.assertEqual(result["state"], "published")
@@ -193,13 +194,21 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(calls[5][-1], "docker://" + publish.IMAGE + ":v0.1.0-beta.1")
 
     def test_bootstrap_cannot_bypass_unreadable_inventory_or_conflicting_tag(self):
-        prefix = [(0, b"root", b""), (1, b"", b"403 Forbidden"), (0, b"", b""), (0, b"root", b"")]
-        for tail in ([(1, b"", b"403 Forbidden")], [(0, b'{"Tags":["v0.1.0-beta.1"]}', b""), (0, b"conflict", b"")]):
-            with self.assertRaises(publish.RegistryError):
-                self.call(prefix + tail)
-            copies = [c for c in self.last_calls if "copy" in c]
-            self.assertEqual(len(copies), 1)
-            self.assertIn("@sha256:", copies[0][-1])
+        for error in (b"403 Forbidden", b"unauthorized", b"unknown response"):
+            prefix = [(0, b"root", b""), (1, b"", error), (0, b"", b""), (0, b"root", b"")]
+            for tail in ([(1, b"", error)], [(0, b'{"Tags":["v0.1.0-beta.1"]}', b""), (0, b"conflict", b"")]):
+                with self.assertRaises(publish.RegistryError):
+                    self.call(prefix + tail)
+                copies = [c for c in self.last_calls if "copy" in c]
+                self.assertEqual(len(copies), 1)
+                self.assertIn("@sha256:", copies[0][-1])
+
+    def test_failed_digest_bootstrap_never_inspects_or_writes_version_tags(self):
+        for error in (b"unauthorized", b"TLS handshake timeout", b"unknown registry error"):
+            with self.assertRaisesRegex(publish.RegistryError, "immutable namespace bootstrap"):
+                self.call([(0, b"root", b""), (1, b"", error), (1, b"", error)])
+            self.assertEqual(len(self.last_calls), 3)
+            self.assertIn("@sha256:", self.last_calls[-1][-1])
 
     def test_bootstrap_wrong_digest_never_reaches_named_tag(self):
         with self.assertRaisesRegex(publish.RegistryError, "bootstrap digest"):
@@ -207,7 +216,7 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(len([c for c in self.last_calls if "copy" in c]), 1)
 
     def test_403_dry_run_and_other_registry_errors_never_write(self):
-        for error in (b"403 Forbidden", b"unauthorized", b"TLS handshake timeout"):
+        for error in (b"403 Forbidden", b"unauthorized", b"TLS handshake timeout", b"unknown registry error"):
             with self.assertRaises(publish.RegistryError):
                 self.call([(0, b"root", b""), (1, b"", error)], execute=False)
             self.assertFalse(any("copy" in c for c in self.last_calls))
@@ -217,6 +226,16 @@ class RegistryTests(unittest.TestCase):
             self.call([(0, b"root", b""), (1, b"", b"403 Forbidden"), (1, b"", b"bearer-secret and signed-url")])
         self.assertNotIn("bearer-secret", str(caught.exception))
         self.assertNotIn("signed-url", str(caught.exception))
+
+    def test_registry_categories_are_allowlisted_and_never_copy_error_text(self):
+        for raw, expected in ((b"NAME_UNKNOWN bearer-secret", "not-found"), (b"StatusCode: 403 signed-url", "access-denied"), (b"429 Too Many Requests signed-url", "rate-limited"), (b"TLS handshake timeout bearer-secret", "transport"), (b"bearer-secret signed-url", "unclassified")):
+            self.assertEqual(publish.registry_error_category(raw), expected)
+        output = io.StringIO()
+        with redirect_stderr(output), self.assertRaises(publish.RegistryError):
+            self.call([(0, b"root", b""), (1, b"", b"bearer-secret signed-url"), (1, b"", b"bearer-secret signed-url")])
+        self.assertIn("unclassified", output.getvalue())
+        self.assertNotIn("bearer-secret", output.getvalue())
+        self.assertNotIn("signed-url", output.getvalue())
 
     def test_verification_error_reports_phase_without_network_error_text(self):
         output = io.StringIO()
