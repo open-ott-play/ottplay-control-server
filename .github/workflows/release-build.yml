@@ -1,0 +1,139 @@
+name: Build release assets
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+      release_plan_artifact:
+        required: true
+        type: string
+permissions:
+  contents: read
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+defaults:
+  run:
+    shell: bash
+jobs:
+  binaries:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-amd64, linux-arm64, linux-armv7, darwin-amd64, darwin-arm64, windows-amd64, windows-arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.26.8'
+          cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.release_plan_artifact }}
+          path: .
+      - run: python3 scripts/version_plan.py sync --root . --plan .release-plan.json
+      - run: python3 scripts/check-release-version.py "$RELEASE_VERSION" "$RELEASE_CHANNEL"
+      - name: Build and package portable binary
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: python3 scripts/build.py "$BUILD_TARGET"
+      - name: Run native release binary
+        if: matrix.target == 'linux-amd64'
+        run: python3 scripts/smoke_binary.py dist/ottplay-control-server-linux-amd64
+      - name: Stage exact versioned assets
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: python3 scripts/stage_release_assets.py --target "$BUILD_TARGET" --pattern "dist/ottplay-control-server-$BUILD_TARGET*"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-assets-${{ matrix.target }}
+          path: release-assets/${{ matrix.target }}/*
+          if-no-files-found: error
+          retention-days: 14
+  container:
+    name: Build multi-platform OCI archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.release_plan_artifact }}
+          path: .
+      - run: python3 scripts/version_plan.py sync --root . --plan .release-plan.json
+      - run: python3 scripts/check-release-version.py "$RELEASE_VERSION" "$RELEASE_CHANNEL"
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - id: metadata
+        run: |
+          python3 scripts/release_container_labels.py --github-output "$GITHUB_OUTPUT"
+          printf 'date=%s\n' "$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=oci,dest=ottplay-control-server-container.oci.tar
+          tags: ottplay-control-server:${{ steps.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.metadata.outputs.version }}
+            COMMIT=${{ steps.metadata.outputs.revision }}
+            BUILD_DATE=${{ steps.metadata.outputs.date }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.metadata.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.metadata.outputs.revision }}
+            org.opencontainers.image.source=https://github.com/open-ott-play/ottplay-control-server
+            org.opencontainers.image.licenses=MIT
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: python3 scripts/stage_release_assets.py --target container --pattern ottplay-control-server-container.oci.tar
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-assets-container
+          path: release-assets/container/*
+          if-no-files-found: error
+          retention-days: 14
+  deployment:
+    name: Package deployment resources
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.release_plan_artifact }}
+          path: .
+      - run: python3 scripts/version_plan.py sync --root . --plan .release-plan.json
+      - name: Package Helm and Kubernetes manifests
+        run: |
+          python3 scripts/package_deployment.py
+          python3 scripts/stage_release_assets.py --target deployment --pattern 'dist/ottplay-control-server-*'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-assets-deployment
+          path: release-assets/deployment/*
+          if-no-files-found: error
+          retention-days: 14

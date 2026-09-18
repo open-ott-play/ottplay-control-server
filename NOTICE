@@ -1,0 +1,6 @@
+Release tooling in scripts/ and .github/release-tests/ is vendored from
+victron-venus/venus-os-ci-toolkit at ba7c4ece1188974df04799158e35603e968a4bac,
+under the MIT license in LICENSES/venus-os-ci-toolkit.txt.
+
+The legacy command API is compatible with the optional webhook example in
+open-ott-play/ottplay-foss/local_proxy.py. This server is an independent Go implementation.
