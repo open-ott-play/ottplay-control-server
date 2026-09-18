@@ -1,0 +1,10 @@
+/dist/
+/release-assets/
+/.release-*
+!/.release-policy.json
+/coverage.out
+/.local-artifacts/
+/config.json
+*.oci.tar
+__pycache__/
+*.pyc
