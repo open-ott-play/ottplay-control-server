@@ -1,0 +1,11 @@
+# Use with charts/ottplay-control-server; k3s normally includes Traefik.
+# Set the exact release tag and a LAN DNS name before enabling Ingress.
+image:
+  tag: ""
+service:
+  type: ClusterIP
+ingress:
+  enabled: false
+  className: traefik
+  host: ""
+  tlsSecretName: ""

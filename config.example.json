@@ -1,0 +1,20 @@
+{
+  "listen": "127.0.0.1:8081",
+  "admin_token": "<generated administrator token>",
+  "allowed_origins": [
+    "http://localhost:8443",
+    "http://localhost:8444",
+    "http://localhost:8445",
+    "http://localhost:8446",
+    "https://ott.2560801.xyz"
+  ],
+  "allow_null_origin": false,
+  "devices": [
+    {
+      "id": "living-room",
+      "token": "<generated device token>"
+    }
+  ],
+  "command_ttl_seconds": 60,
+  "max_pending_per_device": 50
+}

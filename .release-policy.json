@@ -1,0 +1,56 @@
+{
+  "version_file": "VERSION",
+  "validation_workflows": [
+    "ci.yml",
+    "codeql.yml"
+  ],
+  "artifact_pattern": "release-assets*",
+  "local_checks": [
+    "go vet ./...",
+    "go test -race ./...",
+    "python3 -m unittest discover -s .github/release-tests",
+    "python3 scripts/check_deployment.py"
+  ],
+  "notes": [
+    "Release binaries cover Linux amd64/arm64/ARMv7, macOS amd64/arm64, and Windows amd64/arm64. Native execution and cross-compilation are reported separately.",
+    "Queues are ephemeral and single-replica. Command acknowledgement suppresses retry duplicates within a player session; it is not durable exactly-once delivery.",
+    "OCI archives are published without rebuilding. Physical player and live cluster acceptance are separate checks."
+  ],
+  "container_assets": {
+    "ottplay-control-server-container.oci.tar": "ghcr.io/open-ott-play/ottplay-control-server"
+  },
+  "repository": "open-ott-play/ottplay-control-server",
+  "mode": "release",
+  "default_branch": "main",
+  "visibility": "public",
+  "versioning": {
+    "schema": 1,
+    "promotion": "promote-bytes",
+    "files": [
+      {
+        "path": "VERSION",
+        "format": "text",
+        "value": "package"
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "ottplay-control-server-*.version.json",
+        "format": "json",
+        "value": "package",
+        "field": "version"
+      },
+      {
+        "path": "ottplay-control-server-container.oci.tar",
+        "format": "oci",
+        "field": [
+          "config",
+          "Labels",
+          "org.opencontainers.image.version"
+        ],
+        "value": "package"
+      }
+    ],
+    "toolkit_revision": "ba7c4ece1188974df04799158e35603e968a4bac"
+  }
+}

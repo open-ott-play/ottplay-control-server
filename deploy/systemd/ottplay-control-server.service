@@ -1,0 +1,26 @@
+[Unit]
+Description=OTT-play Control Server
+After=network.target
+
+[Service]
+Type=simple
+User=ottplay-control
+Group=ottplay-control
+ExecStart=/usr/local/bin/ottplay-control-server serve --config /etc/ottplay-control-server/config.json
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

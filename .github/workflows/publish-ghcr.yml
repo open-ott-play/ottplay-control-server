@@ -1,0 +1,46 @@
+name: Publish verified GHCR image
+on:
+  workflow_run:
+    workflows: [Release pipeline]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact published vX.Y.Z-beta.N, vX.Y.Z-rc.N or vX.Y.Z tag
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+  packages: write
+concurrency:
+  group: publish-ottplay-control-server-ghcr
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: >-
+      github.repository == 'open-ott-play/ottplay-control-server' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - name: Install OCI archive copier
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends skopeo
+      - name: Verify published provenance and copy exact OCI bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+            python3 scripts/publish_ghcr.py --run-id "$RELEASE_RUN_ID" --execute
+          else
+            python3 scripts/publish_ghcr.py --tag "$RELEASE_TAG" --execute
+          fi

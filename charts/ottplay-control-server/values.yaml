@@ -1,0 +1,25 @@
+image:
+  repository: ghcr.io/open-ott-play/ottplay-control-server
+  # Set an exact published release tag; optionally pin its manifest digest as well.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+existingSecret: ottplay-control-server
+service:
+  type: ClusterIP
+  port: 8081
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tlsSecretName: ""
+resources:
+  requests:
+    cpu: 25m
+    memory: 16Mi
+  limits:
+    cpu: 500m
+    memory: 64Mi
+nodeSelector: {}
+tolerations: []
+affinity: {}
