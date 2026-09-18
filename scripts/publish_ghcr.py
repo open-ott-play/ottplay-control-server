@@ -30,6 +30,15 @@ ARCHIVE = "ottplay-control-server-container.oci.tar"
 TAG = re.compile(r"v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:beta|rc)\.[1-9]\d*)?", re.ASCII)
 
 
+class RegistryError(rc.ReleaseError):
+    """A static operator-facing diagnostic, never raw network output."""
+
+
+def registry_require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RegistryError(message)
+
+
 def validate_candidate(raw: bytes, tag: str) -> dict:
     """Extend the toolkit's RC verifier to frozen beta plans without rewriting evidence."""
     rc.require(TAG.fullmatch(tag), "An exact beta, RC or stable release tag is required")
@@ -129,36 +138,54 @@ def tag_for_run(gh, run_id: int) -> str | None:
     return releases[0]["tag_name"] if releases else None
 
 
-def command(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+def command(args: list[str], operation: str = "registry operation", **kwargs) -> subprocess.CompletedProcess:
     result = subprocess.run(args, capture_output=True, check=False, **kwargs)
-    rc.require(result.returncode == 0, "Registry command failed; check registry access and availability")
+    registry_require(result.returncode == 0, "Registry command failed during " + operation)
     return result
 
 
 def publish_archive(archive: Path, tag: str, execute: bool) -> dict:
     """Retain every manifest digest and refuse conflicting exact version tags."""
     rc.require(TAG.fullmatch(tag), "Invalid immutable image tag")
-    local = command(["skopeo", "inspect", "--raw", "oci-archive:" + str(archive)]).stdout
+    local = command(["skopeo", "inspect", "--raw", "oci-archive:" + str(archive)], operation="verified archive inspection").stdout
     rc.require(bool(local), "OCI archive has no root manifest")
     expected = "sha256:" + rc.digest(local)
     reference = IMAGE + ":" + tag
     inventory = subprocess.run(["skopeo", "list-tags", "docker://" + IMAGE], capture_output=True, check=False)
+    if inventory.returncode != 0:
+        error = inventory.stderr.decode("utf-8", errors="replace").lower()
+        missing = "name_unknown" in error or "name unknown:" in error or "repository does not exist" in error
+        forbidden = "403 forbidden" in error
+        # A new GHCR namespace can deny pull-scope token requests before its
+        # first push. A 403 is NOT proof that a version tag is absent. Create
+        # only content-addressed objects, verify them, then require readable
+        # inventory before any named-tag write. Existing tags remain untouched.
+        if execute and (missing or forbidden):
+            immutable = "docker://" + IMAGE + "@" + expected
+            command(["skopeo", "copy", "--all", "--preserve-digests", "oci-archive:" + str(archive), immutable], operation="immutable namespace bootstrap")
+            remote = command(["skopeo", "inspect", "--raw", immutable], operation="immutable bootstrap verification").stdout
+            registry_require("sha256:" + rc.digest(remote) == expected, "Immutable bootstrap digest differs from verified archive")
+            inventory = subprocess.run(["skopeo", "list-tags", "docker://" + IMAGE], capture_output=True, check=False)
+            registry_require(inventory.returncode == 0, "Registry inventory remains unreadable after immutable bootstrap; no version tag was written")
+        elif not (missing and not execute):
+            raise RegistryError("Cannot establish registry tag inventory; no version tag was written")
     if inventory.returncode == 0:
-        tags = json.loads(inventory.stdout).get("Tags")
-        rc.require(isinstance(tags, list), "Invalid registry tag inventory")
+        data = json.loads(inventory.stdout)
+        registry_require(isinstance(data, dict) and "Tags" in data, "Invalid registry tag inventory")
+        tags = [] if data["Tags"] is None else data["Tags"]
+        registry_require(isinstance(tags, list) and all(isinstance(tag, str) for tag in tags), "Invalid registry tag inventory")
         exists = tag in tags
     else:
-        error = inventory.stderr.decode("utf-8", errors="replace")
-        rc.require("NAME_UNKNOWN" in error or "repository does not exist" in error, "Cannot establish registry tag inventory")
+        # Only the read-only, explicit NAME_UNKNOWN branch reaches this point.
         exists = False
     if exists:
-        remote = command(["skopeo", "inspect", "--raw", "docker://" + reference]).stdout
-        rc.require("sha256:" + rc.digest(remote) == expected, "Existing registry tag conflicts with verified release bytes")
+        remote = command(["skopeo", "inspect", "--raw", "docker://" + reference], operation="existing version inspection").stdout
+        registry_require("sha256:" + rc.digest(remote) == expected, "Existing registry tag conflicts with verified release bytes")
         state = "already-published"
     elif execute:
-        command(["skopeo", "copy", "--all", "--preserve-digests", "oci-archive:" + str(archive), "docker://" + reference])
-        remote = command(["skopeo", "inspect", "--raw", "docker://" + reference]).stdout
-        rc.require("sha256:" + rc.digest(remote) == expected, "Published registry digest differs from verified archive")
+        command(["skopeo", "copy", "--all", "--preserve-digests", "oci-archive:" + str(archive), "docker://" + reference], operation="new version publication")
+        remote = command(["skopeo", "inspect", "--raw", "docker://" + reference], operation="published version verification").stdout
+        registry_require("sha256:" + rc.digest(remote) == expected, "Published registry digest differs from verified archive")
         state = "published"
     else:
         state = "verified-only"
@@ -172,6 +199,7 @@ def main() -> int:
     selection.add_argument("--run-id", type=int)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
+    phase = "release discovery"
     try:
         gh = rc.GitHub(REPOSITORY)
         tag = args.tag or tag_for_run(gh, rc.positive(args.run_id, "run ID"))
@@ -180,18 +208,24 @@ def main() -> int:
             return 0
         with tempfile.TemporaryDirectory(prefix="ottplay-ghcr-") as temporary:
             directory = Path(temporary)
+            phase = "release provenance and payload verification"
             manifest = verify_release(gh, tag, directory)
             if args.execute:
+                phase = "registry authentication"
                 rc.require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY and os.environ.get("GH_TOKEN") and os.environ.get("GITHUB_ACTOR"), "Authenticated project Actions context is required for publication")
                 os.environ["REGISTRY_AUTH_FILE"] = str(directory / "registry-auth.json")
-                command(["skopeo", "login", "--username", os.environ["GITHUB_ACTOR"], "--password-stdin", "ghcr.io"], input=os.environ["GH_TOKEN"].encode())
+                command(["skopeo", "login", "--username", os.environ["GITHUB_ACTOR"], "--password-stdin", "ghcr.io"], operation="registry authentication", input=os.environ["GH_TOKEN"].encode())
+            phase = "verified OCI publication"
             result = publish_archive(directory / ARCHIVE, tag, args.execute)
             result.update({"tag": tag, "source_sha": manifest["source_sha"], "release_run_id": manifest["run_id"]})
             print(json.dumps(result, sort_keys=True))
         return 0
+    except RegistryError as error:
+        print(f"GHCR publication failed: {error}", file=sys.stderr)
+        return 1
     except (rc.ReleaseError, OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile):
         # Network tools can include bearer credentials or signed redirect URLs.
-        print("GHCR verification/publication failed; no unchecked image will be copied.", file=sys.stderr)
+        print(f"GHCR publication failed during {phase}; no unchecked image will be copied.", file=sys.stderr)
         return 1
 
 

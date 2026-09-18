@@ -1,6 +1,7 @@
 """Offline project GHCR trust-boundary and no-rebuild publication contracts."""
 
 import copy
+from contextlib import redirect_stderr
 import io
 import json
 from pathlib import Path
@@ -153,8 +154,11 @@ class RegistryTests(unittest.TestCase):
             item = outputs.pop(0)
             return subprocess.CompletedProcess(args, *item)
         with patch.object(publish.subprocess, "run", side_effect=completed) as process:
-            result = publish.publish_archive(Path("/safe/image.tar"), "v0.1.0-beta.1", execute)
-            return result, [call.args[0] for call in process.call_args_list]
+            try:
+                result = publish.publish_archive(Path("/safe/image.tar"), "v0.1.0-beta.1", execute)
+            finally:
+                self.last_calls = [call.args[0] for call in process.call_args_list]
+            return result, self.last_calls
 
     def test_new_tag_copies_all_without_rebuild_and_verifies_digest(self):
         result, calls = self.call([(0, b"root", b""), (0, b'{"Tags":[]}', b""), (0, b"", b""), (0, b"root", b"")])
@@ -178,6 +182,48 @@ class RegistryTests(unittest.TestCase):
         result, calls = self.call([(0, b"root", b""), (1, b"", b"NAME_UNKNOWN")], execute=False)
         self.assertEqual(result["state"], "verified-only")
         self.assertFalse(any("copy" in call for call in calls))
+
+    def test_first_namespace_bootstrap_uses_only_digest_before_readable_inventory(self):
+        for error in (b"Requesting bearer token: received unexpected HTTP status: 403 Forbidden", b"name unknown: repository name not known to registry"):
+            outputs = [(0, b"root", b""), (1, b"", error), (0, b"", b""), (0, b"root", b""), (0, b'{"Tags":null}', b""), (0, b"", b""), (0, b"root", b"")]
+            result, calls = self.call(outputs)
+            self.assertEqual(result["state"], "published")
+            self.assertEqual(calls[2], ["skopeo", "copy", "--all", "--preserve-digests", "oci-archive:/safe/image.tar", "docker://" + publish.IMAGE + "@sha256:" + rc.digest(b"root")])
+            self.assertEqual(calls[4], ["skopeo", "list-tags", "docker://" + publish.IMAGE])
+            self.assertEqual(calls[5][-1], "docker://" + publish.IMAGE + ":v0.1.0-beta.1")
+
+    def test_bootstrap_cannot_bypass_unreadable_inventory_or_conflicting_tag(self):
+        prefix = [(0, b"root", b""), (1, b"", b"403 Forbidden"), (0, b"", b""), (0, b"root", b"")]
+        for tail in ([(1, b"", b"403 Forbidden")], [(0, b'{"Tags":["v0.1.0-beta.1"]}', b""), (0, b"conflict", b"")]):
+            with self.assertRaises(publish.RegistryError):
+                self.call(prefix + tail)
+            copies = [c for c in self.last_calls if "copy" in c]
+            self.assertEqual(len(copies), 1)
+            self.assertIn("@sha256:", copies[0][-1])
+
+    def test_bootstrap_wrong_digest_never_reaches_named_tag(self):
+        with self.assertRaisesRegex(publish.RegistryError, "bootstrap digest"):
+            self.call([(0, b"root", b""), (1, b"", b"403 Forbidden"), (0, b"", b""), (0, b"changed", b"")])
+        self.assertEqual(len([c for c in self.last_calls if "copy" in c]), 1)
+
+    def test_403_dry_run_and_other_registry_errors_never_write(self):
+        for error in (b"403 Forbidden", b"unauthorized", b"TLS handshake timeout"):
+            with self.assertRaises(publish.RegistryError):
+                self.call([(0, b"root", b""), (1, b"", error)], execute=False)
+            self.assertFalse(any("copy" in c for c in self.last_calls))
+
+    def test_registry_diagnostic_reports_operation_without_raw_stderr(self):
+        with self.assertRaisesRegex(publish.RegistryError, "immutable namespace bootstrap") as caught:
+            self.call([(0, b"root", b""), (1, b"", b"403 Forbidden"), (1, b"", b"bearer-secret and signed-url")])
+        self.assertNotIn("bearer-secret", str(caught.exception))
+        self.assertNotIn("signed-url", str(caught.exception))
+
+    def test_verification_error_reports_phase_without_network_error_text(self):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["publish_ghcr.py", "--tag", "v0.1.0-beta.1"]), patch.object(publish, "verify_release", side_effect=rc.GitHubError("private-signed-url")), redirect_stderr(output):
+            self.assertEqual(publish.main(), 1)
+        self.assertIn("release provenance and payload verification", output.getvalue())
+        self.assertNotIn("private-signed-url", output.getvalue())
 
 
 if __name__ == "__main__":
