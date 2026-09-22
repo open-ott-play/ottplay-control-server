@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
+	"github.com/open-ott-play/ottplay-control-server/internal/wire"
 )
 
 const MaxBodyBytes = 16 * 1024
@@ -203,11 +204,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimRight(r.URL.Path, "/")
 	methods := ""
 	switch path {
-	case "/healthz", "/readyz", "/api/devices", "/webhook/poll":
+	case "/healthz", "/readyz", "/api/devices", wire.LegacyPollPath:
 		methods = "GET"
-	case "/api/webhook/commands":
+	case wire.CommandPath:
 		methods = "GET,POST"
-	case "/webhook/notify", "/api/webhook/commands/ack":
+	case wire.LegacyNotifyPath, wire.AckPath:
 		methods = "POST"
 	default:
 		failure(w, 404, "not found")
@@ -217,7 +218,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if intendedMethod == http.MethodOptions {
 		intendedMethod = r.Header.Get("Access-Control-Request-Method")
 	}
-	deviceRoute := path == "/webhook/poll" || path == "/api/webhook/commands/ack" || (path == "/api/webhook/commands" && intendedMethod == http.MethodGet)
+	deviceRoute := path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
 	if !s.cors(w, r, methods, deviceRoute) {
 		return
 	}
@@ -247,7 +248,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := path == "/api/devices" || (r.Method == "POST" && path != "/api/webhook/commands/ack")
+	requiresAdmin := path == "/api/devices" || (r.Method == "POST" && path != wire.AckPath)
 	if requiresAdmin != admin {
 		failure(w, 403, "credential role is not allowed")
 		return
@@ -288,7 +289,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 403, "device_id does not match credentials")
 		return
 	}
-	if path == "/api/webhook/commands/ack" {
+	if path == wire.AckPath {
 		s.ack(w, r, d, now)
 		return
 	}
@@ -367,7 +368,7 @@ func (s *Server) poll(w http.ResponseWriter, d *device, now time.Time, ack bool)
 	}
 }
 
-var commandID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var commandID = regexp.MustCompile(wire.ServerCommandIdPattern)
 
 func (s *Server) ack(w http.ResponseWriter, r *http.Request, d *device, now time.Time) {
 	b, ok := readBody(w, r)
@@ -376,7 +377,7 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request, d *device, now time
 	}
 	m, err := decodeObject(b)
 	var ids []string
-	if err != nil || len(m) != 1 || string(m["ids"]) == "null" || json.Unmarshal(m["ids"], &ids) != nil || len(ids) > 50 {
+	if err != nil || len(m) != 1 || string(m["ids"]) == "null" || json.Unmarshal(m["ids"], &ids) != nil || len(ids) > wire.AckBatchMax {
 		failure(w, 400, "ids must be an array of at most 50 command ids")
 		return
 	}
