@@ -1,0 +1,1000 @@
+[
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "missing-popup_message"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "missing-channel_by_number"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "missing-channel_by_name"
+  },
+  {
+    "command": {
+      "command": "random_channel"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "missing-random_channel"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "missing-change_provider"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "missing-change_provider_settings"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "missing-change_playlist"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "missing-set_volume"
+  },
+  {
+    "command": {
+      "command": "exit_player"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "missing-exit_player"
+  },
+  {
+    "error": "unsupported command",
+    "http": {
+      "body": {
+        "error": "unsupported command"
+      },
+      "status": 400
+    },
+    "name": "missing-unknown"
+  },
+  {
+    "error": "expected JSON object",
+    "http": {
+      "body": {
+        "error": "Content-Type must be application/json"
+      },
+      "status": 415
+    },
+    "name": "shape-10"
+  },
+  {
+    "error": "expected JSON object",
+    "http": {
+      "body": {
+        "error": "expected JSON object"
+      },
+      "status": 400
+    },
+    "name": "shape-11"
+  },
+  {
+    "error": "expected JSON object",
+    "http": {
+      "body": {
+        "error": "expected JSON object"
+      },
+      "status": 400
+    },
+    "name": "shape-12"
+  },
+  {
+    "error": "command is required",
+    "http": {
+      "body": {
+        "error": "command is required"
+      },
+      "status": 400
+    },
+    "name": "shape-13"
+  },
+  {
+    "error": "command is required",
+    "http": {
+      "body": {
+        "error": "command is required"
+      },
+      "status": 400
+    },
+    "name": "shape-14"
+  },
+  {
+    "error": "command is required",
+    "http": {
+      "body": {
+        "error": "command is required"
+      },
+      "status": 400
+    },
+    "name": "shape-15"
+  },
+  {
+    "error": "command is required",
+    "http": {
+      "body": {
+        "error": "command is required"
+      },
+      "status": 400
+    },
+    "name": "shape-16"
+  },
+  {
+    "error": "command is required",
+    "http": {
+      "body": {
+        "error": "command is required"
+      },
+      "status": 400
+    },
+    "name": "shape-17"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "popup_duration-18"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "popup_duration-19"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "popup_duration-20"
+  },
+  {
+    "command": {
+      "command": "popup_message",
+      "message": "ok",
+      "popup_duration": 0.001
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "popup_duration-21"
+  },
+  {
+    "command": {
+      "command": "popup_message",
+      "message": "ok",
+      "popup_duration": 3600
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "popup_duration-22"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "popup_duration-23"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "popup_duration-24"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "channel_number-25"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "channel_number-26"
+  },
+  {
+    "command": {
+      "channel_number": 1,
+      "command": "channel_by_number"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "channel_number-27"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "channel_number-28"
+  },
+  {
+    "command": {
+      "channel_number": 9007199254740991,
+      "command": "channel_by_number"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "channel_number-29"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "channel_number-30"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "channel_number-31"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "provider-32"
+  },
+  {
+    "command": {
+      "command": "change_provider",
+      "provider": 0
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "provider-33"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "provider-34"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "provider-35"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "message-36"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "message-37"
+  },
+  {
+    "command": {
+      "command": "popup_message",
+      "message": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "message-38"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "message-39"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "message-40"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "channel_name-41"
+  },
+  {
+    "command": {
+      "channel_name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "command": "channel_by_name"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "channel_name-42"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "channel_name-43"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "random_range-44"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "random_range-45"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "random_range-46"
+  },
+  {
+    "command": {
+      "command": "random_channel",
+      "random_range": [
+        1,
+        2
+      ]
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "random_range-47"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "random_range-48"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "random_range-49"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "provider_settings-50"
+  },
+  {
+    "command": {
+      "command": "change_provider_settings",
+      "provider_settings": "{}"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "provider_settings-51"
+  },
+  {
+    "command": {
+      "command": "change_provider_settings",
+      "provider_settings": "null"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "provider_settings-52"
+  },
+  {
+    "command": {
+      "command": "change_provider_settings",
+      "provider_settings": "[]"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "provider_settings-53"
+  },
+  {
+    "command": {
+      "command": "change_provider_settings",
+      "provider_settings": "{\"x\":1,\"x\":2}"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "provider_settings-54"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "provider_settings-55"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "playlist-56"
+  },
+  {
+    "command": {
+      "command": "change_playlist",
+      "playlist": "https://x/a"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "playlist-57"
+  },
+  {
+    "command": {
+      "command": "change_playlist",
+      "playlist": "http://u:p@x/a"
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "playlist-58"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "playlist-59"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "playlist-60"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "playlist-61"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "volume-62"
+  },
+  {
+    "command": {
+      "command": "set_volume",
+      "volume": 0
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "volume-63"
+  },
+  {
+    "command": {
+      "command": "set_volume",
+      "volume": 100
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "volume-64"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "volume-65"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "volume-66"
+  },
+  {
+    "command": {
+      "command": "set_volume",
+      "volume_step": -1e+308
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "volume_step-67"
+  },
+  {
+    "command": {
+      "command": "set_volume",
+      "volume_step": 1e+308
+    },
+    "http": {
+      "body": {
+        "expires_at": 1700000060,
+        "id": "\u003cgenerated-hex32\u003e",
+        "status": "queued",
+        "ts": 1700000000
+      },
+      "status": 202
+    },
+    "name": "volume_step-68"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "volume_step-69"
+  },
+  {
+    "error": "invalid command value",
+    "http": {
+      "body": {
+        "error": "invalid command value"
+      },
+      "status": 400
+    },
+    "name": "both-volume"
+  },
+  {
+    "error": "unsupported command",
+    "http": {
+      "body": {
+        "error": "unsupported command"
+      },
+      "status": 400
+    },
+    "name": "unknown-first"
+  },
+  {
+    "error": "unexpected command field",
+    "http": {
+      "body": {
+        "error": "unexpected command field"
+      },
+      "status": 400
+    },
+    "name": "extra-before-invalid"
+  },
+  {
+    "error": "unexpected command field",
+    "http": {
+      "body": {
+        "error": "unexpected command field"
+      },
+      "status": 400
+    },
+    "name": "irrelevant-invalid"
+  },
+  {
+    "error": "unexpected command field",
+    "http": {
+      "body": {
+        "error": "unexpected command field"
+      },
+      "status": 400
+    },
+    "name": "extra-valid"
+  },
+  {
+    "error": "duplicate JSON key",
+    "http": {
+      "body": {
+        "error": "duplicate JSON key"
+      },
+      "status": 400
+    },
+    "name": "json-75"
+  },
+  {
+    "error": "expected one JSON object",
+    "http": {
+      "body": {
+        "error": "expected one JSON object"
+      },
+      "status": 400
+    },
+    "name": "json-76"
+  },
+  {
+    "error": "invalid JSON",
+    "http": {
+      "body": {
+        "error": "invalid JSON"
+      },
+      "status": 400
+    },
+    "name": "json-77"
+  },
+  {
+    "error": "invalid JSON value",
+    "http": {
+      "body": {
+        "error": "invalid JSON value"
+      },
+      "status": 400
+    },
+    "name": "json-78"
+  },
+  {
+    "error": "expected JSON object",
+    "http": {
+      "body": {
+        "error": "expected JSON object"
+      },
+      "status": 400
+    },
+    "name": "json-79"
+  },
+  {
+    "error": "expected JSON object",
+    "http": {
+      "body": {
+        "error": "expected JSON object"
+      },
+      "status": 400
+    },
+    "name": "json-80"
+  },
+  {
+    "ack": "{}",
+    "body": {
+      "error": "ids must be an array of at most 50 command ids"
+    },
+    "status": 400
+  },
+  {
+    "ack": "{\"ids\":null}",
+    "body": {
+      "error": "ids must be an array of at most 50 command ids"
+    },
+    "status": 400
+  },
+  {
+    "ack": "{\"ids\":[]}",
+    "body": {
+      "acknowledged": 0,
+      "status": "ok"
+    },
+    "status": 200
+  },
+  {
+    "ack": "{\"ids\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}",
+    "body": {
+      "acknowledged": 0,
+      "status": "ok"
+    },
+    "status": 200
+  },
+  {
+    "ack": "{\"ids\":[\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"]}",
+    "body": {
+      "error": "invalid command id"
+    },
+    "status": 400
+  },
+  {
+    "ack": "{\"ids\":[\"a\"]}",
+    "body": {
+      "error": "invalid command id"
+    },
+    "status": 400
+  },
+  {
+    "ack": "{\"ids\":[],\"extra\":1}",
+    "body": {
+      "error": "ids must be an array of at most 50 command ids"
+    },
+    "status": 400
+  },
+  {
+    "ack": "{\"ids\":[],\"ids\":[]}",
+    "body": {
+      "error": "ids must be an array of at most 50 command ids"
+    },
+    "status": 400
+  },
+  {
+    "ack": "{\"ids\":[]} {}",
+    "body": {
+      "error": "ids must be an array of at most 50 command ids"
+    },
+    "status": 400
+  }
+]

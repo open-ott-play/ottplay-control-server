@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/open-ott-play/ottplay-control-server/internal/wire"
 	"io"
 	"net"
 	"net/url"
@@ -32,8 +33,8 @@ type Config struct {
 	MaxPendingPerDevice int      `json:"max_pending_per_device"`
 }
 
-var deviceID = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
-var token = regexp.MustCompile(`^[A-Za-z0-9_-]{32,256}$`)
+var deviceID = regexp.MustCompile(wire.DeviceIdPattern)
+var token = regexp.MustCompile(wire.TokenPattern)
 
 func (c *Config) Defaults() {
 	if c.Listen == "" {
