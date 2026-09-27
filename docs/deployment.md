@@ -12,18 +12,18 @@ sudo chgrp 65532 /absolute/private/config.json
 chmod 640 /absolute/private/config.json
 export CONTROL_SERVER_VERSION=RELEASE_TAG
 export CONTROL_SERVER_CONFIG=/absolute/private/config.json
-export CONTROL_SERVER_BIND_IP=127.0.0.1
+export CONTROL_SERVER_BIND_IP=0.0.0.0
 docker compose -f deploy/compose.yml up -d
 ```
 
-For LAN access, explicitly change `CONTROL_SERVER_BIND_IP` to the host's LAN address. Docker Desktop file-sharing ownership behavior differs from Linux: verify that UID/GID 65532 can read the mounted file, while other local users cannot. The image runs without root, a writable root filesystem, Linux capabilities, or a shell. Its built-in healthcheck uses the executable itself.
+Compose publishes port 8081 on all IPv4 interfaces by default. Set `CONTROL_SERVER_BIND_IP` to a specific LAN address to select one interface, or to `127.0.0.1` for host-only access. Docker Desktop file-sharing ownership behavior differs from Linux: verify that UID/GID 65532 can read the mounted file, while other local users cannot. The image runs without root, a writable root filesystem, Linux capabilities, or a shell. Its built-in healthcheck uses the executable itself.
 
 Direct Docker use:
 
 ```sh
 docker run -d --name ottplay-control-server --restart unless-stopped \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
-  --memory 64m --cpus 0.5 -p 127.0.0.1:8081:8081 \
+  --memory 64m --cpus 0.5 -p 0.0.0.0:8081:8081 \
   --mount type=bind,src=/absolute/private/config.json,dst=/etc/ottplay-control-server/config.json,readonly \
   ghcr.io/open-ott-play/ottplay-control-server:RELEASE_TAG
 ```
@@ -48,13 +48,17 @@ kubectl -n ottplay-control port-forward service/ottplay-control-server 8081:8081
 ./ottplay-control-server healthcheck --url http://127.0.0.1:8081/readyz
 ```
 
+For TVs on the same LAN, add `--address 0.0.0.0` to `port-forward` and use
+the forwarding machine's LAN IP with port 8081. Add each LAN player origin to
+`allowed_origins`; forwarding does not bypass credentials or CORS checks.
+
 For k3s, add `-f deploy/k3s-values.yaml`. It selects Traefik when Ingress is enabled; configure an actual reachable `ingress.host`, DNS, and optionally `ingress.tlsSecretName`. A trusted LAN HTTP endpoint is supported. HTTPS-hosted players need an HTTPS server endpoint. No hostname, public ingress, NodePort, or LoadBalancer is created by default. The release deployment archive also includes rendered `deploy/kubernetes.yaml` with the exact release tag, usable with `kubectl apply` after creating the namespace and Secret.
 
 Configuration changes require a restart: `kubectl -n ottplay-control rollout restart deployment/ottplay-control-server`. Pending commands are discarded during restart or replacement. Do not scale replicas independently or add an HPA. Capture the current release tag/digest and private configuration before upgrading; use `helm rollback` to restore the prior image and explicitly restore configuration if it changed. Queue contents cannot be recovered.
 
 ## Linux systemd
 
-Create a dedicated `ottplay-control` system account, install the matching executable at `/usr/local/bin/ottplay-control-server`, and create `/etc/ottplay-control-server/config.json` readable only by that account. Install `deploy/systemd/ottplay-control-server.service` under `/etc/systemd/system/`, then run `systemctl daemon-reload` and `systemctl enable --now ottplay-control-server`. The service preserves the configuration's listen address; it does not automatically expose all interfaces.
+Create a dedicated `ottplay-control` system account, install the matching executable at `/usr/local/bin/ottplay-control-server`, and create `/etc/ottplay-control-server/config.json` readable only by that account. Install `deploy/systemd/ottplay-control-server.service` under `/etc/systemd/system/`, then run `systemctl daemon-reload` and `systemctl enable --now ottplay-control-server`. New configurations bind all IPv4 interfaces; the service preserves any explicit listen address in an existing configuration.
 
 ## macOS
 
