@@ -1,12 +1,13 @@
 {
-  "listen": "127.0.0.1:8081",
+  "listen": "0.0.0.0:8081",
   "admin_token": "<generated administrator token>",
   "allowed_origins": [
     "http://localhost:8443",
     "http://localhost:8444",
     "http://localhost:8445",
     "http://localhost:8446",
-    "https://ott.2560801.xyz"
+    "https://ott.2560801.xyz",
+    "https://player.ottplay.here.now"
   ],
   "allow_null_origin": false,
   "devices": [

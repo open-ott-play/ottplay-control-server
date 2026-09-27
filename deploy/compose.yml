@@ -3,7 +3,7 @@ services:
     image: ghcr.io/open-ott-play/ottplay-control-server:${CONTROL_SERVER_VERSION:?Set CONTROL_SERVER_VERSION to an exact release tag}
     restart: unless-stopped
     ports:
-      - "${CONTROL_SERVER_BIND_IP:-127.0.0.1}:8081:8081"
+      - "${CONTROL_SERVER_BIND_IP:-0.0.0.0}:8081:8081"
     volumes:
       - type: bind
         source: ${CONTROL_SERVER_CONFIG:?Set CONTROL_SERVER_CONFIG to an absolute private config path}

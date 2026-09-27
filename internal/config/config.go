@@ -38,7 +38,7 @@ var token = regexp.MustCompile(wire.TokenPattern)
 
 func (c *Config) Defaults() {
 	if c.Listen == "" {
-		c.Listen = "127.0.0.1:8081"
+		c.Listen = "0.0.0.0:8081"
 	}
 	if c.CommandTTLSeconds == 0 {
 		c.CommandTTLSeconds = 60

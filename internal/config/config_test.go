@@ -18,7 +18,7 @@ func TestInitPrivateExclusiveAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != "127.0.0.1:8081" || c.CommandTTLSeconds != 60 || c.MaxPendingPerDevice != 50 || c.Devices[0].Token == c.AdminToken {
+	if c.Listen != "0.0.0.0:8081" || c.CommandTTLSeconds != 60 || c.MaxPendingPerDevice != 50 || c.Devices[0].Token == c.AdminToken {
 		t.Fatal("invalid generated defaults or credentials")
 	}
 	info, _ := os.Stat(p)
