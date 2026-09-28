@@ -26,6 +26,7 @@ type entry struct {
 	id      string
 	data    json.RawMessage
 	expires time.Time
+	rpc     bool
 }
 type bucket struct {
 	start time.Time
@@ -49,6 +50,7 @@ type device struct {
 	queue    []entry
 	lastSeen time.Time
 	rate     bucket
+	results  map[string]requestResult
 }
 
 type Server struct {
@@ -59,6 +61,7 @@ type Server struct {
 	allowNull             bool
 	ttl                   time.Duration
 	maxPending, bytes     int
+	resultBytes           int
 	lastTS                float64
 	globalRate, adminRate bucket
 	now                   func() time.Time
@@ -162,11 +165,15 @@ func query(r *http.Request, allowed ...string) (url.Values, bool) {
 }
 
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	return readLimitedBody(w, r, MaxBodyBytes)
+}
+
+func readLimitedBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
 	if len(r.TransferEncoding) != 0 || r.Header.Get("Transfer-Encoding") != "" || r.Header.Get("Expect") != "" {
 		failure(w, 400, "unsupported request framing")
 		return nil, false
 	}
-	if r.ContentLength > MaxBodyBytes {
+	if r.ContentLength > limit {
 		failure(w, 413, "request body is too large")
 		return nil, false
 	}
@@ -175,7 +182,7 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 		failure(w, 415, "Content-Type must be application/json")
 		return nil, false
 	}
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		failure(w, 413, "cannot read bounded request body")
 		return nil, false
@@ -185,6 +192,12 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 
 func (s *Server) expire(now time.Time) {
 	for _, d := range s.devices {
+		for id, result := range d.results {
+			if !now.Before(result.expires) {
+				s.resultBytes -= len(result.data)
+				delete(d.results, id)
+			}
+		}
 		kept := d.queue[:0]
 		for _, e := range d.queue {
 			if now.Before(e.expires) {
@@ -208,6 +221,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		methods = "GET"
 	case wire.CommandPath:
 		methods = "GET,POST"
+	case "/api/requests":
+		methods = "GET,POST"
+	case "/api/responses":
+		methods = "POST"
 	case wire.LegacyNotifyPath, wire.AckPath:
 		methods = "POST"
 	default:
@@ -218,7 +235,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if intendedMethod == http.MethodOptions {
 		intendedMethod = r.Header.Get("Access-Control-Request-Method")
 	}
-	deviceRoute := path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
+	deviceRoute := path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
 	if !s.cors(w, r, methods, deviceRoute) {
 		return
 	}
@@ -248,7 +265,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := path == "/api/devices" || (r.Method == "POST" && path != wire.AckPath)
+	requiresAdmin := path == "/api/devices" || path == "/api/requests" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
 	if requiresAdmin != admin {
 		failure(w, 403, "credential role is not allowed")
 		return
@@ -268,6 +285,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/devices" {
 		s.list(w, r, now)
+		return
+	}
+	if path == "/api/requests" || path == "/api/responses" {
+		s.requests(w, r, d, now)
 		return
 	}
 	q, ok := query(r, "device_id", "delivery")
@@ -350,7 +371,14 @@ func (s *Server) poll(w http.ResponseWriter, d *device, now time.Time, ack bool)
 	s.expire(now)
 	d.lastSeen = now
 	commands := make([]json.RawMessage, 0, len(d.queue))
+	requests := make([]json.RawMessage, 0)
+	kept := make([]entry, 0, len(d.queue))
 	for _, e := range d.queue {
+		if e.rpc {
+			requests = append(requests, e.data)
+			kept = append(kept, e)
+			continue
+		}
 		commands = append(commands, e.data)
 		if !ack {
 			s.bytes -= len(e.data)
@@ -358,11 +386,11 @@ func (s *Server) poll(w http.ResponseWriter, d *device, now time.Time, ack bool)
 	}
 	if !ack {
 		clear(d.queue)
-		d.queue = nil
+		d.queue = kept
 	}
 	s.mu.Unlock()
 	if ack {
-		reply(w, 200, map[string]any{"commands": commands, "server_time": float64(now.UnixNano()) / 1e9})
+		reply(w, 200, map[string]any{"commands": commands, "requests": requests, "request_protocol": 1, "server_time": float64(now.UnixNano()) / 1e9})
 	} else {
 		reply(w, 200, commands)
 	}
@@ -395,7 +423,7 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request, d *device, now time
 	kept := d.queue[:0]
 	removed := 0
 	for _, e := range d.queue {
-		if set[e.id] {
+		if set[e.id] && !e.rpc {
 			s.bytes -= len(e.data)
 			removed++
 		} else {

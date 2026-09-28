@@ -31,6 +31,12 @@ Use a player release that includes the command-server connection feature. Open *
 
 The player stores this connection only on the current installation and excludes it from settings backups/cloud transfer. It does not require the separate local HTTP listener. Web browsers require an allowed CORS origin; packaged TV pages with `Origin: null` may use the explicit `allow_null_origin` setting, which permits device polling and acknowledgement only.
 
+## Terminal remote
+
+Use the Python CLI for player aliases, live volume, channel search, current EPG,
+provider selection and supported provider configuration: [CLI guide](docs/cli.md).
+Both server and player must include the request/response extension.
+
 ## Send a command
 
 This example reads the administrator token from the local private configuration without placing it in the URL or command-line arguments:
