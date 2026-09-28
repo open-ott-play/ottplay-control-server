@@ -153,6 +153,11 @@ class Client:
                     # entire body, letting a timed-out trickle worker retire.
                     chunk = response.read1(min(65536, 2 * 1024 * 1024 + 1 - len(body)))
                     if not chunk:
+                        # Unlike read(), read1() can return EOF before the
+                        # advertised Content-Length without IncompleteRead.
+                        remaining = getattr(response, "length", None)
+                        if isinstance(remaining, int) and remaining > 0:
+                            raise TransportError("Сервер закрыл соединение до получения полного ответа")
                         return response.status, json.loads(body)
                     body.extend(chunk)
                     if len(body) > 2 * 1024 * 1024:

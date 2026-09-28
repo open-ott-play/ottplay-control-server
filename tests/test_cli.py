@@ -122,6 +122,47 @@ class CliTest(unittest.TestCase):
             server.server_close()
             listener.join(1)
 
+    def test_short_http_body_retries_only_the_same_result_id(self):
+        posts, reads = [], []
+        class ShortThenComplete(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_POST(self):
+                posts.append(self.rfile.read(int(self.headers['Content-Length'])))
+                body = json.dumps({'id': 'a' * 32}).encode()
+                self.send_response(202)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def do_GET(self):
+                reads.append(self.path)
+                body = json.dumps({'status': 'ok', 'data': {'volume': 35}}).encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                # HTTP/1.0 closes the first response after ten bytes while the
+                # declared length still promises the complete JSON envelope.
+                self.wfile.write(body[:10] if len(reads) == 1 else body)
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), ShortThenComplete)
+        server.daemon_threads = True
+        listener = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+        listener.start()
+        client = object.__new__(ott.Client)
+        client.timeout = 5
+        client.token = 'a' * 32
+        client.server = f'http://127.0.0.1:{server.server_port}'
+        client.opener = ott.urllib.request.build_opener(ott.urllib.request.ProxyHandler({}))
+        try:
+            self.assertEqual(client.call('tv', 'command', {'command': 'set_volume', 'volume_step': 5}), {'volume': 35})
+            self.assertEqual(len(posts), 1)
+            self.assertEqual(len(reads), 2)
+            self.assertEqual(reads[0], reads[1])
+            self.assertTrue(reads[0].endswith('&id=' + 'a' * 32))
+        finally:
+            server.shutdown()
+            server.server_close()
+            listener.join(1)
+
 
 class ReadbackTest(unittest.TestCase):
     def setUp(self):
