@@ -2,10 +2,92 @@ package control
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+type blockedResultWriter struct {
+	*httptest.ResponseRecorder
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (w *blockedResultWriter) Write(b []byte) (int, error) {
+	close(w.entered)
+	<-w.release
+	return w.ResponseRecorder.Write(b)
+}
+
+func TestResultWriteDoesNotBlockOtherDevices(t *testing.T) {
+	for _, state := range []string{"new", "duplicate", "missing", "full"} {
+		t.Run(state, func(t *testing.T) {
+			s := newTestServer(t)
+			id := rpcID(t, s, `{"action":"status","params":{}}`)
+			body := `{"id":"` + id + `","status":"ok","data":{}}`
+			if state == "duplicate" {
+				expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
+			} else if state == "missing" {
+				body = `{"id":"` + strings.Repeat("0", 32) + `","status":"ok","data":{}}`
+			} else if state == "full" {
+				s.resultBytes = maxResultBytes
+			}
+			r := httptest.NewRequest("POST", "/api/responses", strings.NewReader(body))
+			r.Header.Set("Authorization", "Bearer "+firstToken)
+			r.Header.Set("Content-Type", "application/json")
+			w := &blockedResultWriter{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+			done := make(chan struct{})
+			go func() {
+				s.ServeHTTP(w, r)
+				close(done)
+			}()
+			defer func() { close(w.release); <-done }()
+			select {
+			case <-w.entered:
+			case <-time.After(time.Second):
+				t.Fatal("result handler did not begin writing")
+			}
+			poll := make(chan int, 1)
+			go func() {
+				poll <- request(s, "GET", "/api/webhook/commands?delivery=ack", secondToken, "", nil).Code
+			}()
+			select {
+			case status := <-poll:
+				if status != 200 {
+					t.Fatalf("other device poll returned %d", status)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("slow result consumer blocked the other device")
+			}
+		})
+	}
+}
+
+func TestResultRemovalReleasesQueuePayload(t *testing.T) {
+	s := newTestServer(t)
+	id := rpcID(t, s, `{"action":"provider_settings","params":{"provider":"xtream","settings":{"password":"test-only-secret"}}}`)
+	d := s.devices[0]
+	backing := d.queue[:cap(d.queue)]
+	expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"ok","data":{}}`, nil), 200)
+	if len(d.queue) != 0 || s.bytes != 0 || backing[0].data != nil || backing[0].id != "" {
+		t.Fatal("completed request retained its queue payload")
+	}
+}
+
+func TestResultReadPreservesBoundedJSON(t *testing.T) {
+	s := newTestServer(t)
+	id := rpcID(t, s, `{"action":"channels","params":{}}`)
+	prefix := `{"id":"` + id + `","status":"ok","data":{"text":"`
+	suffix := `"}}`
+	body := prefix + strings.Repeat("<", maxResponseBytes-len(prefix)-len(suffix)) + suffix
+	expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
+	result := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+	expect(t, result, 200)
+	if result.Body.String() != body || result.Header().Get("Content-Type") != "application/json" {
+		t.Fatal("reading an accepted result changed its JSON or exceeded the wire limit")
+	}
+}
 
 func rpcID(t *testing.T, s *Server, payload string) string {
 	t.Helper()

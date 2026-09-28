@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """OTT-play remote CLI. Python 3 standard library; secrets stay in private files."""
 import argparse
+import base64
+import http.client
 import json
 import math
 import os
 from pathlib import Path
+import queue
 import re
 import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -46,6 +50,10 @@ class Error(Exception):
     pass
 
 
+class TransportError(Error):
+    pass
+
+
 class HTTPError(Error):
     def __init__(self, code):
         self.code = code
@@ -65,7 +73,7 @@ def read_json(path):
         raise Error(f"Не удалось прочитать JSON-файл {path}") from exc
 
 
-def write_private(path, data):
+def write_private(path, data, exclusive=False):
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".ott-")
@@ -73,7 +81,11 @@ def write_private(path, data):
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(data, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
-        os.replace(temporary, path)
+        if exclusive:
+            # Reserve a provisioning journal without replacing another operation.
+            os.link(temporary, path)
+        else:
+            os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -95,7 +107,34 @@ class Client:
                 return None
         self.opener = urllib.request.build_opener(NoRedirect())
 
-    def api(self, path, payload=None):
+    def api(self, path, payload=None, timeout=None):
+        budget = min(10, self.timeout if timeout is None else timeout)
+        deadline = time.monotonic() + budget
+        cancelled = threading.Event()
+        outcome = queue.Queue(maxsize=1)
+
+        def perform():
+            try:
+                outcome.put((True, self._api(path, payload, budget, deadline, cancelled)))
+            except Exception as exc:
+                outcome.put((False, exc))
+
+        # Socket timeouts alone are idle timeouts: trickling bytes (or DNS) can
+        # exceed them. Bound the caller separately and never replay this POST.
+        threading.Thread(target=perform, name="ottplay-http", daemon=True).start()
+        try:
+            ok, value = outcome.get(timeout=max(0, deadline - time.monotonic()))
+        except queue.Empty:
+            cancelled.set()
+            raise TransportError("Истекло время ожидания ответа сервера") from None
+        if time.monotonic() >= deadline:
+            cancelled.set()
+            raise TransportError("Истекло время ожидания ответа сервера")
+        if not ok:
+            raise value
+        return value
+
+    def _api(self, path, payload, budget, deadline, cancelled):
         headers = {"Authorization": "Bearer " + self.token, "User-Agent": "ottplay-cli/1.0"}
         body = None
         if payload is not None:
@@ -103,15 +142,29 @@ class Client:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(self.server + path, data=body, headers=headers)
         try:
-            with self.opener.open(request, timeout=min(10, self.timeout)) as response:
-                body = response.read(2 * 1024 * 1024 + 1)
-                if len(body) > 2 * 1024 * 1024:
-                    raise Error("Ответ сервера превышает лимит")
-                return response.status, json.loads(body)
+            if cancelled.is_set() or time.monotonic() >= deadline:
+                raise TransportError("Истекло время ожидания ответа сервера")
+            with self.opener.open(request, timeout=budget) as response:
+                body = bytearray()
+                while True:
+                    if cancelled.is_set() or time.monotonic() >= deadline:
+                        raise TransportError("Истекло время ожидания ответа сервера")
+                    # read1 returns available bytes instead of waiting for the
+                    # entire body, letting a timed-out trickle worker retire.
+                    chunk = response.read1(min(65536, 2 * 1024 * 1024 + 1 - len(body)))
+                    if not chunk:
+                        return response.status, json.loads(body)
+                    body.extend(chunk)
+                    if len(body) > 2 * 1024 * 1024:
+                        raise Error("Ответ сервера превышает лимит")
         except urllib.error.HTTPError as exc:
-            raise HTTPError(exc.code) from None
-        except (OSError, ValueError) as exc:
-            raise Error("Сервер недоступен или вернул неверный JSON; проверьте адрес и подключение") from exc
+            code = exc.code
+            exc.close()
+            raise HTTPError(code) from None
+        except (OSError, http.client.HTTPException) as exc:
+            raise TransportError("Сервер недоступен; проверьте адрес и подключение") from exc
+        except ValueError as exc:
+            raise Error("Сервер вернул неверный JSON") from exc
 
     def device(self, name):
         aliases = self.config.get("players", {})
@@ -125,16 +178,51 @@ class Client:
 
     def call(self, device, action, params):
         query = "?" + urllib.parse.urlencode({"device_id": device})
-        _, queued = self.api("/api/requests" + query, {"action": action, "params": params})
         deadline = time.monotonic() + self.timeout
-        while time.monotonic() < deadline:
-            time.sleep(0.8)
-            status, result = self.api("/api/requests" + query + "&id=" + queued["id"])
-            if status == 202:
+        try:
+            _, queued = self.api("/api/requests" + query, {"action": action, "params": params}, timeout=self.timeout)
+        except Error as exc:
+            # A lost POST response cannot prove whether the mutation was queued.
+            # Replaying it would give a relative-volume command a second ID.
+            if isinstance(exc, HTTPError) and exc.code < 500:
+                raise
+            raise Error(str(exc) + ". Запрос мог быть принят; не повторяйте изменение вслепую.") from exc
+        if not isinstance(queued, dict) or not isinstance(queued.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", queued["id"]):
+            raise Error("Сервер не вернул ID запроса. Запрос мог быть принят; не повторяйте изменение вслепую.")
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.8, remaining))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                status, result = self.api("/api/requests" + query + "&id=" + queued["id"], timeout=remaining)
+            except TransportError:
                 continue
+            except HTTPError as exc:
+                if exc.code in (502, 503, 504):
+                    continue
+                if exc.code == 404:
+                    raise Error("Квитанция запроса истекла или отсутствует. Запрос мог быть выполнен; не повторяйте изменение вслепую.") from exc
+                raise
+            except Error as exc:
+                raise Error(str(exc) + ". Запрос мог быть выполнен; не повторяйте изменение вслепую.") from exc
+            if time.monotonic() >= deadline:
+                break
+            if status == 202:
+                if not isinstance(result, dict) or result.get("status") != "pending":
+                    raise Error("Сервер вернул неверный статус ожидания. Запрос мог быть выполнен; не повторяйте изменение вслепую.")
+                continue
+            if status != 200 or not isinstance(result, dict) or result.get("status") not in ("ok", "rejected", "unsupported") or not isinstance(result.get("data"), dict):
+                raise Error("Сервер вернул неверный ответ плеера. Запрос мог быть выполнен; не повторяйте изменение вслепую.")
             if result.get("status") != "ok":
-                data = result.get("data") or {}
-                details = "\n".join(f"{row.get('number', row.get('index', ''))}: {clean(row.get('name', ''))}" for row in data.get("matches", []))
+                data = result["data"]
+                matches = data.get("matches", [])
+                if not isinstance(matches, list) or not all(isinstance(row, dict) for row in matches):
+                    raise Error("Плеер отклонил запрос, но вернул неверный список совпадений")
+                details = "\n".join(f"{row.get('number', row.get('index', ''))}: {clean(row.get('name', ''))}" for row in matches)
                 raise Error(clean(data.get("error", "Плеер отклонил запрос")) + ("\n" + details if details else ""))
             return result["data"]
         raise Error("Плеер не ответил. Откройте его, проверьте адрес/код и версию с поддержкой CLI. Запрос ещё может выполниться до истечения TTL; не повторяйте изменение вслепую.")
@@ -193,6 +281,73 @@ def parse_command(words):
     return "play", {"query": " ".join(words)}
 
 
+def provision_kubernetes(client, config_path, name, device):
+    kube = client.config["kubernetes"]
+    journal_path = Path(config_path).expanduser().with_name(Path(config_path).name + ".pending-add.json")
+    identity = {"name": name.casefold(), "device": device, "kubernetes": kube, "server": client.server,
+                "server_config": str(Path(client.config["server_config"]).expanduser().resolve())}
+    resuming = journal_path.exists()
+    journal = read_json(journal_path) if resuming else None
+    if resuming:
+        if (not isinstance(journal, dict) or set(journal) != {"version", "identity", "before", "after"}
+                or type(journal["version"]) is not int or journal["version"] != 1 or not isinstance(journal["identity"], dict)
+                or not all(isinstance(journal[field], dict) and isinstance(journal[field].get("devices"), list)
+                           for field in ("before", "after"))):
+            raise Error("Неверный файл pending-add.json; сверьте его с конфигурацией перед восстановлением")
+        if journal.get("identity") != identity or client.credentials not in (journal.get("before"), journal.get("after")):
+            raise Error("Есть незавершённый ott add для другой конфигурации; сначала завершите или сверьте pending-add.json")
+    else:
+        updated = json.loads(json.dumps(client.credentials))
+        updated["devices"].append({"id": device, "token": secrets.token_urlsafe(32)})
+        journal = {"version": 1, "identity": identity, "before": client.credentials, "after": updated}
+    base = ["kubectl", "--context", kube["context"], "-n", kube["namespace"], "--request-timeout=15s"]
+
+    def current_config(require_alias=False):
+        # kubectl/rollout may take seconds: preserve edits made meanwhile, but
+        # never bind this operation's token to another server or target alias.
+        current = read_json(config_path)
+        try:
+            same_target = (isinstance(current, dict) and current.get("server", "").rstrip("/") == identity["server"]
+                           and current.get("kubernetes") == identity["kubernetes"]
+                           and str(Path(current["server_config"]).expanduser().resolve()) == identity["server_config"])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            same_target = False
+        if not same_target:
+            raise Error("Адрес или Kubernetes/server_config в cli.json изменились; сверьте pending-add.json перед продолжением")
+        aliases = current.get("players", {})
+        if not isinstance(aliases, dict):
+            raise Error("Список players в cli.json изменился; сверьте pending-add.json перед продолжением")
+        matching = [key for key in aliases if key.casefold() == name.casefold()]
+        if (len(matching) > 1 or any(aliases[key] != device for key in matching)
+                or (require_alias and not matching)):
+            raise Error("Целевой псевдоним в cli.json изменился; сверьте pending-add.json перед продолжением")
+        current.setdefault("players", {})[matching[0] if matching else name] = device
+        return current
+
+    try:
+        resource = json.loads(subprocess.check_output(base + ["get", "secret", kube["secret"], "-o", "json"], timeout=20, stderr=subprocess.PIPE))
+        live = json.loads(base64.b64decode(resource["data"]["config.json"]))
+        if live not in (journal["before"], journal["after"]):
+            raise Error("Конфигурация кластера изменилась; сверьте server_config и pending-add.json перед повтором")
+        if not resuming:
+            # Save the generated credential before the first external mutation.
+            # A lost kubectl response can then be reconciled against the live Secret.
+            write_private(journal_path, journal, exclusive=True)
+        if live != journal["after"]:
+            resource["data"]["config.json"] = base64.b64encode(json.dumps(journal["after"]).encode()).decode()
+            subprocess.run(base + ["replace", "-f", "-"], input=json.dumps(resource), text=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=20)
+        write_private(client.config["server_config"], journal["after"])
+        client.credentials = journal["after"]
+        client.config = current_config()
+        write_private(config_path, client.config)
+        subprocess.run(base + ["rollout", "restart", "deployment/" + kube["deployment"]], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=20)
+        subprocess.run(base + ["rollout", "status", "deployment/" + kube["deployment"], "--timeout=90s"], check=True, stdout=sys.stderr, stderr=subprocess.PIPE, timeout=100)
+        client.config = current_config(require_alias=True)
+        journal_path.unlink()
+    except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise Error(f"Добавление не завершено. Повторите ott add {name} {device}; сохранённый код будет использован снова. Не удаляйте pending-add.json до сверки.") from exc
+
+
 def management(client, config_path, words):
     verb = words[0].casefold()
     if verb == "devices" and len(words) == 1:
@@ -222,30 +377,23 @@ def management(client, config_path, words):
         existing = next((key for key in aliases if key.casefold() == name.casefold()), name)
         if existing in aliases and aliases[existing] != device:
             raise Error("Имя уже привязано к другому UUID; отредактируйте cli.json для переназначения")
-        if not any(x["id"] == device for x in client.credentials["devices"]):
+        registered = any(x["id"] == device for x in client.credentials["devices"])
+        journal_path = Path(config_path).expanduser().with_name(Path(config_path).name + ".pending-add.json")
+        if verb == "add" and client.config.get("kubernetes") and (not registered or journal_path.exists()):
+            if not registered and len(client.credentials["devices"]) >= 64:
+                raise Error("Достигнут лимит 64 устройств")
+            provision_kubernetes(client, config_path, existing, device)
+            print(f"{existing} → {device}. Данные подключения: ott pair {existing}")
+            return True
+        elif not registered:
             if verb == "alias":
                 raise Error("UUID ещё не зарегистрирован. Используйте ott add ИМЯ UUID")
             if len(client.credentials["devices"]) >= 64:
                 raise Error("Достигнут лимит 64 устройств")
             updated = json.loads(json.dumps(client.credentials))
             updated["devices"].append({"id": device, "token": secrets.token_urlsafe(32)})
-            kube = client.config.get("kubernetes")
-            if kube:
-                base = ["kubectl", "--context", kube["context"], "-n", kube["namespace"]]
-                # Read resourceVersion and live config: never overwrite concurrent credentials.
-                resource = json.loads(subprocess.check_output(base + ["get", "secret", kube["secret"], "-o", "json"]))
-                import base64
-                live = json.loads(base64.b64decode(resource["data"]["config.json"]))
-                if live != client.credentials:
-                    raise Error("Конфигурация кластера изменилась; синхронизируйте server_config перед добавлением")
-                resource["data"]["config.json"] = base64.b64encode(json.dumps(updated).encode()).decode()
-                subprocess.run(base + ["replace", "-f", "-"], input=json.dumps(resource), text=True, check=True, stdout=subprocess.DEVNULL)
-                write_private(client.config["server_config"], updated)
-                subprocess.run(base + ["rollout", "restart", "deployment/" + kube["deployment"]], check=True, stdout=subprocess.DEVNULL)
-                subprocess.run(base + ["rollout", "status", "deployment/" + kube["deployment"], "--timeout=90s"], check=True, stdout=sys.stderr)
-            else:
-                write_private(client.config["server_config"], updated)
-                print("Конфигурация сервера обновлена. Перезапустите сервер команд.", file=sys.stderr)
+            write_private(client.config["server_config"], updated)
+            print("Конфигурация сервера обновлена. Перезапустите сервер команд.", file=sys.stderr)
         aliases[existing] = device
         write_private(config_path, client.config)
         print(f"{existing} → {device}. Данные подключения: ott pair {existing}")
@@ -282,9 +430,6 @@ def main(argv=None):
         elif action == "programs":
             for row in data["programs"]:
                 print(f"{clean(row['channel'])} — {clean(row['title'])}")
-            if data.get("partial"):
-                print(f"EPG загружен частично: проверено {data['checked']} из {data['total']} каналов. Повторите запрос позже.", file=sys.stderr)
-                return 3
         elif action == "status" and words and words[0].casefold() == "v":
             if data.get("volume") is None:
                 raise Error("Платформа не сообщает громкость")
@@ -300,8 +445,11 @@ def main(argv=None):
             print(f"{data['volume']:g}%")
         else:
             print(json.dumps(data, ensure_ascii=False, indent=2))
+        if action == "programs" and data.get("partial"):
+            print(f"EPG загружен частично: проверено {data['checked']} из {data['total']} каналов. Повторите запрос позже.", file=sys.stderr)
+            return 3
         return 0
-    except (Error, KeyError, TypeError, subprocess.CalledProcessError) as exc:
+    except (Error, KeyError, TypeError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         print("Ошибка: " + (str(exc) if isinstance(exc, Error) else "Проверьте конфигурацию; операция не завершена"), file=sys.stderr)
         return 1
     except KeyboardInterrupt:

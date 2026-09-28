@@ -58,7 +58,11 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		}
 		s.mu.Unlock()
 		if found {
-			reply(w, 200, result.data)
+			// The envelope was already validated and bounded on receipt. Encoding
+			// it again expands HTML characters and can exceed the same wire limit.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(result.data)
 		} else if pending {
 			reply(w, 202, map[string]string{"status": "pending"})
 		} else {
@@ -146,9 +150,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	now := s.now()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.expire(now)
 	if _, exists := d.results[id]; exists {
+		s.mu.Unlock()
 		reply(w, 200, map[string]string{"status": "ok"})
 		return
 	}
@@ -157,6 +161,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			continue
 		}
 		if s.resultBytes+len(b) > maxResultBytes || len(d.results) >= 50 {
+			s.mu.Unlock()
 			failure(w, 429, "result storage is full")
 			return
 		}
@@ -166,10 +171,14 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second)}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
-		d.queue = append(d.queue[:i], d.queue[i+1:]...)
+		copy(d.queue[i:], d.queue[i+1:])
+		d.queue[len(d.queue)-1] = entry{}
+		d.queue = d.queue[:len(d.queue)-1]
 		d.lastSeen = now
+		s.mu.Unlock()
 		reply(w, 200, map[string]string{"status": "ok"})
 		return
 	}
+	s.mu.Unlock()
 	failure(w, 404, "request expired or not found")
 }
