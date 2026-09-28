@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,7 +26,8 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'server.json'
             ott.write_private(path, {'admin_token':'a'*32,'devices':[{'id':'dev_abc','token':'b'*32}]})
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name == 'posix':
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             client=ott.Client({'server':'http://127.0.0.1:8081','server_config':str(path),'players':{'TV':'dev_abc'}})
             self.assertEqual(client.device('tv'),'dev_abc')
             with self.assertRaises(ott.Error): client.device('missing')

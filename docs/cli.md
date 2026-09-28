@@ -8,6 +8,11 @@
 
 ## Установка и подключение
 
+Ниже приведена установка для macOS/Linux, где CLI создаёт файлы с правами 600.
+На Windows запускайте скрипт через `python cli/ott.py` и храните конфигурацию в
+личном каталоге с закрытым доступом NTFS: POSIX-права 600 там не применяются,
+доступ к новым файлам определяется ACL родительского каталога.
+
 ```sh
 mkdir -p ~/.local/bin ~/.config/ottplay-control
 ln -s /absolute/path/to/ottplay-control-server/cli/ott.py ~/.local/bin/ott
