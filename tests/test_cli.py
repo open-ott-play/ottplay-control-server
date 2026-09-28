@@ -54,7 +54,7 @@ class CliTest(unittest.TestCase):
             status = ott.main(['--json', 'tv', 'p'])
         self.assertEqual(status, 3)
         self.assertEqual(json.loads(output.getvalue()), result)
-        self.assertIn('проверено 1 из 2', errors.getvalue())
+        self.assertIn('checked 1 of 2', errors.getvalue())
 
     def test_incomplete_http_body_is_a_retryable_transport_failure(self):
         client = object.__new__(ott.Client)
@@ -106,7 +106,7 @@ class CliTest(unittest.TestCase):
         client.opener = ott.urllib.request.build_opener(ott.urllib.request.ProxyHandler({}))
         try:
             start = time.monotonic()
-            with self.assertRaisesRegex(ott.Error, 'не повторяйте'):
+            with self.assertRaisesRegex(ott.Error, 'do not repeat'):
                 client.call('tv', 'command', {'command': 'set_volume', 'volume_step': 5})
             self.assertLess(time.monotonic() - start, 1.8)
             self.assertEqual(len(posts), 1)
@@ -199,7 +199,7 @@ class ReadbackTest(unittest.TestCase):
             self.advance(timeout)
             raise ott.TransportError('read timed out')
         self.client.api = mock.Mock(side_effect=api)
-        with self.assertRaisesRegex(ott.Error, 'не повторяйте'):
+        with self.assertRaisesRegex(ott.Error, 'do not repeat'):
             self.client.call('tv', 'status', {})
         self.assertAlmostEqual(self.now, 2)
         self.assertEqual(self.client.api.call_count, 2)
@@ -217,7 +217,7 @@ class ReadbackTest(unittest.TestCase):
 
     def test_lost_enqueue_is_not_replayed_and_explains_uncertainty(self):
         self.client.api = mock.Mock(side_effect=ott.TransportError('lost enqueue'))
-        with self.assertRaisesRegex(ott.Error, 'мог быть принят'):
+        with self.assertRaisesRegex(ott.Error, 'may have been accepted'):
             self.client.call('tv', 'command', {'volume_step': 5})
         self.client.api.assert_called_once()
 
@@ -229,7 +229,7 @@ class ReadbackTest(unittest.TestCase):
 
     def test_expired_receipt_does_not_claim_an_old_server(self):
         self.client.api = mock.Mock(side_effect=[(202, {'id': 'a' * 32}), ott.HTTPError(404)])
-        with self.assertRaisesRegex(ott.Error, 'Квитанция запроса истекла.*мог быть выполнен'):
+        with self.assertRaisesRegex(ott.Error, 'The request receipt has expired.*may have been executed'):
             self.client.call('tv', 'command', {'volume_step': 5})
         self.assertEqual(self.client.api.call_count, 2)
 
@@ -238,7 +238,7 @@ class ReadbackTest(unittest.TestCase):
                                (202, []), (202, {'status': 'unknown'})]:
             with self.subTest(status=status, result=result):
                 self.client.api = mock.Mock(side_effect=[(202, {'id': 'a' * 32}), (status, result)])
-                with self.assertRaisesRegex(ott.Error, 'мог быть выполнен'):
+                with self.assertRaisesRegex(ott.Error, 'may have been executed'):
                     self.client.call('tv', 'command', {'volume_step': 5})
                 self.assertEqual(self.client.api.call_count, 2)
 
@@ -313,7 +313,7 @@ class ProvisionTest(unittest.TestCase):
 
     def test_restart_failure_resumes_with_same_token(self):
         self.failure = 'restart'
-        with self.assertRaisesRegex(ott.Error, 'Повторите ott add tv dev_tv'):
+        with self.assertRaisesRegex(ott.Error, 'Retry ott add tv dev_tv'):
             self.add()
         self.assertTrue(self.journal_path.exists())
         if os.name == 'posix':
@@ -344,7 +344,7 @@ class ProvisionTest(unittest.TestCase):
         with self.assertRaises(ott.Error):
             self.add()
         self.live['allowed_origins'].append('https://other.example')
-        with self.assertRaisesRegex(ott.Error, 'Конфигурация кластера изменилась'):
+        with self.assertRaisesRegex(ott.Error, 'The cluster configuration changed'):
             self.add()
         self.assertEqual(self.replaces, 1)
         self.assertEqual(self.restarts, 1)
@@ -355,7 +355,7 @@ class ProvisionTest(unittest.TestCase):
         with self.assertRaises(ott.Error):
             self.add()
         before = self.journal_path.read_bytes()
-        with self.assertRaisesRegex(ott.Error, 'незавершённый ott add'):
+        with self.assertRaisesRegex(ott.Error, 'unfinished ott add'):
             self.add('mac', 'dev_mac')
         self.assertEqual(self.journal_path.read_bytes(), before)
         self.assertEqual(self.replaces, 1)
@@ -364,7 +364,7 @@ class ProvisionTest(unittest.TestCase):
         for data in (None, [], {}, {'version': 2}, {'version': 1, 'identity': {}, 'before': {}, 'after': []}):
             with self.subTest(data=data):
                 ott.write_private(self.journal_path, data)
-                with self.assertRaisesRegex(ott.Error, 'Неверный файл pending-add.json'):
+                with self.assertRaisesRegex(ott.Error, 'Invalid pending-add.json'):
                     self.add()
                 self.assertEqual(ott.read_json(self.journal_path), data)
                 self.assertEqual(self.replaces, 0)
@@ -398,7 +398,7 @@ class ProvisionTest(unittest.TestCase):
 
     def test_conflicting_target_alias_keeps_journal_and_can_resume(self):
         self.edit_during_replace = lambda: self.edit_config(lambda current: current['players'].update({'TV': 'different'}))
-        with self.assertRaisesRegex(ott.Error, 'Целевой псевдоним'):
+        with self.assertRaisesRegex(ott.Error, 'The target alias'):
             self.add()
         self.assertTrue(self.journal_path.exists())
         self.assertEqual(ott.read_json(self.config_path)['players']['TV'], 'different')
@@ -408,7 +408,7 @@ class ProvisionTest(unittest.TestCase):
 
     def assert_identity_drift_keeps_journal(self, field, value):
         self.edit_during_replace = lambda: self.edit_config(lambda current: current.update({field: value}))
-        with self.assertRaisesRegex(ott.Error, 'Адрес или Kubernetes/server_config'):
+        with self.assertRaisesRegex(ott.Error, 'The server address or Kubernetes/server_config'):
             self.add()
         self.assertTrue(self.journal_path.exists())
         self.assertEqual(ott.read_json(self.config_path)[field], value)
@@ -428,7 +428,7 @@ class ProvisionTest(unittest.TestCase):
 
     def test_target_change_during_rollout_prevents_journal_retirement(self):
         self.edit_during_rollout = lambda: self.edit_config(lambda current: current['players'].update({'tv': 'different'}))
-        with self.assertRaisesRegex(ott.Error, 'Целевой псевдоним'):
+        with self.assertRaisesRegex(ott.Error, 'The target alias'):
             self.add()
         self.assertTrue(self.journal_path.exists())
         self.assertEqual(ott.read_json(self.config_path)['players']['tv'], 'different')
