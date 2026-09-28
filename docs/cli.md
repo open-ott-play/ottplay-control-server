@@ -130,8 +130,11 @@ M3U:
 OTTClub:
 
 ```json
-{"provider":"ottclub","settings":{"server":"https://provider.example","key":"YOUR_KEY"}}
+{"provider":"ottclub","settings":{"server":"provider.example","key":"YOUR_KEY"}}
 ```
+
+У OTTClub поле `server` содержит только имя хоста с необязательным портом,
+без `http://`, `https://`, пути или query. Протокол добавляет сам драйвер.
 
 Используются штатные драйверы сохранения и перезагрузки. Родительская блокировка
 настроек и ограничения платформы сохраняются; сначала разблокируйте настройки на
