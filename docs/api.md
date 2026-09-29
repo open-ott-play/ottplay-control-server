@@ -107,7 +107,9 @@ not accepted. A resolution returns at most eight instances and considers at most
 four system search domains and three system resolvers. One complete resolution
 has a three-second deadline, UDP truncation falls back to TCP, concurrent
 lookups coalesce, and successful results are cached for at most 30 seconds or
-the shortest record TTL. Failures have a two-second discovery cache.
+the shortest record TTL. Each caller can cancel its own wait without cancelling
+the shared lookup, which retains its three-second deadline even if no callers
+remain. Failures have a two-second discovery cache.
 
 `GET /api/discovery` needs no credential and returns:
 
@@ -190,8 +192,10 @@ bound controller address before approving.
 exactly, including case. Incorrect codes return 403; five failed comparisons
 invalidate the request. Unknown/expired requests return 404. Approval is
 one-time and atomic; repeated/concurrent approvals after the first return 409.
-A fresh DNS check precedes approval; a changed or unavailable descriptor
-invalidates the request and returns 409.
+A fresh DNS check precedes approval. A successful lookup proving that the bound
+descriptor changed or disappeared invalidates the request and returns 409.
+A lookup error or cancelled wait returns 503 without approving or deleting the
+request; the same request can be retried until its original expiry.
 
 ### Private claim
 
@@ -211,10 +215,13 @@ approved. Once approved, a fresh DNS check precedes the 200 response:
 The token is exactly the registered device's existing credential, never an
 administrator token. Repeating the claim with the same private secret is allowed
 until expiry so a lost response can be recovered. Missing/wrong/expired claim
-credentials return 401; changed or unavailable DNS invalidates the request and
-returns 409. The client stores the device credential locally, discards the
-pairing secret, and enables normal outbound command polling only after the user
-completes pairing. Existing manually configured players require no re-pairing.
+credentials return 401. A successful lookup proving that the bound descriptor
+changed or disappeared invalidates the request and returns 409. A lookup error
+or cancelled wait returns 503 without disclosing the token or deleting the
+request; retrying does not extend its original expiry. The client stores the
+device credential locally, discards the pairing secret, and enables normal
+outbound command polling only after the user completes pairing. Existing
+manually configured players require no re-pairing.
 
 ### Cancelling or retiring a claim
 

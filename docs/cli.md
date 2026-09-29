@@ -220,7 +220,9 @@ reported as success. A timeout stops the CLI from waiting but does not cancel
 an already submitted command. Temporary network errors and HTTP 502/503/504
 responses retry only the readback of the same request ID within the remaining
 budget. Enqueueing is never retried automatically, even if its acknowledgement
-is lost.
+is lost. Other HTTP errors while reading an accepted request's receipt, including
+401, 403 and 429, stop the CLI with a warning that the command may have executed.
+Check the player's state before deciding whether to send another command.
 
 Checks: `go test -race ./...`, `python3 -m unittest discover -s tests`.
 Run the end-to-end test from the player repository:

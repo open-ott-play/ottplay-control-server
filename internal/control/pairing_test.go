@@ -3,10 +3,12 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -165,24 +167,29 @@ func TestHostedDiscoveryOnlyNominatesConfiguredController(t *testing.T) {
 
 func TestPairingRejectsChangedDescriptorAndAnotherController(t *testing.T) {
 	for _, stage := range []string{"approval", "redemption"} {
-		t.Run(stage, func(t *testing.T) {
-			s := pairingServer(t)
-			c := startPairing(t, s)
-			if stage == "redemption" {
-				expect(t, approve(t, s, c), 200)
-			}
-			s.discovery.lookup = func(context.Context) ([]discoveredServer, time.Duration, error) {
-				v := homeServer
-				v.Address = "https://other.example.test"
-				return []discoveredServer{v}, 30 * time.Second, nil
-			}
-			if stage == "approval" {
-				expect(t, approve(t, s, c), 409)
-			} else {
-				expect(t, redeem(s, c), 409)
-			}
-			expect(t, redeem(s, c), 401)
-		})
+		for _, change := range []string{"different", "absent"} {
+			t.Run(stage+"/"+change, func(t *testing.T) {
+				s := pairingServer(t)
+				c := startPairing(t, s)
+				if stage == "redemption" {
+					expect(t, approve(t, s, c), 200)
+				}
+				s.discovery.lookup = func(context.Context) ([]discoveredServer, time.Duration, error) {
+					if change == "absent" {
+						return []discoveredServer{}, 30 * time.Second, nil
+					}
+					v := homeServer
+					v.Address = "https://other.example.test"
+					return []discoveredServer{v}, 30 * time.Second, nil
+				}
+				if stage == "approval" {
+					expect(t, approve(t, s, c), 409)
+				} else {
+					expect(t, redeem(s, c), 409)
+				}
+				expect(t, redeem(s, c), 401)
+			})
+		}
 	}
 	s := pairingServer(t)
 	other := homeServer
@@ -194,6 +201,152 @@ func TestPairingRejectsChangedDescriptorAndAnotherController(t *testing.T) {
 	expect(t, request(s, "POST", "/api/pairings", "", `{"device_id":"first"}`, nil), 409)
 	expect(t, request(s, "POST", "/api/pairings", "", fmt.Sprintf(`{"device_id":"first","server_id":%q}`, other.ID), nil), 409)
 	expect(t, request(s, "POST", "/api/pairings", "", fmt.Sprintf(`{"device_id":"first","server_id":%q}`, homeServer.ID), nil), 201)
+}
+
+func TestPairingLookupErrorPreservesApprovalAndRedemption(t *testing.T) {
+	for _, stage := range []string{"approval", "redemption"} {
+		for _, lookupError := range []error{errors.New("temporary DNS failure"), context.Canceled, context.DeadlineExceeded} {
+			t.Run(stage+"/"+lookupError.Error(), func(t *testing.T) {
+				s := pairingServer(t)
+				c := startPairing(t, s)
+				if stage == "redemption" {
+					expect(t, approve(t, s, c), 200)
+				}
+				original := *s.pairings[c.ID]
+				s.discovery.lookup = func(context.Context) ([]discoveredServer, time.Duration, error) {
+					return nil, 0, lookupError
+				}
+				var response *httptest.ResponseRecorder
+				if stage == "approval" {
+					response = approve(t, s, c)
+				} else {
+					response = redeem(s, c)
+				}
+				expect(t, response, 503)
+				if strings.Contains(response.Body.String(), firstToken) || strings.Contains(response.Body.String(), c.Secret) {
+					t.Fatal("unavailable lookup disclosed a credential")
+				}
+				if p := s.pairings[c.ID]; p == nil || *p != original {
+					t.Fatal("temporary lookup error changed or removed the pairing")
+				}
+				s.discovery.lookup = func(context.Context) ([]discoveredServer, time.Duration, error) {
+					return []discoveredServer{homeServer}, 30 * time.Second, nil
+				}
+				if stage == "approval" {
+					expect(t, redeem(s, c), 202)
+					expect(t, approve(t, s, c), 200)
+				}
+				expect(t, redeem(s, c), 200)
+			})
+		}
+	}
+}
+
+func TestPairingStillExpiresOrCancelsDuringLookup(t *testing.T) {
+	for _, stage := range []string{"approval", "redemption"} {
+		for _, invalidation := range []string{"expiry", "cancel"} {
+			t.Run(stage+"/"+invalidation, func(t *testing.T) {
+				s := pairingServer(t)
+				var now atomic.Int64
+				now.Store(time.Now().UnixNano())
+				s.now = func() time.Time { return time.Unix(0, now.Load()) }
+				c := startPairing(t, s)
+				if stage == "redemption" {
+					expect(t, approve(t, s, c), 200)
+				}
+				started, release := make(chan struct{}), make(chan struct{})
+				var releaseOnce sync.Once
+				t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+				s.discovery.lookup = func(ctx context.Context) ([]discoveredServer, time.Duration, error) {
+					close(started)
+					select {
+					case <-release:
+						return []discoveredServer{homeServer}, 30 * time.Second, nil
+					case <-ctx.Done():
+						return nil, 0, ctx.Err()
+					}
+				}
+				var result *httptest.ResponseRecorder
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					if stage == "approval" {
+						result = approve(t, s, c)
+					} else {
+						result = redeem(s, c)
+					}
+				}()
+				waitForDiscovery(t, started)
+				if invalidation == "expiry" {
+					now.Add(int64(pairingTTL))
+				} else {
+					expect(t, request(s, "DELETE", "/api/pairings?id="+c.ID, c.Secret, "", nil), 200)
+				}
+				releaseOnce.Do(func() { close(release) })
+				waitForDiscovery(t, done)
+				want := 401
+				if stage == "approval" {
+					want = 404
+				}
+				expect(t, result, want)
+				if strings.Contains(result.Body.String(), firstToken) || s.pairings[c.ID] != nil {
+					t.Fatal("lookup completion revived an invalidated pairing")
+				}
+			})
+		}
+	}
+}
+
+func TestPairingCancelledWaitPreservesClaim(t *testing.T) {
+	for _, stage := range []string{"approval", "redemption"} {
+		t.Run(stage, func(t *testing.T) {
+			s := pairingServer(t)
+			c := startPairing(t, s)
+			if stage == "redemption" {
+				expect(t, approve(t, s, c), 200)
+			}
+			original := *s.pairings[c.ID]
+			started, release := make(chan struct{}), make(chan struct{})
+			var startOnce, releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+			s.discovery.lookup = func(ctx context.Context) ([]discoveredServer, time.Duration, error) {
+				startOnce.Do(func() { close(started) })
+				select {
+				case <-release:
+					return []discoveredServer{homeServer}, 30 * time.Second, nil
+				case <-ctx.Done():
+					return nil, 0, ctx.Err()
+				}
+			}
+			r := httptest.NewRequest("GET", "/api/pairings?id="+c.ID, nil)
+			r.Header.Set("Authorization", "Bearer "+c.Secret)
+			if stage == "approval" {
+				r = httptest.NewRequest("POST", "/api/pairings/approve", strings.NewReader(fmt.Sprintf(`{"id":%q,"code":%q}`, c.ID, c.Code)))
+				r.Header.Set("Content-Type", "application/json")
+				r.Header.Set("Authorization", "Bearer "+adminToken)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result, done := httptest.NewRecorder(), make(chan struct{})
+			go func() { defer close(done); s.ServeHTTP(result, r.WithContext(ctx)) }()
+			waitForDiscovery(t, started)
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("cancelled pairing request kept waiting for DNS")
+			}
+			expect(t, result, 503)
+			if p := s.pairings[c.ID]; p == nil || *p != original || strings.Contains(result.Body.String(), firstToken) {
+				t.Fatal("cancelled wait changed the claim or disclosed a token")
+			}
+			releaseOnce.Do(func() { close(release) })
+			if stage == "approval" {
+				expect(t, approve(t, s, c), 200)
+			}
+			expect(t, redeem(s, c), 200)
+		})
+	}
 }
 
 func TestPairingExpiryRestartCodeAndCapacity(t *testing.T) {
@@ -254,7 +407,7 @@ func TestPairingCancellationNeedsOwnSecretAndReleasesCapacity(t *testing.T) {
 	expect(t, request(s, "DELETE", "/api/pairings", adminToken, "", nil), 400)
 	expect(t, request(s, "OPTIONS", "/api/pairings?id="+first.ID, "", "", map[string]string{"Origin": "https://player.example", "Access-Control-Request-Method": "DELETE", "Access-Control-Request-Headers": "Authorization"}), 204)
 	s.discovery.lookup = func(context.Context) ([]discoveredServer, time.Duration, error) {
-		t.Fatal("cancel queried DNS")
+		t.Error("cancel queried DNS")
 		return nil, 0, nil
 	}
 	expect(t, request(s, "DELETE", "/api/pairings?id="+first.ID, first.Secret, "", nil), 200)
