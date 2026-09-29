@@ -175,17 +175,20 @@ func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 	reply(w, 201, map[string]any{"id": id, "secret": secret, "code": code, "expires_in": 600})
 }
 
-func (s *Server) currentPairingServer(r *http.Request, expected discoveredServer) bool {
+func (s *Server) currentPairingServer(r *http.Request, expected discoveredServer) (bool, error) {
 	servers, err := s.discovery.resolve(r.Context(), true)
-	if err != nil || expected.Address != s.discovery.publicURL {
-		return false
+	if err != nil {
+		return false, err
+	}
+	if expected.Address != s.discovery.publicURL {
+		return false, nil
 	}
 	for _, server := range servers {
 		if server == expected {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (s *Server) approvePairing(w http.ResponseWriter, r *http.Request) {
@@ -223,7 +226,12 @@ func (s *Server) approvePairing(w http.ResponseWriter, r *http.Request) {
 	}
 	expected := p.server
 	s.mu.Unlock()
-	if !s.currentPairingServer(r, expected) {
+	current, err := s.currentPairingServer(r, expected)
+	if err != nil {
+		failure(w, 503, "DNS discovery unavailable")
+		return
+	}
+	if !current {
 		s.mu.Lock()
 		if s.pairings[id] == p {
 			delete(s.pairings, id)
@@ -275,7 +283,12 @@ func (s *Server) claimPairing(w http.ResponseWriter, r *http.Request, id string)
 		reply(w, 202, map[string]string{"status": "pending"})
 		return
 	}
-	if !s.currentPairingServer(r, expected) {
+	current, err := s.currentPairingServer(r, expected)
+	if err != nil {
+		failure(w, 503, "DNS discovery unavailable")
+		return
+	}
+	if !current {
 		s.mu.Lock()
 		if s.pairings[id] == p {
 			delete(s.pairings, id)

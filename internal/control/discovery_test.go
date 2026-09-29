@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,28 @@ import (
 	"github.com/miekg/dns"
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
 )
+
+// Signal when a caller starts waiting for the shared lookup without relying on
+// scheduler timing or introducing hooks into production discovery code.
+type discoveryWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *discoveryWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func waitForDiscovery(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("discovery operation did not complete")
+	}
+}
 
 func dnsFixture(t *testing.T, records func(dns.Question) []dns.RR) string {
 	t.Helper()
@@ -147,15 +170,102 @@ func TestDiscoveryCoalescesAndBoundsLookups(t *testing.T) {
 	if count.Load() != 2 {
 		t.Fatal("fresh validation used cached DNS")
 	}
-	failed := &discovery{lookup: func(ctx context.Context) ([]discoveredServer, time.Duration, error) {
+}
+
+func TestDiscoveryWithoutCallersStillHasBoundedDeadline(t *testing.T) {
+	started := make(chan context.Context, 1)
+	d := &discovery{lookup: func(ctx context.Context) ([]discoveredServer, time.Duration, error) {
+		started <- ctx
 		<-ctx.Done()
 		return nil, 0, ctx.Err()
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := failed.resolve(ctx, false); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("lookup did not honor cancellation: %v", err)
+	begin := time.Now()
+	if _, err := d.resolve(ctx, false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("caller deadline was ignored: %v", err)
 	}
+	if time.Since(begin) > time.Second {
+		t.Fatal("caller waited for the shared lookup deadline")
+	}
+	lookup := <-started
+	deadline, ok := lookup.Deadline()
+	if !ok || deadline.Sub(begin) < 2*time.Second || deadline.Sub(begin) > 4*time.Second {
+		t.Fatal("shared lookup must have its own three-second deadline")
+	}
+	if lookup.Err() != nil {
+		t.Fatal("last caller cancellation aborted the shared lookup")
+	}
+	waitForDiscovery(t, lookup.Done())
+	if !errors.Is(lookup.Err(), context.DeadlineExceeded) {
+		t.Fatalf("shared lookup ended incorrectly: %v", lookup.Err())
+	}
+	// Join completion before inspecting the cache; no caller is needed to retire
+	// the worker, and failures must retain the existing short cache bound.
+	if _, err := d.resolve(context.Background(), false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lookup failure was not cached: %v", err)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.flight != nil || time.Until(d.expires) > 2*time.Second {
+		t.Fatal("completed lookup retained a worker or an unbounded failure cache")
+	}
+}
+
+func TestCancelledDiscoveryDoesNotStartLookup(t *testing.T) {
+	d := &discovery{lookup: func(context.Context) ([]discoveredServer, time.Duration, error) {
+		t.Error("already-cancelled request started DNS work")
+		return nil, 0, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := d.resolve(ctx, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled caller returned %v", err)
+	}
+}
+
+func TestDiscoveryCallerCancellationDoesNotAbortPairingApproval(t *testing.T) {
+	s := pairingServer(t)
+	c := startPairing(t, s)
+	s.discovery.expires = time.Time{}
+	started, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce, startOnce sync.Once
+	resolver := dnsFixture(t, func(q dns.Question) []dns.RR {
+		if q.Qtype == dns.TypePTR {
+			startOnce.Do(func() { close(started) })
+			<-release
+		}
+		return fixtureRecords(q)
+	})
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var lookups atomic.Int32
+	s.discovery.lookup = func(ctx context.Context) ([]discoveredServer, time.Duration, error) {
+		lookups.Add(1)
+		return discoverDNS(ctx, config.Discovery{Domain: "example.test", Nameserver: resolver})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	public := httptest.NewRequest("GET", "/api/discovery", nil).WithContext(ctx)
+	publicResult, publicDone := httptest.NewRecorder(), make(chan struct{})
+	go func() { defer close(publicDone); s.ServeHTTP(publicResult, public) }()
+	waitForDiscovery(t, started)
+	approvalContext := &discoveryWaitContext{Context: context.Background(), waiting: make(chan struct{})}
+	approval := httptest.NewRequest("POST", "/api/pairings/approve", strings.NewReader(`{"id":"`+c.ID+`","code":"`+c.Code+`"}`)).WithContext(approvalContext)
+	approval.Header.Set("Content-Type", "application/json")
+	approval.Header.Set("Authorization", "Bearer "+adminToken)
+	approvalResult, approvalDone := httptest.NewRecorder(), make(chan struct{})
+	go func() { defer close(approvalDone); s.ServeHTTP(approvalResult, approval) }()
+	waitForDiscovery(t, approvalContext.waiting)
+	cancel()
+	waitForDiscovery(t, publicDone)
+	expect(t, publicResult, 503)
+	releaseOnce.Do(func() { close(release) })
+	waitForDiscovery(t, approvalDone)
+	expect(t, approvalResult, 200)
+	if lookups.Load() != 1 {
+		t.Fatalf("concurrent approval did not share the DNS lookup: %d", lookups.Load())
+	}
+	expect(t, redeem(s, c), 200)
 }
 
 func TestDNSInstanceAndAnswerBounds(t *testing.T) {
