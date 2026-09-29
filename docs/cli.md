@@ -42,6 +42,29 @@ ott add tv DEVICE_UUID
 ott pair tv
 ```
 
+### Discover and pair without entering a device token
+
+With server-side [DNS discovery](discovery.md) enabled, an unconfigured player
+can find the controller and display a short pairing code. The player must
+already be registered with `ott add NAME UUID`. On an existing installation,
+choose **Settings → Remote control → Find command server** to start a new
+pairing without changing the saved connection until approval succeeds.
+
+```sh
+ott discover
+ott pending
+ott approve tv ABCD2345
+```
+
+Compare the eight-character code with the one shown on the intended player.
+Approval matches both its registered device ID and that code. The player then
+receives its own existing access token over HTTPS, saves it and connects.
+Neither DNS nor the pending list contains device tokens. Requests expire after
+ten minutes, are bound to the discovered controller and fail if DNS changes
+before approval or delivery. Cancelling on the player removes its request when
+the server is reachable. `--json` supports `discover`, `pending` and `approve`.
+An uncertain approval response is never retried automatically.
+
 `add` creates a separate random token, saves it in `server_config` and binds the
 name. Restart the command server afterwards for a regular installation. For a
 server running in k3s, you can add a `kubernetes` object to `cli.json` with

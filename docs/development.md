@@ -1,6 +1,6 @@
 # Development and releases
 
-Use Go 1.26.8 for reproducible release builds, Python 3.12 or later for release tooling, Helm 3, and Docker Buildx for containers. The runtime uses only Go's standard library. Legacy ES5 compatibility belongs to the separate player client; this native server does not execute browser JavaScript.
+Use Go 1.26.8 for reproducible release builds, Python 3.12 or later for release tooling, Helm 3, and Docker Buildx for containers. DNS-SD uses the pinned `github.com/miekg/dns` module; dependency checksums are included in container builds. Legacy ES5 compatibility belongs to the separate player client; this native server does not execute browser JavaScript.
 
 ```sh
 go vet ./...

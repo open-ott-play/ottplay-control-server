@@ -54,17 +54,22 @@ type device struct {
 }
 
 type Server struct {
-	mu                    sync.Mutex
-	admin                 [32]byte
-	devices               []*device
-	origins               map[string]bool
-	allowNull             bool
-	ttl                   time.Duration
-	maxPending, bytes     int
-	resultBytes           int
-	lastTS                float64
-	globalRate, adminRate bucket
-	now                   func() time.Time
+	mu                     sync.Mutex
+	admin                  [32]byte
+	devices                []*device
+	origins                map[string]bool
+	allowNull              bool
+	ttl                    time.Duration
+	maxPending, bytes      int
+	resultBytes            int
+	lastTS                 float64
+	globalRate, adminRate  bucket
+	now                    func() time.Time
+	discovery              *discovery
+	pairings               map[string]*pairing
+	pairTokens             map[string]string
+	pairRates              map[string]*bucket
+	publicRate, createRate bucket
 }
 
 func New(c config.Config) (*Server, error) {
@@ -78,6 +83,16 @@ func New(c config.Config) (*Server, error) {
 	}
 	for _, d := range c.Devices {
 		s.devices = append(s.devices, &device{id: d.ID, token: sha256.Sum256([]byte(d.Token))})
+	}
+	if c.Discovery != nil {
+		s.discovery = newDiscovery(*c.Discovery)
+		s.pairings = make(map[string]*pairing)
+		s.pairTokens = make(map[string]string)
+		s.pairRates = make(map[string]*bucket)
+		for _, d := range c.Devices {
+			s.pairTokens[d.ID] = d.Token
+			s.pairRates[d.ID] = new(bucket)
+		}
 	}
 	return s, nil
 }
@@ -217,6 +232,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimRight(r.URL.Path, "/")
 	methods := ""
 	switch path {
+	case "/api/discovery", "/api/pairings", "/api/pairings/approve":
+		if s.discovery == nil {
+			failure(w, 404, "not found")
+			return
+		}
+		methods = "GET,POST"
+		if path == "/api/pairings" {
+			methods = "GET,POST,DELETE"
+		}
+		if path == "/api/discovery" {
+			methods = "GET"
+		}
+		if path == "/api/pairings/approve" {
+			methods = "POST"
+		}
 	case "/healthz", "/readyz", "/api/devices", wire.LegacyPollPath:
 		methods = "GET"
 	case wire.CommandPath:
@@ -236,6 +266,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		intendedMethod = r.Header.Get("Access-Control-Request-Method")
 	}
 	deviceRoute := path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
+	if path == "/api/discovery" || (path == "/api/pairings" && (intendedMethod == "POST" || r.URL.Query().Has("id"))) {
+		deviceRoute = true
+	}
 	if !s.cors(w, r, methods, deviceRoute) {
 		return
 	}
@@ -259,6 +292,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Unlock()
+	if path == "/api/discovery" || path == "/api/pairings" || path == "/api/pairings/approve" {
+		s.bootstrap(w, r, path)
+		return
+	}
 	admin, d := s.authenticate(r)
 	if !admin && d == nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ottplay-control"`)
