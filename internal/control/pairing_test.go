@@ -407,7 +407,7 @@ func TestPairingCancellationNeedsOwnSecretAndReleasesCapacity(t *testing.T) {
 	expect(t, request(s, "DELETE", "/api/pairings", adminToken, "", nil), 400)
 	expect(t, request(s, "OPTIONS", "/api/pairings?id="+first.ID, "", "", map[string]string{"Origin": "https://player.example", "Access-Control-Request-Method": "DELETE", "Access-Control-Request-Headers": "Authorization"}), 204)
 	s.discovery.lookup = func(context.Context) ([]discoveredServer, time.Duration, error) {
-		t.Fatal("cancel queried DNS")
+		t.Error("cancel queried DNS")
 		return nil, 0, nil
 	}
 	expect(t, request(s, "DELETE", "/api/pairings?id="+first.ID, first.Secret, "", nil), 200)
