@@ -273,7 +273,8 @@ class ReadbackTest(unittest.TestCase):
     def test_transient_readback_retries_same_id_without_reposting(self):
         self.client.api = mock.Mock(side_effect=[
             (202, {'id': 'a' * 32}), ott.TransportError('lost readback'),
-            ott.HTTPError(503), (200, {'status': 'ok', 'data': {'volume': 40}})])
+            ott.HTTPError(502), ott.HTTPError(503), ott.HTTPError(504),
+            (200, {'status': 'ok', 'data': {'volume': 40}})])
         self.assertEqual(self.client.call('tv', 'command', {'volume_step': 5}), {'volume': 40})
         calls = self.client.api.call_args_list
         self.assertEqual(len(calls[0].args), 2)
@@ -312,11 +313,28 @@ class ReadbackTest(unittest.TestCase):
             self.client.call('tv', 'command', {'volume_step': 5})
         self.client.api.assert_called_once()
 
-    def test_permanent_readback_failure_is_not_retried(self):
-        self.client.api = mock.Mock(side_effect=[(202, {'id': 'a' * 32}), ott.HTTPError(401)])
-        with self.assertRaises(ott.HTTPError):
-            self.client.call('tv', 'status', {})
-        self.assertEqual(self.client.api.call_count, 2)
+    def test_terminal_readback_http_errors_warn_of_execution_without_retrying(self):
+        for code in (401, 403, 429, 500):
+            with self.subTest(code=code):
+                self.client.api = mock.Mock(side_effect=[(202, {'id': 'a' * 32}), ott.HTTPError(code)])
+                with self.assertRaisesRegex(ott.Error, rf'receipt.*HTTP {code}.*may have been executed.*do not repeat') as caught:
+                    self.client.call('tv', 'command', {'command': 'set_volume', 'volume_step': 5})
+                self.assertNotIn('try again later', str(caught.exception))
+                calls = self.client.api.call_args_list
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(len(calls[0].args), 2)
+                self.assertEqual(calls[1].args, ('/api/requests?device_id=tv&id=' + 'a' * 32,))
+
+    def test_initial_post_http_rejection_remains_unchanged_without_retrying(self):
+        for code in (401, 403, 429):
+            with self.subTest(code=code):
+                rejection = ott.HTTPError(code)
+                self.client.api = mock.Mock(side_effect=rejection)
+                with self.assertRaises(ott.HTTPError) as caught:
+                    self.client.call('tv', 'command', {'command': 'set_volume', 'volume_step': 5})
+                self.assertIs(caught.exception, rejection)
+                self.client.api.assert_called_once()
+                self.assertEqual(len(self.client.api.call_args.args), 2)
 
     def test_expired_receipt_does_not_claim_an_old_server(self):
         self.client.api = mock.Mock(side_effect=[(202, {'id': 'a' * 32}), ott.HTTPError(404)])

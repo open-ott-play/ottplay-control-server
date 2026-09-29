@@ -216,7 +216,7 @@ class Client:
                     continue
                 if exc.code == 404:
                     raise Error("The request receipt has expired or is missing. The request may have been executed; do not repeat the change blindly.") from exc
-                raise
+                raise Error(f"The request receipt could not be read (HTTP {exc.code}). The request may have been executed; do not repeat the change blindly.") from exc
             except Error as exc:
                 raise Error(str(exc) + ". The request may have been executed; do not repeat the change blindly.") from exc
             if time.monotonic() >= deadline:
