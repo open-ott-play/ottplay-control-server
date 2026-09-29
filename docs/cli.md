@@ -88,7 +88,8 @@ ott tv play s               # channel named s, which is also a command
 ott tv s                    # all channels from the active provider
 ott tv s HD                 # filter by channel name
 ott tv p                    # channel — current programme
-ott tv p news               # filter by current programme title
+ott tv p news               # find programmes and play the first matching channel
+ott tv p --list news        # filter programme titles without switching channels
 ott tv v                    # current volume, 0–100%
 ott tv v 35                 # absolute volume
 ott tv v +5                 # relative change applied by the player
@@ -107,18 +108,34 @@ ott --timeout 60 tv p
 
 Searches for channels, programmes, providers and aliases are case-insensitive,
 including Cyrillic text. Exact channel names take precedence. If several
-channels match, the CLI lists the choices without switching; select a number.
+channel names match a `play` query, the CLI lists the choices without switching;
+select a number.
 The numbers used by `s` and `play` refer to the provider's full catalogue,
 regardless of the category currently open. `random` retains the existing
 behaviour of using the current playback list.
 
 `p` includes only programmes with a title and `start <= now < end`. Channels
-without current EPG are omitted. Data comes from the selected player; missing
+without current EPG are omitted. Plain `p` only lists programmes. `p TEXT`
+prints every matching programme and requests playback of the first returned
+channel, in provider catalogue order. `p --list TEXT` searches without playing.
+An empty or whitespace-only search never switches channels. No matches means
+no playback request. The switch confirmation goes to stderr, keeping stdout
+in `channel — programme` format. With `--json`, the result includes a `playback`
+object containing the player acknowledgement or an `error` if switching fails;
+a playback failure exits with code 1 and never retries the switch automatically.
+
+Data comes from the selected player; missing
 EPG is requested through its normal guide service. Collection has a 25-second
 budget. If it cannot finish, the CLI reports the number of channels checked and
-exits with code 3. A repeated query can use the warmed cache. Results are
+exits with code 3. A filtered search still plays the first available match from
+that partial result; unchecked channels might contain earlier matches. A repeated
+`p --list TEXT` query can use the warmed cache without switching again. Results are
 rejected if the provider changes during the query. Exit code 3 also applies to
 `--json`: JSON goes to stdout and the warning goes to stderr.
+
+The EPG query and playback are separate requests, each using the `--timeout`
+budget. Keep the provider/catalogue unchanged between them: playback uses the
+returned channel number in the player's current catalogue.
 
 ## Provider settings
 
