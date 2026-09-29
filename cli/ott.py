@@ -24,6 +24,9 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott alias NAME UUID                name an existing device
   ott add NAME UUID                  create a device access code and queue
   ott pair NAME                      show the player connection settings
+  ott discover                       show controllers advertised in network DNS
+  ott pending                        list pending player pairing requests
+  ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show player status
   ott NAME 12                        play channel 12 from the s listing
   ott NAME CHANNEL                   find and play a channel (case-insensitive)
@@ -357,8 +360,58 @@ def provision_kubernetes(client, config_path, name, device):
         raise Error(f"Device addition is incomplete. Retry ott add {name} {device}; the saved access code will be reused. Do not delete pending-add.json before reconciliation.") from exc
 
 
-def management(client, config_path, words):
+def management(client, config_path, words, json_output=False):
     verb = words[0].casefold()
+    if verb == "discover" and len(words) == 1:
+        _, data = client.api("/api/discovery")
+        if json_output:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        else:
+            for row in data["servers"]:
+                print(f"{clean(row['id'])}  {clean(row['address'])}  domain={clean(row['domain'])}")
+            if not data["servers"]:
+                print("No OTT-play controllers are advertised in network DNS.")
+        return True
+    if verb in ("pending", "approve"):
+        if (verb == "pending" and len(words) != 1) or (verb == "approve" and len(words) != 3):
+            raise Error("Use ott pending or ott approve NAME CODE")
+        device = client.device(words[1]) if verb == "approve" else None
+        code = words[2].upper() if verb == "approve" else None
+        if code is not None and not re.fullmatch(r"[A-Z0-9]{8}", code):
+            raise Error("Enter the eight-character pairing code displayed by the player")
+        _, data = client.api("/api/pairings")
+        rows = data.get("pairings")
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise Error("The server returned an invalid pairing list")
+        if verb == "pending":
+            if json_output:
+                print(json.dumps(data, ensure_ascii=False, indent=2))
+            else:
+                for row in rows:
+                    aliases = [key for key, value in client.config.get("players", {}).items() if value == row["device_id"]]
+                    print(f"{clean(','.join(aliases) or row['device_id'])}  code={clean(row['code'])}  {clean(row['address'])}  expires_in={row['expires_in']}s")
+                if not rows:
+                    print("No players are waiting for pairing approval.")
+            return True
+        matches = [row for row in rows if row.get("device_id") == device and row.get("code") == code]
+        if len(matches) != 1:
+            raise Error("No unique pending request matches this player and code. Check the code on the player, then run ott pending")
+        row = matches[0]
+        if not isinstance(row.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", row["id"]):
+            raise Error("The server returned an invalid pairing ID")
+        try:
+            status, result = client.api("/api/pairings/approve", {"id": row["id"], "code": code})
+        except Error as exc:
+            if isinstance(exc, HTTPError) and exc.code < 500:
+                raise
+            raise Error("Approval may have succeeded. Check the player's connection and ott pending before trying again") from exc
+        if status != 200 or not isinstance(result, dict) or result.get("status") != "approved":
+            raise Error("The server did not confirm approval. Check the player's connection before trying again")
+        if json_output:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Pairing approved for {clean(words[1])}. The player will save its own access code and connect automatically.")
+        return True
     if verb == "devices" and len(words) == 1:
         _, data = client.api("/api/devices")
         for row in data["devices"]:
@@ -378,7 +431,7 @@ def management(client, config_path, words):
         return True
     if verb in ("alias", "add") and len(words) == 3:
         name, device = words[1:]
-        if not re.fullmatch(r"[a-zA-Z0-9\u0430-\u044f\u0410-\u042f\u0451\u0401_-]{1,32}", name) or name.casefold() in {"devices", "alias", "add", "pair", "help"}:
+        if not re.fullmatch(r"[a-zA-Z0-9\u0430-\u044f\u0410-\u042f\u0451\u0401_-]{1,32}", name) or name.casefold() in {"devices", "alias", "add", "pair", "help", "discover", "pending", "approve"}:
             raise Error("Choose a name of up to 32 letters/digits, underscores or hyphens, without spaces")
         if not re.fullmatch(r"[a-zA-Z0-9._:-]{1,128}", device):
             raise Error("Invalid device UUID")
@@ -425,7 +478,7 @@ def main(argv=None):
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
             raise Error("--timeout must be between 1 and 300 seconds")
         client = Client(read_json(args.config), args.timeout)
-        if management(client, args.config, args.words):
+        if management(client, args.config, args.words, json_output=args.json):
             return 0
         device = client.device(args.words[0])
         words = args.words[1:]

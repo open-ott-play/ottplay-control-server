@@ -5,6 +5,12 @@ from pathlib import Path
 import subprocess
 
 root = Path(__file__).resolve().parents[1]
+# The container context is deny-by-default; both locked module inputs must reach
+# Docker before its dependency download step can run.
+context_rules = (root / ".dockerignore").read_text().splitlines()
+for source in ("go.mod", "go.sum"):
+    if not (root / source).is_file() or "!" + source not in context_rules:
+        raise SystemExit("Container build context excludes dependency input: " + source)
 chart = str(root / "charts/ottplay-control-server")
 base = ["helm", "template", "control", chart]
 # A release must name immutable version identity rather than a moving default.

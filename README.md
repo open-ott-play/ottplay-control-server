@@ -2,7 +2,7 @@
 
 A small self-hosted server that delivers remote commands to OTT-play players. Players make outbound HTTP requests, so a TV does not need to expose a listening port. Each player has its own queue and access token; a separate administrator token submits commands.
 
-The server builds with the Go standard library and runs as a single portable executable. Release packages cover Linux amd64, arm64 and ARMv7; macOS Intel and Apple Silicon; and Windows amd64 and arm64. Container images support Linux amd64 and arm64. Kubernetes and k3s use the included Helm chart.
+The server runs as a single portable Go executable, with a pinned DNS library for optional service discovery. Release packages cover Linux amd64, arm64 and ARMv7; macOS Intel and Apple Silicon; and Windows amd64 and arm64. Container images support Linux amd64 and arm64. Kubernetes and k3s use the included Helm chart.
 
 ## Start a server
 
@@ -32,6 +32,11 @@ Use a player release that includes the command-server connection feature. Open *
 The player stores this connection only on the current installation and excludes it from settings backups/cloud transfer. It does not require the separate local HTTP listener. Web browsers require an allowed CORS origin; packaged TV pages with `Origin: null` may use the explicit `allow_null_origin` setting, which permits device polling and acknowledgement only.
 
 ## Terminal remote
+
+Optional [DNS-SD discovery and pairing](docs/discovery.md) lets players find the
+controller through their network domain and receive an individual device token
+after `ott approve NAME CODE`. DNS contains service metadata only. Existing
+manual connections continue to work without enabling discovery.
 
 Use the Python CLI for player aliases, live volume, channel search, current EPG,
 provider selection and supported provider configuration: [CLI guide](docs/cli.md).

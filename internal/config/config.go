@@ -24,13 +24,14 @@ type Device struct {
 }
 
 type Config struct {
-	Listen              string   `json:"listen"`
-	AdminToken          string   `json:"admin_token"`
-	AllowedOrigins      []string `json:"allowed_origins"`
-	AllowNullOrigin     bool     `json:"allow_null_origin,omitempty"`
-	Devices             []Device `json:"devices"`
-	CommandTTLSeconds   int      `json:"command_ttl_seconds"`
-	MaxPendingPerDevice int      `json:"max_pending_per_device"`
+	Listen              string     `json:"listen"`
+	AdminToken          string     `json:"admin_token"`
+	AllowedOrigins      []string   `json:"allowed_origins"`
+	AllowNullOrigin     bool       `json:"allow_null_origin,omitempty"`
+	Devices             []Device   `json:"devices"`
+	CommandTTLSeconds   int        `json:"command_ttl_seconds"`
+	MaxPendingPerDevice int        `json:"max_pending_per_device"`
+	Discovery           *Discovery `json:"discovery,omitempty"`
 }
 
 var deviceID = regexp.MustCompile(wire.DeviceIdPattern)
@@ -52,6 +53,11 @@ func (c *Config) Defaults() {
 }
 
 func (c Config) Validate() error {
+	if c.Discovery != nil {
+		if err := c.Discovery.Validate(); err != nil {
+			return err
+		}
+	}
 	_, port, err := net.SplitHostPort(c.Listen)
 	if err != nil {
 		return errors.New("listen must be a host:port address")

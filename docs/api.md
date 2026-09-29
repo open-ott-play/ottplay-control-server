@@ -65,3 +65,166 @@ ACK-mode device polling additionally returns `request_protocol:1` and a `request
 Results are bounded to 2 MiB each, 50 per device and 16 MiB globally; they expire 60 seconds after receipt. Command requests remain bounded to 16 KiB and 2 MiB of total pending queue data. All endpoints use the existing authentication, CORS and rate limits. Null origins can access device responses only when explicitly enabled. Results and last activity are in-memory; a restart clears them. Player request execution is generation-cancelled on disconnect and completed IDs are deduplicated with bounded retention during one page session. A dispatch result is not proof of playback or completed provider loading.
 
 Programme results use one `as_of` Unix-seconds timestamp captured at collection start. `checked` counts completed channel lookups and `partial` indicates an unfinished collection, not whether every provider feed was available. Channels with no current programme are omitted; the guide service does not distinguish missing data from a fetch failure in an empty result.
+
+## Opt-in DNS-SD discovery and pairing
+
+These routes return 404 unless the optional `discovery` configuration is present:
+
+```json
+{
+  "discovery": {
+    "domain": "alvit.cf",
+    "nameserver": "192.168.160.1:53",
+    "public_url": "https://www.2560801.xyz/ott-control"
+  }
+}
+```
+
+`domain` and `nameserver` may be omitted to use the server's resolver search
+configuration from `/etc/resolv.conf`. Explicit resolvers must be literal
+`IP:port` addresses. This is server-side unicast DNS-SD, not browser mDNS.
+Clients cannot choose a resolver, domain, or URL through query parameters.
+`public_url` is this server's externally reachable HTTPS base and is required;
+it is also the authority against which a selected controller is checked before
+any device credential is released.
+
+DNS contains routing information only, never access codes or credentials:
+
+```dns
+_ottplay-ctrl._tcp.alvit.cf. 30 IN PTR home._ottplay-ctrl._tcp.alvit.cf.
+home._ottplay-ctrl._tcp.alvit.cf. 30 IN SRV 0 0 443 www.2560801.xyz.
+home._ottplay-ctrl._tcp.alvit.cf. 30 IN TXT "txtvers=1" "scheme=https" "path=/ott-control"
+```
+
+An instance must have exactly one SRV and one TXT record. The TXT fields above
+are required, unique, and the only accepted fields. Only HTTPS addresses with a
+valid host/port and an unambiguous base path are accepted: no credentials, query,
+fragment, percent-encoded path, empty path segment, or `.`/`..` segment. Instance
+IDs are lowercase DNS instance FQDNs with the trailing dot. The instance label
+must be an ASCII DNS label (letters, digits, hyphens, at most 63 characters),
+immediately above the service domain; escaped or multi-label instance names are
+not accepted. A resolution returns at most eight instances and considers at most
+four system search domains and three system resolvers. One complete resolution
+has a three-second deadline, UDP truncation falls back to TCP, concurrent
+lookups coalesce, and successful results are cached for at most 30 seconds or
+the shortest record TTL. Failures have a two-second discovery cache.
+
+`GET /api/discovery` needs no credential and returns:
+
+```json
+{
+  "version": 1,
+  "servers": [{
+    "id": "home._ottplay-ctrl._tcp.alvit.cf.",
+    "domain": "alvit.cf",
+    "address": "https://www.2560801.xyz/ott-control"
+  }],
+  "pairing_url": "https://www.2560801.xyz/ott-control/api/pairings"
+}
+```
+
+This hosted bridge exposes only DNS descriptors whose canonical HTTPS base
+equals its configured `public_url`, including the port and base path. Foreign
+controllers are omitted even when their DNS records are otherwise valid; an
+empty or foreign-only DNS service set returns `servers: []`. The `pairing_url`
+always identifies this configured server and does not select a controller.
+Thus a hosted player using a fixed trusted HTTPS discovery URL cannot be
+redirected to another controller merely by changing a DNS-SD record.
+
+Native OS DNS discovery is a separate trust model: it can list multiple
+controllers and trusts the network administrator's DNS configuration to nominate
+them. TLS authenticates the nominated hostname; it does not prove that the
+controller belongs to the user. The administrator must check the controller
+address and comparison code before approving pairing.
+
+DNS/configuration failures return 503. Bootstrap responses have
+`Cache-Control: no-store`. Existing exact CORS
+origins apply; `allow_null_origin` additionally permits null origins on device
+bootstrap routes, but never on the administrator listing or approval route.
+CORS preflights permit only Authorization and Content-Type headers. Public
+bootstrap traffic and pairing creation have separate bounded rate limits.
+
+### Creating a pairing request
+
+`POST /api/pairings`, Content-Type application/json:
+
+```json
+{"device_id":"registered-device-uuid","server_id":"home._ottplay-ctrl._tcp.alvit.cf."}
+```
+
+`server_id` is optional only when exactly one valid server is discovered in the
+full internal DNS result, before the hosted response filter. Clients should
+send the selected descriptor's ID even when the hosted response has one entry.
+The selected server must match a freshly discovered descriptor and its normalized
+address must equal this server's configured `public_url`; a server must never
+issue its own credentials for a different discovered controller. Ambiguous,
+missing, changed, or nonmatching selections return 409. The device UUID must
+already be registered in the private server configuration; an unknown UUID
+returns 400. UUID knowledge alone never authorizes command access.
+
+A successful request returns 201 with:
+
+```json
+{"id":"32-lowercase-hex-characters","secret":"43-URL-safe-random-characters","code":"ABCD2345","expires_in":600}
+```
+
+The ID uses 128 random bits, the private claim secret uses 256 random bits and is
+stored only as a SHA-256 hash, and the visible comparison code uses 40 random
+bits encoded as eight uppercase Base32 characters. The client retains the
+secret privately and shows the comparison code on the device. There are at most
+64 live pairing requests and two per device. Creation is limited to three
+requests per device and 30 globally per minute; exhausted limits return 429.
+Pairing data is memory-only and expires after ten minutes, including approval
+and redemption. A restart invalidates all outstanding pairing requests.
+
+### Administrator approval
+
+`GET /api/pairings` with the administrator Bearer credential returns
+`{"pairings":[{"id":"…","device_id":"…","code":"…","address":"…","expires_in":600}]}`.
+Only pending requests appear. Neither a claim secret nor any device/admin token
+is included. The administrator compares the code with the device and checks the
+bound controller address before approving.
+
+`POST /api/pairings/approve` with the administrator credential and body
+`{"id":"…","code":"ABCD2345"}` returns `{"status":"approved"}`. Codes match
+exactly, including case. Incorrect codes return 403; five failed comparisons
+invalidate the request. Unknown/expired requests return 404. Approval is
+one-time and atomic; repeated/concurrent approvals after the first return 409.
+A fresh DNS check precedes approval; a changed or unavailable descriptor
+invalidates the request and returns 409.
+
+### Private claim
+
+`GET /api/pairings?id=…` uses `Authorization: Bearer <claim-secret>`, not an
+administrator or device credential. It returns 202 `{"status":"pending"}` until
+approved. Once approved, a fresh DNS check precedes the 200 response:
+
+```json
+{
+  "status":"approved",
+  "device_id":"registered-device-uuid",
+  "address":"https://www.2560801.xyz/ott-control",
+  "token":"existing-private-device-token"
+}
+```
+
+The token is exactly the registered device's existing credential, never an
+administrator token. Repeating the claim with the same private secret is allowed
+until expiry so a lost response can be recovered. Missing/wrong/expired claim
+credentials return 401; changed or unavailable DNS invalidates the request and
+returns 409. The client stores the device credential locally, discards the
+pairing secret, and enables normal outbound command polling only after the user
+completes pairing. Existing manually configured players require no re-pairing.
+
+### Cancelling or retiring a claim
+
+`DELETE /api/pairings?id=…` uses the matching claim secret and returns
+`{"status":"cancelled"}`. No DNS lookup is needed. Administrator credentials,
+device credentials, and another claim's secret cannot cancel the request; wrong,
+missing, or expired secrets return 401. A request without an ID returns 400.
+DELETE is included in CORS methods only for `/api/pairings`.
+
+Clients should best-effort cancel before discarding a pending flow, replacing it,
+or after successfully storing the approved device credential. This frees the
+per-device queue; TTL expiry remains the fallback when cancellation is lost.
+The existing device credential remains valid after its pairing receipt is removed.
