@@ -29,7 +29,9 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME CHANNEL                   find and play a channel (case-insensitive)
   ott NAME play s                    play a channel whose name is reserved
   ott NAME s [TEXT]                  list channels, optionally matching TEXT
-  ott NAME p [TEXT]                  channel — current programme, filtered by title
+  ott NAME p                         list channel — current programme
+  ott NAME p TEXT                    find programmes and play the first match
+  ott NAME p --list [TEXT]           list programmes without switching channels
   ott NAME v                         show volume
   ott NAME v 35                      set volume to 35%
   ott NAME v +5 / v -5               increase / decrease volume
@@ -244,6 +246,8 @@ def parse_command(words):
     verb, tail = words[0].casefold(), words[1:]
     text = " ".join(tail)
     if verb in ("s", "p"):
+        if verb == "p":
+            text = " ".join(tail[1:] if tail[:1] == ["--list"] else tail).strip()
         return ("channels" if verb == "s" else "programs"), {"search": text}
     if verb == "v":
         if not tail:
@@ -427,6 +431,26 @@ def main(argv=None):
         words = args.words[1:]
         action, params = parse_command(words)
         data = client.call(device, action, params)
+        playback_error = None
+        if action == "programs" and params["search"] and words[1:2] != ["--list"]:
+            if data["programs"]:
+                try:
+                    number = data["programs"][0].get("number")
+                    if type(number) is not int or number < 1:
+                        raise Error("The first programme has no valid channel number; no switch was requested")
+                    # Use the returned catalogue number, even for duplicate or numeric names.
+                    playback = client.call(device, "play", {"query": str(number)})
+                    channel = playback.get("channel")
+                    if (playback.get("dispatched") is not True or not isinstance(channel, dict)
+                            or type(channel.get("number")) is not int or channel["number"] != number
+                            or not isinstance(channel.get("name"), str)):
+                        raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
+                    data["playback"] = playback
+                except Error as exc:
+                    playback_error = exc
+                    data["playback"] = {"error": str(exc)}
+            else:
+                print("No current programmes match the search.", file=sys.stderr)
         if args.json:
             print(json.dumps(data, ensure_ascii=False, indent=2))
         elif action == "channels":
@@ -450,10 +474,14 @@ def main(argv=None):
             print(f"{data['volume']:g}%")
         else:
             print(json.dumps(data, ensure_ascii=False, indent=2))
+        if action == "programs" and data.get("playback", {}).get("dispatched"):
+            channel = data["playback"]["channel"]
+            print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
         if action == "programs" and data.get("partial"):
             print(f"EPG is partially loaded: checked {data['checked']} of {data['total']} channels. Try again later.", file=sys.stderr)
-            return 3
-        return 0
+        if playback_error:
+            raise playback_error
+        return 3 if action == "programs" and data.get("partial") else 0
     except (Error, KeyError, TypeError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         print("Error: " + (str(exc) if isinstance(exc, Error) else "Check the configuration; the operation did not complete"), file=sys.stderr)
         return 1

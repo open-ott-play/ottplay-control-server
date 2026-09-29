@@ -43,6 +43,97 @@ class CliTest(unittest.TestCase):
     def test_terminal_control(self):
         self.assertNotIn('\x1b',ott.clean('\x1b[31mnews\n'))
 
+    def run_programs(self, words, result, playback=None, json_output=False):
+        client = mock.Mock()
+        client.device.return_value = 'dev_tv'
+        client.call.side_effect = [result, playback]
+        output, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(ott, 'read_json', return_value={}), mock.patch.object(ott, 'Client', return_value=client), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            status = ott.main((['--json'] if json_output else []) + ['tv'] + words)
+        return status, output.getvalue(), errors.getvalue(), client.call.call_args_list
+
+    def test_program_search_plays_first_returned_channel_once(self):
+        for name in ['Ю ТВ', '2', 'Duplicate channel']:
+            with self.subTest(name=name):
+                result = {'programs': [
+                    {'channel': name, 'number': 17, 'title': 'Моя свадьба лучше!'},
+                    {'channel': name, 'number': 42, 'title': 'Большая свадьба.'},
+                ]}
+                playback = {'channel': {'number': 17, 'name': name}, 'dispatched': True}
+                status, output, errors, calls = self.run_programs(['P', 'СВАДЬБА'], result, playback)
+                self.assertEqual(status, 0)
+                self.assertEqual(output, f'{name} — Моя свадьба лучше!\n{name} — Большая свадьба.\n')
+                self.assertIn(f'Channel switch requested: 17: {name}', errors)
+                self.assertEqual(calls, [mock.call('dev_tv', 'programs', {'search': 'СВАДЬБА'}),
+                                         mock.call('dev_tv', 'play', {'query': '17'})])
+
+    def test_program_listing_and_empty_search_do_not_play(self):
+        for words, search in [(['p'], ''), (['p', '   '], ''), (['p', '--list'], ''),
+                              (['P', '--list', 'current', 'show'], 'current show')]:
+            with self.subTest(words=words):
+                result = {'programs': [{'channel': 'News', 'number': 1, 'title': 'Current show'}]}
+                status, output, errors, calls = self.run_programs(words, result)
+                self.assertEqual(status, 0)
+                self.assertEqual(output, 'News — Current show\n')
+                self.assertEqual(errors, '')
+                self.assertEqual(calls, [mock.call('dev_tv', 'programs', {'search': search})])
+
+    def test_program_search_without_matches_does_not_play(self):
+        status, output, errors, calls = self.run_programs(['p', 'missing'], {'programs': []}, json_output=True)
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(output), {'programs': []})
+        self.assertIn('No current programmes match', errors)
+        self.assertEqual(len(calls), 1)
+
+    def test_partial_program_search_plays_first_available_match_and_preserves_json(self):
+        result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'}],
+                  'partial': True, 'checked': 1, 'total': 20}
+        playback = {'channel': {'number': 5, 'name': 'News'}, 'dispatched': True}
+        status, output, errors, calls = self.run_programs(['p', 'current'], result, playback, json_output=True)
+        self.assertEqual(status, 3)
+        self.assertEqual(json.loads(output), dict(result, playback=playback))
+        self.assertIn('checked 1 of 20', errors)
+        self.assertIn('Channel switch requested: 5', errors)
+        self.assertEqual(calls[-1], mock.call('dev_tv', 'play', {'query': '5'}))
+
+    def test_failed_program_playback_keeps_results_and_never_retries(self):
+        for partial in [False, True]:
+            with self.subTest(partial=partial):
+                result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'}],
+                          'partial': partial, 'checked': 1, 'total': 20}
+                status, output, errors, calls = self.run_programs(
+                    ['p', 'current'], result, ott.Error('Lost reply; do not repeat blindly'), json_output=True)
+                data = json.loads(output)
+                self.assertEqual(status, 1)
+                self.assertEqual(data['programs'], result['programs'])
+                self.assertEqual(data['playback']['error'], 'Lost reply; do not repeat blindly')
+                self.assertIn('Error: Lost reply', errors)
+                self.assertNotIn('Channel switch requested', errors)
+                self.assertEqual(len(calls), 2)
+
+    def test_program_search_rejects_invalid_channel_numbers_without_playing(self):
+        for number in [None, 0, -1, True, 1.5, '5']:
+            with self.subTest(number=number):
+                result = {'programs': [{'channel': 'News', 'number': number, 'title': 'Current'}]}
+                status, output, errors, calls = self.run_programs(['p', 'current'], result)
+                self.assertEqual(status, 1)
+                self.assertIn('no valid channel number', errors)
+                self.assertEqual(len(calls), 1)
+
+    def test_program_playback_requires_matching_dispatch_acknowledgement(self):
+        for playback in [{}, {'dispatched': False}, {'dispatched': True, 'channel': {}},
+                         {'dispatched': True, 'channel': {'number': 6, 'name': 'Other'}},
+                         {'dispatched': True, 'channel': {'number': 5, 'name': None}}]:
+            with self.subTest(playback=playback):
+                result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'}]}
+                status, output, errors, calls = self.run_programs(['p', 'current'], result, playback, json_output=True)
+                self.assertEqual(status, 1)
+                self.assertIn('did not confirm', json.loads(output)['playback']['error'])
+                self.assertIn('do not repeat', errors)
+                self.assertNotIn('Channel switch requested', errors)
+                self.assertEqual(len(calls), 2)
+
     def test_partial_epg_json_retains_failure_exit_status(self):
         client = mock.Mock()
         client.device.return_value = 'dev_tv'
