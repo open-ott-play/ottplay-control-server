@@ -66,7 +66,15 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request, path string) 
 			failure(w, 503, "DNS discovery unavailable")
 			return
 		}
-		reply(w, 200, map[string]any{"version": 1, "servers": servers, "pairing_url": s.discovery.publicURL + "/api/pairings"})
+		// Hosted clients trust this configured HTTPS bridge, not every controller
+		// nominated by DNS. Both addresses are canonical bases at this boundary.
+		pinned := make([]discoveredServer, 0, len(servers))
+		for _, server := range servers {
+			if server.Address == s.discovery.publicURL {
+				pinned = append(pinned, server)
+			}
+		}
+		reply(w, 200, map[string]any{"version": 1, "servers": pinned, "pairing_url": s.discovery.publicURL + "/api/pairings"})
 	case path == "/api/pairings/approve":
 		s.approvePairing(w, r)
 	case r.Method == "DELETE":

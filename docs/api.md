@@ -123,8 +123,22 @@ the shortest record TTL. Failures have a two-second discovery cache.
 }
 ```
 
-An empty DNS service set returns `servers: []`. DNS/configuration failures return
-503. Bootstrap responses have `Cache-Control: no-store`. Existing exact CORS
+This hosted bridge exposes only DNS descriptors whose canonical HTTPS base
+equals its configured `public_url`, including the port and base path. Foreign
+controllers are omitted even when their DNS records are otherwise valid; an
+empty or foreign-only DNS service set returns `servers: []`. The `pairing_url`
+always identifies this configured server and does not select a controller.
+Thus a hosted player using a fixed trusted HTTPS discovery URL cannot be
+redirected to another controller merely by changing a DNS-SD record.
+
+Native OS DNS discovery is a separate trust model: it can list multiple
+controllers and trusts the network administrator's DNS configuration to nominate
+them. TLS authenticates the nominated hostname; it does not prove that the
+controller belongs to the user. The administrator must check the controller
+address and comparison code before approving pairing.
+
+DNS/configuration failures return 503. Bootstrap responses have
+`Cache-Control: no-store`. Existing exact CORS
 origins apply; `allow_null_origin` additionally permits null origins on device
 bootstrap routes, but never on the administrator listing or approval route.
 CORS preflights permit only Authorization and Content-Type headers. Public
@@ -138,8 +152,10 @@ bootstrap traffic and pairing creation have separate bounded rate limits.
 {"device_id":"registered-device-uuid","server_id":"home._ottplay-ctrl._tcp.alvit.cf."}
 ```
 
-`server_id` is optional only when exactly one valid server is discovered. The
-selected server must match a freshly discovered descriptor and its normalized
+`server_id` is optional only when exactly one valid server is discovered in the
+full internal DNS result, before the hosted response filter. Clients should
+send the selected descriptor's ID even when the hosted response has one entry.
+The selected server must match a freshly discovered descriptor and its normalized
 address must equal this server's configured `public_url`; a server must never
 issue its own credentials for a different discovered controller. Ambiguous,
 missing, changed, or nonmatching selections return 409. The device UUID must

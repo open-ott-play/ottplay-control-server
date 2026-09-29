@@ -112,6 +112,57 @@ func TestBootstrapDefaultsCORSAndStrictInputs(t *testing.T) {
 	expect(t, request(s, "POST", "/api/pairings", "", `{"device_id":"first","server_id":"untrusted"}`, nil), 409)
 }
 
+func TestHostedDiscoveryOnlyNominatesConfiguredController(t *testing.T) {
+	foreign := discoveredServer{ID: "foreign._ottplay-ctrl._tcp.example.test.", Domain: "example.test", Address: "https://foreign.example.test/ott-control"}
+	otherPath := discoveredServer{ID: "path._ottplay-ctrl._tcp.example.test.", Domain: "example.test", Address: publicController + "-other"}
+	for _, tc := range []struct {
+		name    string
+		servers []discoveredServer
+		want    []discoveredServer
+	}{
+		{name: "empty", servers: []discoveredServer{}, want: []discoveredServer{}},
+		{name: "foreign only", servers: []discoveredServer{foreign, otherPath}, want: []discoveredServer{}},
+		{name: "mixed", servers: []discoveredServer{foreign, homeServer, otherPath}, want: []discoveredServer{homeServer}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := pairingServer(t)
+			// The configured URL and DNS descriptors use the same canonical base.
+			s.discovery = newDiscovery(config.Discovery{PublicURL: "https://CONTROLLER.example.test:443/ott-control/"})
+			s.discovery.lookup = func(context.Context) ([]discoveredServer, time.Duration, error) {
+				return tc.servers, 30 * time.Second, nil
+			}
+			result := request(s, "GET", "/api/discovery", "", "", nil)
+			expect(t, result, 200)
+			var body struct {
+				Version    int                `json:"version"`
+				Servers    []discoveredServer `json:"servers"`
+				PairingURL string             `json:"pairing_url"`
+			}
+			if err := json.Unmarshal(result.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Version != 1 || body.PairingURL != publicController+"/api/pairings" || body.Servers == nil || len(body.Servers) != len(tc.want) {
+				t.Fatalf("incorrect pinned discovery response: %s", result.Body.String())
+			}
+			for i, server := range body.Servers {
+				if server != tc.want[i] {
+					t.Fatalf("unexpected nominated controller: %+v", server)
+				}
+			}
+			// The public filter must not mutate the DNS cache used by pairing.
+			all, err := s.discovery.resolve(context.Background(), false)
+			if err != nil || len(all) != len(tc.servers) {
+				t.Fatalf("internal discovery changed: %v, %v", all, err)
+			}
+			for i, server := range all {
+				if server != tc.servers[i] {
+					t.Fatalf("internal descriptor changed: %+v", server)
+				}
+			}
+		})
+	}
+}
+
 func TestPairingRejectsChangedDescriptorAndAnotherController(t *testing.T) {
 	for _, stage := range []string{"approval", "redemption"} {
 		t.Run(stage, func(t *testing.T) {

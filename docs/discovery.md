@@ -66,12 +66,22 @@ or when the server's DNS configuration cannot represent the desired network.
 Omitting the entire block disables discovery and pairing routes.
 
 `GET /api/discovery` is public metadata with the existing exact CORS policy.
+The hosted bridge returns only descriptors matching its configured `public_url`,
+including the port and path; unrelated DNS advertisements cannot nominate a
+different controller through this trusted HTTPS endpoint.
 Configure the deployed browser profile's `window.__OTT_CONTROL_DISCOVERY_URL__`
 to this HTTPS endpoint. This profile explicitly chooses the bridge's network;
 it does not automatically inspect the network of a roaming browser. Tauri and
 the local OTT server can use their native DNS access instead. Failure to discover
 a controller must not block playback or unrelated player functions. Existing
 manual configuration and deliberate disconnection are preserved.
+
+Native discovery trusts the network administrator to nominate controllers through
+DNS. TLS authenticates the nominated hostname, not its ownership by the user.
+Use automatic native discovery on trusted home or managed networks; keep a saved
+manual controller on untrusted networks. Pairing approval protects credentials
+issued by the legitimate controller, but cannot authenticate an arbitrary server
+that controls its own approval responses.
 
 ## Pairing
 
