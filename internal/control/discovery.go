@@ -23,13 +23,19 @@ type discoveredServer struct {
 	Address string `json:"address"`
 }
 
+type discoveryFlight struct {
+	done   chan struct{}
+	result []discoveredServer
+	err    error
+}
+
 type discovery struct {
 	publicURL string
 	mu        sync.Mutex
 	cached    []discoveredServer
 	expires   time.Time
 	err       error
-	flight    chan struct{}
+	flight    *discoveryFlight
 	lookup    func(context.Context) ([]discoveredServer, time.Duration, error)
 }
 
@@ -41,28 +47,37 @@ func newDiscovery(c config.Discovery) *discovery {
 // Concurrent callers share one bounded lookup. Approval and redemption force a
 // fresh lookup, so a cached descriptor cannot silently authorize a new target.
 func (d *discovery) resolve(ctx context.Context, refresh bool) ([]discoveredServer, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	d.mu.Lock()
 	if !refresh && time.Now().Before(d.expires) {
 		result, err := append([]discoveredServer{}, d.cached...), d.err
 		d.mu.Unlock()
 		return result, err
 	}
-	if flight := d.flight; flight != nil {
-		d.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-flight:
-		}
-		d.mu.Lock()
-		result, err := append([]discoveredServer{}, d.cached...), d.err
-		d.mu.Unlock()
-		return result, err
-	}
-	d.flight = make(chan struct{})
 	flight := d.flight
+	if flight == nil {
+		flight = &discoveryFlight{done: make(chan struct{})}
+		d.flight = flight
+		go d.resolveFlight(flight)
+	}
 	d.mu.Unlock()
-	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-flight.done:
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return append([]discoveredServer{}, flight.result...), flight.err
+	}
+}
+
+func (d *discovery) resolveFlight(flight *discoveryFlight) {
+	// A disconnected caller must not cancel another caller's validation. The
+	// shared work remains bounded even when every HTTP caller stops waiting.
+	bounded, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	result, ttl, err := d.lookup(bounded)
 	cancel()
 	if err != nil {
@@ -74,10 +89,10 @@ func (d *discovery) resolve(ctx context.Context, refresh bool) ([]discoveredServ
 	}
 	d.mu.Lock()
 	d.cached, d.expires, d.err = append([]discoveredServer{}, result...), time.Now().Add(ttl), err
+	flight.result, flight.err = d.cached, err
 	d.flight = nil
-	close(flight)
+	close(flight.done)
 	d.mu.Unlock()
-	return result, err
 }
 
 func discoverDNS(ctx context.Context, c config.Discovery) ([]discoveredServer, time.Duration, error) {
