@@ -60,6 +60,34 @@ CORS is a browser boundary, not authentication. Keep administrator access separa
 
 `POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
 
+`profiles` accepts exactly `{}`. For the active M3U provider it returns
+`{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured,vportal_configured}]}`:
+exactly 15 ordered slots numbered 1–15, with one active slot. History is an
+integer 0–8760 or `null` for an invalid legacy value. Configuration flags are
+booleans; URLs and credentials are not returned.
+
+`profile` accepts exactly `{number:N}` and returns
+`{provider:"m3u",profile:METADATA,dispatched:true}` for the selected, active slot.
+`profile_settings` accepts exactly `{number:N,settings:{...}}`, with a nonempty
+allowlist of `name`, `playlist`, `history_hours` and `vportal`. Numbers must be
+JSON integers: slot 1–15, history 0–8760. Strings must be valid Unicode without
+C0/DEL controls, limited to 256 UTF-8 bytes for names or 8192 for either link.
+Empty strings clear fields. Unknown/duplicate fields and malformed settings are
+rejected; the 16 KiB request envelope limit still applies. The player validates
+and applies all settings together, returning
+`{provider:"m3u",profile:METADATA,saved:true}`. A saved result does not establish
+that provider loading completed. These operations require the active M3U driver
+and remain subject to parental and platform policy.
+
+`restart` accepts exactly `{target:"stream"}` or `{target:"player"}`. Stream
+success is `{accepted:true,target:"stream",dispatched:true}`. Player reload
+acceptance is `{accepted:true,target:"player",dispatched:false,effect:"reload-after-ack"}`:
+the reload callback runs once only after its response POST receives HTTP 200
+with `status:"ok"`. The callback is not reconstructed from a cached response on
+replay and is discarded on expiry or command-server reconfiguration/disable.
+Clients must not infer completed restart from either acknowledgement or replay
+an uncertain request. Unsupported playback backends use `status:"unsupported"`.
+
 `epg_catalog` accepts exactly `{}` and returns a lightweight snapshot:
 `{catalog,channels:[{id,number,name,tvgId,tvgName,shift}]}`. It must not fetch guide
 rows. `catalog` is an opaque player-owned revision, `number` is the one-based
