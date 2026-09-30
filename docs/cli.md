@@ -36,6 +36,30 @@ used by the CLI; `player_server` is the address to enter in players. Both may us
 the same HTTPS address. Set `OTT_CONFIG` or pass `--config FILE` to select another
 configuration file.
 
+To search current programmes on the shared EPG service, add this optional field
+to the same CLI configuration:
+
+```json
+"epg": {"url": "https://epg.2560801.xyz/epg/v1", "source": "epg-one"}
+```
+
+With `epg` configured, all `p` commands ask the player only for its channel
+metadata and catalogue identity. The CLI sends that metadata to `/current` on
+the configured EPG service and receives current titles. It sends no controller
+token, provider credentials, playlist URLs or stream URLs to that service.
+The service URL must be HTTP(S) without credentials, a query or a fragment;
+redirects are refused. Use HTTPS outside a trusted local network.
+
+The player must support `epg_catalog` and `play_catalog`. Catalogue metadata is
+limited to 2048 channels and a 512 KiB request. The service must return a complete,
+fresh result for the fixed public `epg-one` source; the service and CLI clocks
+must be within one minute. Other `epg.source` values are rejected. Selecting
+`epg-one` searches the public guide even if the player uses a private or custom
+guide; those sources are neither used nor uploaded. An unsupported player,
+stale result or service failure exits with an error. It never falls back to scanning
+every channel's EPG on the player. Each EPG HTTP request is limited to ten
+seconds (or a smaller `--timeout`) and 2 MiB of response data.
+
 ```sh
 ott devices
 ott add tv DEVICE_UUID
@@ -149,7 +173,8 @@ in `channel — programme` format. With `--json`, the result includes a `playbac
 object containing the player acknowledgement or an `error` if switching fails;
 a playback failure exits with code 1 and never retries the switch automatically.
 
-Data comes from the selected player; missing
+When `epg` is absent from the CLI configuration, the legacy compatibility path
+reads programme data from the selected player; missing
 EPG is requested through its normal guide service. Collection has a 25-second
 budget. If it cannot finish, the CLI reports the number of channels checked and
 exits with code 3. A filtered search still plays the first available match from
@@ -158,9 +183,12 @@ that partial result; unchecked channels might contain earlier matches. A repeate
 rejected if the provider changes during the query. Exit code 3 also applies to
 `--json`: JSON goes to stdout and the warning goes to stderr.
 
-The EPG query and playback are separate requests, each using the `--timeout`
-budget. Keep the provider/catalogue unchanged between them: playback uses the
-returned channel number in the player's current catalogue.
+The EPG query and playback are separate requests. With the EPG service configured,
+playback uses `play_catalog` with the original catalogue identity and channel ID;
+the player rejects a changed catalogue instead of switching a different channel.
+The legacy compatibility path uses the returned channel number, so keep the
+provider/catalogue unchanged between query and playback. Controller requests each
+use the `--timeout` budget.
 
 `vp TEXT` searches the player's VPortal video titles and requests a repeating
 queue of all matches in catalogue order. After the last video finishes, playback

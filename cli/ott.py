@@ -72,6 +72,158 @@ class HTTPError(Error):
         }.get(code, "Check the request parameters."))
 
 
+class EpgClient:
+    """Public EPG transport, deliberately independent of controller credentials."""
+    def __init__(self, settings, timeout):
+        if (not isinstance(settings, dict) or set(settings) != {"url", "source"}
+                or settings["source"] != "epg-one" or not isinstance(settings["url"], str)):
+            raise Error('EPG configuration must contain url and source "epg-one"')
+        url = settings["url"]
+        try:
+            parsed = urllib.parse.urlsplit(url)
+            invalid = (parsed.scheme not in ("http", "https") or not parsed.hostname
+                       or parsed.username is not None or parsed.password is not None
+                       or "?" in url or "#" in url or "\\" in url
+                       or any(ord(char) <= 32 or ord(char) == 127 for char in url)
+                       or parsed.port == 0)
+        except ValueError:
+            invalid = True
+        if invalid:
+            raise Error("EPG url must be an HTTP(S) address without credentials, whitespace, query or fragment")
+        self.url = url.rstrip("/") + "/current"
+        self.timeout = min(10, timeout)
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+        self.opener = urllib.request.build_opener(NoRedirect())
+
+    def current(self, channels, search):
+        payload = {"version": 1, "source": "epg-one", "channels": channels, "search": search}
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(body) > 512 * 1024:
+            raise Error("EPG catalogue exceeds the request size limit; no playback was requested")
+        deadline = time.monotonic() + self.timeout
+        cancelled = threading.Event()
+        outcome = queue.Queue(maxsize=1)
+        def perform():
+            try:
+                outcome.put((True, self._current(body, deadline, cancelled)))
+            except Exception as exc:
+                outcome.put((False, exc))
+        threading.Thread(target=perform, name="ottplay-epg-http", daemon=True).start()
+        try:
+            ok, value = outcome.get(timeout=max(0, deadline - time.monotonic()))
+        except queue.Empty:
+            cancelled.set()
+            raise Error("EPG service timed out; no player EPG scan or playback was requested") from None
+        if time.monotonic() >= deadline:
+            cancelled.set()
+            raise Error("EPG service timed out; no player EPG scan or playback was requested")
+        if not ok:
+            raise value
+        return value
+
+    def _current(self, body, deadline, cancelled):
+        request = urllib.request.Request(self.url, data=body, headers={
+            "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "ottplay-cli/1.0"})
+        try:
+            if cancelled.is_set() or time.monotonic() >= deadline:
+                raise Error("EPG service timed out")
+            with self.opener.open(request, timeout=self.timeout) as response:
+                if response.status != 200:
+                    raise Error("EPG service did not return a successful response")
+                body = bytearray()
+                while True:
+                    if cancelled.is_set() or time.monotonic() >= deadline:
+                        raise Error("EPG service timed out")
+                    chunk = response.read1(min(65536, 2 * 1024 * 1024 + 1 - len(body)))
+                    if not chunk:
+                        remaining = getattr(response, "length", None)
+                        if isinstance(remaining, int) and remaining > 0:
+                            raise Error("EPG service returned an incomplete response")
+                        return json.loads(body)
+                    body.extend(chunk)
+                    if len(body) > 2 * 1024 * 1024:
+                        raise Error("EPG service response exceeds the size limit")
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+            exc.close()
+            raise Error(f"EPG service returned HTTP {code}; no player EPG scan or playback was requested") from None
+        except (OSError, http.client.HTTPException):
+            raise Error("EPG service unavailable; no player EPG scan or playback was requested") from None
+        except ValueError:
+            raise Error("EPG service returned invalid JSON") from None
+
+
+def epg_text(value, maximum, encoding="utf-16-le"):
+    if not isinstance(value, str):
+        return False
+    try:
+        return len(value.encode(encoding)) <= maximum * (2 if encoding == "utf-16-le" else 1)
+    except UnicodeEncodeError:
+        return False
+
+
+def epg_number(value):
+    return type(value) in (int, float) and -9007199254740991 <= value <= 9007199254740991
+
+
+def server_programs(client, device, settings, search):
+    epg = EpgClient(settings, client.timeout)
+    if not epg_text(search, 1024, "utf-8"):
+        raise Error("Programme search must contain at most 1024 UTF-8 bytes")
+    snapshot = client.call(device, "epg_catalog", {})
+    invalid = "The player returned an invalid EPG catalogue; no playback was requested"
+    if (not isinstance(snapshot, dict) or not epg_text(snapshot.get("catalog"), 128, "utf-8")
+            or not snapshot["catalog"].strip() or not isinstance(snapshot.get("channels"), list)
+            or len(snapshot["channels"]) > 2048):
+        raise Error(invalid)
+    channels, by_id, numbers = [], {}, set()
+    for row in snapshot["channels"]:
+        if (not isinstance(row, dict) or not all(epg_text(row.get(key), 512) for key in ("id", "name", "tvgId", "tvgName"))
+                or not row["id"].strip() or row["id"] in by_id or type(row.get("number")) is not int
+                or row["number"] < 1 or row["number"] in numbers or type(row.get("shift")) is not int
+                or not -86400 <= row["shift"] <= 86400):
+            raise Error(invalid)
+        if numbers and row["number"] <= channels[-1]["number"]:
+            raise Error(invalid)
+        channels.append({key: row[key] for key in ("id", "number", "name", "tvgId", "tvgName", "shift")})
+        by_id[row["id"]] = channels[-1]
+        numbers.add(row["number"])
+    if not channels:
+        return {"as_of": time.time(), "checked": 0, "partial": False, "programs": [], "total": 0}, None
+    response = epg.current([{key: value for key, value in row.items() if key != "number"} for row in channels], search)
+    invalid = "EPG service returned an invalid or incomplete current-programme result; no playback was requested"
+    if (not isinstance(response, dict) or type(response.get("version")) is not int or response["version"] != 1
+            or response.get("source") != "epg-one" or not epg_text(response.get("generation"), 256)
+            or not response["generation"] or type(response.get("fetchedAt")) is not int
+            or not 0 < response["fetchedAt"] <= 9007199254740991 or not epg_number(response.get("asOf"))
+            or abs(response["asOf"] - time.time()) > 60
+            or type(response.get("checked")) is not int or response["checked"] != len(channels)
+            or type(response.get("total")) is not int or response["total"] != len(channels)
+            or not isinstance(response.get("programs"), list) or len(response["programs"]) > len(channels)):
+        raise Error(invalid)
+    if response.get("stale") is not False:
+        raise Error("EPG service has no fresh guide snapshot; no playback was requested")
+    programs, selected, last_number = [], None, 0
+    for row in response["programs"]:
+        if (not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] not in by_id
+                or not epg_text(row.get("title"), 16384) or not row["title"]
+                or any(not epg_number(row.get(key)) for key in ("start", "end"))
+                or not row["start"] <= response["asOf"] < row["end"]):
+            raise Error(invalid)
+        channel = by_id[row["id"]]
+        if channel["number"] <= last_number:
+            raise Error(invalid)
+        last_number = channel["number"]
+        programs.append({"channel": channel["name"], "number": channel["number"], "title": row["title"],
+                         "start": row["start"], "end": row["end"]})
+        if selected is None:
+            selected = {"catalog": snapshot["catalog"], "id": row["id"]}
+    return {"as_of": response["asOf"], "checked": response["checked"], "partial": False,
+            "programs": programs, "total": response["total"]}, selected
+
+
 def read_json(path):
     try:
         with Path(path).expanduser().open(encoding="utf-8") as stream:
@@ -513,13 +665,18 @@ def main(argv=None):
     try:
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
             raise Error("--timeout must be between 1 and 300 seconds")
-        client = Client(read_json(args.config), args.timeout)
+        config = read_json(args.config)
+        client = Client(config, args.timeout)
         if management(client, args.config, args.words, json_output=args.json):
             return 0
         device = client.device(args.words[0])
         words = args.words[1:]
         action, params = parse_command(words)
-        data = client.call(device, action, params)
+        catalog_play = None
+        if action == "programs" and "epg" in config:
+            data, catalog_play = server_programs(client, device, config["epg"], params["search"])
+        else:
+            data = client.call(device, action, params)
         if action in ("vportal", "vportal_search"):
             data = vportal_metadata(data, action == "vportal")
         playback_error = None
@@ -530,12 +687,17 @@ def main(argv=None):
                     if type(number) is not int or number < 1:
                         raise Error("The first programme has no valid channel number; no switch was requested")
                     # Use the returned catalogue number, even for duplicate or numeric names.
-                    playback = client.call(device, "play", {"query": str(number)})
+                    playback = (client.call(device, "play_catalog", catalog_play) if catalog_play is not None
+                                else client.call(device, "play", {"query": str(number)}))
                     channel = playback.get("channel")
                     if (playback.get("dispatched") is not True or not isinstance(channel, dict)
                             or type(channel.get("number")) is not int or channel["number"] != number
-                            or not isinstance(channel.get("name"), str)):
+                            or not isinstance(channel.get("name"), str)
+                            or (catalog_play is not None and (channel.get("id") != catalog_play["id"]
+                                or channel["name"] != data["programs"][0]["channel"]))):
                         raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
+                    if catalog_play is not None:
+                        playback = {"dispatched": True, "channel": {key: channel[key] for key in ("id", "number", "name")}}
                     data["playback"] = playback
                 except Error as exc:
                     playback_error = exc

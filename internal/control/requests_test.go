@@ -223,3 +223,65 @@ func TestVPortalWireActionNamesAreExact(t *testing.T) {
 		})
 	}
 }
+
+func TestEpgCatalogAndGuardedPlaybackRequests(t *testing.T) {
+	for _, body := range []string{
+		`{"action":"epg_catalog","params":{}}`,
+		`{"action":"play_catalog","params":{"catalog":"snapshot-1","id":"канал-7"}}`,
+		`{"action":"play_catalog","params":{"catalog":"` + strings.Repeat("x", 128) + `","id":"` + strings.Repeat("я", 512) + `"}}`,
+		`{"action":"play_catalog","params":{"catalog":"c","id":"` + strings.Repeat("界", 512) + `"}}`,
+		`{"action":"play_catalog","params":{"catalog":"c","id":"` + strings.Repeat("x", 2048) + `"}}`,
+	} {
+		s := newTestServer(t)
+		id := rpcID(t, s, body)
+		poll := request(s, "GET", "/api/webhook/commands?delivery=ack", firstToken, "", nil)
+		expect(t, poll, 200)
+		var response struct {
+			Requests []map[string]json.RawMessage `json:"requests"`
+		}
+		if err := json.Unmarshal(poll.Body.Bytes(), &response); err != nil || len(response.Requests) != 1 {
+			t.Fatalf("invalid request delivery: %s", poll.Body.String())
+		}
+		var expected map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(body), &expected); err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range []string{"action", "params"} {
+			if string(response.Requests[0][field]) != string(expected[field]) {
+				t.Fatalf("%s changed during delivery", field)
+			}
+		}
+		expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"rejected","data":{"error":"Catalogue changed"}}`, nil), 200)
+		reply := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+		expect(t, reply, 200)
+		if !strings.Contains(reply.Body.String(), "Catalogue changed") || len(s.devices[0].queue) != 0 {
+			t.Fatal("catalogue rejection did not complete the request")
+		}
+	}
+}
+
+func TestEpgCatalogRequestsRejectExtraAndInvalidFields(t *testing.T) {
+	for _, body := range []string{
+		`{"action":"epg_catalog","params":{"search":"cats"}}`,
+		`{"action":"epg_catalog","params":null}`,
+		`{"action":"EPG_CATALOG","params":{}}`,
+		`{"action":"play_catalog","params":{}}`,
+		`{"action":"play_catalog","params":{"catalog":"c"}}`,
+		`{"action":"play_catalog","params":{"id":"1"}}`,
+		`{"action":"play_catalog","params":{"catalog":"","id":"1"}}`,
+		`{"action":"play_catalog","params":{"catalog":" \t","id":"1"}}`,
+		`{"action":"play_catalog","params":{"catalog":"c","id":" \u2003"}}`,
+		`{"action":"play_catalog","params":{"catalog":false,"id":"1"}}`,
+		`{"action":"play_catalog","params":{"catalog":"c","id":7}}`,
+		`{"action":"play_catalog","params":{"catalog":"c","id":"1","query":"2"}}`,
+		`{"action":"play_catalog","params":{"catalog":"c","id":"1","id":"2"}}`,
+		`{"action":"play_catalog","params":{"catalog":"` + strings.Repeat("x", 129) + `","id":"1"}}`,
+		`{"action":"play_catalog","params":{"catalog":"c","id":"` + strings.Repeat("я", 1025) + `"}}`,
+	} {
+		s := newTestServer(t)
+		expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, body, nil), 400)
+		if len(s.devices[0].queue) != 0 || s.bytes != 0 {
+			t.Fatal("invalid catalogue request entered the queue")
+		}
+	}
+}
