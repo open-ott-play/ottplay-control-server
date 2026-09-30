@@ -86,8 +86,12 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	switch action {
-	case "status", "providers":
+	case "status", "providers", "epg_catalog":
 		ok = len(params) == 0
+	case "play_catalog":
+		_, validCatalog := textValue(params["catalog"], 128)
+		_, validID := textValue(params["id"], 2048)
+		ok = len(params) == 2 && validCatalog && validID
 	case "play", "provider":
 		var value string
 		ok = len(params) == 1 && json.Unmarshal(params["query"], &value) == nil && value != "" && len(value) <= 1024

@@ -60,6 +60,21 @@ CORS is a browser boundary, not authentication. Keep administrator access separa
 
 `POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
 
+`epg_catalog` accepts exactly `{}` and returns a lightweight snapshot:
+`{catalog,channels:[{id,number,name,tvgId,tvgName,shift}]}`. It must not fetch guide
+rows. `catalog` is an opaque player-owned revision, `number` is the one-based
+catalogue position, and `shift` is the provider's additional time adjustment in
+integer seconds. No source URLs or credentials are included. `play_catalog`
+accepts exactly `{catalog,id}`; both strings must be nonempty, with at most 128
+UTF-8 bytes for `catalog` and 2048 for `id`. The player verifies its current
+catalogue still matches before dispatching playback and returns
+`{dispatched:true,channel:{id,number,name}}`. A changed catalogue is rejected.
+
+The CLI's optional EPG configuration uses these RPCs around a separate public
+`POST /current` call. The control server never forwards its administrator token
+to that service. Existing `programs` remains available for compatibility when
+the CLI has no EPG service configured.
+
 `vportal` and `vportal_search` accept exactly `{"query":"TITLE FILTER"}`. The
 query must be a string of at most 1024 UTF-8 bytes and must not be empty after
 trimming whitespace. Matching is case-insensitive and performed by the player.
