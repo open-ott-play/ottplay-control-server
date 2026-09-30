@@ -29,11 +29,11 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show player status
   ott NAME 12                        play channel 12 from the s listing
-  ott NAME CHANNEL                   play the first matching channel (exact name first)
+  ott NAME CHANNEL                   list name matches and play a random matching channel
   ott NAME play s                    play a channel whose name is reserved
   ott NAME s [TEXT]                  list channels, optionally matching TEXT
   ott NAME p                         list channel — current programme
-  ott NAME p TEXT                    find programmes and play the first match
+  ott NAME p TEXT                    list matching programmes and play a random match
   ott NAME p --list [TEXT]           list programmes without switching channels
   ott NAME vp TEXT                   loop VPortal videos whose titles match TEXT
   ott NAME vp --list TEXT            list matching VPortal videos without playing
@@ -210,7 +210,7 @@ def server_programs(client, device, settings, search):
         by_id[row["id"]] = channels[-1]
         numbers.add(row["number"])
     if not channels:
-        return {"as_of": time.time(), "checked": 0, "partial": False, "programs": [], "total": 0}, None
+        return {"as_of": time.time(), "checked": 0, "partial": False, "programs": [], "total": 0}, {}
     response = epg.current([{key: value for key, value in row.items() if key != "number"} for row in channels], search)
     invalid = "EPG service returned an invalid or incomplete current-programme result; no playback was requested"
     if (not isinstance(response, dict) or type(response.get("version")) is not int or response["version"] != 1
@@ -224,7 +224,7 @@ def server_programs(client, device, settings, search):
         raise Error(invalid)
     if response.get("stale") is not False:
         raise Error("EPG service has no fresh guide snapshot; no playback was requested")
-    programs, selected, last_number = [], None, 0
+    programs, targets, last_number = [], {}, 0
     for row in response["programs"]:
         if (not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] not in by_id
                 or not epg_text(row.get("title"), 16384) or not row["title"]
@@ -237,10 +237,9 @@ def server_programs(client, device, settings, search):
         last_number = channel["number"]
         programs.append({"channel": channel["name"], "number": channel["number"], "title": row["title"],
                          "start": row["start"], "end": row["end"]})
-        if selected is None:
-            selected = {"catalog": snapshot["catalog"], "id": row["id"]}
+        targets[channel["number"]] = {"catalog": snapshot["catalog"], "id": row["id"]}
     return {"as_of": response["asOf"], "checked": response["checked"], "partial": False,
-            "programs": programs, "total": response["total"]}, selected
+            "programs": programs, "total": response["total"]}, targets
 
 
 def read_json(path):
@@ -429,37 +428,36 @@ def channel_identity(value):
 
 
 def play_channel(client, device, params):
+    text = params["query"].strip()
+    if not text or re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
+        return client.call(device, "play", params), None
+    response = client.call(device, "channels", {"search": text})
+    matches = response.get("channels") if isinstance(response, dict) else None
+    invalid = "The player returned an invalid channel list; no switch was requested"
+    if not isinstance(matches, list):
+        raise Error(invalid)
+    previous, identities, rows = 0, set(), []
+    for row in matches:
+        if not isinstance(row, dict):
+            raise Error(invalid)
+        number, name = row.get("number"), row.get("name")
+        identity = channel_identity(row.get("id"))
+        if (type(number) is not int or not previous < number <= 9007199254740991
+                or identity is None or identity in identities
+                or not epg_text(name, 16384) or not name.strip()
+                or text.casefold() not in name.casefold()):
+            raise Error(invalid)
+        previous = number
+        identities.add(identity)
+        rows.append({key: row[key] for key in ("id", "number", "name")})
+    data = {"channels": rows}
+    if not rows:
+        error = Error("No channels match the search; no switch was requested")
+        data["playback"] = {"error": str(error)}
+        return data, error
+    selected = secrets.choice(rows) if len(rows) > 1 else rows[0]
     try:
-        # Preserve the player's exact-name preference and the single-request path.
-        return client.call(device, "play", params)
-    except PlayerRejected as rejected:
-        text = params["query"].strip()
-        if not text or re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
-            raise
-        matches = rejected.data.get("matches")
-        if not isinstance(matches, list) or len(matches) < 2:
-            raise
-        previous, identities, names = 0, set(), []
-        for row in matches:
-            if not isinstance(row, dict):
-                raise Error("The player returned an invalid ambiguous channel list; no switch was requested") from None
-            number, name = row.get("number"), row.get("name")
-            identity = channel_identity(row.get("id"))
-            if (type(number) is not int or not previous < number <= 9007199254740991
-                    or identity is None or identity in identities
-                    or not epg_text(name, 16384) or not name.strip()
-                    or text.casefold() not in name.casefold()):
-                raise Error("The player returned an invalid ambiguous channel list; no switch was requested") from None
-            previous = number
-            identities.add(identity)
-            names.append(name.casefold())
-        # An exact-name result cannot legitimately be mixed with substring matches.
-        if text.casefold() in names and any(name != text.casefold() for name in names):
-            raise Error("The player returned an invalid ambiguous channel list; no switch was requested") from None
-        selected = matches[0]
-        print(f"Multiple channels match; requesting the first in catalogue order: "
-              f"{selected['number']}: {clean(selected['name'])}", file=sys.stderr)
-        # Only an explicit rejection permits this second request. Never replay it.
+        # One mutation follows the complete read-only search. Never replay it.
         result = client.call(device, "play", {"query": str(selected["number"])})
         channel = result.get("channel") if isinstance(result, dict) else None
         if (not isinstance(channel, dict) or result.get("dispatched") is not True
@@ -467,7 +465,27 @@ def play_channel(client, device, params):
                 or channel_identity(channel.get("id")) != channel_identity(selected["id"])
                 or channel.get("name") != selected["name"]):
             raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
-        return result
+        data["playback"] = {"dispatched": True, "channel": {key: channel[key] for key in ("id", "number", "name")}}
+        return data, None
+    except Error as exc:
+        data["playback"] = {"error": str(exc)}
+        return data, exc
+
+
+def select_programme(programs):
+    # Validate every candidate before drawing: the random row may be any row.
+    invalid = "The player returned an invalid programme list; no switch was requested"
+    if not isinstance(programs, list):
+        raise Error(invalid)
+    previous = 0
+    for row in programs:
+        if (not isinstance(row, dict) or type(row.get("number")) is not int
+                or not previous < row["number"] <= 9007199254740991
+                or any(not epg_text(row.get(key), 16384) or not row[key].strip()
+                       for key in ("channel", "title"))):
+            raise Error(invalid)
+        previous = row["number"]
+    return (secrets.choice(programs) if len(programs) > 1 else programs[0]) if programs else None
 
 
 def parse_command(words):
@@ -863,10 +881,11 @@ def main(argv=None):
         words = args.words[1:]
         action, params = parse_command(words)
         catalog_play = None
+        playback_error = None
         if action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"])
         elif action == "play":
-            data = play_channel(client, device, params)
+            data, playback_error = play_channel(client, device, params)
         else:
             try:
                 data = client.call(device, action, params)
@@ -882,22 +901,20 @@ def main(argv=None):
             data = profile_metadata(data, action, params)
         elif action == "restart":
             data = restart_metadata(data, params["target"])
-        playback_error = None
         if action == "programs" and params["search"] and words[1:2] != ["--list"]:
-            if data["programs"]:
+            selected = select_programme(data["programs"])
+            if selected:
                 try:
-                    number = data["programs"][0].get("number")
-                    if type(number) is not int or number < 1:
-                        raise Error("The first programme has no valid channel number; no switch was requested")
+                    number = selected["number"]
+                    target = catalog_play[number] if catalog_play is not None else None
                     # Use the returned catalogue number, even for duplicate or numeric names.
-                    playback = (client.call(device, "play_catalog", catalog_play) if catalog_play is not None
+                    playback = (client.call(device, "play_catalog", target) if target is not None
                                 else client.call(device, "play", {"query": str(number)}))
-                    channel = playback.get("channel")
-                    if (playback.get("dispatched") is not True or not isinstance(channel, dict)
+                    channel = playback.get("channel") if isinstance(playback, dict) else None
+                    if (not isinstance(channel, dict) or playback.get("dispatched") is not True
                             or type(channel.get("number")) is not int or channel["number"] != number
-                            or not isinstance(channel.get("name"), str)
-                            or (catalog_play is not None and (channel.get("id") != catalog_play["id"]
-                                or channel["name"] != data["programs"][0]["channel"]))):
+                            or channel.get("name") != selected["channel"]
+                            or (target is not None and channel.get("id") != target["id"])):
                         raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
                     if catalog_play is not None:
                         playback = {"dispatched": True, "channel": {key: channel[key] for key in ("id", "number", "name")}}
@@ -909,7 +926,7 @@ def main(argv=None):
                 print("No current programmes match the search.", file=sys.stderr)
         if args.json:
             print(json.dumps(data, ensure_ascii=False, indent=2))
-        elif action == "channels":
+        elif action == "channels" or (action == "play" and "channels" in data):
             for row in data["channels"]:
                 print(f"{row['number']}: {clean(row['name'])}")
         elif action == "programs":
@@ -945,8 +962,11 @@ def main(argv=None):
             print(f"{data['volume']:g}%")
         else:
             print(json.dumps(data, ensure_ascii=False, indent=2))
-        if action == "programs" and data.get("playback", {}).get("dispatched"):
+        if action in ("programs", "play") and data.get("playback", {}).get("dispatched"):
             channel = data["playback"]["channel"]
+            sys.stdout.flush()
+            if len(data.get("programs", data.get("channels", []))) > 1:
+                print(f"Randomly selected channel: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
             print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
         if action == "vportal":
             print(f"VPortal playback requested: {data['total']} videos; repeat enabled.", file=sys.stderr)

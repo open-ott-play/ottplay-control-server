@@ -1,6 +1,7 @@
 import importlib.util
 import base64
 import contextlib
+import copy
 import io
 import http.server
 import json
@@ -49,24 +50,28 @@ class CliTest(unittest.TestCase):
         client.call.side_effect = [result, playback]
         output, errors = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'read_json', return_value={}), mock.patch.object(ott, 'Client', return_value=client), \
+                mock.patch.object(ott.secrets, 'choice', side_effect=lambda rows: rows[-1]) as choice, \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             status = ott.main((['--json'] if json_output else []) + ['tv'] + words)
+        self.program_choice = choice
         return status, output.getvalue(), errors.getvalue(), client.call.call_args_list
 
-    def test_program_search_plays_first_returned_channel_once(self):
+    def test_program_search_lists_all_matches_and_plays_random_nonfirst_channel_once(self):
         for name in ['Ю ТВ', '2', 'Duplicate channel']:
             with self.subTest(name=name):
                 result = {'programs': [
                     {'channel': name, 'number': 17, 'title': 'Моя свадьба лучше!'},
                     {'channel': name, 'number': 42, 'title': 'Большая свадьба.'},
                 ]}
-                playback = {'channel': {'number': 17, 'name': name}, 'dispatched': True}
+                playback = {'channel': {'number': 42, 'name': name}, 'dispatched': True}
                 status, output, errors, calls = self.run_programs(['P', 'СВАДЬБА'], result, playback)
                 self.assertEqual(status, 0)
                 self.assertEqual(output, f'{name} — Моя свадьба лучше!\n{name} — Большая свадьба.\n')
-                self.assertIn(f'Channel switch requested: 17: {name}', errors)
+                self.assertIn(f'Randomly selected channel: 42: {name}', errors)
+                self.assertIn(f'Channel switch requested: 42: {name}', errors)
                 self.assertEqual(calls, [mock.call('dev_tv', 'programs', {'search': 'СВАДЬБА'}),
-                                         mock.call('dev_tv', 'play', {'query': '17'})])
+                                         mock.call('dev_tv', 'play', {'query': '42'})])
+                self.program_choice.assert_called_once_with(result['programs'])
 
     def test_program_listing_and_empty_search_do_not_play(self):
         for words, search in [(['p'], ''), (['p', '   '], ''), (['p', '--list'], ''),
@@ -78,6 +83,7 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(output, 'News — Current show\n')
                 self.assertEqual(errors, '')
                 self.assertEqual(calls, [mock.call('dev_tv', 'programs', {'search': search})])
+                self.program_choice.assert_not_called()
 
     def test_program_search_without_matches_does_not_play(self):
         status, output, errors, calls = self.run_programs(['p', 'missing'], {'programs': []}, json_output=True)
@@ -85,6 +91,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(json.loads(output), {'programs': []})
         self.assertIn('No current programmes match', errors)
         self.assertEqual(len(calls), 1)
+        self.program_choice.assert_not_called()
 
     def test_partial_search_without_matches_does_not_claim_complete_absence(self):
         result = {'programs': [], 'partial': True, 'checked': 231, 'total': 1562}
@@ -101,22 +108,36 @@ class CliTest(unittest.TestCase):
                     self.assertNotIn('EPG is partially loaded', errors)
                     self.assertEqual(calls, [mock.call('dev_tv', 'programs', {'search': 'три кота'})])
 
-    def test_partial_program_search_plays_first_available_match_and_preserves_json(self):
-        result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'}],
-                  'partial': True, 'checked': 1, 'total': 20}
-        playback = {'channel': {'number': 5, 'name': 'News'}, 'dispatched': True}
+    def test_partial_program_search_chooses_among_returned_matches_and_preserves_json(self):
+        result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'},
+                               {'channel': 'News HD', 'number': 12, 'title': 'Current HD'}],
+                  'partial': True, 'checked': 2, 'total': 20}
+        playback = {'channel': {'number': 12, 'name': 'News HD'}, 'dispatched': True}
         status, output, errors, calls = self.run_programs(['p', 'current'], result, playback, json_output=True)
         self.assertEqual(status, 3)
         self.assertEqual(json.loads(output), dict(result, playback=playback))
-        self.assertIn('checked 1 of 20', errors)
-        self.assertIn('Channel switch requested: 5', errors)
+        self.assertIn('checked 2 of 20', errors)
+        self.assertIn('Randomly selected channel: 12: News HD', errors)
+        self.assertIn('Channel switch requested: 12', errors)
+        self.assertEqual(calls[-1], mock.call('dev_tv', 'play', {'query': '12'}))
+        self.program_choice.assert_called_once_with(result['programs'])
+
+    def test_single_programme_match_does_not_need_random_selection(self):
+        result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'}]}
+        playback = {'channel': {'number': 5, 'name': 'News'}, 'dispatched': True}
+        status, output, errors, calls = self.run_programs(['p', 'current'], result, playback)
+        self.assertEqual(status, 0, errors)
+        self.assertEqual(output, 'News — Current\n')
+        self.assertNotIn('Randomly selected channel', errors)
         self.assertEqual(calls[-1], mock.call('dev_tv', 'play', {'query': '5'}))
+        self.program_choice.assert_not_called()
 
     def test_failed_program_playback_keeps_results_and_never_retries(self):
         for partial in [False, True]:
             with self.subTest(partial=partial):
-                result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'}],
-                          'partial': partial, 'checked': 1, 'total': 20}
+                result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'},
+                                       {'channel': 'News HD', 'number': 12, 'title': 'Current HD'}],
+                          'partial': partial, 'checked': 2, 'total': 20}
                 status, output, errors, calls = self.run_programs(
                     ['p', 'current'], result, ott.Error('Lost reply; do not repeat blindly'), json_output=True)
                 data = json.loads(output)
@@ -126,19 +147,44 @@ class CliTest(unittest.TestCase):
                 self.assertIn('Error: Lost reply', errors)
                 self.assertNotIn('Channel switch requested', errors)
                 self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[-1], mock.call('dev_tv', 'play', {'query': '12'}))
 
     def test_program_search_rejects_invalid_channel_numbers_without_playing(self):
-        for number in [None, 0, -1, True, 1.5, '5']:
+        for number in [None, 0, -1, True, 1.5, '5', 9007199254740992]:
             with self.subTest(number=number):
                 result = {'programs': [{'channel': 'News', 'number': number, 'title': 'Current'}]}
                 status, output, errors, calls = self.run_programs(['p', 'current'], result)
                 self.assertEqual(status, 1)
-                self.assertIn('no valid channel number', errors)
+                self.assertNotIn('Channel switch requested', errors)
                 self.assertEqual(len(calls), 1)
+                self.program_choice.assert_not_called()
+
+    def test_invalid_later_programme_rows_are_rejected_before_random_choice_or_play(self):
+        valid = [{'channel': 'News', 'number': 5, 'title': 'Current'},
+                 {'channel': 'News HD', 'number': 12, 'title': 'Current HD'}]
+        invalid = []
+        for field, values in {
+            'number': [None, 0, -1, True, 12.0, '12', 5, 4, 9007199254740992],
+            'channel': [None, '', ' ', True, [], '\ud800', 'x' * 16385],
+            'title': [None, '', ' ', True, {}, '\udfff', 'x' * 16385],
+        }.items():
+            for value in values:
+                rows = copy.deepcopy(valid)
+                rows[1][field] = value
+                invalid.append(rows)
+        invalid.extend([list(reversed(valid)), [valid[0], None]])
+        for rows in invalid:
+            with self.subTest(rows=repr(rows)[:150]):
+                status, _, errors, calls = self.run_programs(['p', 'current'], {'programs': rows})
+                self.assertEqual(status, 1)
+                self.assertEqual(calls, [mock.call('dev_tv', 'programs', {'search': 'current'})])
+                self.program_choice.assert_not_called()
+                self.assertNotIn('Channel switch requested', errors)
 
     def test_program_playback_requires_matching_dispatch_acknowledgement(self):
         for playback in [{}, {'dispatched': False}, {'dispatched': True, 'channel': {}},
                          {'dispatched': True, 'channel': {'number': 6, 'name': 'Other'}},
+                         {'dispatched': True, 'channel': {'number': 5, 'name': 'Other'}},
                          {'dispatched': True, 'channel': {'number': 5, 'name': None}}]:
             with self.subTest(playback=playback):
                 result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'}]}
