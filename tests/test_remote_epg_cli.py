@@ -35,7 +35,8 @@ class RemoteEpgCliTest(unittest.TestCase):
         client.timeout = 45
         client.device.return_value = 'dev_tv'
         client.call.side_effect = [catalog() if snapshot is None else snapshot,
-                                   playback or {'dispatched': True, 'channel': {'id': 'cats', 'number': 7, 'name': 'СТС'}}]
+                                   {'dispatched': True, 'channel': {'id': 'cats', 'number': 7, 'name': 'СТС'}}
+                                   if playback is None else playback]
         epg = mock.Mock()
         epg.current.side_effect = [guide() if response is None else response]
         output, errors = io.StringIO(), io.StringIO()
@@ -43,8 +44,10 @@ class RemoteEpgCliTest(unittest.TestCase):
                 mock.patch.object(ott, 'Client', return_value=client), \
                 mock.patch.object(ott, 'EpgClient', return_value=epg), \
                 mock.patch.object(ott.time, 'time', return_value=NOW), \
+                mock.patch.object(ott.secrets, 'choice', side_effect=lambda rows: rows[-1]) as choice, \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             result = ott.main((['--json'] if json_output else []) + ['tv'] + words)
+        self.program_choice = choice
         return result, output.getvalue(), errors.getvalue(), client, epg
 
     def test_configured_query_uses_only_metadata_and_guarded_playback(self):
@@ -60,6 +63,49 @@ class RemoteEpgCliTest(unittest.TestCase):
         expected = [{key: value for key, value in row.items() if key != 'number'} for row in catalog()['channels']]
         epg.current.assert_called_once_with(expected, 'ТРИ КОТА')
         self.assertNotIn('private', json.dumps(epg.current.call_args.args) + output + errors)
+        self.program_choice.assert_not_called()
+
+    def test_multiple_programmes_keep_full_list_and_use_random_rows_own_catalogue_id(self):
+        response = guide()
+        response['programs'].insert(0, {'id': 'ren', 'start': NOW - 30, 'end': NOW + 30,
+                                        'title': 'Три кота: первая серия'})
+        expected_programmes = [
+            {'channel': 'РЕН ТВ', 'number': 1, 'title': 'Три кота: первая серия',
+             'start': NOW - 30, 'end': NOW + 30},
+            {'channel': 'СТС', 'number': 7, 'title': 'Три кота', 'start': NOW - 60, 'end': NOW + 60},
+        ]
+        for json_output in [False, True]:
+            with self.subTest(json_output=json_output):
+                result, output, errors, client, epg = self.run_command(
+                    ['p', 'КОТА'], response=response, json_output=json_output)
+                self.assertEqual(result, 0, errors)
+                if json_output:
+                    data = json.loads(output)
+                    self.assertEqual(data['programs'], expected_programmes)
+                    self.assertEqual(data['playback']['channel'], {'id': 'cats', 'number': 7, 'name': 'СТС'})
+                else:
+                    self.assertEqual(output, 'РЕН ТВ — Три кота: первая серия\nСТС — Три кота\n')
+                self.assertIn('Channel switch requested: 7: СТС', errors)
+                self.assertIn('Randomly selected channel: 7: СТС', errors)
+                self.program_choice.assert_called_once_with(expected_programmes)
+                self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'epg_catalog', {}),
+                    mock.call('dev_tv', 'play_catalog', {'catalog': 'owned-catalog-1', 'id': 'cats'})])
+                self.assertEqual(epg.current.call_count, 1)
+
+    def test_random_selection_rejects_first_rows_ack_and_keeps_all_results_without_retry(self):
+        response = guide()
+        response['programs'].insert(0, {'id': 'ren', 'start': NOW - 30, 'end': NOW + 30, 'title': 'Три кота'})
+        incorrect_ack = {'dispatched': True, 'channel': {'id': 'ren', 'number': 1, 'name': 'РЕН ТВ'}}
+        result, output, errors, client, _ = self.run_command(
+            ['p', 'кота'], response=response, playback=incorrect_ack, json_output=True)
+        self.assertEqual(result, 1)
+        data = json.loads(output)
+        self.assertEqual([row['number'] for row in data['programs']], [1, 7])
+        self.assertIn('did not confirm', data['playback']['error'])
+        self.assertIn('do not repeat', errors)
+        self.assertNotIn('Channel switch requested', errors)
+        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'epg_catalog', {}),
+            mock.call('dev_tv', 'play_catalog', {'catalog': 'owned-catalog-1', 'id': 'cats'})])
 
     def test_plain_and_list_queries_never_play(self):
         for words, query in [(['p'], ''), (['p', '  '], ''), (['P', '--list', 'Три кота'], 'Три кота')]:
@@ -73,6 +119,16 @@ class RemoteEpgCliTest(unittest.TestCase):
                 self.assertFalse(data['partial'])
                 self.assertNotIn('playback', data)
                 self.assertEqual(errors, '')
+                self.program_choice.assert_not_called()
+
+    def test_multiple_programme_list_query_does_not_choose_or_play(self):
+        response = guide()
+        response['programs'].insert(0, {'id': 'ren', 'start': NOW - 30, 'end': NOW + 30, 'title': 'Три кота'})
+        result, output, errors, client, _ = self.run_command(['p', '--list', 'кота'], response=response)
+        self.assertEqual((result, errors), (0, ''))
+        self.assertEqual(output, 'РЕН ТВ — Три кота\nСТС — Три кота\n')
+        self.program_choice.assert_not_called()
+        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'epg_catalog', {})])
 
     def test_multibyte_id_boundary_survives_catalog_service_and_playback(self):
         value = '界' * 512
@@ -156,6 +212,16 @@ class RemoteEpgCliTest(unittest.TestCase):
                 self.assertIn('Error:', errors)
                 self.assertEqual(client.call.call_count, 1)
                 self.assertEqual(epg.current.call_count, 1)
+                self.program_choice.assert_not_called()
+
+    def test_invalid_later_programme_never_reaches_random_choice_or_dispatch(self):
+        response = guide()
+        response['programs'].insert(0, {'id': 'ren', 'start': NOW - 30, 'end': NOW + 30, 'title': 'Три кота'})
+        response['programs'][1]['title'] = '\ud800'
+        result, output, _, client, _ = self.run_command(['p', 'кота'], response=response)
+        self.assertEqual((result, output), (1, ''))
+        self.program_choice.assert_not_called()
+        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'epg_catalog', {})])
 
     def test_title_utf16_boundary_allows_complete_valid_unicode(self):
         for title in ['x' * 16384, '😀' * 8192]:

@@ -130,12 +130,12 @@ The central player server on ports 8443–8446 is separate from the command serv
 ```sh
 ott tv                      # UUID, provider, readiness, channel count and volume
 ott tv 12                   # one-based channel number from s
-ott tv news                 # exact channel name, otherwise a substring
+ott tv news                 # list name matches and play a random matching channel
 ott tv play s               # channel named s, which is also a command
 ott tv s                    # all channels from the active provider
 ott tv s HD                 # filter by channel name
 ott tv p                    # channel — current programme
-ott tv p news               # find programmes and play the first matching channel
+ott tv p news               # list programme matches and play a random matching channel
 ott tv p --list news        # filter programme titles without switching channels
 ott tv vp wedding          # loop all VPortal videos with matching titles
 ott tv vp --list wedding   # list the matches without changing playback
@@ -156,30 +156,40 @@ ott --timeout 60 tv p
 ```
 
 Searches for channels, programmes, VPortal titles, providers and aliases are case-insensitive,
-including Cyrillic text. Exact channel names take precedence. If several
-channel names match a text query, the CLI requests the first in provider catalogue
-order and prints a warning to stderr. For example, `ott iphone РЕН` selects the
-first matching channel, while `ott iphone "РЕН ТВ"` prefers that exact name.
-`ott iphone s РЕН` lists matches without switching. Successful exact or unique
-matches use one request. Only an explicit player rejection containing a valid,
-ordered list of multiple matches permits one additional numeric play request;
-unsupported actions, numeric queries, invalid results and uncertain transport
-failures do not trigger it. The second response must confirm the selected number,
-ID and name before the CLI reports a switch request. `--json` keeps the ordinary
-playback response on stdout; the ambiguity warning stays on stderr. Keep the
-provider/catalogue unchanged between requests; a mismatching acknowledgement
-reports an error but cannot undo a switch that already happened.
+including Cyrillic text. A text channel query lists every channel whose name
+contains the query, including exact names and longer names. For example,
+`ott t1 zee` lists all names containing `zee`; `ott iphone "РЕН ТВ"` can include
+both `РЕН ТВ` and `РЕН ТВ HD`. The list stays in provider catalogue order. With
+multiple matches, each matching channel has an equal chance of being selected;
+one match is selected directly. The CLI requests one channel switch after
+validating the complete returned list. `ott iphone s РЕН` only lists matches.
+Numeric queries such as `ott tv 12` retain a single playback request.
+
+Text queries print `NUMBER: NAME` rows to stdout and the selected channel's
+switch acknowledgement to stderr. For multiple matches, stderr also reports
+`Randomly selected channel: NUMBER: NAME`; selection alone does not confirm
+that the player accepted the switch. With `--json`, stdout contains the full
+`channels` list and a `playback` object containing the player acknowledgement
+or an `error` if switching fails. No matches means no playback request. An
+invalid list or failed search never triggers a switch. The playback response
+must confirm the selected number, ID and name before the CLI reports success.
+A failed or uncertain switch exits with code 1 and is never retried automatically.
+Keep the provider/catalogue unchanged between search and playback; a mismatching
+acknowledgement reports an error but cannot undo a switch that already happened.
 The numbers used by `s` and `play` refer to the provider's full catalogue,
 regardless of the category currently open. `random` retains the existing
 behaviour of using the current playback list.
 
 `p` includes only programmes with a title and `start <= now < end`. Channels
 without current EPG are omitted. Plain `p` only lists programmes. `p TEXT`
-prints every matching programme and requests playback of the first returned
-channel, in provider catalogue order. `p --list TEXT` searches without playing.
+prints every matching programme in provider catalogue order and requests playback
+of a randomly selected matching channel. Each matching channel has an equal
+chance when there are multiple matches; a single match is selected directly.
+`p --list TEXT` searches without playing.
 An empty or whitespace-only search never switches channels. No matches means
 no playback request. The switch confirmation goes to stderr, keeping stdout
-in `channel — programme` format. With `--json`, the result includes a `playback`
+in `channel — programme` format. Multiple matches also report
+`Randomly selected channel: NUMBER: NAME` on stderr. With `--json`, the result includes a `playback`
 object containing the player acknowledgement or an `error` if switching fails;
 a playback failure exits with code 1 and never retries the switch automatically.
 
@@ -190,8 +200,9 @@ budget. If it cannot finish, the CLI reports an incomplete programme search with
 the number of channels checked and exits with code 3. This count measures search
 coverage, not XMLTV download or server EPG loading progress. An empty partial
 result cannot establish that no channels have matching programmes.
-A filtered search still plays the first available match from
-that partial result; unchecked channels might contain earlier matches. A repeated
+A filtered search selects randomly among the matches in that partial result;
+unchecked channels are excluded from that selection and might contain additional
+matches. A repeated
 `p --list TEXT` query can use the warmed cache without switching again. Results are
 rejected if the provider changes during the query. Exit code 3 also applies to
 `--json`: JSON goes to stdout and the warning goes to stderr.
