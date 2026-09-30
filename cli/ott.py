@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""OTT-play remote CLI. Python 3 standard library; secrets stay in private files."""
+"""OTT-play remote CLI using the Python 3 standard library."""
 import argparse
 import base64
+import getpass
 import http.client
 import json
 import math
@@ -18,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 
 HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott devices                        list devices and their last connection
@@ -43,6 +45,11 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME providers                 list providers (zero-based indices)
   ott NAME provider m3u              select a provider by ID, index or name
   ott NAME provider-config FILE      update active provider settings from JSON
+  ott NAME plex setup URL [TOKEN]    set Plex address and token (hidden prompt if omitted)
+  ott NAME plex setup URL --token-file FILE  set Plex address and token from a file
+  ott NAME plex server URL           update the saved Plex server address
+  ott NAME plex token [TOKEN]        update the Plex token (hidden prompt if omitted)
+  ott NAME plex token-file FILE      update the Plex token from a file
   ott NAME playlist URL              update the M3U playlist
   ott NAME profiles                  list the 15 M3U profiles without URLs
   ott NAME profile N                 select M3U profile 1–15
@@ -558,10 +565,14 @@ def parse_command(words):
     if verb == "provider-config":
         if len(tail) != 1:
             raise Error("Use provider-config FILE.json")
-        data = read_json(tail[0])
+        data = read_settings_json(tail[0], "provider")
         if not isinstance(data, dict) or set(data) != {"provider", "settings"} or not isinstance(data["settings"], dict):
             raise Error('Expected {"provider":"xtream","settings":{...}}')
+        if data["provider"] == "plex":
+            data["settings"] = validate_plex_settings(data["settings"])
         return "provider_settings", data
+    if verb == "plex":
+        return "provider_settings", {"provider": "plex", "settings": parse_plex_settings(tail)}
     if verb == "playlist" and len(tail) == 1:
         return "provider_settings", {"provider": "m3u", "settings": {"playlist": text}}
     if verb == "msg" and tail:
@@ -582,22 +593,101 @@ def parse_command(words):
     return "play", {"query": " ".join(words)}
 
 
-def read_profile_settings(path):
+def read_settings_json(path, kind):
     def unique_fields(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("Duplicate profile setting")
+                raise ValueError("Duplicate setting")
             result[key] = value
         return result
     try:
         with Path(path).expanduser().open(encoding="utf-8") as stream:
             raw = stream.read(16 * 1024 + 1)
         if len(raw.encode("utf-8")) > 16 * 1024:
-            raise ValueError("Oversized profile settings")
+            raise ValueError("Oversized settings")
         return json.loads(raw, object_pairs_hook=unique_fields)
     except (OSError, ValueError):
-        raise Error("Could not read profile settings: use a valid JSON object without duplicate fields, at most 16 KiB") from None
+        raise Error(f"Could not read {kind} settings: use a valid JSON object without duplicate fields, at most 16 KiB") from None
+
+
+def read_profile_settings(path):
+    return read_settings_json(path, "profile")
+
+
+def plex_token(path=None):
+    if path is not None:
+        try:
+            with Path(path).expanduser().open(encoding="utf-8") as stream:
+                token = stream.read(4097)
+            if len(token.encode("utf-8")) > 4096:
+                raise ValueError()
+            return token
+        except (OSError, ValueError):
+            raise Error("Could not read Plex token file: use a UTF-8 file containing one token") from None
+    try:
+        # Refuse getpass's echoing fallback on terminals without hidden input.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            return getpass.getpass("Plex token: ")
+    except (EOFError, OSError, getpass.GetPassWarning):
+        raise Error("Hidden token input is unavailable; use a token file or provider-config JSON") from None
+
+
+def parse_plex_settings(words):
+    command = words[0].casefold() if words else ""
+    values = words[1:]
+    if command == "setup" and (len(values) == 1 or (len(values) == 2 and values[1] != "--token-file")
+                               or (len(values) == 3 and values[1] == "--token-file")):
+        # Validate the address before asking for a credential.
+        settings = validate_plex_settings({"server": values[0]})
+        settings["token"] = (plex_token(values[2]) if len(values) == 3 else
+                             values[1] if len(values) == 2 else plex_token())
+    elif command == "server" and len(values) == 1:
+        settings = {"server": values[0]}
+    elif command == "token" and len(values) <= 1:
+        settings = {"token": values[0] if values else plex_token()}
+    elif command == "token-file" and len(values) == 1:
+        settings = {"token": plex_token(values[0])}
+    else:
+        raise Error("Use plex setup URL [TOKEN|--token-file FILE], plex server URL, plex token [TOKEN], or plex token-file FILE")
+    return validate_plex_settings(settings)
+
+
+def validate_plex_settings(settings):
+    if not isinstance(settings, dict) or not settings or set(settings) - {"server", "token"}:
+        raise Error("Plex settings must contain server and/or token")
+    result = {}
+    for key, value in settings.items():
+        if not isinstance(value, str):
+            raise Error("Plex settings must contain text values")
+        value = value.strip()
+        if not epg_text(value, 8192 if key == "server" else 1024):
+            raise Error("Plex settings must be text: server up to 8192 characters, token up to 1024 characters")
+        if key == "server":
+            value = value.rstrip("/")
+            try:
+                parsed = urllib.parse.urlsplit(value)
+                valid = (re.fullmatch(r"https?://(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::[0-9]{1,5})?(?:/[a-z0-9_./~-]*)?", value, re.I)
+                         and not re.search(r"(?:^|/)\.\.(?:/|$)", value)
+                         and parsed.hostname and (parsed.port is None or 1 <= parsed.port <= 65535))
+            except ValueError:
+                valid = False
+            if not valid:
+                raise Error("Use a Plex HTTP(S) server address without credentials, query, fragment or parent path segments")
+        elif not value or re.search(r"[\s\x00-\x1f\x7f]", value):
+            raise Error("Plex token must be nonempty and contain no whitespace or control characters")
+        result[key] = value
+    return result
+
+
+def plex_settings_metadata(data, settings):
+    if (not isinstance(data, dict) or data.get("provider") != "plex" or data.get("saved") is not True
+            or not isinstance(data.get("fields"), list) or len(data["fields"]) != len(settings)
+            or any(not isinstance(field, str) for field in data["fields"])
+            or set(data["fields"]) != set(settings)):
+        raise Error("The player did not confirm saving Plex settings. The request may have executed; do not repeat the change blindly.")
+    return {"provider": "plex", "saved": True, "fields": data["fields"]}
 
 
 def validate_profile_settings(settings):
@@ -882,6 +972,7 @@ def main(argv=None):
         action, params = parse_command(words)
         catalog_play = None
         playback_error = None
+        plex_settings = action == "provider_settings" and params.get("provider") == "plex"
         if action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"])
         elif action == "play":
@@ -890,10 +981,12 @@ def main(argv=None):
             try:
                 data = client.call(device, action, params)
             except (PlayerRejected, PlayerUnsupported) as exc:
-                if action not in ("profiles", "profile", "profile_settings", "restart"):
+                if action not in ("profiles", "profile", "profile_settings", "restart") and not plex_settings:
                     raise
                 # Settings can contain credentials: do not echo player-supplied errors.
                 reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+                if plex_settings:
+                    raise Error(f"The Plex settings request was {reason}; select Plex, unlock its settings and use a player with remote Plex support") from None
                 raise Error(f"The {action} request was {reason}; check its settings on the player") from None
         if action in ("vportal", "vportal_search"):
             data = vportal_metadata(data, action == "vportal")
@@ -901,6 +994,8 @@ def main(argv=None):
             data = profile_metadata(data, action, params)
         elif action == "restart":
             data = restart_metadata(data, params["target"])
+        elif plex_settings:
+            data = plex_settings_metadata(data, params["settings"])
         if action == "programs" and params["search"] and words[1:2] != ["--list"]:
             selected = select_programme(data["programs"])
             if selected:
@@ -954,6 +1049,8 @@ def main(argv=None):
         elif action == "restart":
             print("Stream restart requested." if data["target"] == "stream" else
                   "Player reload accepted; waiting for the acknowledgement to reach the player.")
+        elif plex_settings:
+            print("Plex settings saved: " + ", ".join(data["fields"]) + ".")
         elif action == "play":
             print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
         elif action == "command" and params.get("command") == "set_volume":
