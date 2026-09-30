@@ -86,6 +86,21 @@ class CliTest(unittest.TestCase):
         self.assertIn('No current programmes match', errors)
         self.assertEqual(len(calls), 1)
 
+    def test_partial_search_without_matches_does_not_claim_complete_absence(self):
+        result = {'programs': [], 'partial': True, 'checked': 231, 'total': 1562}
+        for listing in [False, True]:
+            for json_output in [False, True]:
+                with self.subTest(listing=listing, json_output=json_output):
+                    words = ['p'] + (['--list'] if listing else []) + ['три кота']
+                    status, output, errors, calls = self.run_programs(words, result, json_output=json_output)
+                    self.assertEqual(status, 3)
+                    self.assertEqual(json.loads(output) if json_output else output, result if json_output else '')
+                    self.assertIn('Programme search is incomplete: checked 231 of 1562 channels on the player.', errors)
+                    self.assertIn('Unchecked channels may contain matches.', errors)
+                    self.assertNotIn('No current programmes match', errors)
+                    self.assertNotIn('EPG is partially loaded', errors)
+                    self.assertEqual(calls, [mock.call('dev_tv', 'programs', {'search': 'три кота'})])
+
     def test_partial_program_search_plays_first_available_match_and_preserves_json(self):
         result = {'programs': [{'channel': 'News', 'number': 5, 'title': 'Current'}],
                   'partial': True, 'checked': 1, 'total': 20}

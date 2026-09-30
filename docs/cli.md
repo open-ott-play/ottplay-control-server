@@ -176,8 +176,11 @@ a playback failure exits with code 1 and never retries the switch automatically.
 When `epg` is absent from the CLI configuration, the legacy compatibility path
 reads programme data from the selected player; missing
 EPG is requested through its normal guide service. Collection has a 25-second
-budget. If it cannot finish, the CLI reports the number of channels checked and
-exits with code 3. A filtered search still plays the first available match from
+budget. If it cannot finish, the CLI reports an incomplete programme search with
+the number of channels checked and exits with code 3. This count measures search
+coverage, not XMLTV download or server EPG loading progress. An empty partial
+result cannot establish that no channels have matching programmes.
+A filtered search still plays the first available match from
 that partial result; unchecked channels might contain earlier matches. A repeated
 `p --list TEXT` query can use the warmed cache without switching again. Results are
 rejected if the provider changes during the query. Exit code 3 also applies to
