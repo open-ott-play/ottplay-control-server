@@ -113,6 +113,8 @@ ott tv s HD                 # filter by channel name
 ott tv p                    # channel — current programme
 ott tv p news               # find programmes and play the first matching channel
 ott tv p --list news        # filter programme titles without switching channels
+ott tv vp wedding          # loop all VPortal videos with matching titles
+ott tv vp --list wedding   # list the matches without changing playback
 ott tv v                    # current volume, 0–100%
 ott tv v 35                 # absolute volume
 ott tv v +5                 # relative change applied by the player
@@ -129,7 +131,7 @@ ott --json tv s             # machine-readable output
 ott --timeout 60 tv p
 ```
 
-Searches for channels, programmes, providers and aliases are case-insensitive,
+Searches for channels, programmes, VPortal titles, providers and aliases are case-insensitive,
 including Cyrillic text. Exact channel names take precedence. If several
 channel names match a `play` query, the CLI lists the choices without switching;
 select a number.
@@ -159,6 +161,30 @@ rejected if the provider changes during the query. Exit code 3 also applies to
 The EPG query and playback are separate requests, each using the `--timeout`
 budget. Keep the provider/catalogue unchanged between them: playback uses the
 returned channel number in the player's current catalogue.
+
+`vp TEXT` searches the player's VPortal video titles and requests a repeating
+queue of all matches in catalogue order. After the last video finishes, playback
+returns to the first. `vp --list TEXT` returns the same title matches without
+changing playback. The filter must contain 1–1024 UTF-8 bytes after trimming
+outer whitespace; empty filters are rejected. Queue numbers are one-based match
+positions, independent of live channel numbers. To play a live channel named
+`vp`, use `play vp`.
+
+Both commands print `number: title` rows. JSON output contains only `items` and
+`total`, plus `loop: true` and `dispatched: true` for a playback request. Stream
+URLs and provider credentials are excluded. The playback confirmation goes to
+stderr and means the player dispatched the queue, not that a video frame has
+been rendered. No matches or a player that cannot use VPortal reports an error
+for `vp`; the list command may return an empty list. Update the controller and
+player to versions that support these actions. A failed or uncertain request
+is never automatically submitted again.
+
+The player collects all advertised search pages and episodes of matching series
+before starting. Incomplete, timed-out or oversized searches start nothing; use a
+narrower filter when a catalog limit is reached. Only natural video completion
+advances the queue. Stop, manual playback or a provider change interrupts it. Each
+visit resolves a fresh stream URL; an unavailable next item stops playback instead
+of being silently skipped. Queues are not restored after restarting the player.
 
 ## Provider settings
 

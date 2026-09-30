@@ -255,6 +255,99 @@ class CliTest(unittest.TestCase):
             listener.join(1)
 
 
+class VPortalTest(unittest.TestCase):
+    def run_command(self, words, result, json_output=False):
+        client = mock.Mock()
+        client.device.return_value = 'dev_tv'
+        client.call.side_effect = [result]
+        output, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(ott, 'read_json', return_value={}), mock.patch.object(ott, 'Client', return_value=client), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            status = ott.main((['--json'] if json_output else []) + ['tv'] + words)
+        return status, output.getvalue(), errors.getvalue(), client.call.call_args_list
+
+    def test_parser_preserves_case_and_unicode_in_trimmed_queries(self):
+        for words, action, query in [(['VP', '  СВАДЬБА', 'Ёж  '], 'vportal', 'СВАДЬБА Ёж'),
+                                     (['vp', '--list', 'Straße', 'Σς İ'], 'vportal_search', 'Straße Σς İ'),
+                                     (['vp', 'я' * 512], 'vportal', 'я' * 512),
+                                     (['vp', '--list', '😀' * 256], 'vportal_search', '😀' * 256)]:
+            with self.subTest(words=words):
+                self.assertEqual(ott.parse_command(words), (action, {'query': query}))
+        self.assertEqual(ott.parse_command(['play', 'vp']), ('play', {'query': 'vp'}))
+
+    def test_invalid_query_does_not_enqueue(self):
+        for words in [['vp'], ['vp', '--list'], ['vp', ' \t\u2003 '], ['vp', '--list', '  '],
+                      ['vp', 'x' * 1025], ['vp', '--list', 'я' * 513], ['vp', '\udcff']]:
+            with self.subTest(words=words):
+                status, output, errors, calls = self.run_command(words, {})
+                self.assertEqual(status, 1)
+                self.assertEqual(output, '')
+                self.assertIn('Error:', errors)
+                self.assertEqual(calls, [])
+
+    def test_play_dispatches_one_request_and_prints_queue_in_order(self):
+        result = {'items': [{'number': 1, 'title': 'Свадьба 2'}, {'number': 2, 'title': 'Свадьба 1'}],
+                  'total': 2, 'loop': True, 'dispatched': True}
+        status, output, errors, calls = self.run_command(['vp', 'СВАДЬБА'], result)
+        self.assertEqual(status, 0)
+        self.assertEqual(output, '1: Свадьба 2\n2: Свадьба 1\n')
+        self.assertEqual(errors, 'VPortal playback requested: 2 videos; repeat enabled.\n')
+        self.assertEqual(calls, [mock.call('dev_tv', 'vportal', {'query': 'СВАДЬБА'})])
+
+    def test_listing_never_dispatches_playback(self):
+        for items in [[], [{'number': 1, 'title': 'Video'}]]:
+            with self.subTest(items=items):
+                result = {'items': items, 'total': len(items)}
+                status, output, errors, calls = self.run_command(['vp', '--list', 'video'], result, True)
+                self.assertEqual(status, 0)
+                self.assertEqual(json.loads(output), result)
+                self.assertNotIn('playback requested', errors)
+                if not items:
+                    self.assertIn('No VPortal videos match', errors)
+                self.assertEqual(calls, [mock.call('dev_tv', 'vportal_search', {'query': 'video'})])
+
+    def test_output_never_exposes_extra_result_fields(self):
+        result = {'items': [{'number': 1, 'title': 'News\x1b[31m\n', 'url': 'https://private.example/token'}],
+                  'total': 1, 'loop': True, 'dispatched': True, 'token': 'private-secret'}
+        for json_output in [False, True]:
+            with self.subTest(json_output=json_output):
+                status, output, errors, _ = self.run_command(['vp', 'news'], result, json_output)
+                self.assertEqual(status, 0)
+                self.assertNotIn('private', output + errors)
+                if json_output:
+                    self.assertEqual(json.loads(output), {'items': [{'number': 1, 'title': 'News\x1b[31m\n'}],
+                                                         'total': 1, 'loop': True, 'dispatched': True})
+                else:
+                    self.assertEqual(output, '1: News [31m \n')
+                    self.assertNotIn('\x1b', output)
+
+    def test_invalid_metadata_never_claims_dispatch_or_retries(self):
+        valid = {'items': [{'number': 1, 'title': 'Video'}], 'total': 1, 'loop': True, 'dispatched': True}
+        cases = [None, [], {}, dict(valid, total=True), dict(valid, total=2), dict(valid, items={}),
+                 dict(valid, items=[]), dict(valid, items=[{}]), dict(valid, items=[{'number': 2, 'title': 'V'}]),
+                 dict(valid, items=[{'number': True, 'title': 'V'}]),
+                 dict(valid, items=[{'number': 1, 'title': None}]),
+                 dict(valid, dispatched=False), dict(valid, loop=False), {'items': [], 'total': 0}]
+        for data in cases:
+            with self.subTest(data=data):
+                status, output, errors, calls = self.run_command(['vp', 'video'], data, True)
+                self.assertEqual(status, 1)
+                self.assertEqual(output, '')
+                self.assertNotIn('playback requested', errors)
+                self.assertIn('do not repeat', errors)
+                self.assertEqual(len(calls), 1)
+
+    def test_unsupported_rejected_and_uncertain_requests_do_not_retry(self):
+        for error in ['Unsupported VPortal request', 'No VPortal videos match',
+                      'Request may have executed; do not repeat blindly']:
+            with self.subTest(error=error):
+                status, output, errors, calls = self.run_command(['vp', 'video'], ott.Error(error))
+                self.assertEqual(status, 1)
+                self.assertEqual(output, '')
+                self.assertEqual(errors, f'Error: {error}\n')
+                self.assertEqual(len(calls), 1)
+
+
 class ReadbackTest(unittest.TestCase):
     def setUp(self):
         self.client = object.__new__(ott.Client)

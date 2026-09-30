@@ -35,6 +35,8 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME p                         list channel — current programme
   ott NAME p TEXT                    find programmes and play the first match
   ott NAME p --list [TEXT]           list programmes without switching channels
+  ott NAME vp TEXT                   loop VPortal videos whose titles match TEXT
+  ott NAME vp --list TEXT            list matching VPortal videos without playing
   ott NAME v                         show volume
   ott NAME v 35                      set volume to 35%
   ott NAME v +5 / v -5               increase / decrease volume
@@ -47,7 +49,7 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME exit                      close the player / enter standby
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
-Player, channel, programme and provider searches are case-insensitive.
+Player, channel, programme, VPortal and provider searches are case-insensitive.
 """
 
 
@@ -248,6 +250,16 @@ def parse_command(words):
         return "status", {}
     verb, tail = words[0].casefold(), words[1:]
     text = " ".join(tail)
+    if verb == "vp":
+        listing = tail[:1] == ["--list"]
+        text = " ".join(tail[1:] if listing else tail).strip()
+        try:
+            length = len(text.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise Error("VPortal search must be valid UTF-8 text") from None
+        if not 1 <= length <= 1024:
+            raise Error("Use vp TEXT or vp --list TEXT; the search must contain 1–1024 UTF-8 bytes")
+        return ("vportal_search" if listing else "vportal"), {"query": text}
     if verb in ("s", "p"):
         if verb == "p":
             text = " ".join(tail[1:] if tail[:1] == ["--list"] else tail).strip()
@@ -291,6 +303,30 @@ def parse_command(words):
             raise Error("play requires a channel number or name")
         return "play", {"query": text}
     return "play", {"query": " ".join(words)}
+
+
+def vportal_metadata(data, playing):
+    """Validate queue acknowledgement and expose only public video metadata."""
+    message = "The player returned invalid VPortal metadata"
+    if playing:
+        message += ". The request may have executed; do not repeat the change blindly."
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        raise Error(message)
+    items = data["items"]
+    if type(data.get("total")) is not int or data["total"] != len(items):
+        raise Error(message)
+    if playing and (not items or data.get("loop") is not True or data.get("dispatched") is not True):
+        raise Error(message)
+    public = []
+    for number, row in enumerate(items, 1):
+        if (not isinstance(row, dict) or type(row.get("number")) is not int or row["number"] != number
+                or not isinstance(row.get("title"), str)):
+            raise Error(message)
+        public.append({"number": number, "title": row["title"]})
+    result = {"items": public, "total": len(public)}
+    if playing:
+        result.update(loop=True, dispatched=True)
+    return result
 
 
 def provision_kubernetes(client, config_path, name, device):
@@ -484,6 +520,8 @@ def main(argv=None):
         words = args.words[1:]
         action, params = parse_command(words)
         data = client.call(device, action, params)
+        if action in ("vportal", "vportal_search"):
+            data = vportal_metadata(data, action == "vportal")
         playback_error = None
         if action == "programs" and params["search"] and words[1:2] != ["--list"]:
             if data["programs"]:
@@ -512,6 +550,9 @@ def main(argv=None):
         elif action == "programs":
             for row in data["programs"]:
                 print(f"{clean(row['channel'])} — {clean(row['title'])}")
+        elif action in ("vportal", "vportal_search"):
+            for row in data["items"]:
+                print(f"{row['number']}: {clean(row['title'])}")
         elif action == "status" and words and words[0].casefold() == "v":
             if data.get("volume") is None:
                 raise Error("The platform does not report volume")
@@ -530,6 +571,10 @@ def main(argv=None):
         if action == "programs" and data.get("playback", {}).get("dispatched"):
             channel = data["playback"]["channel"]
             print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
+        if action == "vportal":
+            print(f"VPortal playback requested: {data['total']} videos; repeat enabled.", file=sys.stderr)
+        elif action == "vportal_search" and not data["items"]:
+            print("No VPortal videos match the search.", file=sys.stderr)
         if action == "programs" and data.get("partial"):
             print(f"EPG is partially loaded: checked {data['checked']} of {data['total']} channels. Try again later.", file=sys.stderr)
         if playback_error:
