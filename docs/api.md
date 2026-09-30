@@ -60,6 +60,21 @@ CORS is a browser boundary, not authentication. Keep administrator access separa
 
 `POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
 
+`vportal` and `vportal_search` accept exactly `{"query":"TITLE FILTER"}`. The
+query must be a string of at most 1024 UTF-8 bytes and must not be empty after
+trimming whitespace. Matching is case-insensitive and performed by the player.
+`vportal` requests playback of every matching VPortal video in catalogue order,
+repeating from the first after the last ends. `vportal_search` only lists the
+matches. Success data is `{"items":[{"number":1,"title":"Video"}],"total":1}`;
+playback adds `"loop":true,"dispatched":true`. Numbers are one-based positions
+within the result queue. Results contain title metadata only, never stream URLs
+or credentials. Dispatch does not establish rendered playback or successful
+completion of the queue. Unsupported or rejected requests use the existing
+response statuses; the client never retries the initial POST automatically.
+The player dispatches only after collecting the complete bounded selection.
+Natural completion advances and wraps the queue; Stop or source replacement
+cancels pending work. A media or resolution error does not count as completion.
+
 ACK-mode device polling additionally returns `request_protocol:1` and a `requests` array. Old players ignore the extension. Requests share the existing per-device queue and TTL. Legacy polls and command ACKs cannot consume requests. The device submits `{id,status,data}` to `POST /api/responses`; accepted statuses are `ok`, `rejected`, `unsupported`. The matching pending request is removed atomically with result retention. Retries are idempotent, cross-device responses are rejected, and expired requests cannot create results.
 
 Results are bounded to 2 MiB each, 50 per device and 16 MiB globally; they expire 60 seconds after receipt. Command requests remain bounded to 16 KiB and 2 MiB of total pending queue data. All endpoints use the existing authentication, CORS and rate limits. Null origins can access device responses only when explicitly enabled. Results and last activity are in-memory; a restart clears them. Player request execution is generation-cancelled on disconnect and completed IDs are deduplicated with bounded retention during one page session. A dispatch result is not proof of playback or completed provider loading.

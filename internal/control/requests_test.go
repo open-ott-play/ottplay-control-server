@@ -154,3 +154,72 @@ func TestRequestValidationAndOrigins(t *testing.T) {
 		t.Fatal("request did not expire")
 	}
 }
+
+func TestVPortalRequestRoundTrip(t *testing.T) {
+	for _, action := range []string{"vportal", "vportal_search"} {
+		for _, value := range []string{"СВАДЬБА Straße Σς İ 😀", strings.Repeat("я", 512)} {
+			t.Run(action+"/"+value[:4], func(t *testing.T) {
+				s := newTestServer(t)
+				body, _ := json.Marshal(map[string]any{"action": action, "params": map[string]string{"query": value}})
+				id := rpcID(t, s, string(body))
+				poll := request(s, "GET", "/api/webhook/commands?delivery=ack", firstToken, "", nil)
+				expect(t, poll, 200)
+				var response struct {
+					Requests []struct {
+						ID     string            `json:"id"`
+						Action string            `json:"action"`
+						Params map[string]string `json:"params"`
+					} `json:"requests"`
+				}
+				if err := json.Unmarshal(poll.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				if len(response.Requests) != 1 || response.Requests[0].ID != id || response.Requests[0].Action != action || response.Requests[0].Params["query"] != value || len(response.Requests[0].Params) != 1 {
+					t.Fatalf("VPortal request changed in transit: %s", poll.Body.String())
+				}
+				data := `{"items":[{"number":1,"title":"Свадьба"}],"total":1}`
+				if action == "vportal" {
+					data = `{"items":[{"number":1,"title":"Свадьба"}],"total":1,"loop":true,"dispatched":true}`
+				}
+				resultBody := `{"id":"` + id + `","status":"ok","data":` + data + `}`
+				expect(t, request(s, "POST", "/api/responses", firstToken, resultBody, nil), 200)
+				result := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+				expect(t, result, 200)
+				if result.Body.String() != resultBody || len(s.devices[0].queue) != 0 {
+					t.Fatal("VPortal result changed or left the request queued")
+				}
+			})
+		}
+	}
+}
+
+func TestVPortalRequestRejectsMalformedParams(t *testing.T) {
+	for _, action := range []string{"vportal", "vportal_search"} {
+		for _, params := range []string{`null`, `[]`, `{}`, `{"query":null}`, `{"query":1}`, `{"query":true}`, `{"query":[]}`, `{"query":{}}`,
+			`{"query":""}`, `{"query":" \t\u2003 "}`, `{"search":"video"}`, `{"query":"video","loop":true}`,
+			`{"query":"video","token":"secret"}`, `{"query":"first","query":"second"}`,
+			`{"query":"` + strings.Repeat("x", 1025) + `"}`, `{"query":"` + strings.Repeat("я", 513) + `"}`} {
+			t.Run(action+"/"+params[:min(len(params), 30)], func(t *testing.T) {
+				s := newTestServer(t)
+				body := `{"action":"` + action + `","params":` + params + `}`
+				expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, body, nil), 400)
+				if len(s.devices[0].queue) != 0 || s.bytes != 0 {
+					t.Fatal("invalid VPortal request entered the queue")
+				}
+			})
+		}
+	}
+}
+
+func TestVPortalWireActionNamesAreExact(t *testing.T) {
+	for _, action := range []string{"vp", "VP", "VPortal", "VPORTAL", "vportal-search", "vportal_search_extra"} {
+		t.Run(action, func(t *testing.T) {
+			s := newTestServer(t)
+			body := `{"action":"` + action + `","params":{"query":"video"}}`
+			expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, body, nil), 400)
+			if len(s.devices[0].queue) != 0 {
+				t.Fatal("an unsupported VPortal action entered the queue")
+			}
+		})
+	}
+}
