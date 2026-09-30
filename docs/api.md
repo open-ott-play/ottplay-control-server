@@ -60,6 +60,23 @@ CORS is a browser boundary, not authentication. Keep administrator access separa
 
 `POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
 
+`provider_settings` accepts provider IDs `m3u`, `xtream`, `stalker`, `ottclub`
+and `plex`. The controller requires exactly `provider` and an object-valued
+`settings`; provider-specific field validation remains on the player. For Plex,
+select the Plex provider on a compatible player, then send its server URL and
+token together:
+
+```json
+{"action":"provider_settings","params":{"provider":"plex","settings":{"server":"http://nas.example:32400","token":"YOUR_PLEX_TOKEN"}}}
+```
+
+Only the selected device's authenticated command poll receives these settings.
+The normal player result contains `{fields:["server","token"],provider:"plex",saved:true}`,
+without the server URL or token values. The controller relays the player's result;
+the player is responsible for omitting credentials. A saved acknowledgement does
+not establish server reachability or completed playback. Older players can reject
+unsupported Plex settings; callers must not replay an uncertain request.
+
 `profiles` accepts exactly `{}`. For the active M3U provider it returns
 `{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured,vportal_configured}]}`:
 exactly 15 ordered slots numbered 1–15, with one active slot. History is an

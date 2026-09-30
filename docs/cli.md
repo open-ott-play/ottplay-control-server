@@ -246,6 +246,55 @@ preserved. Credentials are not echoed in status, provider lists or
 acknowledgements. Save these files with mode 600 and use HTTPS outside a trusted
 local network.
 
+### Plex
+
+Select Plex, then configure the server address and its Plex access token in one
+request. The token prompt hides input and does not add the token to shell history:
+
+```sh
+ott t1 provider plex
+ott t1 plex setup 'http://nas.example:32400'
+```
+
+Both fields are required for the first setup. Once saved, change either field
+while preserving the other credential and the current Plex playback preference:
+
+```sh
+ott t1 plex server 'https://plex.example'
+ott t1 plex token
+```
+
+For scripts, read the token from a private UTF-8 file (one token, with an optional
+trailing newline), or supply a private provider-config JSON file:
+
+```sh
+ott t1 plex setup 'http://nas.example:32400' --token-file ~/private/plex-token
+ott t1 plex token-file ~/private/plex-token
+ott t1 provider-config ~/private/plex.json
+```
+
+```json
+{"provider":"plex","settings":{"server":"http://nas.example:32400","token":"YOUR_PLEX_TOKEN"}}
+```
+
+Direct arguments are also supported: `plex setup URL TOKEN` and `plex token TOKEN`.
+Those tokens can appear in shell history and process arguments; use the hidden
+prompt or file forms when that matters. A terminal without hidden input must use
+a file or an explicit argument; the CLI never falls back to echoing the prompt.
+
+The server address must be HTTP(S), with a valid port and no embedded credentials,
+query, fragment or `..` path segment. The token must be nonempty, at most 1024
+UTF-16 code units, and contain no whitespace or control characters. Outer pasted
+whitespace and a token file's trailing newline are removed before sending.
+
+These commands require both a command server and a player with remote Plex
+settings support. Plex must be selected and its settings unlocked. Saving uses
+the player's existing Plex driver, reloads the library and clears saved account
+connection candidates when the address or token changes. `Plex settings saved`
+confirms that the settings were stored; it does not prove a successful server
+connection or playback. Tokens and addresses are omitted from acknowledgements,
+including `--json`. A rejected or uncertain operation is not retried automatically.
+
 Xtream:
 
 ```json

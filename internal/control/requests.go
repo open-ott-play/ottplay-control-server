@@ -121,7 +121,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		// the player. No credentials are returned by status or provider listing.
 		var provider string
 		_, fieldsErr := decodeObject(params["settings"])
-		ok = len(params) == 2 && json.Unmarshal(params["provider"], &provider) == nil && fieldsErr == nil && (provider == "m3u" || provider == "xtream" || provider == "stalker" || provider == "ottclub")
+		ok = len(params) == 2 && json.Unmarshal(params["provider"], &provider) == nil && fieldsErr == nil && (provider == "m3u" || provider == "xtream" || provider == "stalker" || provider == "ottclub" || provider == "plex")
 	default:
 		ok = false
 	}
