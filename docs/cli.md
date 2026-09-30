@@ -157,8 +157,18 @@ ott --timeout 60 tv p
 
 Searches for channels, programmes, VPortal titles, providers and aliases are case-insensitive,
 including Cyrillic text. Exact channel names take precedence. If several
-channel names match a `play` query, the CLI lists the choices without switching;
-select a number.
+channel names match a text query, the CLI requests the first in provider catalogue
+order and prints a warning to stderr. For example, `ott iphone РЕН` selects the
+first matching channel, while `ott iphone "РЕН ТВ"` prefers that exact name.
+`ott iphone s РЕН` lists matches without switching. Successful exact or unique
+matches use one request. Only an explicit player rejection containing a valid,
+ordered list of multiple matches permits one additional numeric play request;
+unsupported actions, numeric queries, invalid results and uncertain transport
+failures do not trigger it. The second response must confirm the selected number,
+ID and name before the CLI reports a switch request. `--json` keeps the ordinary
+playback response on stdout; the ambiguity warning stays on stderr. Keep the
+provider/catalogue unchanged between requests; a mismatching acknowledgement
+reports an error but cannot undo a switch that already happened.
 The numbers used by `s` and `play` refer to the provider's full catalogue,
 regardless of the category currently open. `random` retains the existing
 behaviour of using the current playback list.

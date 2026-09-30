@@ -29,7 +29,7 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show player status
   ott NAME 12                        play channel 12 from the s listing
-  ott NAME CHANNEL                   find and play a channel (case-insensitive)
+  ott NAME CHANNEL                   play the first matching channel (exact name first)
   ott NAME play s                    play a channel whose name is reserved
   ott NAME s [TEXT]                  list channels, optionally matching TEXT
   ott NAME p                         list channel — current programme
@@ -55,6 +55,13 @@ Player, channel, programme, VPortal and provider searches are case-insensitive.
 
 class Error(Exception):
     pass
+
+
+class PlayerRejected(Error):
+    """A completed request explicitly rejected by the player, with its metadata."""
+    def __init__(self, message, data):
+        super().__init__(message)
+        self.data = data
 
 
 class TransportError(Error):
@@ -387,7 +394,10 @@ class Client:
                 if not isinstance(matches, list) or not all(isinstance(row, dict) for row in matches):
                     raise Error("The player rejected the request but returned an invalid match list")
                 details = "\n".join(f"{row.get('number', row.get('index', ''))}: {clean(row.get('name', ''))}" for row in matches)
-                raise Error(clean(data.get("error", "The player rejected the request")) + ("\n" + details if details else ""))
+                message = clean(data.get("error", "The player rejected the request")) + ("\n" + details if details else "")
+                if result["status"] == "rejected":
+                    raise PlayerRejected(message, data)
+                raise Error(message)
             return result["data"]
         raise Error("The player did not respond. Open it, check the address/access code and use a version that supports the CLI. The request may still execute before its TTL expires; do not repeat the change blindly.")
 
@@ -395,6 +405,57 @@ class Client:
 def clean(value):
     # Provider-controlled names must not send terminal control/escape sequences.
     return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", str(value))
+
+
+def channel_identity(value):
+    # Legacy channel IDs can be strings or JavaScript safe integers.
+    if isinstance(value, str) and value and epg_text(value, 512):
+        return value
+    if type(value) is int and -9007199254740991 <= value <= 9007199254740991:
+        return str(value)
+    return None
+
+
+def play_channel(client, device, params):
+    try:
+        # Preserve the player's exact-name preference and the single-request path.
+        return client.call(device, "play", params)
+    except PlayerRejected as rejected:
+        text = params["query"].strip()
+        if not text or re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
+            raise
+        matches = rejected.data.get("matches")
+        if not isinstance(matches, list) or len(matches) < 2:
+            raise
+        previous, identities, names = 0, set(), []
+        for row in matches:
+            if not isinstance(row, dict):
+                raise Error("The player returned an invalid ambiguous channel list; no switch was requested") from None
+            number, name = row.get("number"), row.get("name")
+            identity = channel_identity(row.get("id"))
+            if (type(number) is not int or not previous < number <= 9007199254740991
+                    or identity is None or identity in identities
+                    or not epg_text(name, 16384) or not name.strip()
+                    or text.casefold() not in name.casefold()):
+                raise Error("The player returned an invalid ambiguous channel list; no switch was requested") from None
+            previous = number
+            identities.add(identity)
+            names.append(name.casefold())
+        # An exact-name result cannot legitimately be mixed with substring matches.
+        if text.casefold() in names and any(name != text.casefold() for name in names):
+            raise Error("The player returned an invalid ambiguous channel list; no switch was requested") from None
+        selected = matches[0]
+        print(f"Multiple channels match; requesting the first in catalogue order: "
+              f"{selected['number']}: {clean(selected['name'])}", file=sys.stderr)
+        # Only an explicit rejection permits this second request. Never replay it.
+        result = client.call(device, "play", {"query": str(selected["number"])})
+        channel = result.get("channel") if isinstance(result, dict) else None
+        if (not isinstance(channel, dict) or result.get("dispatched") is not True
+                or type(channel.get("number")) is not int or channel["number"] != selected["number"]
+                or channel_identity(channel.get("id")) != channel_identity(selected["id"])
+                or channel.get("name") != selected["name"]):
+            raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
+        return result
 
 
 def parse_command(words):
@@ -675,6 +736,8 @@ def main(argv=None):
         catalog_play = None
         if action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"])
+        elif action == "play":
+            data = play_channel(client, device, params)
         else:
             data = client.call(device, action, params)
         if action in ("vportal", "vportal_search"):
