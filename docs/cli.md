@@ -266,6 +266,78 @@ Settings use the existing save and reload drivers. Parental settings locks and
 platform restrictions still apply; unlock the settings on the player first.
 Other providers currently require their own settings UI.
 
+## M3U profiles
+
+M3U has 15 numbered profiles. Select the M3U provider first; these commands
+require it to be active and respect the player's settings lock:
+
+```sh
+ott tv provider m3u
+ott tv profiles
+ott tv profile 3
+ott tv profile 3 name "Living room"
+ott tv profile 3 url 'https://provider.example/list.m3u'
+ott tv profile 3 history 168
+ott tv profile 3 vportal 'portal::[key:YOUR_KEY]https://provider.example/api/v1/'
+ott tv profile 3 vportal ''
+ott tv profile-config 3 /private/profile.json
+```
+
+`profiles` lists all 15 slots in order, marking the active slot with `*`. It shows
+the name, archive depth in hours and whether playlist/VPortal links are configured.
+URLs, provider keys and credentials are omitted from both normal and JSON output.
+An existing history value that cannot be validated appears as `unknown` (`null`
+in JSON). `profile N` selects that slot; it reports a switch request, not completed
+provider loading or visible playback.
+
+Use `profile-config N FILE.json` to update several settings together. Its contents
+are the settings object itself, without a `provider` or `settings` wrapper:
+
+```json
+{"name":"Cinema","playlist":"https://provider.example/list.m3u","history_hours":168,"vportal":"portal::[key:YOUR_KEY]https://provider.example/api/v1/"}
+```
+
+VPortal requires the complete cabinet link in
+`portal::[key:YOUR_KEY]https://provider.example/api/v1/` format, including its key
+and endpoint. A bare HTTP(S) URL is not a VPortal cabinet link.
+
+Only supplied fields change. Editing an inactive profile leaves the active
+playlist running. Renaming a profile or changing only its VPortal link does not
+reload channels; a VPortal change replaces that profile's media source. Changing
+the active playlist or its archive depth reloads channels once.
+Profile numbers are integers 1–15; `history_hours`
+is an integer 0–8760. Archive depth tells the player what history to offer; the
+provider must still supply that history. Names are limited to 256 UTF-8 bytes,
+playlist and VPortal strings to 8192 bytes each, with no C0 or DEL control
+characters. Empty strings clear the corresponding name or link. Clearing the
+active playlist also reloads that slot, so its previous stream does not remain
+active. The player validates links and applies changes through its normal driver.
+
+The JSON file and complete request must each fit within 16 KiB. Empty settings,
+duplicate fields, unknown fields and invalid values are rejected before sending.
+Save files containing private links with mode 600. Updating settings is atomic:
+all supplied fields must pass validation. The acknowledgement must match the
+requested profile and nonsecret settings before the CLI reports them saved;
+URL changes are confirmed only through configured/empty flags. Unsupported,
+rejected or uncertain requests are never repeated automatically.
+
+## Restarting playback or the player
+
+`ott tv restart` and `ott tv restart stream` request a restart of the current
+stream through the playback backend. `ott tv restart player` requests a full
+player reload. Neither command selects another provider or profile. Backends
+that cannot perform the requested operation return an explicit unsupported result.
+
+A stream result means the restart was dispatched, not that video has resumed.
+A player reload result means the request was accepted: the player reloads only
+after its response reaches the controller successfully. The CLI prints
+`Player reload accepted; waiting for the acknowledgement to reach the player.`
+It does not claim the reload completed, poll the player's state or resend the
+request. An expired request or changed/disconnected command-server configuration
+can discard the pending reload. Check the player before manually repeating an
+uncertain request. A full player reload does not restore an in-memory VPortal
+repeat queue.
+
 ## Acknowledgements and limitations
 
 The CLI requires a server and player supporting `request_protocol=1`. Older

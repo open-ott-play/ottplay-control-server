@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
+	"unicode/utf8"
 )
 
 const maxResponseBytes = 2 * 1024 * 1024
@@ -86,8 +88,15 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	switch action {
-	case "status", "providers", "epg_catalog":
+	case "status", "providers", "profiles", "epg_catalog":
 		ok = len(params) == 0
+	case "profile":
+		ok = len(params) == 1 && profileInteger(params["number"], 1, 15)
+	case "profile_settings":
+		ok = len(params) == 2 && profileInteger(params["number"], 1, 15) && validProfileSettings(params["settings"])
+	case "restart":
+		var target string
+		ok = len(params) == 1 && json.Unmarshal(params["target"], &target) == nil && (target == "stream" || target == "player")
 	case "play_catalog":
 		_, validCatalog := textValue(params["catalog"], 128)
 		_, validID := textValue(params["id"], 2048)
@@ -142,6 +151,75 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	s.bytes += len(data)
 	s.mu.Unlock()
 	reply(w, 202, map[string]string{"status": "queued", "id": id})
+}
+
+func profileInteger(raw json.RawMessage, min, max int) bool {
+	var value *int
+	return json.Unmarshal(raw, &value) == nil && value != nil && *value >= min && *value <= max
+}
+
+func profileText(raw json.RawMessage, max int) bool {
+	var value string
+	if len(raw) < 2 || raw[0] != '"' || !utf8.Valid(raw) || json.Unmarshal(raw, &value) != nil || len(value) > max {
+		return false
+	}
+	for _, character := range value {
+		if character < 32 || character == 127 {
+			return false
+		}
+	}
+	// encoding/json replaces unpaired UTF-16 surrogates. Reject them instead of
+	// silently changing a profile name or credential-bearing URL in transit.
+	for i := 1; i < len(raw)-1; i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		i++
+		if raw[i] != 'u' {
+			continue
+		}
+		code, _ := strconv.ParseUint(string(raw[i+1:i+5]), 16, 16)
+		i += 4
+		if code >= 0xD800 && code <= 0xDBFF {
+			if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+				return false
+			}
+			low, err := strconv.ParseUint(string(raw[i+3:i+7]), 16, 16)
+			if err != nil || low < 0xDC00 || low > 0xDFFF {
+				return false
+			}
+			i += 6
+		} else if code >= 0xDC00 && code <= 0xDFFF {
+			return false
+		}
+	}
+	return true
+}
+
+func validProfileSettings(raw json.RawMessage) bool {
+	settings, err := decodeObject(raw)
+	if err != nil || len(settings) == 0 {
+		return false
+	}
+	for key, value := range settings {
+		switch key {
+		case "name":
+			if !profileText(value, 256) {
+				return false
+			}
+		case "playlist", "vportal":
+			if !profileText(value, 8192) {
+				return false
+			}
+		case "history_hours":
+			if !profileInteger(value, 0, 8760) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device) {

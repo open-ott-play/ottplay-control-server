@@ -44,6 +44,14 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME provider m3u              select a provider by ID, index or name
   ott NAME provider-config FILE      update active provider settings from JSON
   ott NAME playlist URL              update the M3U playlist
+  ott NAME profiles                  list the 15 M3U profiles without URLs
+  ott NAME profile N                 select M3U profile 1–15
+  ott NAME profile N url URL         change a profile's playlist URL
+  ott NAME profile N history HOURS   set archive depth in hours (0–8760)
+  ott NAME profile N vportal LINK    set a profile's VPortal link
+  ott NAME profile N name NAME       rename a profile
+  ott NAME profile-config N FILE     update profile settings atomically from JSON
+  ott NAME restart [stream|player]   restart the stream (default) or reload the player
   ott NAME random [FROM TO]          play a random channel
   ott NAME msg TEXT                  show an on-screen message
   ott NAME exit                      close the player / enter standby
@@ -62,6 +70,10 @@ class PlayerRejected(Error):
     def __init__(self, message, data):
         super().__init__(message)
         self.data = data
+
+
+class PlayerUnsupported(Error):
+    pass
 
 
 class TransportError(Error):
@@ -397,7 +409,7 @@ class Client:
                 message = clean(data.get("error", "The player rejected the request")) + ("\n" + details if details else "")
                 if result["status"] == "rejected":
                     raise PlayerRejected(message, data)
-                raise Error(message)
+                raise PlayerUnsupported(message)
             return result["data"]
         raise Error("The player did not respond. Open it, check the address/access code and use a version that supports the CLI. The request may still execute before its TTL expires; do not repeat the change blindly.")
 
@@ -463,6 +475,40 @@ def parse_command(words):
         return "status", {}
     verb, tail = words[0].casefold(), words[1:]
     text = " ".join(tail)
+    if verb == "profiles":
+        if tail:
+            raise Error("Use profiles without arguments")
+        return "profiles", {}
+    if verb in ("profile", "profile-config"):
+        if not tail or not re.fullmatch(r"[1-9]|1[0-5]", tail[0]):
+            raise Error("Profile number must be an integer from 1 to 15")
+        number = int(tail[0])
+        if verb == "profile-config":
+            if len(tail) != 2:
+                raise Error("Use profile-config N FILE.json")
+            settings = read_profile_settings(tail[1])
+        elif len(tail) == 1:
+            return "profile", {"number": number}
+        else:
+            field = {"url": "playlist", "history": "history_hours", "vportal": "vportal", "name": "name"}.get(tail[1].casefold())
+            if field is None or len(tail) < 3 or (field != "name" and len(tail) != 3):
+                raise Error("Use profile N [url URL | history HOURS | vportal LINK | name NAME]")
+            value = " ".join(tail[2:])
+            if field == "history_hours":
+                if not re.fullmatch(r"0|[1-9][0-9]{0,3}", value):
+                    raise Error("Profile history must be an integer from 0 to 8760 hours")
+                value = int(value)
+            settings = {field: value}
+        validate_profile_settings(settings)
+        params = {"number": number, "settings": settings}
+        if len(json.dumps({"action": "profile_settings", "params": params}, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
+            raise Error("Profile settings exceed the 16 KiB request limit")
+        return "profile_settings", params
+    if verb == "restart":
+        target = tail[0].casefold() if len(tail) == 1 else "stream"
+        if len(tail) > 1 or target not in ("stream", "player"):
+            raise Error("Use restart, restart stream or restart player")
+        return "restart", {"target": target}
     if verb == "vp":
         listing = tail[:1] == ["--list"]
         text = " ".join(tail[1:] if listing else tail).strip()
@@ -516,6 +562,89 @@ def parse_command(words):
             raise Error("play requires a channel number or name")
         return "play", {"query": text}
     return "play", {"query": " ".join(words)}
+
+
+def read_profile_settings(path):
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate profile setting")
+            result[key] = value
+        return result
+    try:
+        with Path(path).expanduser().open(encoding="utf-8") as stream:
+            raw = stream.read(16 * 1024 + 1)
+        if len(raw.encode("utf-8")) > 16 * 1024:
+            raise ValueError("Oversized profile settings")
+        return json.loads(raw, object_pairs_hook=unique_fields)
+    except (OSError, ValueError):
+        raise Error("Could not read profile settings: use a valid JSON object without duplicate fields, at most 16 KiB") from None
+
+
+def validate_profile_settings(settings):
+    if (not isinstance(settings, dict) or not settings
+            or set(settings) - {"name", "playlist", "history_hours", "vportal"}):
+        raise Error("Profile settings must contain only name, playlist, history_hours or vportal, with at least one field")
+    for key, value in settings.items():
+        if key == "history_hours":
+            if type(value) is not int or not 0 <= value <= 8760:
+                raise Error("Profile history must be an integer from 0 to 8760 hours")
+        elif (not epg_text(value, 256 if key == "name" else 8192, "utf-8")
+              or any(ord(character) < 32 or ord(character) == 127 for character in value)):
+            raise Error("Profile settings must be UTF-8 text without control characters: name up to 256 bytes, playlist and VPortal links up to 8192 bytes")
+
+
+def profile_metadata(data, action, params):
+    message = "The player returned invalid M3U profile metadata"
+    if action != "profiles":
+        message += ". The request may have executed; do not repeat the change blindly."
+    def fail():
+        raise Error(message)
+    def profile(row):
+        if (not isinstance(row, dict) or type(row.get("number")) is not int or not 1 <= row["number"] <= 15
+                or not epg_text(row.get("name"), 256, "utf-8")
+                or any(type(row.get(key)) is not bool for key in ("active", "playlist_configured", "vportal_configured"))
+                or "history_hours" not in row or (row["history_hours"] is not None
+                    and (type(row["history_hours"]) is not int or not 0 <= row["history_hours"] <= 8760))):
+            fail()
+        return {key: row[key] for key in ("number", "name", "active", "history_hours", "playlist_configured", "vportal_configured")}
+    if not isinstance(data, dict) or data.get("provider") != "m3u":
+        fail()
+    if action == "profiles":
+        if not isinstance(data.get("profiles"), list) or len(data["profiles"]) != 15:
+            fail()
+        rows = [profile(row) for row in data["profiles"]]
+        if any(row["number"] != number for number, row in enumerate(rows, 1)) or sum(row["active"] for row in rows) != 1:
+            fail()
+        return {"provider": "m3u", "profiles": rows}
+    row = profile(data.get("profile"))
+    if row["number"] != params["number"]:
+        fail()
+    if action == "profile":
+        if data.get("dispatched") is not True or row["active"] is not True:
+            fail()
+        return {"provider": "m3u", "profile": row, "dispatched": True}
+    if data.get("saved") is not True:
+        fail()
+    for key, value in params["settings"].items():
+        if key in ("name", "history_hours"):
+            if row[key] != value:
+                fail()
+        elif row[key + "_configured"] != bool(value):
+            fail()
+    return {"provider": "m3u", "profile": row, "saved": True}
+
+
+def restart_metadata(data, target):
+    if (not isinstance(data, dict) or data.get("accepted") is not True or data.get("target") != target
+            or (target == "stream" and data.get("dispatched") is not True)
+            or (target == "player" and (data.get("dispatched") is not False or data.get("effect") != "reload-after-ack"))):
+        raise Error("The player did not confirm the restart request. It may have executed; do not repeat the change blindly.")
+    result = {"accepted": True, "target": target, "dispatched": target == "stream"}
+    if target == "player":
+        result["effect"] = "reload-after-ack"
+    return result
 
 
 def vportal_metadata(data, playing):
@@ -739,9 +868,20 @@ def main(argv=None):
         elif action == "play":
             data = play_channel(client, device, params)
         else:
-            data = client.call(device, action, params)
+            try:
+                data = client.call(device, action, params)
+            except (PlayerRejected, PlayerUnsupported) as exc:
+                if action not in ("profiles", "profile", "profile_settings", "restart"):
+                    raise
+                # Settings can contain credentials: do not echo player-supplied errors.
+                reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+                raise Error(f"The {action} request was {reason}; check its settings on the player") from None
         if action in ("vportal", "vportal_search"):
             data = vportal_metadata(data, action == "vportal")
+        elif action in ("profiles", "profile", "profile_settings"):
+            data = profile_metadata(data, action, params)
+        elif action == "restart":
+            data = restart_metadata(data, params["target"])
         playback_error = None
         if action == "programs" and params["search"] and words[1:2] != ["--list"]:
             if data["programs"]:
@@ -785,6 +925,18 @@ def main(argv=None):
         elif action == "providers":
             for row in data["providers"]:
                 print(f"{'*' if row['active'] else ' '} {row['index']}: {clean(row['id'])} — {clean(row['name'])}")
+        elif action == "profiles":
+            for row in data["profiles"]:
+                history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
+                print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | history: {history} h | "
+                      f"playlist: {'set' if row['playlist_configured'] else 'empty'} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
+        elif action == "profile":
+            print(f"Profile switch requested: {data['profile']['number']}: {clean(data['profile']['name'])}")
+        elif action == "profile_settings":
+            print(f"Profile settings saved: {data['profile']['number']}: {clean(data['profile']['name'])}")
+        elif action == "restart":
+            print("Stream restart requested." if data["target"] == "stream" else
+                  "Player reload accepted; waiting for the acknowledgement to reach the player.")
         elif action == "play":
             print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
         elif action == "command" and params.get("command") == "set_volume":
