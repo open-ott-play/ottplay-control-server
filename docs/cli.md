@@ -246,7 +246,7 @@ preserved. Credentials are not echoed in status, provider lists or
 acknowledgements. Save these files with mode 600 and use HTTPS outside a trusted
 local network.
 
-### Plex
+Plex:
 
 Select Plex, then configure the server address and its Plex access token in one
 request. The token prompt hides input and does not add the token to shell history:
