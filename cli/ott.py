@@ -702,7 +702,7 @@ def main(argv=None):
                 except Error as exc:
                     playback_error = exc
                     data["playback"] = {"error": str(exc)}
-            else:
+            elif not data.get("partial"):
                 print("No current programmes match the search.", file=sys.stderr)
         if args.json:
             print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -738,7 +738,8 @@ def main(argv=None):
         elif action == "vportal_search" and not data["items"]:
             print("No VPortal videos match the search.", file=sys.stderr)
         if action == "programs" and data.get("partial"):
-            print(f"EPG is partially loaded: checked {data['checked']} of {data['total']} channels. Try again later.", file=sys.stderr)
+            print(f"Programme search is incomplete: checked {data['checked']} of {data['total']} channels on the player. "
+                  "Unchecked channels may contain matches. This is search coverage, not EPG download progress.", file=sys.stderr)
         if playback_error:
             raise playback_error
         return 3 if action == "programs" and data.get("partial") else 0
