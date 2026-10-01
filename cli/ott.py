@@ -4,6 +4,7 @@ import argparse
 import base64
 import getpass
 import http.client
+import ipaddress
 import json
 import math
 import os
@@ -22,6 +23,7 @@ import urllib.request
 import warnings
 
 HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
+  ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
   ott alias NAME UUID                name an existing device
   ott add NAME UUID                  create a device access code and queue
@@ -30,6 +32,7 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show player status
+  ott NAME load PRESET               apply a private Plex and M3U preset
   ott NAME 12                        play channel 12 from the s listing
   ott NAME CHANNEL                   list name matches and play a random matching channel
   ott NAME play s                    play a channel whose name is reserved
@@ -250,9 +253,16 @@ def server_programs(client, device, settings, search):
 
 
 def read_json(path):
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate configuration field")
+            result[key] = value
+        return result
     try:
         with Path(path).expanduser().open(encoding="utf-8") as stream:
-            return json.load(stream)
+            return json.load(stream, object_pairs_hook=unique_fields)
     except (OSError, ValueError) as exc:
         raise Error(f"Could not read JSON file {path}") from exc
 
@@ -500,6 +510,10 @@ def parse_command(words):
         return "status", {}
     verb, tail = words[0].casefold(), words[1:]
     text = " ".join(tail)
+    if verb == "load":
+        if len(tail) != 1 or not preset_name(tail[0]):
+            raise Error("Use load PRESET with a short preset name")
+        return "load", {"preset": tail[0]}
     if verb == "profiles":
         if tail:
             raise Error("Use profiles without arguments")
@@ -744,6 +758,228 @@ def profile_metadata(data, action, params):
     return {"provider": "m3u", "profile": row, "saved": True}
 
 
+def preset_name(value):
+    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", value)
+
+
+def preset_names(config):
+    presets = config.get("presets", {}) if isinstance(config, dict) else None
+    if not isinstance(presets, dict) or any(not preset_name(name) for name in presets):
+        raise Error("Presets must be a mapping of short names using letters, digits, underscores or hyphens")
+    if len({name.casefold() for name in presets}) != len(presets):
+        raise Error("Preset names must be unique ignoring case")
+    return sorted(presets, key=str.casefold)
+
+
+def preset_url(value):
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        host = parsed.hostname or ""
+        if ":" not in host:
+            host = urllib.parse.unquote(host, errors="strict")
+            valid_host = not any(ord(char) <= 32 or ord(char) == 127 or char in "#%/:<>?@[\\]^|" for char in host)
+            valid_host = valid_host and not parsed.netloc.startswith("[")
+            # Browsers interpret a numeric final label as IPv4, even in host.123.
+            # Require the unambiguous four-decimal-octet form for preset URLs.
+            numeric_host = host.rstrip(".")
+            if re.fullmatch(r"(?:[0-9]+|0x[0-9a-f]*)", numeric_host.rsplit(".", 1)[-1], re.I):
+                ipaddress.IPv4Address(numeric_host)
+        else:
+            # urlsplit validates IPv6 brackets; browser URLs do not allow zone IDs.
+            valid_host = "%" not in host
+        return (bool(re.match(r"https?://", value, re.I)) and parsed.scheme in ("http", "https")
+                and bool(host) and valid_host and parsed.username is None and parsed.password is None
+                and not re.search(r"[\\\s\x00-\x1f\x7f]", value)
+                and (parsed.port is None or 1 <= parsed.port <= 65535))
+    except (TypeError, ValueError):
+        return False
+
+
+def preset_vportal(value):
+    # Match the player's cabinet-link grammar without decoding the key or URL.
+    match = re.fullmatch(r'portal::(?:\[|%5b)key:([^\[\]\s<>"\\]{1,1024}?)(?:\]|%5d)(https?://[^\s<>"\\]+)',
+                         value.strip(), re.I)
+    return bool(match and epg_text(match[1], 1024) and re.fullmatch(
+        r'https?://(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::[0-9]{1,5})?(?:[/?][^#]*)?',
+        match[2], re.I) and preset_url(match[2]))
+
+
+def validate_preset(config, requested):
+    names = preset_names(config)
+    if not preset_name(requested):
+        raise Error("Invalid preset name")
+    matches = [name for name in names if name.casefold() == requested.casefold()]
+    if len(matches) != 1:
+        raise Error("Unknown preset; use ott presets to list local names")
+    name = matches[0]
+    value = config["presets"][name]
+    if not isinstance(value, dict) or set(value) != {"m3u", "plex", "active_profile"}:
+        raise Error("A preset must contain m3u, plex and active_profile")
+    if not isinstance(value["m3u"], list) or not 1 <= len(value["m3u"]) <= 15:
+        raise Error("A preset must contain 1–15 complete M3U profiles")
+    profiles = []
+    numbers = set()
+    for row in value["m3u"]:
+        if (not isinstance(row, dict) or set(row) != {"number", "name", "playlist", "history_hours", "vportal"}
+                or type(row["number"]) is not int or not 1 <= row["number"] <= 15 or row["number"] in numbers):
+            raise Error("Preset M3U profiles require complete fields and unique numbers from 1 to 15")
+        settings = {key: row[key] for key in ("name", "playlist", "history_hours", "vportal")}
+        validate_profile_settings(settings)
+        if not preset_url(settings["playlist"]) or (settings["vportal"] and not preset_vportal(settings["vportal"])):
+            raise Error("Preset profiles require an HTTP(S) playlist and a complete VPortal cabinet link")
+        profiles.append({"number": row["number"], "settings": settings})
+        numbers.add(row["number"])
+    active = value["active_profile"]
+    if type(active) is not int or active not in numbers:
+        raise Error("Preset active_profile must name one of its M3U profiles")
+    if not isinstance(value["plex"], dict) or set(value["plex"]) != {"server", "token"}:
+        raise Error("A preset requires both Plex server and token")
+    plex = validate_plex_settings(value["plex"])
+    if not preset_url(plex["server"]):
+        raise Error("Preset Plex server must be a valid HTTP(S) address")
+    requests = [("provider_settings", {"provider": "plex", "settings": plex})]
+    requests.extend(("profile_settings", row) for row in profiles)
+    for action, params in requests:
+        if len(json.dumps({"action": action, "params": params}, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
+            raise Error("A preset settings request exceeds the 16 KiB limit")
+    return name, {"m3u": sorted(profiles, key=lambda row: row["number"]), "plex": plex, "active_profile": active}
+
+
+def load_preset(client, device, name, preset):
+    """Apply acknowledged steps; repeat only proven pre-write mount rejections."""
+    completed = []
+    stage = "start"
+    budget = client.timeout
+
+    def step(label, action, params, validate, retry_errors=()):
+        nonlocal stage
+        stage = label
+        deadline = time.monotonic() + budget
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Error("Preset phase timed out")
+            pending = False
+            try:
+                client.timeout = remaining
+                data = client.call(device, action, params)
+            except PlayerRejected as exc:
+                if not isinstance(exc.data, dict) or exc.data.get("error") not in retry_errors:
+                    raise
+                pending = True
+            finally:
+                client.timeout = budget
+            if time.monotonic() >= deadline:
+                raise Error("Preset phase timed out")
+            if not pending:
+                result = validate(data)
+                if result is not None:
+                    completed.append(label)
+                    return result
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+
+    def provider(expected):
+        def validate(data):
+            if not isinstance(data, dict) or data.get("dispatched") is not True or data.get("provider") != expected:
+                raise Error("Provider switch was not confirmed")
+            return True
+        return validate
+
+    def plex_status(data):
+        if not isinstance(data, dict) or not isinstance(data.get("provider"), str):
+            raise Error("Invalid provider status")
+        # This may report the selected ID before the driver mounts. Never wait for
+        # ready: a Plex credential editor or empty catalogue is still configurable.
+        return True if data["provider"] == "plex" else None
+
+    def profiles(data):
+        return profile_metadata(data, "profiles", {})["profiles"]
+
+    def save_profile(row, active):
+        def validate(data):
+            result = profile_metadata(data, "profile_settings", row)
+            if result["profile"]["active"] != (row["number"] == active):
+                raise Error("The active profile changed during loading")
+            return True
+        step("save_profile_" + str(row["number"]), "profile_settings", row, validate)
+
+    try:
+        step("select_plex", "provider", {"query": "plex"}, provider("plex"))
+        step("wait_plex", "status", {}, plex_status)
+        settings = {"provider": "plex", "settings": preset["plex"]}
+        step("save_plex", "provider_settings", settings,
+             lambda data: plex_settings_metadata(data, preset["plex"]),
+             ("Select this provider before changing its settings.", "Plex settings are unavailable on this player."))
+        step("select_m3u", "provider", {"query": "m3u"}, provider("m3u"))
+        rows = step("wait_m3u", "profiles", {}, profiles,
+                    ("Select the M3U provider before managing profiles.",))
+        current = next(row["number"] for row in rows if row["active"])
+        desired = preset["active_profile"]
+        for row in preset["m3u"]:
+            if row["number"] != current:
+                save_profile(row, current)
+        if current == desired:
+            save_profile(next(row for row in preset["m3u"] if row["number"] == current), current)
+        params = {"number": desired}
+        def selected(data):
+            result = profile_metadata(data, "profile", params)
+            expected = next(row for row in preset["m3u"] if row["number"] == desired)
+            profile_metadata({"provider": "m3u", "saved": True, "profile": result["profile"]},
+                             "profile_settings", expected)
+            return True
+        step("select_profile_" + str(desired), "profile", params, selected)
+        if current != desired:
+            for row in preset["m3u"]:
+                if row["number"] == current:
+                    save_profile(row, desired)
+        def verified(data):
+            final = profiles(data)
+            if next(row["number"] for row in final if row["active"]) != desired:
+                raise Error("Final active profile differs from the preset")
+            for row in preset["m3u"]:
+                profile_metadata({"provider": "m3u", "saved": True, "profile": final[row["number"] - 1]},
+                                 "profile_settings", row)
+            return True
+        step("verify_profiles", "profiles", {}, verified)
+    except KeyboardInterrupt:
+        return {"preset": name, "status": "interrupted", "stage": stage, "completed": completed,
+                "error": "Loading interrupted. A request may have executed; inspect the player before retrying."}
+    except (Error, KeyError, TypeError, ValueError, OSError):
+        return {"preset": name, "status": "failed", "stage": stage, "completed": completed,
+                "error": "Loading stopped. A request may have executed; inspect the player before retrying."}
+    return {"preset": name, "status": "loaded", "provider": "m3u", "active_profile": desired,
+            "completed": completed}
+
+
+def preset_command(config, words, timeout, json_output):
+    receipt = {"status": "failed", "stage": "validate", "completed": [], "error": "Invalid preset configuration or command."}
+    try:
+        _, params = parse_command(words[1:])
+        name, preset = validate_preset(config, params["preset"])
+        receipt["preset"] = name
+        receipt["stage"] = "connect"
+        receipt["error"] = "Could not prepare the player connection."
+        client = Client(config, timeout)
+        device = client.device(words[0])
+        receipt = load_preset(client, device, name, preset)
+    except Error as exc:
+        if receipt["stage"] == "validate":
+            # Local validators use fixed messages, never credential values.
+            receipt["error"] = str(exc)
+    except (KeyError, TypeError, ValueError, OSError):
+        pass
+    except KeyboardInterrupt:
+        receipt.update(status="interrupted", error="Preset loading interrupted before connecting.")
+    if json_output:
+        print(json.dumps(receipt, ensure_ascii=False, indent=2))
+    elif receipt["status"] == "loaded":
+        print(f"Preset loaded: {receipt['preset']} (M3U profile {receipt['active_profile']}).")
+    else:
+        done = ", ".join(receipt["completed"]) or "none"
+        print(f"Preset loading stopped at {receipt['stage']}. Completed: {done}. {receipt['error']}", file=sys.stderr)
+    return 0 if receipt["status"] == "loaded" else 130 if receipt["status"] == "interrupted" else 1
+
+
 def restart_metadata(data, target):
     if (not isinstance(data, dict) or data.get("accepted") is not True or data.get("target") != target
             or (target == "stream" and data.get("dispatched") is not True)
@@ -964,6 +1200,15 @@ def main(argv=None):
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
             raise Error("--timeout must be between 1 and 300 seconds")
         config = read_json(args.config)
+        if args.words[0].casefold() == "presets":
+            if len(args.words) != 1:
+                raise Error("Use presets without arguments")
+            names = preset_names(config)
+            print(json.dumps({"presets": names}, indent=2) if args.json else "\n".join(names))
+            return 0
+        if (len(args.words) > 1 and args.words[1].casefold() == "load"
+                and args.words[0].casefold() not in ("alias", "add", "approve", "pair", "devices", "discover", "pending")):
+            return preset_command(config, args.words, args.timeout, args.json)
         client = Client(config, args.timeout)
         if management(client, args.config, args.words, json_output=args.json):
             return 0
