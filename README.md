@@ -42,6 +42,16 @@ Use the Python CLI for player aliases, live volume, channel search, current EPG,
 provider selection and supported provider configuration: [CLI guide](docs/cli.md).
 Both server and player must include the request/response extension.
 
+To shuffle all VPortal videos matching a title and play them on repeat:
+
+```sh
+ott l vpr "wedding"
+```
+
+`vpr` shuffles the complete selection once, then repeats that queue. Run it again
+for a new shuffle. `vp` plays matches in catalogue order; `vp --list` lists them
+without changing playback. See [VPortal commands](docs/cli.md#commands).
+
 ### Load a saved setup
 
 Store named setups in the private `presets` section of

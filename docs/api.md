@@ -120,13 +120,17 @@ The CLI's optional EPG configuration uses these RPCs around a separate public
 to that service. Existing `programs` remains available for compatibility when
 the CLI has no EPG service configured.
 
-`vportal` and `vportal_search` accept exactly `{"query":"TITLE FILTER"}`. The
+`vportal`, `vportal_random` and `vportal_search` accept exactly `{"query":"TITLE FILTER"}`. The
 query must be a string of at most 1024 UTF-8 bytes and must not be empty after
 trimming whitespace. Matching is case-insensitive and performed by the player.
 `vportal` requests playback of every matching VPortal video in catalogue order,
-repeating from the first after the last ends. `vportal_search` only lists the
+repeating from the first after the last ends. `vportal_random` shuffles the
+complete matching selection once and repeats that permutation; a new request
+creates a new shuffle. `vportal_search` only lists the
 matches. Success data is `{"items":[{"number":1,"title":"Video"}],"total":1}`;
-playback adds `"loop":true,"dispatched":true`. Numbers are one-based positions
+playback adds `"loop":true,"dispatched":true`. `vportal_random` additionally
+returns `"shuffled":true`, which clients must require before reporting success.
+Numbers are one-based positions
 within the result queue. Results contain title metadata only, never stream URLs
 or credentials. Dispatch does not establish rendered playback or successful
 completion of the queue. Unsupported or rejected requests use the existing

@@ -41,6 +41,7 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME p TEXT                    list matching programmes and play a random match
   ott NAME p --list [TEXT]           list programmes without switching channels
   ott NAME vp TEXT                   loop VPortal videos whose titles match TEXT
+  ott NAME vpr TEXT                  shuffle matching VPortal videos and loop the queue
   ott NAME vp --list TEXT            list matching VPortal videos without playing
   ott NAME v                         show volume
   ott NAME v 35                      set volume to 35%
@@ -548,7 +549,7 @@ def parse_command(words):
         if len(tail) > 1 or target not in ("stream", "player"):
             raise Error("Use restart, restart stream or restart player")
         return "restart", {"target": target}
-    if verb == "vp":
+    if verb in ("vp", "vpr"):
         listing = tail[:1] == ["--list"]
         text = " ".join(tail[1:] if listing else tail).strip()
         try:
@@ -556,8 +557,9 @@ def parse_command(words):
         except UnicodeEncodeError:
             raise Error("VPortal search must be valid UTF-8 text") from None
         if not 1 <= length <= 1024:
-            raise Error("Use vp TEXT or vp --list TEXT; the search must contain 1–1024 UTF-8 bytes")
-        return ("vportal_search" if listing else "vportal"), {"query": text}
+            raise Error("Use vp TEXT, vpr TEXT or vp --list TEXT; the search must contain 1–1024 UTF-8 bytes")
+        action = "vportal_search" if listing else "vportal_random" if verb == "vpr" else "vportal"
+        return action, {"query": text}
     if verb in ("s", "p"):
         if verb == "p":
             text = " ".join(tail[1:] if tail[:1] == ["--list"] else tail).strip()
@@ -991,7 +993,7 @@ def restart_metadata(data, target):
     return result
 
 
-def vportal_metadata(data, playing):
+def vportal_metadata(data, playing, shuffled=False):
     """Validate queue acknowledgement and expose only public video metadata."""
     message = "The player returned invalid VPortal metadata"
     if playing:
@@ -1003,6 +1005,8 @@ def vportal_metadata(data, playing):
         raise Error(message)
     if playing and (not items or data.get("loop") is not True or data.get("dispatched") is not True):
         raise Error(message)
+    if shuffled and data.get("shuffled") is not True:
+        raise Error("The player did not confirm shuffling the VPortal queue. Update the player; the request may have executed, so do not repeat it blindly.")
     public = []
     for number, row in enumerate(items, 1):
         if (not isinstance(row, dict) or type(row.get("number")) is not int or row["number"] != number
@@ -1012,6 +1016,8 @@ def vportal_metadata(data, playing):
     result = {"items": public, "total": len(public)}
     if playing:
         result.update(loop=True, dispatched=True)
+    if shuffled:
+        result["shuffled"] = True
     return result
 
 
@@ -1233,8 +1239,8 @@ def main(argv=None):
                 if plex_settings:
                     raise Error(f"The Plex settings request was {reason}; select Plex, unlock its settings and use a player with remote Plex support") from None
                 raise Error(f"The {action} request was {reason}; check its settings on the player") from None
-        if action in ("vportal", "vportal_search"):
-            data = vportal_metadata(data, action == "vportal")
+        if action in ("vportal", "vportal_random", "vportal_search"):
+            data = vportal_metadata(data, action != "vportal_search", action == "vportal_random")
         elif action in ("profiles", "profile", "profile_settings"):
             data = profile_metadata(data, action, params)
         elif action == "restart":
@@ -1272,7 +1278,7 @@ def main(argv=None):
         elif action == "programs":
             for row in data["programs"]:
                 print(f"{clean(row['channel'])} — {clean(row['title'])}")
-        elif action in ("vportal", "vportal_search"):
+        elif action in ("vportal", "vportal_random", "vportal_search"):
             for row in data["items"]:
                 print(f"{row['number']}: {clean(row['title'])}")
         elif action == "status" and words and words[0].casefold() == "v":
@@ -1310,8 +1316,9 @@ def main(argv=None):
             if len(data.get("programs", data.get("channels", []))) > 1:
                 print(f"Randomly selected channel: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
             print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
-        if action == "vportal":
-            print(f"VPortal playback requested: {data['total']} videos; repeat enabled.", file=sys.stderr)
+        if action in ("vportal", "vportal_random"):
+            shuffled = "shuffled; " if action == "vportal_random" else ""
+            print(f"VPortal playback requested: {data['total']} videos; {shuffled}repeat enabled.", file=sys.stderr)
         elif action == "vportal_search" and not data["items"]:
             print("No VPortal videos match the search.", file=sys.stderr)
         if action == "programs" and data.get("partial"):
