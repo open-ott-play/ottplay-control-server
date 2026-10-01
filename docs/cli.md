@@ -381,6 +381,120 @@ requested profile and nonsecret settings before the CLI reports them saved;
 URL changes are confirmed only through configured/empty flags. Unsupported,
 rejected or uncertain requests are never repeated automatically.
 
+## Named setups
+
+A named setup groups provider settings for one environment. `ott PLAYER load NAME`
+loads it onto an already connected player. It is separate from the numbered M3U
+slots selected by `ott PLAYER profile N`. Names are case-insensitive, contain
+1–32 ASCII letters, digits, underscores or hyphens, and start with a letter or
+digit. Use `ott PLAYER play load` to select a channel literally named `load`.
+
+Add `presets` to the existing private `~/.config/ottplay-control/cli.json`, keeping
+its controller settings and player aliases. This example shows the object to add;
+replace the credential placeholders before use:
+
+```json
+"presets": {
+  "local": {
+    "m3u": [
+      {
+        "number": 1,
+        "name": "Local 1",
+        "playlist": "http://127.0.0.1:8090",
+        "history_hours": 144,
+        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+      },
+      {
+        "number": 2,
+        "name": "Local 2",
+        "playlist": "http://127.0.0.1:8090",
+        "history_hours": 144,
+        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+      }
+    ],
+    "plex": {"server": "http://nas.example:32400", "token": "YOUR_PLEX_TOKEN"},
+    "active_profile": 1
+  },
+  "home": {
+    "m3u": [
+      {
+        "number": 1,
+        "name": "Home 1",
+        "playlist": "https://m.2560801.xyz",
+        "history_hours": 144,
+        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+      },
+      {
+        "number": 2,
+        "name": "Home 2",
+        "playlist": "https://m.2560801.xyz",
+        "history_hours": 144,
+        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+      }
+    ],
+    "plex": {"server": "http://nas.example:32400", "token": "YOUR_PLEX_TOKEN"},
+    "active_profile": 1
+  }
+}
+```
+
+`local` uses the Mac's playlist service on loopback. `home` uses its external
+address for the TV and phone. Both can use the same VPortal link and Plex
+credentials. The Plex address must be reachable from each target device.
+The second M3U slot starts with the same settings so it can be customized
+independently. Editing a preset changes only this file; run `load` to apply it.
+Set mode 600 on the file and keep it out of source control and public uploads.
+
+```sh
+ott presets
+ott t1 load local
+ott o1 load local
+ott l load home
+ott iphone load home
+ott --json t1 load LOCAL
+```
+
+To configure all four instances, run each load sequentially and stop on failure:
+
+```sh
+for player in t1 t2 t3 t4; do ott "$player" load local || break; done
+for player in o1 o2 o3 o4; do ott "$player" load local || break; done
+```
+
+The selected setup is fully validated before any remote request. Each M3U entry
+must include `number`, `name`, `playlist`, `history_hours` and `vportal`; numbers
+must be unique integers from 1 to 15. `active_profile` must refer to an included
+slot. Playlist URLs must be nonempty HTTP(S) addresses. An empty VPortal string
+disables VPortal for that slot. Plex requires both `server` and `token`.
+The existing provider length and request-size limits apply.
+
+Loading selects Plex, waits for its settings handler, saves its credentials,
+then selects M3U and waits for the profile handler. It saves inactive slots
+first and selects `active_profile`. If the previously active slot also needs
+updating, it saves that slot after switching, avoiding an unnecessary playlist
+reload. Finally, it checks the resulting M3U metadata. Unlisted M3U slots remain
+unchanged. Each change uses the existing
+request/acknowledgement API; the next change is sent only after the preceding
+one is confirmed. A provider's empty library or unavailable playlist does not
+prevent saving settings: channel readiness is not a configuration barrier.
+
+The whole setup is not a transaction. If a step fails, earlier confirmed saves
+remain in place, and the CLI reports the failed step and completed steps. It
+does not roll back or continue after an uncertain response. Ctrl+C also reports
+confirmed steps and exits with status 130. It retries only
+read-only readiness queries and explicit prerequisite rejections that occur
+before any settings write; it never replays an unacknowledged write. Check the
+player before repeating a failed load. Avoid changing providers/settings from
+another remote or the player's UI while a load is in progress.
+
+`--timeout` bounds each request/readiness phase, so a complete load can take
+longer than a single timeout. Setup output, including `--json`, contains only
+the setup name, step names and selected profile; it omits URLs, VPortal keys and
+Plex tokens. Success confirms storage and selection, not successful media
+playback. Settings locks and platform restrictions still apply. Use a player
+with remote M3U profile and Plex settings support; the existing controller needs
+no deployment change.
+
 ## Restarting playback or the player
 
 `ott tv restart` and `ott tv restart stream` request a restart of the current

@@ -42,6 +42,30 @@ Use the Python CLI for player aliases, live volume, channel search, current EPG,
 provider selection and supported provider configuration: [CLI guide](docs/cli.md).
 Both server and player must include the request/response extension.
 
+### Load a saved setup
+
+Store named setups in the private `presets` section of
+`~/.config/ottplay-control/cli.json`. Each setup contains numbered M3U profiles
+(playlist, archive hours and VPortal link), Plex credentials and the M3U profile
+to select when loading finishes. See the [configuration example](docs/cli.md#named-setups).
+
+```sh
+ott presets                  # List saved setup names without credentials
+ott t1 load local            # Configure a Mac player
+ott o1 load local            # Configure a local OTT Server instance
+ott l load home              # Configure the living-room TV
+ott iphone load home        # Configure the iPhone
+ott t1 profile 2             # Select the second saved M3U profile later
+ott t1 provider plex         # Open the configured Plex provider later
+```
+
+The CLI validates the whole setup first, then waits for each player's
+acknowledgement before sending the next change. It handles provider loading,
+saves Plex and the M3U slots, and selects the configured M3U profile. An error
+stops the sequence and reports the confirmed steps; an uncertain write is never
+repeated automatically. No additional profile service or controller restart is
+needed. Keep this configuration private: it contains provider credentials.
+
 ## Send a command
 
 This example reads the administrator token from the local private configuration without placing it in the URL or command-line arguments:
