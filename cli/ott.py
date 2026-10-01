@@ -4,6 +4,7 @@ import argparse
 import base64
 import getpass
 import http.client
+import ipaddress
 import json
 import math
 import os
@@ -778,6 +779,11 @@ def preset_url(value):
             host = urllib.parse.unquote(host, errors="strict")
             valid_host = not any(ord(char) <= 32 or ord(char) == 127 or char in "#%/:<>?@[\\]^|" for char in host)
             valid_host = valid_host and not parsed.netloc.startswith("[")
+            # Browsers interpret a numeric final label as IPv4, even in host.123.
+            # Require the unambiguous four-decimal-octet form for preset URLs.
+            numeric_host = host.rstrip(".")
+            if re.fullmatch(r"(?:[0-9]+|0x[0-9a-f]*)", numeric_host.rsplit(".", 1)[-1], re.I):
+                ipaddress.IPv4Address(numeric_host)
         else:
             # urlsplit validates IPv6 brackets; browser URLs do not allow zone IDs.
             valid_host = "%" not in host
@@ -829,6 +835,8 @@ def validate_preset(config, requested):
     if not isinstance(value["plex"], dict) or set(value["plex"]) != {"server", "token"}:
         raise Error("A preset requires both Plex server and token")
     plex = validate_plex_settings(value["plex"])
+    if not preset_url(plex["server"]):
+        raise Error("Preset Plex server must be a valid HTTP(S) address")
     requests = [("provider_settings", {"provider": "plex", "settings": plex})]
     requests.extend(("profile_settings", row) for row in profiles)
     for action, params in requests:

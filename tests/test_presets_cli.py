@@ -165,6 +165,23 @@ class PresetValidationTests(unittest.TestCase):
         source['presets']['local']['m3u'][1]['vportal'] = 'PORTAL::%5Bkey:opaque%2Fkey%5DHTTPS://portal.example/api/?a=b'
         self.assertEqual(run(source)[0], 0)
 
+    def test_numeric_hosts_are_validated_before_any_provider_change(self):
+        for host in ('999.999.999.999', 'host.123', 'host.0xff', '09', '127.1', '0x7f000001'):
+            for target in ('playlist', 'vportal', 'plex'):
+                source = config()
+                url = 'http://' + host + '/media'
+                if target == 'plex':
+                    source['presets']['local']['plex']['server'] = url
+                else:
+                    source['presets']['local']['m3u'][1][target] = ('portal::[key:test-only-key]' if target == 'vportal' else '') + url
+                with self.subTest(host=host, target=target):
+                    status, out, err, player, constructor = run(source)
+                    self.assertEqual((status, json.loads(out)['stage'], player.calls), (1, 'validate', []))
+                    constructor.assert_not_called()
+        for url in ('http://127.0.0.1:8090', 'https://192.168.1.25/', 'https://[::1]:32400', 'https://host123.example/list'):
+            with self.subTest(url=url):
+                self.assertTrue(ott.preset_url(url))
+
     def test_bad_root_duplicate_names_and_duplicate_json_fields_fail_cleanly(self):
         for source in [[], 1, {'presets': []}, {'presets': {'bad name': {}}},
                        {'presets': {'Local': {}, 'LOCAL': {}}}]:

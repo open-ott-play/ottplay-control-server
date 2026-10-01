@@ -464,7 +464,9 @@ for player in o1 o2 o3 o4; do ott "$player" load local || break; done
 The selected setup is fully validated before any remote request. Each M3U entry
 must include `number`, `name`, `playlist`, `history_hours` and `vportal`; numbers
 must be unique integers from 1 to 15. `active_profile` must refer to an included
-slot. Playlist URLs must be nonempty HTTP(S) addresses. An empty VPortal string
+slot. Playlist URLs must be nonempty HTTP(S) addresses. Use IPv4 addresses in
+four decimal octets (for example, `127.0.0.1`), not shortened or hexadecimal
+forms. An empty VPortal string
 disables VPortal for that slot. Plex requires both `server` and `token`.
 The existing provider length and request-size limits apply.
 
