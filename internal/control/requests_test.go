@@ -156,7 +156,7 @@ func TestRequestValidationAndOrigins(t *testing.T) {
 }
 
 func TestVPortalRequestRoundTrip(t *testing.T) {
-	for _, action := range []string{"vportal", "vportal_search"} {
+	for _, action := range []string{"vportal", "vportal_random", "vportal_search"} {
 		for _, value := range []string{"СВАДЬБА Straße Σς İ 😀", strings.Repeat("я", 512)} {
 			t.Run(action+"/"+value[:4], func(t *testing.T) {
 				s := newTestServer(t)
@@ -181,6 +181,9 @@ func TestVPortalRequestRoundTrip(t *testing.T) {
 				if action == "vportal" {
 					data = `{"items":[{"number":1,"title":"Свадьба"}],"total":1,"loop":true,"dispatched":true}`
 				}
+				if action == "vportal_random" {
+					data = `{"items":[{"number":1,"title":"Свадьба"}],"total":1,"loop":true,"dispatched":true,"shuffled":true}`
+				}
 				resultBody := `{"id":"` + id + `","status":"ok","data":` + data + `}`
 				expect(t, request(s, "POST", "/api/responses", firstToken, resultBody, nil), 200)
 				result := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
@@ -194,7 +197,7 @@ func TestVPortalRequestRoundTrip(t *testing.T) {
 }
 
 func TestVPortalRequestRejectsMalformedParams(t *testing.T) {
-	for _, action := range []string{"vportal", "vportal_search"} {
+	for _, action := range []string{"vportal", "vportal_random", "vportal_search"} {
 		for _, params := range []string{`null`, `[]`, `{}`, `{"query":null}`, `{"query":1}`, `{"query":true}`, `{"query":[]}`, `{"query":{}}`,
 			`{"query":""}`, `{"query":" \t\u2003 "}`, `{"search":"video"}`, `{"query":"video","loop":true}`,
 			`{"query":"video","token":"secret"}`, `{"query":"first","query":"second"}`,
@@ -212,7 +215,7 @@ func TestVPortalRequestRejectsMalformedParams(t *testing.T) {
 }
 
 func TestVPortalWireActionNamesAreExact(t *testing.T) {
-	for _, action := range []string{"vp", "VP", "VPortal", "VPORTAL", "vportal-search", "vportal_search_extra"} {
+	for _, action := range []string{"vp", "vpr", "VPR", "VP", "VPortal", "VPORTAL", "vportal-search", "vportal_search_extra", "vportal_random_extra", "VPORTAL_RANDOM"} {
 		t.Run(action, func(t *testing.T) {
 			s := newTestServer(t)
 			body := `{"action":"` + action + `","params":{"query":"video"}}`

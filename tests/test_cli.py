@@ -355,6 +355,52 @@ class VPortalTest(unittest.TestCase):
         self.assertEqual(errors, 'VPortal playback requested: 2 videos; repeat enabled.\n')
         self.assertEqual(calls, [mock.call('dev_tv', 'vportal', {'query': 'СВАДЬБА'})])
 
+    def test_random_queue_requires_player_shuffle_confirmation_and_preserves_order(self):
+        result = {'items': [{'number': 1, 'title': 'Episode 3'}, {'number': 2, 'title': 'Episode 1'},
+                            {'number': 3, 'title': 'Episode 2'}],
+                  'total': 3, 'loop': True, 'dispatched': True, 'shuffled': True}
+        for json_output in (False, True):
+            status, output, errors, calls = self.run_command(['VpR', '  ТРИ', 'кота  '], result, json_output)
+            self.assertEqual(status, 0)
+            self.assertEqual(calls, [mock.call('dev_tv', 'vportal_random', {'query': 'ТРИ кота'})])
+            self.assertEqual(json.loads(output) if json_output else output,
+                             result if json_output else '1: Episode 3\n2: Episode 1\n3: Episode 2\n')
+            self.assertEqual(errors, 'VPortal playback requested: 3 videos; shuffled; repeat enabled.\n')
+        for flag in (None, False, 1, 'true'):
+            response = dict(result, shuffled=flag)
+            if flag is None:
+                response.pop('shuffled')
+            status, output, errors, calls = self.run_command(['vpr', 'video'], response, True)
+            self.assertEqual((status, output, len(calls)), (1, '', 1))
+            self.assertIn('did not confirm shuffling', errors)
+            self.assertNotIn('playback requested', errors)
+
+    def test_random_query_validation_and_read_only_listing(self):
+        for words in (['vpr'], ['vpr', '  '], ['vpr', 'я' * 513], ['vpr', '\udcff']):
+            status, output, errors, calls = self.run_command(words, {})
+            self.assertEqual((status, output, calls), (1, '', []))
+        result = {'items': [], 'total': 0}
+        status, output, errors, calls = self.run_command(['vpr', '--list', 'video'], result, True)
+        self.assertEqual((status, json.loads(output)), (0, result))
+        self.assertEqual(calls, [mock.call('dev_tv', 'vportal_search', {'query': 'video'})])
+        self.assertNotIn('playback requested', errors)
+        self.assertEqual(ott.parse_command(['play', 'vpr']), ('play', {'query': 'vpr'}))
+
+    def test_random_queue_never_falls_back_or_repeats_after_failure(self):
+        for error in (ott.PlayerUnsupported('Update the player'), ott.PlayerRejected('No matches', {}),
+                      ott.Error('The request may have executed')):
+            status, output, errors, calls = self.run_command(['vpr', 'video'], error)
+            self.assertEqual((status, output, len(calls)), (1, '', 1))
+            self.assertEqual(calls[0], mock.call('dev_tv', 'vportal_random', {'query': 'video'}))
+
+    def test_random_queue_output_excludes_private_fields(self):
+        result = {'items': [{'number': 1, 'title': 'Video', 'url': 'private-stream-url'}],
+                  'total': 1, 'loop': True, 'dispatched': True, 'shuffled': True, 'token': 'private-token'}
+        status, output, errors, _ = self.run_command(['vpr', 'video'], result, True)
+        self.assertEqual(status, 0)
+        self.assertNotIn('private', output + errors)
+        self.assertTrue(json.loads(output)['shuffled'])
+
     def test_listing_never_dispatches_playback(self):
         for items in [[], [{'number': 1, 'title': 'Video'}]]:
             with self.subTest(items=items):

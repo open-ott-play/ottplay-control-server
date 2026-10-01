@@ -138,6 +138,7 @@ ott tv p                    # channel — current programme
 ott tv p news               # list programme matches and play a random matching channel
 ott tv p --list news        # filter programme titles without switching channels
 ott tv vp wedding          # loop all VPortal videos with matching titles
+ott tv vpr wedding         # shuffle all matching videos and loop that queue
 ott tv vp --list wedding   # list the matches without changing playback
 ott tv v                    # current volume, 0–100%
 ott tv v 35                 # absolute volume
@@ -217,19 +218,27 @@ use the `--timeout` budget.
 `vp TEXT` searches the player's VPortal video titles and requests a repeating
 queue of all matches in catalogue order. After the last video finishes, playback
 returns to the first. `vp --list TEXT` returns the same title matches without
-changing playback. The filter must contain 1–1024 UTF-8 bytes after trimming
+changing playback. `vpr TEXT` shuffles the complete selection once and plays
+every matching video in that order before repeating the same queue. Each new
+`vpr` command creates a new random permutation; a one-video selection remains
+unchanged. `vpr --list TEXT` is also read-only and lists matches in catalogue
+order, without preparing a playback queue. The filter must contain 1–1024 UTF-8 bytes after trimming
 outer whitespace; empty filters are rejected. Queue numbers are one-based match
 positions, independent of live channel numbers. To play a live channel named
-`vp`, use `play vp`.
+`vp` or `vpr`, use `play vp` or `play vpr`.
 
-Both commands print `number: title` rows. JSON output contains only `items` and
-`total`, plus `loop: true` and `dispatched: true` for a playback request. Stream
+These commands print `number: title` rows in their resulting queue order. JSON
+output contains only `items` and `total`, plus `loop: true` and `dispatched: true`
+for a playback request. A shuffled queue also requires and returns
+`shuffled: true`. Stream
 URLs and provider credentials are excluded. The playback confirmation goes to
 stderr and means the player dispatched the queue, not that a video frame has
 been rendered. No matches or a player that cannot use VPortal reports an error
-for `vp`; the list command may return an empty list. Update the controller and
-player to versions that support these actions. A failed or uncertain request
-is never automatically submitted again.
+for `vp` and `vpr`; the list command may return an empty list. Update the controller
+and player to versions that support these actions. `vpr` needs the
+`vportal_random` action on both; an older player must be updated/reloaded.
+The CLI never substitutes ordered playback when shuffle is unsupported or
+unconfirmed. A failed or uncertain request is never automatically submitted again.
 
 The player collects all advertised search pages and episodes of matching series
 before starting. Incomplete, timed-out or oversized searches start nothing; use a

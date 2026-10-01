@@ -104,7 +104,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	case "play", "provider":
 		var value string
 		ok = len(params) == 1 && json.Unmarshal(params["query"], &value) == nil && value != "" && len(value) <= 1024
-	case "vportal", "vportal_search":
+	case "vportal", "vportal_random", "vportal_search":
 		_, validQuery := textValue(params["query"], 1024)
 		ok = len(params) == 1 && validQuery
 	case "channels", "programs":
