@@ -43,8 +43,53 @@ class HistoryTest(unittest.TestCase):
             [(CHANNEL, [row(-600, -500), row(-500, -400), row(-400, -300)])], NOW + 7200)))
         self.probe = self.stack.enter_context(patch.object(search, "archive_available", return_value=True))
 
-    def run_search(self, query="орел и решка", snapshot=SNAPSHOT, refresh=False):
-        return search.search_archives(self.client, "tv", SETTINGS, snapshot, query, refresh)
+    def run_search(self, query="орел и решка", snapshot=SNAPSHOT, refresh=False, **kwargs):
+        return search.search_archives(self.client, "tv", SETTINGS, snapshot, query, refresh, **kwargs)
+
+    def test_expired_receipt_is_refreshed_before_one_read_only_retry(self):
+        expired = ott.PlayerRejected('expired', {
+            'error': 'Channels or provider changed. Retry the EPG query before playing.'})
+        renewed = copy.deepcopy(SNAPSHOT)
+        renewed['catalog'] = 'renewed-receipt'
+        self.client.call.side_effect = [expired, renewed,
+                                       {'resolved': True, 'url': 'https://proxy.example/archive.m3u8'}, renewed]
+        data, targets = self.run_search(catalog_expired=ott.expired_epg_catalog)
+        self.assertEqual(len(data['programs']), 1)
+        calls = self.client.call.call_args_list
+        self.assertEqual([call.args[1] for call in calls],
+                         ['resolve_archive', 'epg_catalog', 'resolve_archive', 'epg_catalog'])
+        self.assertEqual(calls[2].args[2]['catalog'], 'renewed-receipt')
+        self.assertEqual(targets[(1, NOW - 600)]['catalog'], 'renewed-receipt')
+
+    def test_receipt_retry_rejects_changed_catalogues_and_never_repeats_twice(self):
+        expired = ott.PlayerRejected('expired', {
+            'error': 'Channels or provider changed. Retry the EPG query before playing.'})
+        for changed in ('channels', 'revision', 'expires-again'):
+            renewed = copy.deepcopy(SNAPSHOT)
+            renewed['catalog'] = 'renewed-receipt'
+            if changed == 'channels':
+                renewed['channels'][0]['name'] = 'Changed'
+            elif changed == 'revision':
+                renewed['archive']['revision'] = 'changed-source'
+            self.client.call.reset_mock()
+            self.client.call.side_effect = [expired, renewed, expired]
+            with self.subTest(changed=changed), self.assertRaises(
+                    ott.PlayerRejected if changed == 'expires-again' else search.SearchError):
+                self.run_search(catalog_expired=ott.expired_epg_catalog)
+            self.assertEqual(sum(call.args[1] == 'resolve_archive' for call in self.client.call.call_args_list),
+                             2 if changed == 'expires-again' else 1)
+        self.probe.assert_not_called()
+
+    def test_unrelated_rejections_and_uncertain_transport_are_not_retried(self):
+        message = 'Channels or provider changed. Retry the EPG query before playing.'
+        for error in (ott.PlayerRejected('locked', {'error': 'Unlock this channel'}),
+                      ott.TransportError(message), ott.PlayerUnsupported(message)):
+            self.client.call.reset_mock()
+            self.client.call.side_effect = error
+            with self.subTest(error=type(error).__name__), self.assertRaises(type(error)):
+                self.run_search(catalog_expired=ott.expired_epg_catalog)
+            self.client.call.assert_called_once()
+        self.probe.assert_not_called()
 
     def test_earliest_adjacent_programme_is_the_only_candidate_in_its_chain(self):
         data, targets = self.run_search()
