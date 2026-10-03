@@ -281,7 +281,7 @@ def server_programs(client, device, settings, search, refresh=False):
         as_of = max(as_of, response["asOf"])
     programs = [row for row in programs if row["start"] <= as_of < row["end"]]
     if not programs and search.strip():
-        spec = importlib.util.spec_from_file_location("ott_programme_search", Path(__file__).with_name("programme_search.py"))
+        spec = importlib.util.spec_from_file_location("ott_programme_search", Path(__file__).resolve().with_name("programme_search.py"))
         history = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(history)
         try:
