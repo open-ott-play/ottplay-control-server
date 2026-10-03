@@ -114,6 +114,46 @@ def clean_rows(rows):
     return [{"time": start, "time_to": end, "name": name} for start, end, name in sorted(clean)]
 
 
+def fresh(value, now):
+    return (isinstance(value, dict) and type(value.get("until")) in (int, float)
+            and now < value["until"] <= now + GUIDE_TTL)
+
+
+def valid_match(value):
+    return value is None or (isinstance(value, dict) and isinstance(value.get("channelId"), str)
+            and 1 <= len(value["channelId"]) <= 512 and type(value.get("shift")) is int
+            and -86400 <= value["shift"] <= 86400 and value["shift"] % 3600 == 0)
+
+
+def valid_mapping(value, metadata, now):
+    return (fresh(value, now) and isinstance(value.get("generation"), str)
+            and 1 <= len(value["generation"]) <= 256 and isinstance(value.get("mappings"), dict)
+            and all(row["id"] in value["mappings"] and valid_match(value["mappings"][row["id"]])
+                    for row in metadata))
+
+
+def valid_candidates(rows, channels, now):
+    if not isinstance(rows, list) or not rows:
+        return False
+    by_id = {channel["id"]: channel for channel in channels}
+    previous = (0, 0)
+    for row in rows:
+        if (not isinstance(row, dict) or row.get("mode") != "archive"
+                or any(type(row.get(k)) is not int for k in ("number", "start", "end", "archive_hours", "consecutive"))
+                or any(not isinstance(row.get(k), str) or not row[k].strip() for k in ("id", "channel", "title"))
+                or row["id"] not in by_id):
+            return False
+        channel = by_id[row["id"]]
+        order = (row["number"], row["start"])
+        if (row["number"] != channel["number"] or row["channel"] != channel["name"]
+                or row["archive_hours"] != channel["archiveHours"] or row["consecutive"] < 1
+                or not 0 < row["archive_hours"] <= 144 or not previous < order
+                or not now - row["archive_hours"] * 3600 <= row["start"] < row["end"] <= now):
+            return False
+        previous = order
+    return True
+
+
 def schedules(base, channels, refresh=False):
     metadata = [{k: c[k] for k in ("id", "name", "tvgId", "tvgName")} for c in channels]
     for attempt in range(2):
@@ -121,7 +161,7 @@ def schedules(base, channels, refresh=False):
             clock = time.time()
             key = [base, metadata]
             mapping = cached("mapping", key, GUIDE_TTL, refresh or bool(attempt))
-            if not isinstance(mapping, dict) or clock >= mapping.get("until", 0):
+            if not valid_mapping(mapping, metadata, clock):
                 generation, mappings = None, {}
                 for start in range(0, len(metadata), 100):
                     batch = metadata[start:start + 100]
@@ -133,30 +173,35 @@ def schedules(base, channels, refresh=False):
                         raise SearchError("Invalid EPG channel mapping")
                     mappings.update({row["id"]: response["mappings"].get(row["id"]) for row in batch})
                 mapping = {"generation": generation, "mappings": mappings, "until": clock + GUIDE_TTL}
+                if not valid_mapping(mapping, metadata, clock):
+                    raise SearchError("Invalid EPG channel mapping")
                 remember("mapping", key, mapping)
             ids = {}
             for channel in channels:
                 match = mapping["mappings"].get(channel["id"])
                 if match is None:
                     continue
-                if (not isinstance(match, dict) or not isinstance(match.get("channelId"), str)
-                        or not 1 <= len(match["channelId"]) <= 512 or type(match.get("shift")) is not int
-                        or not -86400 <= match["shift"] <= 86400 or match["shift"] % 3600):
-                    raise SearchError("Invalid EPG channel mapping")
                 ids[channel["id"]] = (match["channelId"], match["shift"])
 
             def fetch(key):
                 cache_key = [base, mapping["generation"], key]
                 saved = cached("guide", cache_key, GUIDE_TTL, refresh)
                 clock = time.time()
-                if not isinstance(saved, dict) or clock >= saved.get("until", 0):
+                rows = None
+                if fresh(saved, clock):
+                    try:
+                        rows = clean_rows(saved.get("rows"))
+                    except SearchError:
+                        pass
+                if rows is None:
                     response = epg_request(base, "/programmes?" + urlencode({
                         "channelId": key[0], "shift": key[1], "hours": 168, "generation": mapping["generation"]}))
                     if response["generation"] != mapping["generation"]:
                         raise GenerationChanged("EPG history changed")
-                    saved = {"rows": clean_rows(response.get("rows")), "until": clock + GUIDE_TTL}
+                    rows = clean_rows(response.get("rows"))
+                    saved = {"rows": rows, "until": clock + GUIDE_TTL}
                     remember("guide", cache_key, saved)
-                return key, clean_rows(saved["rows"]), saved["until"]
+                return key, rows, saved["until"]
 
             guides, until = {}, mapping["until"]
             with ThreadPoolExecutor(max_workers=4) as pool:
@@ -246,11 +291,9 @@ def search_archives(client, device, settings, snapshot, query, refresh=False):
     previous = cached("query", key, GUIDE_TTL, refresh)
     selected = None
     now = time.time()
-    if isinstance(previous, dict) and now < previous.get("until", 0):
+    if fresh(previous, now):
         candidates = previous.get("programs")
-        if (isinstance(candidates, list) and candidates and all(
-                row.get("mode") == "archive" and now - row["archive_hours"] * 3600 <= row["start"] < row["end"] <= now
-                for row in candidates)):
+        if valid_candidates(candidates, channels, now):
             selected = candidates
     receipt = snapshot["catalog"]
     checked_at = time.monotonic()

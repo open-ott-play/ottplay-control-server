@@ -121,6 +121,22 @@ class HistoryTest(unittest.TestCase):
             self.run_search(snapshot={"catalog": "old", "channels": [CHANNEL]})
         self.guides.assert_not_called()
 
+    def test_malformed_query_cache_is_rebuilt_without_playback(self):
+        expected, _ = self.run_search()
+        cache = next(search.CACHE.glob("query-*.json"))
+        valid = expected["programs"][0]
+        for programs in ([None], [{}], [dict(valid, id="missing")],
+                         [dict(valid, number="1")], [dict(valid, archive_hours=1000)],
+                         [dict(valid, title=None)], [dict(valid, consecutive=0)]):
+            with self.subTest(programs=programs):
+                envelope = json.loads(cache.read_text())
+                envelope["data"]["programs"] = programs
+                cache.write_text(json.dumps(envelope))
+                self.guides.reset_mock()
+                data, _ = self.run_search()
+                self.assertEqual(data["programs"], expected["programs"])
+                self.guides.assert_called_once()
+
 
 class LaunchTest(unittest.TestCase):
     def test_no_channel_match_falls_back_to_epg_and_dispatches_archive_once(self):
@@ -187,6 +203,28 @@ class HistoryTransportTest(unittest.TestCase):
             guide, _ = search.schedules(SETTINGS["url"], [CHANNEL])
         self.assertEqual(guide[0][1], [row(-600, -500)])
         self.assertIn("generation=g2", request.call_args.args[1])
+
+    def test_malformed_mapping_and_guide_cache_refetch_from_the_server(self):
+        def response(base, path, payload=None):
+            if path == "/match":
+                return {"generation": "g1", "mappings": {"cats": {"channelId": "guide", "shift": 0}}}
+            return {"generation": "g1", "rows": [row(-600, -500)]}
+        with patch.object(search, "epg_request", side_effect=response) as request:
+            search.schedules(SETTINGS["url"], [CHANNEL])
+            for kind, invalid in (("mapping", {"until": "later"}),
+                                  ("mapping", {"until": NOW + 100, "mappings": []}),
+                                  ("mapping", {"until": NOW + 100, "generation": "g1", "mappings": {"cats": 3}}),
+                                  ("guide", {"until": NOW + 100}),
+                                  ("guide", {"until": NOW + 100, "rows": [None]})):
+                with self.subTest(kind=kind, data=invalid):
+                    cache = next(search.CACHE.glob(kind + "-*.json"))
+                    envelope = json.loads(cache.read_text())
+                    envelope["data"] = invalid
+                    cache.write_text(json.dumps(envelope))
+                    request.reset_mock()
+                    guides, _ = search.schedules(SETTINGS["url"], [CHANNEL])
+                    self.assertEqual(guides[0][1], [row(-600, -500)])
+                    request.assert_called_once()
 
 
 class MediaProbeTest(unittest.TestCase):
