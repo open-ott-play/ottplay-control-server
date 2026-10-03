@@ -274,7 +274,7 @@ def archive_available(url, start):
     return False
 
 
-def search_archives(client, device, settings, snapshot, query, refresh=False):
+def search_archives(client, device, settings, snapshot, query, refresh=False, catalog_expired=None):
     capability = snapshot.get("archive")
     if (not isinstance(capability, dict) or capability.get("version") != 1
             or not isinstance(capability.get("revision"), str) or not 1 <= len(capability["revision"]) <= 128):
@@ -330,7 +330,16 @@ def search_archives(client, device, settings, snapshot, query, refresh=False):
                     if not verified:
                         params = {"catalog": fresh_receipt(), "id": channel["id"], "start": row["time"],
                                   "end": row["time_to"], "title": row["name"]}
-                        response = client.call(device, "resolve_archive", params)
+                        try:
+                            response = client.call(device, "resolve_archive", params)
+                        except Exception as exc:
+                            if catalog_expired is None or not catalog_expired(exc):
+                                raise
+                            # A catalogue read can return a receipt near expiry.
+                            # Verify the unchanged source before retrying this
+                            # read-only resolution once; never replay playback.
+                            params["catalog"] = fresh_receipt(force=True)
+                            response = client.call(device, "resolve_archive", params)
                         if not isinstance(response, dict) or response.get("resolved") is not True:
                             raise SearchError("The player did not resolve the selected archive")
                         verified = archive_available(response.get("url"), row["time"])

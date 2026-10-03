@@ -1,10 +1,12 @@
 import contextlib
 import http.server
+import importlib.machinery
 import importlib.util
 import io
 import json
 from pathlib import Path
 import threading
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -30,6 +32,31 @@ def guide():
 
 
 class RemoteEpgCliTest(unittest.TestCase):
+    def test_symlinked_entry_loads_archive_search_from_its_installation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry = Path(directory) / 'ott'
+            try:
+                entry.symlink_to(Path(ott.__file__).resolve())
+            except OSError as exc:
+                if getattr(exc, 'winerror', None) == 1314:
+                    self.skipTest('Creating symbolic links requires Windows privileges')
+                raise
+            loader = importlib.machinery.SourceFileLoader('linked_ott', str(entry))
+            linked_spec = importlib.util.spec_from_loader(loader.name, loader)
+            linked = importlib.util.module_from_spec(linked_spec)
+            loader.exec_module(linked)
+            self.assertEqual(Path(linked.__file__), entry)
+            client, epg = mock.Mock(timeout=45), mock.Mock()
+            client.call.return_value = catalog()
+            response = guide()
+            response['programs'] = []
+            epg.current.return_value = response
+            with mock.patch.object(linked, 'EpgClient', return_value=epg), \
+                    mock.patch.object(linked.time, 'time', return_value=NOW), \
+                    self.assertRaisesRegex(linked.Error, 'Update this player to support archive search'):
+                linked.server_programs(client, 'tv', SETTINGS, 'Три кота')
+            client.call.assert_called_once_with('tv', 'epg_catalog', {})
+
     def test_large_catalogue_search_keeps_matches_from_both_batches(self):
         snapshot = {'catalog': 'large-catalog', 'channels': [
             dict(id=str(i), number=i + 1, name='Channel ' + str(i), tvgId='', tvgName='', shift=0)

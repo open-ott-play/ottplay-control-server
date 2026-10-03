@@ -214,6 +214,11 @@ def epg_batches(channels):
         yield batch
 
 
+def expired_epg_catalog(error):
+    return (isinstance(error, PlayerRejected)
+            and error.data.get("error") == "Channels or provider changed. Retry the EPG query before playing.")
+
+
 def server_programs(client, device, settings, search, refresh=False):
     epg = EpgClient(settings, client.timeout)
     if not epg_text(search, 1024, "utf-8"):
@@ -281,11 +286,12 @@ def server_programs(client, device, settings, search, refresh=False):
         as_of = max(as_of, response["asOf"])
     programs = [row for row in programs if row["start"] <= as_of < row["end"]]
     if not programs and search.strip():
-        spec = importlib.util.spec_from_file_location("ott_programme_search", Path(__file__).with_name("programme_search.py"))
+        spec = importlib.util.spec_from_file_location("ott_programme_search", Path(__file__).resolve().with_name("programme_search.py"))
         history = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(history)
         try:
-            return history.search_archives(client, device, settings, snapshot, search, refresh)
+            return history.search_archives(client, device, settings, snapshot, search, refresh,
+                                           catalog_expired=expired_epg_catalog)
         except history.SearchError as exc:
             raise Error(str(exc)) from None
     return {"as_of": as_of, "checked": len(channels), "partial": False,
