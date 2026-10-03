@@ -239,9 +239,16 @@ def server_programs(client, device, settings, search, refresh=False):
     if not channels:
         return {"as_of": time.time(), "checked": 0, "partial": False, "programs": [], "total": 0}, {}
     programs, targets, generation, as_of = [], {}, None, 0
+    search_deadline = time.monotonic() + client.timeout
     for batch in epg_batches(channels):
         batch_by_id = {row["id"]: by_id[row["id"]] for row in batch}
+        remaining = search_deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("EPG service timed out; no player EPG scan or playback was requested")
+        epg.timeout = min(10, remaining)
         response = epg.current(batch, search)
+        if time.monotonic() >= search_deadline:
+            raise Error("EPG service timed out; no player EPG scan or playback was requested")
         invalid = "EPG service returned an invalid or incomplete current-programme result; no playback was requested"
         if (not isinstance(response, dict) or type(response.get("version")) is not int or response["version"] != 1
                 or response.get("source") != "epg-one" or not epg_text(response.get("generation"), 256)
