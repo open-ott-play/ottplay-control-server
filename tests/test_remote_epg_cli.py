@@ -148,13 +148,13 @@ class RemoteEpgCliTest(unittest.TestCase):
         self.assertEqual(client.call.call_count, 1)
         epg.current.assert_not_called()
 
-    def test_no_matches_never_play(self):
+    def test_no_current_matches_on_old_player_requires_archive_capability(self):
         response = guide()
         response['programs'] = []
         result, output, errors, client, _ = self.run_command(['p', 'missing'], response=response)
-        self.assertEqual(result, 0)
+        self.assertEqual(result, 1)
         self.assertEqual(output, '')
-        self.assertIn('No current programmes match', errors)
+        self.assertIn('Update this player to support archive search', errors)
         self.assertEqual(client.call.call_count, 1)
 
     def test_service_errors_never_fall_back_to_player_scan(self):

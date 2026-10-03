@@ -5,6 +5,7 @@ import base64
 import getpass
 import http.client
 import ipaddress
+import importlib.util
 import json
 import math
 import os
@@ -34,11 +35,11 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME                           show player status
   ott NAME load PRESET               apply a private Plex and M3U preset
   ott NAME 12                        play channel 12 from the s listing
-  ott NAME CHANNEL                   list name matches and play a random matching channel
+  ott NAME TITLE                     search channels, current EPG, then archives within 144 hours
   ott NAME play s                    play a channel whose name is reserved
   ott NAME s [TEXT]                  list channels, optionally matching TEXT
   ott NAME p                         list channel — current programme
-  ott NAME p TEXT                    list matching programmes and play a random match
+  ott NAME p TEXT                    search current programmes, then available archives
   ott NAME p --list [TEXT]           list programmes without switching channels
   ott NAME vp TEXT                   loop VPortal videos whose titles match TEXT
   ott NAME vpr TEXT                  shuffle matching VPortal videos and loop the queue
@@ -198,7 +199,7 @@ def epg_number(value):
     return type(value) in (int, float) and -9007199254740991 <= value <= 9007199254740991
 
 
-def server_programs(client, device, settings, search):
+def server_programs(client, device, settings, search, refresh=False):
     epg = EpgClient(settings, client.timeout)
     if not epg_text(search, 1024, "utf-8"):
         raise Error("Programme search must contain at most 1024 UTF-8 bytes")
@@ -249,6 +250,14 @@ def server_programs(client, device, settings, search):
         programs.append({"channel": channel["name"], "number": channel["number"], "title": row["title"],
                          "start": row["start"], "end": row["end"]})
         targets[channel["number"]] = {"catalog": snapshot["catalog"], "id": row["id"]}
+    if not programs and search.strip():
+        spec = importlib.util.spec_from_file_location("ott_programme_search", Path(__file__).with_name("programme_search.py"))
+        history = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(history)
+        try:
+            return history.search_archives(client, device, settings, snapshot, search, refresh)
+        except history.SearchError as exc:
+            raise Error(str(exc)) from None
     return {"as_of": response["asOf"], "checked": response["checked"], "partial": False,
             "programs": programs, "total": response["total"]}, targets
 
@@ -495,14 +504,19 @@ def select_programme(programs):
     invalid = "The player returned an invalid programme list; no switch was requested"
     if not isinstance(programs, list):
         raise Error(invalid)
-    previous = 0
+    previous = (0, 0)
     for row in programs:
+        order = (row.get("number", 0), row.get("start", 0) if row.get("mode") == "archive" else 0) if isinstance(row, dict) else (0, 0)
         if (not isinstance(row, dict) or type(row.get("number")) is not int
-                or not previous < row["number"] <= 9007199254740991
+                or not 0 < row["number"] <= 9007199254740991
+                or type(order[1]) not in (int, float) or not previous < order
+                or (row.get("mode") == "archive" and
+                    (type(row.get("start")) is not int or type(row.get("end")) is not int
+                     or not time.time() - 144 * 3600 <= row["start"] < row["end"] <= time.time()))
                 or any(not epg_text(row.get(key), 16384) or not row[key].strip()
                        for key in ("channel", "title"))):
             raise Error(invalid)
-        previous = row["number"]
+        previous = order
     return (secrets.choice(programs) if len(programs) > 1 else programs[0]) if programs else None
 
 
@@ -1196,6 +1210,7 @@ def main(argv=None):
     parser.add_argument("--config", default=os.environ.get("OTT_CONFIG", str(Path.home() / ".config/ottplay-control/cli.json")))
     parser.add_argument("--timeout", type=float, default=45)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--refresh", action="store_true", help="Refresh cached EPG history and archive checks")
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("words", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -1225,9 +1240,15 @@ def main(argv=None):
         playback_error = None
         plex_settings = action == "provider_settings" and params.get("provider") == "plex"
         if action == "programs" and "epg" in config:
-            data, catalog_play = server_programs(client, device, config["epg"], params["search"])
+            data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
         elif action == "play":
             data, playback_error = play_channel(client, device, params)
+            if data.get("channels") == [] and "epg" in config:
+                print("No channel matches. Searching current EPG and available archives...", file=sys.stderr)
+                query = params["query"]
+                data, catalog_play = server_programs(client, device, config["epg"], query, refresh=args.refresh)
+                action, params, words = "programs", {"search": query}, ["p", query]
+                playback_error = None
         else:
             try:
                 data = client.call(device, action, params)
@@ -1252,24 +1273,30 @@ def main(argv=None):
             if selected:
                 try:
                     number = selected["number"]
-                    target = catalog_play[number] if catalog_play is not None else None
+                    archive = selected.get("mode") == "archive"
+                    key = (number, selected["start"]) if archive else number
+                    target = catalog_play[key] if catalog_play is not None else None
                     # Use the returned catalogue number, even for duplicate or numeric names.
-                    playback = (client.call(device, "play_catalog", target) if target is not None
+                    playback = (client.call(device, "play_archive_catalog" if archive else "play_catalog", target) if target is not None
                                 else client.call(device, "play", {"query": str(number)}))
                     channel = playback.get("channel") if isinstance(playback, dict) else None
                     if (not isinstance(channel, dict) or playback.get("dispatched") is not True
                             or type(channel.get("number")) is not int or channel["number"] != number
                             or channel.get("name") != selected["channel"]
-                            or (target is not None and channel.get("id") != target["id"])):
+                            or (target is not None and channel.get("id") != target["id"])
+                            or (archive and (playback.get("start") != selected["start"] or playback.get("end") != selected["end"]))):
                         raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
                     if catalog_play is not None:
                         playback = {"dispatched": True, "channel": {key: channel[key] for key in ("id", "number", "name")}}
+                        if archive:
+                            playback.update({"mode": "archive", "start": selected["start"], "end": selected["end"]})
                     data["playback"] = playback
                 except Error as exc:
                     playback_error = exc
                     data["playback"] = {"error": str(exc)}
             elif not data.get("partial"):
-                print("No current programmes match the search.", file=sys.stderr)
+                print("No current programmes or available archives match the search." if "epg" in config else
+                      "No current programmes match the search.", file=sys.stderr)
         if args.json:
             print(json.dumps(data, ensure_ascii=False, indent=2))
         elif action == "channels" or (action == "play" and "channels" in data):
@@ -1277,7 +1304,11 @@ def main(argv=None):
                 print(f"{row['number']}: {clean(row['name'])}")
         elif action == "programs":
             for row in data["programs"]:
-                print(f"{clean(row['channel'])} — {clean(row['title'])}")
+                detail = ""
+                if row.get("mode") == "archive":
+                    detail = " [archive from %s; %s consecutive programmes]" % (
+                        time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(row["start"])), row["consecutive"])
+                print(f"{clean(row['channel'])} — {clean(row['title'])}{detail}")
         elif action in ("vportal", "vportal_random", "vportal_search"):
             for row in data["items"]:
                 print(f"{row['number']}: {clean(row['title'])}")

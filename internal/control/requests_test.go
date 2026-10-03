@@ -230,6 +230,8 @@ func TestVPortalWireActionNamesAreExact(t *testing.T) {
 func TestEpgCatalogAndGuardedPlaybackRequests(t *testing.T) {
 	for _, body := range []string{
 		`{"action":"epg_catalog","params":{}}`,
+		`{"action":"resolve_archive","params":{"catalog":"snapshot-1","id":"канал-7","start":100,"end":200,"title":"Три кота"}}`,
+		`{"action":"play_archive_catalog","params":{"catalog":"snapshot-1","id":"канал-7","start":100,"end":200,"title":"Три кота"}}`,
 		`{"action":"play_catalog","params":{"catalog":"snapshot-1","id":"канал-7"}}`,
 		`{"action":"play_catalog","params":{"catalog":"` + strings.Repeat("x", 128) + `","id":"` + strings.Repeat("я", 512) + `"}}`,
 		`{"action":"play_catalog","params":{"catalog":"c","id":"` + strings.Repeat("界", 512) + `"}}`,
@@ -266,6 +268,12 @@ func TestEpgCatalogAndGuardedPlaybackRequests(t *testing.T) {
 func TestEpgCatalogRequestsRejectExtraAndInvalidFields(t *testing.T) {
 	for _, body := range []string{
 		`{"action":"epg_catalog","params":{"search":"cats"}}`,
+		`{"action":"resolve_archive","params":{"catalog":"c","id":"1","start":100,"end":100,"title":"Show"}}`,
+		`{"action":"resolve_archive","params":{"catalog":"c","id":"1","start":100,"end":200,"title":"Show","url":"https://example.com"}}`,
+		`{"action":"play_archive_catalog","params":{"catalog":"c","id":"1","start":true,"end":200,"title":"Show"}}`,
+		`{"action":"play_archive_catalog","params":{"catalog":"c","id":"1","start":100.5,"end":200,"title":"Show"}}`,
+		`{"action":"play_archive_catalog","params":{"catalog":"c","id":"1","start":-1,"end":200,"title":"Show"}}`,
+		`{"action":"play_archive_catalog","params":{"catalog":"c","id":"1","start":100,"end":200}}`,
 		`{"action":"epg_catalog","params":null}`,
 		`{"action":"EPG_CATALOG","params":{}}`,
 		`{"action":"play_catalog","params":{}}`,

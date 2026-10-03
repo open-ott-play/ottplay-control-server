@@ -101,6 +101,18 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		_, validCatalog := textValue(params["catalog"], 128)
 		_, validID := textValue(params["id"], 2048)
 		ok = len(params) == 2 && validCatalog && validID
+	case "resolve_archive", "play_archive_catalog":
+		_, validCatalog := textValue(params["catalog"], 128)
+		_, validID := textValue(params["id"], 2048)
+		_, validTitle := textValue(params["title"], 65536)
+		var start, end float64
+		validTimes := numberValue(params["start"], 1, 9007199254740991, true) &&
+			numberValue(params["end"], 1, 9007199254740991, true)
+		if validTimes {
+			_ = json.Unmarshal(params["start"], &start)
+			_ = json.Unmarshal(params["end"], &end)
+		}
+		ok = len(params) == 5 && validCatalog && validID && validTitle && validTimes && start < end
 	case "play", "provider":
 		var value string
 		ok = len(params) == 1 && json.Unmarshal(params["query"], &value) == nil && value != "" && len(value) <= 1024
