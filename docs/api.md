@@ -106,7 +106,11 @@ Clients must not infer completed restart from either acknowledgement or replay
 an uncertain request. Unsupported playback backends use `status:"unsupported"`.
 
 `epg_catalog` accepts exactly `{}` and returns a lightweight snapshot:
-`{catalog,channels:[{id,number,name,tvgId,tvgName,shift}]}`. It must not fetch guide
+`{catalog,channels:[{id,number,name,tvgId,tvgName,shift,archiveHours}],archive:{version:1,revision}}`.
+`archiveHours` is the channel retention capped at 144 hours; zero means no archive.
+`archive.revision` remains stable across receipt renewal but changes when the
+source, channel load, metadata or retention changes. Older players can omit the
+archive extension and still support live EPG search. It must not fetch guide
 rows. `catalog` is an opaque player-owned revision, `number` is the one-based
 catalogue position, and `shift` is the provider's additional time adjustment in
 integer seconds. No source URLs or credentials are included. `play_catalog`
@@ -119,6 +123,26 @@ The CLI's optional EPG configuration uses these RPCs around a separate public
 `POST /current` call. The control server never forwards its administrator token
 to that service. Existing `programs` remains available for compatibility when
 the CLI has no EPG service configured.
+
+`resolve_archive` and `play_archive_catalog` both accept exactly
+`{catalog,id,start,end,title}`. Times are integer Unix seconds, `start < end`, and
+the title is nonempty (at most 65536 UTF-8 bytes on the server, 16384 UTF-16 code
+units on the player). The player revalidates the receipt, category membership,
+parental access and `now - min(retention,144h) <= start < end <= now`.
+
+`resolve_archive` is an explicit authenticated read returning `{resolved:true,url}`.
+It does not switch channels or open a PIN prompt. Unlike ordinary catalogue and
+guide queries, this RPC returns a private provider URL for a local media-byte
+probe. The CLI never prints or caches that URL or forwards it to the public EPG
+service. The Mac/controller must be able to reach that source. A locked channel
+must first be unlocked on the player.
+
+`play_archive_catalog` resolves the provider URL again at dispatch time, selects
+the channel through the shared playback coordinator, and opens the archive at
+`start`. It returns `{dispatched:true,channel:{id,number,name},start,end}` without
+a URL. Dispatch is not a decoder/visible-picture confirmation. An uncertain
+mutation response is never replayed automatically. Both the controller and the
+player must include these additive RPCs before archive launch is available.
 
 `vportal`, `vportal_random` and `vportal_search` accept exactly `{"query":"TITLE FILTER"}`. The
 query must be a string of at most 1024 UTF-8 bytes and must not be empty after

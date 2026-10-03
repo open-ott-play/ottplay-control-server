@@ -1,6 +1,6 @@
 # Control players from the terminal
 
-`cli/ott.py` uses Python 3 without additional packages. Commands take a short
+`cli/ott.py` and its sibling `cli/programme_search.py` use Python 3 without additional packages. Keep both files together when installing a copy. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -57,8 +57,40 @@ must be within one minute. Other `epg.source` values are rejected. Selecting
 `epg-one` searches the public guide even if the player uses a private or custom
 guide; those sources are neither used nor uploaded. An unsupported player,
 stale result or service failure exits with an error. It never falls back to scanning
-every channel's EPG on the player. Each EPG HTTP request is limited to ten
-seconds (or a smaller `--timeout`) and 2 MiB of response data.
+every channel's EPG on the player. Current-programme HTTP requests are limited
+to ten seconds (or a smaller `--timeout`) and 2 MiB of response data. Archive
+history requests allow twenty seconds and 16 MiB per response.
+
+Title launch now follows the same order on every registered player:
+`ott PLAYER TITLE` searches channel names first, then current programme titles,
+then available archive programmes. `ott PLAYER p TITLE` starts at the programme
+step. Both list the matches and choose one randomly when several match.
+`p --list TITLE` searches without launching playback.
+
+Archive lookup uses `/match` and `/programmes` on the same EPG service. Only
+channels advertising archive support are eligible, within the smaller of their
+retention and **144 hours**. Adjacent matching programmes form one result; an
+intervening title, gap, overlap or retention boundary breaks the chain. Playback
+starts at the earliest programme in the chain whose manifest and initial media
+bytes are available. Separate chains on the same channel remain separate
+choices. The first successful fragment is a startup check, not a guarantee for
+every subsequent segment. The archive continues along the channel after launch.
+
+EPG mappings, history and successful search results are cached for **two hours**;
+successful media checks are reused for **seven days**, subject to the current
+retention boundary. Files are private (0600) under `~/.cache/ottplay-control`
+or `OTT_CACHE`. Read hits do not extend cache lifetime. Programme boundaries and
+guide expiry invalidate search results earlier. `ott --refresh PLAYER p TITLE`
+bypasses these caches. Current EPG is still checked first on every invocation;
+the player's current catalogue is read again before dispatch, so a source change
+cannot silently redirect an old search. Failed archive checks are not cached.
+
+Archive search requires updated player and controller builds with
+`resolve_archive` and `play_archive_catalog`. Those handlers belong to the shared
+FOSS client used by web, Tauri desktop, Capacitor/iOS and packaged TV players.
+Old installations retain live searches and report the needed update if an
+archive fallback is required. Local validation of shared code does not install
+new packages on offline TVs or phones.
 
 ```sh
 ott devices
