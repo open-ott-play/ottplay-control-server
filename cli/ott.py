@@ -199,6 +199,21 @@ def epg_number(value):
     return type(value) in (int, float) and -9007199254740991 <= value <= 9007199254740991
 
 
+def epg_batches(channels):
+    """Keep every channel while respecting each public EPG request's limits."""
+    batch, size = [], 2048  # Envelope and the bounded search text.
+    for channel in channels:
+        row = {key: value for key, value in channel.items() if key != "number"}
+        row_size = len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1
+        if batch and (len(batch) == 2048 or size + row_size > 480 * 1024):
+            yield batch
+            batch, size = [], 2048
+        batch.append(row)
+        size += row_size
+    if batch:
+        yield batch
+
+
 def server_programs(client, device, settings, search, refresh=False):
     epg = EpgClient(settings, client.timeout)
     if not epg_text(search, 1024, "utf-8"):
@@ -207,7 +222,7 @@ def server_programs(client, device, settings, search, refresh=False):
     invalid = "The player returned an invalid EPG catalogue; no playback was requested"
     if (not isinstance(snapshot, dict) or not epg_text(snapshot.get("catalog"), 128, "utf-8")
             or not snapshot["catalog"].strip() or not isinstance(snapshot.get("channels"), list)
-            or len(snapshot["channels"]) > 2048):
+            or len(snapshot["channels"]) > 10000):
         raise Error(invalid)
     channels, by_id, numbers = [], {}, set()
     for row in snapshot["channels"]:
@@ -223,33 +238,41 @@ def server_programs(client, device, settings, search, refresh=False):
         numbers.add(row["number"])
     if not channels:
         return {"as_of": time.time(), "checked": 0, "partial": False, "programs": [], "total": 0}, {}
-    response = epg.current([{key: value for key, value in row.items() if key != "number"} for row in channels], search)
-    invalid = "EPG service returned an invalid or incomplete current-programme result; no playback was requested"
-    if (not isinstance(response, dict) or type(response.get("version")) is not int or response["version"] != 1
-            or response.get("source") != "epg-one" or not epg_text(response.get("generation"), 256)
-            or not response["generation"] or type(response.get("fetchedAt")) is not int
-            or not 0 < response["fetchedAt"] <= 9007199254740991 or not epg_number(response.get("asOf"))
-            or abs(response["asOf"] - time.time()) > 60
-            or type(response.get("checked")) is not int or response["checked"] != len(channels)
-            or type(response.get("total")) is not int or response["total"] != len(channels)
-            or not isinstance(response.get("programs"), list) or len(response["programs"]) > len(channels)):
-        raise Error(invalid)
-    if response.get("stale") is not False:
-        raise Error("EPG service has no fresh guide snapshot; no playback was requested")
-    programs, targets, last_number = [], {}, 0
-    for row in response["programs"]:
-        if (not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] not in by_id
-                or not epg_text(row.get("title"), 16384) or not row["title"]
-                or any(not epg_number(row.get(key)) for key in ("start", "end"))
-                or not row["start"] <= response["asOf"] < row["end"]):
+    programs, targets, generation, as_of = [], {}, None, 0
+    for batch in epg_batches(channels):
+        batch_by_id = {row["id"]: by_id[row["id"]] for row in batch}
+        response = epg.current(batch, search)
+        invalid = "EPG service returned an invalid or incomplete current-programme result; no playback was requested"
+        if (not isinstance(response, dict) or type(response.get("version")) is not int or response["version"] != 1
+                or response.get("source") != "epg-one" or not epg_text(response.get("generation"), 256)
+                or not response["generation"] or type(response.get("fetchedAt")) is not int
+                or not 0 < response["fetchedAt"] <= 9007199254740991 or not epg_number(response.get("asOf"))
+                or abs(response["asOf"] - time.time()) > 60
+                or type(response.get("checked")) is not int or response["checked"] != len(batch)
+                or type(response.get("total")) is not int or response["total"] != len(batch)
+                or not isinstance(response.get("programs"), list) or len(response["programs"]) > len(batch)):
             raise Error(invalid)
-        channel = by_id[row["id"]]
-        if channel["number"] <= last_number:
-            raise Error(invalid)
-        last_number = channel["number"]
-        programs.append({"channel": channel["name"], "number": channel["number"], "title": row["title"],
-                         "start": row["start"], "end": row["end"]})
-        targets[channel["number"]] = {"catalog": snapshot["catalog"], "id": row["id"]}
+        if response.get("stale") is not False:
+            raise Error("EPG service has no fresh guide snapshot; no playback was requested")
+        last_number = 0
+        for row in response["programs"]:
+            if (not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] not in batch_by_id
+                    or not epg_text(row.get("title"), 16384) or not row["title"]
+                    or any(not epg_number(row.get(key)) for key in ("start", "end"))
+                    or not row["start"] <= response["asOf"] < row["end"]):
+                raise Error(invalid)
+            channel = by_id[row["id"]]
+            if channel["number"] <= last_number:
+                raise Error(invalid)
+            last_number = channel["number"]
+            programs.append({"channel": channel["name"], "number": channel["number"], "title": row["title"],
+                             "start": row["start"], "end": row["end"]})
+            targets[channel["number"]] = {"catalog": snapshot["catalog"], "id": row["id"]}
+        if generation is not None and response["generation"] != generation:
+            raise Error("EPG guide changed during search; retry the query. No playback was requested")
+        generation = response["generation"]
+        as_of = max(as_of, response["asOf"])
+    programs = [row for row in programs if row["start"] <= as_of < row["end"]]
     if not programs and search.strip():
         spec = importlib.util.spec_from_file_location("ott_programme_search", Path(__file__).with_name("programme_search.py"))
         history = importlib.util.module_from_spec(spec)
@@ -258,8 +281,8 @@ def server_programs(client, device, settings, search, refresh=False):
             return history.search_archives(client, device, settings, snapshot, search, refresh)
         except history.SearchError as exc:
             raise Error(str(exc)) from None
-    return {"as_of": response["asOf"], "checked": response["checked"], "partial": False,
-            "programs": programs, "total": response["total"]}, targets
+    return {"as_of": as_of, "checked": len(channels), "partial": False,
+            "programs": programs, "total": len(channels)}, targets
 
 
 def read_json(path):

@@ -51,7 +51,10 @@ The service URL must be HTTP(S) without credentials, a query or a fragment;
 redirects are refused. Use HTTPS outside a trusted local network.
 
 The player must support `epg_catalog` and `play_catalog`. Catalogue metadata is
-limited to 2048 channels and a 512 KiB request. The service must return a complete,
+limited to 10,000 channels. The CLI searches the entire catalogue in batches of
+at most 2048 channels, leaving space within the service's 512 KiB request limit
+even for multibyte names. Every batch must use the same guide generation; missing
+or invalid later batches reject the entire query without playback. The service must return a complete,
 fresh result for the fixed public `epg-one` source; the service and CLI clocks
 must be within one minute. Other `epg.source` values are rejected. Selecting
 `epg-one` searches the public guide even if the player uses a private or custom
