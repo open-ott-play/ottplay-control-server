@@ -71,6 +71,35 @@ class RemoteEpgCliTest(unittest.TestCase):
                 ott.server_programs(client, 'tv', SETTINGS, 'Три кота')
         self.assertTrue(all(call.args[1] == 'epg_catalog' for call in client.call.call_args_list))
 
+        clock, budgets = [0], []
+        client.timeout = 5
+        def slow_batch(rows, search):
+            budgets.append(epg.timeout)
+            clock[0] += 4
+            return current(rows, search)
+        epg.current.side_effect = slow_batch
+        with mock.patch.object(ott, 'EpgClient', return_value=epg), \
+                mock.patch.object(ott.time, 'time', return_value=NOW), \
+                mock.patch.object(ott.time, 'monotonic', side_effect=lambda: clock[0]), \
+                self.assertRaisesRegex(ott.Error, 'timed out'):
+            ott.server_programs(client, 'tv', SETTINGS, 'Три кота')
+        self.assertEqual(budgets, [5, 1])
+        self.assertTrue(all(call.args[1] == 'epg_catalog' for call in client.call.call_args_list))
+
+        client.timeout = 45
+        def crossed_boundary(rows, search):
+            response = current(rows, search)
+            if rows[0]['id'] == '0':
+                response['programs'][0]['end'] = NOW + 1
+            else:
+                response['asOf'] = NOW + 2
+            return response
+        epg.current.side_effect = crossed_boundary
+        with mock.patch.object(ott, 'EpgClient', return_value=epg), \
+                mock.patch.object(ott.time, 'time', return_value=NOW):
+            result, _ = ott.server_programs(client, 'tv', SETTINGS, 'Три кота')
+        self.assertEqual([row['number'] for row in result['programs']], [2981])
+
     def test_multibyte_metadata_batches_fit_the_wire_limit_without_dropping_rows(self):
         channels = [dict(id=str(i), number=i + 1, name='界' * 512,
                          tvgName='я' * 512, tvgId='界' * 512, shift=0) for i in range(1000)]

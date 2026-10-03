@@ -61,7 +61,8 @@ must be within one minute. Other `epg.source` values are rejected. Selecting
 guide; those sources are neither used nor uploaded. An unsupported player,
 stale result or service failure exits with an error. It never falls back to scanning
 every channel's EPG on the player. Current-programme HTTP requests are limited
-to ten seconds (or a smaller `--timeout`) and 2 MiB of response data. Archive
+to ten seconds (or the smaller remaining budget) and 2 MiB of response data;
+all current-programme batches together share the `--timeout` budget. Archive
 history requests allow twenty seconds and 16 MiB per response.
 
 Title launch now follows the same order on every registered player:
