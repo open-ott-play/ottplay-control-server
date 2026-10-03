@@ -30,6 +30,57 @@ def guide():
 
 
 class RemoteEpgCliTest(unittest.TestCase):
+    def test_large_catalogue_search_keeps_matches_from_both_batches(self):
+        snapshot = {'catalog': 'large-catalog', 'channels': [
+            dict(id=str(i), number=i + 1, name='Channel ' + str(i), tvgId='', tvgName='', shift=0)
+            for i in range(2981)]}
+        client, epg = mock.Mock(timeout=45), mock.Mock()
+        client.call.return_value = snapshot
+
+        def current(rows, search):
+            response = guide()
+            response.update(checked=len(rows), total=len(rows), programs=[
+                dict(id=rows[-1]['id'], start=NOW - 60, end=NOW + 60, title='Три кота')])
+            return response
+
+        epg.current.side_effect = current
+        with mock.patch.object(ott, 'EpgClient', return_value=epg), \
+                mock.patch.object(ott.time, 'time', return_value=NOW):
+            result, targets = ott.server_programs(client, 'tv', SETTINGS, 'Три кота')
+        self.assertEqual([len(call.args[0]) for call in epg.current.call_args_list], [2048, 933])
+        self.assertEqual([row['number'] for row in result['programs']], [2048, 2981])
+        self.assertEqual(result['checked'], result['total'])
+        self.assertEqual(result['total'], 2981)
+        self.assertEqual(targets[2981], {'catalog': 'large-catalog', 'id': '2980'})
+        client.call.assert_called_once_with('tv', 'epg_catalog', {})
+
+        for failure in ('foreign_channel', 'changed_generation', 'partial'):
+            def invalid_later_batch(rows, search):
+                response = current(rows, search)
+                if rows[0]['id'] == '2048':
+                    if failure == 'foreign_channel':
+                        response['programs'][0]['id'] = '0'
+                    elif failure == 'changed_generation':
+                        response['generation'] = 'new-generation'
+                    else:
+                        response['checked'] -= 1
+                return response
+            epg.current.side_effect = invalid_later_batch
+            with self.subTest(failure=failure), mock.patch.object(ott, 'EpgClient', return_value=epg), \
+                    mock.patch.object(ott.time, 'time', return_value=NOW), self.assertRaises(ott.Error):
+                ott.server_programs(client, 'tv', SETTINGS, 'Три кота')
+        self.assertTrue(all(call.args[1] == 'epg_catalog' for call in client.call.call_args_list))
+
+    def test_multibyte_metadata_batches_fit_the_wire_limit_without_dropping_rows(self):
+        channels = [dict(id=str(i), number=i + 1, name='界' * 512,
+                         tvgName='я' * 512, tvgId='界' * 512, shift=0) for i in range(1000)]
+        batches = list(ott.epg_batches(channels))
+        self.assertGreater(len(batches), 1)
+        self.assertEqual([row['id'] for batch in batches for row in batch], [str(i) for i in range(1000)])
+        for batch in batches:
+            wire = dict(version=1, source='epg-one', channels=batch, search='я' * 512)
+            self.assertLess(len(json.dumps(wire, ensure_ascii=False).encode()), 512 * 1024)
+
     def run_command(self, words, snapshot=None, response=None, playback=None, settings=SETTINGS, json_output=False):
         client = mock.Mock()
         client.timeout = 45
