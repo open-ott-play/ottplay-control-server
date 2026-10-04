@@ -19,25 +19,30 @@ import (
 const MaxDevices = 64
 
 type Device struct {
-	ID    string `json:"id"`
-	Token string `json:"token"`
+	ID          string             `json:"id"`
+	Token       string             `json:"token"`
+	Diagnostics *DeviceDiagnostics `json:"diagnostics,omitempty"`
 }
 
 type Config struct {
-	Listen              string     `json:"listen"`
-	AdminToken          string     `json:"admin_token"`
-	AllowedOrigins      []string   `json:"allowed_origins"`
-	AllowNullOrigin     bool       `json:"allow_null_origin,omitempty"`
-	Devices             []Device   `json:"devices"`
-	CommandTTLSeconds   int        `json:"command_ttl_seconds"`
-	MaxPendingPerDevice int        `json:"max_pending_per_device"`
-	Discovery           *Discovery `json:"discovery,omitempty"`
+	Listen              string       `json:"listen"`
+	AdminToken          string       `json:"admin_token"`
+	AllowedOrigins      []string     `json:"allowed_origins"`
+	AllowNullOrigin     bool         `json:"allow_null_origin,omitempty"`
+	Devices             []Device     `json:"devices"`
+	CommandTTLSeconds   int          `json:"command_ttl_seconds"`
+	MaxPendingPerDevice int          `json:"max_pending_per_device"`
+	Discovery           *Discovery   `json:"discovery,omitempty"`
+	Diagnostics         *Diagnostics `json:"diagnostics,omitempty"`
 }
 
 var deviceID = regexp.MustCompile(wire.DeviceIdPattern)
 var token = regexp.MustCompile(wire.TokenPattern)
 
 func (c *Config) Defaults() {
+	if c.Diagnostics != nil {
+		c.Diagnostics.Defaults()
+	}
 	if c.Listen == "" {
 		c.Listen = "0.0.0.0:8081"
 	}
@@ -53,6 +58,9 @@ func (c *Config) Defaults() {
 }
 
 func (c Config) Validate() error {
+	if err := c.validateDiagnostics(); err != nil {
+		return err
+	}
 	if c.Discovery != nil {
 		if err := c.Discovery.Validate(); err != nil {
 			return err
