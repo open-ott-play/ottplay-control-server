@@ -65,8 +65,8 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME restart [stream|player]   restart the stream (default) or reload the player
   ott NAME kiosk [status]            show kiosk policy and playback health
-  ott NAME kiosk on [CHANNEL]        lock CHANNEL, or await a selection in the player
-  ott NAME kiosk set CHANNEL         replace the locked channel
+  ott NAME kiosk on [CHANNEL]        lock number/first name match, or await UI selection
+  ott NAME kiosk set CHANNEL         replace by number or first name match
   ott NAME kiosk off                 release the kiosk lock
   ott NAME random [FROM TO]          play a random channel
   ott NAME msg TEXT                  show an on-screen message

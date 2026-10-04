@@ -617,7 +617,7 @@ to the controller with its device credentials and have loaded live channels.
 ott tv kiosk                # current policy and playback health
 ott tv kiosk on             # lock the next channel selected in the player's UI
 ott tv kiosk on 12          # immediately select and lock channel 12 from `s`
-ott tv kiosk on "Новости"   # unique name, case insensitive; ambiguous names reject
+ott tv kiosk on "Новости"   # lock the first name containing Новости, ignoring case
 ott tv kiosk set 7          # remotely replace the locked channel
 ott tv kiosk off            # disable kiosk mode
 ott --json tv kiosk status
@@ -625,8 +625,15 @@ ott --json tv kiosk status
 
 `on` without a channel arms the player; it does not lock the currently playing
 channel. Repeating it while already locked preserves that lock. `set` requires
-kiosk to be enabled and changes the channel within the current source. It never
-uses random channel/programme/archive fallback. Disable kiosk before changing
+kiosk to be enabled and changes the channel within the current source. Both `on`
+and `set` treat text as a literal case-insensitive substring and select the first
+matching channel in `ott tv s` order. A later exact name has no priority, and
+multiple matches are not an error. For example, with `Новости HD` listed before
+`Новости`, the query `Новости` locks `Новости HD`. This is not regex/glob syntax.
+Numbers still select a one-based catalogue row. No match, or an unavailable or
+protected first match, rejects without changing the lock or skipping to another
+match. Retries keep the selected channel ID, even if the list is later reordered.
+It never uses random channel/programme/archive fallback. Disable kiosk before changing
 provider, profile or provider settings, then re-enable it on the desired source.
 Parental access must already allow the requested channel; kiosk does not bypass it.
 

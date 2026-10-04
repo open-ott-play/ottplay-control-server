@@ -13,6 +13,8 @@ class KioskTest(unittest.TestCase):
             (['KIOSK','STATUS'], {'mode':'status'}),
             (['kiosk','on'], {'mode':'on'}),
             (['kiosk','on','12'], {'mode':'on','query':'12'}),
+            (['kiosk','on','нОвОсТи'], {'mode':'on','query':'нОвОсТи'}),
+            (['kiosk','set','ВоСт'], {'mode':'set','query':'ВоСт'}),
             (['kiosk','set','Новости','HD'], {'mode':'set','query':'Новости HD'}),
             (['kiosk','off'], {'mode':'off'}),
         ]:
