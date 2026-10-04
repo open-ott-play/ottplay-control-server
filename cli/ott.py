@@ -64,6 +64,10 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME profile N name NAME       rename a profile
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME restart [stream|player]   restart the stream (default) or reload the player
+  ott NAME kiosk [status]            show kiosk policy and playback health
+  ott NAME kiosk on [CHANNEL]        lock number/first name match, or await UI selection
+  ott NAME kiosk set CHANNEL         replace by number or first name match
+  ott NAME kiosk off                 release the kiosk lock
   ott NAME random [FROM TO]          play a random channel
   ott NAME msg TEXT                  show an on-screen message
   ott NAME exit                      close the player / enter standby
@@ -561,6 +565,21 @@ def parse_command(words):
         return "status", {}
     verb, tail = words[0].casefold(), words[1:]
     text = " ".join(tail)
+    if verb == "kiosk":
+        mode = tail[0].casefold() if tail else "status"
+        if mode not in ("status", "on", "off", "set") or (mode in ("status", "off") and len(tail) > 1) or (mode == "set" and len(tail) < 2):
+            raise Error("Use kiosk [status], kiosk on [CHANNEL], kiosk set CHANNEL or kiosk off")
+        params = {"mode": mode}
+        if len(tail) > 1:
+            query = " ".join(tail[1:])
+            try:
+                valid = 0 < len(query.strip().encode("utf-8")) <= 1024 and all(ord(c) >= 32 and ord(c) != 127 for c in query)
+            except UnicodeEncodeError:
+                valid = False
+            if not valid:
+                raise Error("Kiosk channel must contain 1–1024 UTF-8 bytes without control characters")
+            params["query"] = query.strip()
+        return "kiosk", params
     if verb == "load":
         if len(tail) != 1 or not preset_name(tail[0]):
             raise Error("Use load PRESET with a short preset name")
@@ -1066,6 +1085,32 @@ def preset_command(config, words, timeout, json_output):
     return 0 if receipt["status"] == "loaded" else 130 if receipt["status"] == "interrupted" else 1
 
 
+def kiosk_metadata(data, mode):
+    message = "The player did not confirm the kiosk policy. Check kiosk status before repeating the change."
+    if (not isinstance(data, dict) or type(data.get("enabled")) is not bool
+            or data.get("state") not in ("off", "waiting", "locked")
+            or data["enabled"] != (data["state"] != "off")
+            or data.get("retry_seconds") != 10
+            or type(data.get("retries")) is not int or data["retries"] < 0
+            or data.get("health") not in ("idle", "waiting", "starting", "playing", "retrying", "error", "source-unavailable", "channel-unavailable")
+            or (mode == "off" and data["enabled"])
+            or (mode in ("on", "set") and not data["enabled"])
+            or (mode == "set" and data["state"] != "locked")):
+        raise Error(message)
+    channel = data.get("channel")
+    if data["state"] == "locked":
+        if not isinstance(channel, dict) or not isinstance(channel.get("id"), str) or not channel["id"] or not isinstance(channel.get("name"), str):
+            raise Error(message)
+        channel = {"id": channel["id"], "name": channel["name"]}
+    elif channel is not None:
+        raise Error(message)
+    provider = data.get("provider")
+    if (data["enabled"] and not isinstance(provider, str)) or (not data["enabled"] and provider is not None):
+        raise Error(message)
+    return {**{key: data[key] for key in ("enabled", "state", "retry_seconds", "retries", "health")},
+            "channel": channel, "provider": provider}
+
+
 def restart_metadata(data, target):
     if (not isinstance(data, dict) or data.get("accepted") is not True or data.get("target") != target
             or (target == "stream" and data.get("dispatched") is not True)
@@ -1336,6 +1381,8 @@ def main(argv=None):
             data = profile_metadata(data, action, params)
         elif action == "restart":
             data = restart_metadata(data, params["target"])
+        elif action == "kiosk":
+            data = kiosk_metadata(data, "set" if params.get("query") else params["mode"])
         elif plex_settings:
             data = plex_settings_metadata(data, params["settings"])
         if action == "programs" and params["search"] and words[1:2] != ["--list"]:
@@ -1401,6 +1448,13 @@ def main(argv=None):
         elif action == "restart":
             print("Stream restart requested." if data["target"] == "stream" else
                   "Player reload accepted; waiting for the acknowledgement to reach the player.")
+        elif action == "kiosk":
+            if data["state"] == "off":
+                print("Kiosk mode disabled.")
+            elif data["state"] == "waiting":
+                print("Kiosk mode enabled; waiting for the first channel selection in the player.")
+            else:
+                print(f"Kiosk channel: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
         elif plex_settings:
             print("Plex settings saved: " + ", ".join(data["fields"]) + ".")
         elif action == "play":
