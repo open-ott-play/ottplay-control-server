@@ -77,6 +77,14 @@ the player is responsible for omitting credentials. A saved acknowledgement does
 not establish server reachability or completed playback. Older players can reject
 unsupported Plex settings; callers must not replay an uncertain request.
 
+For a numbered Stalker slot on a compatible player, `provider_settings` accepts
+`{"provider":"stalker","settings":{"profile":1,"name":"My portal","server":"https://portal.example/c/","mac":"02:00:00:00:00:01"}}`.
+All four settings fields are required; `profile` is an integer from 1 to 15.
+The player saves that slot without changing the selected Stalker slot. Its
+receipt contains `provider`, `profile`, `saved` and the field names only.
+Editing an inactive slot does not reload playback. The existing `server`/`mac`
+form without `profile` continues to update the selected slot.
+
 `profiles` accepts exactly `{}`. For the active M3U provider it returns
 `{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured,vportal_configured}]}`:
 exactly 15 ordered slots numbered 1–15, with one active slot. History is an

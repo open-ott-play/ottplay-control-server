@@ -59,6 +59,10 @@ class FakePlayer:
         if action == 'status':
             return {'provider': self.provider, 'ready': False, 'channels': 0, 'private': TOKEN}
         if action == 'provider_settings':
+            if params['provider'] == 'stalker':
+                self.saved.append(('stalker', copy.deepcopy(params)))
+                return {'provider': 'stalker', 'saved': True, 'profile': params['settings']['profile'],
+                        'fields': ['profile', 'name', 'server', 'mac'], 'private': TOKEN}
             self.saved.append(('plex', copy.deepcopy(params)))
             return {'provider': 'plex', 'saved': True, 'fields': ['token', 'server'], 'private': TOKEN}
         if action == 'profiles':
@@ -85,6 +89,123 @@ def run(preset_config=None, player=None, words=None, json_output=True, timeout=4
         status = ott.main(['--timeout', str(timeout)] + (['--json'] if json_output else []) +
                           (words if words is not None else ['tv', 'load', 'local']))
     return status, output.getvalue(), errors.getvalue(), player, constructor
+
+
+class StalkerPresetTests(unittest.TestCase):
+    def config(self):
+        value = config()
+        value['presets']['local']['stalker'] = [
+            {'number': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
+             'mac': '02:00:00:00:00:01'}]
+        return value
+
+    def test_stalker_slot_is_acknowledged_before_other_providers_without_printing_secrets(self):
+        source = self.config()
+        status, out, err, player, _ = run(source)
+        self.assertEqual((status, err), (0, ''))
+        receipt = json.loads(out)
+        self.assertEqual(receipt, {
+            'preset': 'local', 'status': 'loaded', 'provider': 'm3u', 'active_profile': 1,
+            'completed': ['select_stalker', 'save_stalker_1', 'select_plex', 'wait_plex',
+                          'save_plex', 'select_m3u', 'wait_m3u', 'save_profile_1',
+                          'select_profile_1', 'save_profile_2', 'verify_profiles'],
+        })
+        settings = source['presets']['local']
+        self.assertEqual(player.calls, [
+            ('dev_tv', 'provider', {'query': 'stalker'}),
+            ('dev_tv', 'provider_settings', {'provider': 'stalker', 'settings': {
+                'profile': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
+                'mac': '02:00:00:00:00:01'}}),
+            ('dev_tv', 'provider', {'query': 'plex'}),
+            ('dev_tv', 'status', {}),
+            ('dev_tv', 'provider_settings', {'provider': 'plex', 'settings': settings['plex']}),
+            ('dev_tv', 'provider', {'query': 'm3u'}),
+            ('dev_tv', 'profiles', {}),
+            ('dev_tv', 'profile_settings', {'number': 1, 'settings': {
+                key: value for key, value in settings['m3u'][0].items() if key != 'number'}}),
+            ('dev_tv', 'profile', {'number': 1}),
+            ('dev_tv', 'profile_settings', {'number': 2, 'settings': {
+                key: value for key, value in settings['m3u'][1].items() if key != 'number'}}),
+            ('dev_tv', 'profiles', {}),
+        ])
+        self.assertEqual(player.saved[0][0], 'stalker')
+        self.assertEqual(player.saved[0][1]['settings'],
+                         {'profile': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
+                          'mac': '02:00:00:00:00:01'})
+        self.assertEqual((player.provider, player.active), ('m3u', 1))
+        for secret in ('https://stalker.example/c/', '02:00:00:00:00:01', TOKEN):
+            self.assertNotIn(secret, out + err)
+
+    def test_invalid_stalker_data_stops_before_any_device_request(self):
+        for change in [
+            {'number': True}, {'number': 0}, {'number': 16}, {'number': 1.5},
+            {'name': 'x' * 257}, {'name': 'a\x00b'}, {'name': '\ud800'},
+            {'server': 'http://u:p@stalker.example/'}, {'server': 'file:///private'},
+            {'server': 'http://127.1/c/'}, {'mac': 'invalid'}, {'mac': None}, {'unknown': TOKEN},
+        ]:
+            source = self.config()
+            source['presets']['local']['stalker'][0].update(change)
+            status, out, err, player, constructor = run(source)
+            self.assertEqual((status, err), (1, ''))
+            self.assertEqual(json.loads(out), {
+                'status': 'failed', 'stage': 'validate', 'completed': [],
+                'error': 'Stalker profiles require unique numbers 1–15, a name, HTTP(S) server and MAC',
+            })
+            self.assertEqual(player.calls, [])
+            constructor.assert_not_called()
+        for slots in [None, {}, [], [self.config()['presets']['local']['stalker'][0]] * 2]:
+            source = self.config()
+            source['presets']['local']['stalker'] = slots
+            status, out, err, player, constructor = run(source)
+            self.assertEqual((status, err), (1, ''))
+            self.assertEqual(json.loads(out), {
+                'status': 'failed', 'stage': 'validate', 'completed': [],
+                'error': ('Stalker profiles require unique numbers 1–15, a name, HTTP(S) server and MAC'
+                          if isinstance(slots, list) and slots
+                          else 'A Stalker preset requires 1–15 complete profiles'),
+            })
+            self.assertEqual(player.calls, [])
+            constructor.assert_not_called()
+
+    def assert_stopped_after_stalker_save(self, player, output):
+        self.assertEqual(player.calls, [
+            ('dev_tv', 'provider', {'query': 'stalker'}),
+            ('dev_tv', 'provider_settings', {'provider': 'stalker', 'settings': {
+                'profile': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
+                'mac': '02:00:00:00:00:01'}}),
+        ])
+        self.assertEqual(player.provider, 'stalker')
+        self.assertEqual(json.loads(output), {
+            'preset': 'local', 'status': 'failed', 'stage': 'save_stalker_1',
+            'completed': ['select_stalker'],
+            'error': 'Loading stopped. A request may have executed; inspect the player before retrying.',
+        })
+
+    def test_old_player_or_uncertain_ack_does_not_overwrite_an_arbitrary_active_slot(self):
+        failures = [
+            ott.PlayerRejected('Unsupported provider settings fields.', {}),
+            ott.Error('Lost acknowledgement'),
+            {'provider': 'stalker', 'saved': True, 'profile': 3,
+             'fields': ['profile', 'name', 'server', 'mac']},
+            {'provider': 'stalker', 'saved': True, 'fields': ['server', 'mac']},
+        ]
+        for failure in failures:
+            player = FakePlayer(faults={('provider_settings', 1): failure})
+            status, out, err, player, _ = run(self.config(), player)
+            self.assertEqual((status, err), (1, ''))
+            self.assert_stopped_after_stalker_save(player, out)
+            self.assertEqual(player.saved, [])
+
+    def test_applied_stalker_save_with_lost_ack_is_never_replayed(self):
+        def applied_without_ack(player, params):
+            player.saved.append(('stalker', copy.deepcopy(params)))
+            raise ott.Error('Lost acknowledgement')
+
+        player = FakePlayer(faults={('provider_settings', 1): applied_without_ack})
+        status, out, err, player, _ = run(self.config(), player)
+        self.assertEqual((status, err), (1, ''))
+        self.assert_stopped_after_stalker_save(player, out)
+        self.assertEqual(player.saved, [('stalker', player.calls[1][2])])
 
 
 class PresetValidationTests(unittest.TestCase):

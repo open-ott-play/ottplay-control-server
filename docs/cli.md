@@ -490,6 +490,22 @@ The second M3U slot starts with the same settings so it can be customized
 independently. Editing a preset changes only this file; run `load` to apply it.
 Set mode 600 on the file and keep it out of source control and public uploads.
 
+Each setup may also contain an optional `stalker` list. Its entries address
+Stalker slots independently of the M3U slots:
+
+```json
+"stalker": [
+  {"number": 1, "name": "My portal", "server": "https://portal.example/c/", "mac": "02:00:00:00:00:01"}
+]
+```
+
+Provide all four fields, with unique slot numbers from 1 to 15. Loading saves
+these slots before Plex and M3U, verifies each acknowledgement, and preserves
+the selected Stalker slot. It still finishes on the setup's `active_profile`
+in M3U. The player must support numbered Stalker settings; an older player
+rejects the request and loading stops without substituting the active slot.
+The output does not include portal URLs or MACs.
+
 ```sh
 ott presets
 ott t1 load local
