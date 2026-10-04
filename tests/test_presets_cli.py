@@ -145,15 +145,41 @@ class StalkerPresetTests(unittest.TestCase):
         ]:
             source = self.config()
             source['presets']['local']['stalker'][0].update(change)
-            status, out, _, player, constructor = run(source)
-            self.assertEqual(status, 1)
-            self.assertEqual(json.loads(out)['stage'], 'validate')
+            status, out, err, player, constructor = run(source)
+            self.assertEqual((status, err), (1, ''))
+            self.assertEqual(json.loads(out), {
+                'status': 'failed', 'stage': 'validate', 'completed': [],
+                'error': 'Stalker profiles require unique numbers 1–15, a name, HTTP(S) server and MAC',
+            })
             self.assertEqual(player.calls, [])
             constructor.assert_not_called()
         for slots in [None, {}, [], [self.config()['presets']['local']['stalker'][0]] * 2]:
             source = self.config()
             source['presets']['local']['stalker'] = slots
-            self.assertEqual(run(source)[0], 1)
+            status, out, err, player, constructor = run(source)
+            self.assertEqual((status, err), (1, ''))
+            self.assertEqual(json.loads(out), {
+                'status': 'failed', 'stage': 'validate', 'completed': [],
+                'error': ('Stalker profiles require unique numbers 1–15, a name, HTTP(S) server and MAC'
+                          if isinstance(slots, list) and slots
+                          else 'A Stalker preset requires 1–15 complete profiles'),
+            })
+            self.assertEqual(player.calls, [])
+            constructor.assert_not_called()
+
+    def assert_stopped_after_stalker_save(self, player, output):
+        self.assertEqual(player.calls, [
+            ('dev_tv', 'provider', {'query': 'stalker'}),
+            ('dev_tv', 'provider_settings', {'provider': 'stalker', 'settings': {
+                'profile': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
+                'mac': '02:00:00:00:00:01'}}),
+        ])
+        self.assertEqual(player.provider, 'stalker')
+        self.assertEqual(json.loads(output), {
+            'preset': 'local', 'status': 'failed', 'stage': 'save_stalker_1',
+            'completed': ['select_stalker'],
+            'error': 'Loading stopped. A request may have executed; inspect the player before retrying.',
+        })
 
     def test_old_player_or_uncertain_ack_does_not_overwrite_an_arbitrary_active_slot(self):
         failures = [
@@ -165,12 +191,10 @@ class StalkerPresetTests(unittest.TestCase):
         ]
         for failure in failures:
             player = FakePlayer(faults={('provider_settings', 1): failure})
-            status, out, _, player, _ = run(self.config(), player)
-            self.assertEqual(status, 1)
-            self.assertEqual(json.loads(out)['stage'], 'save_stalker_1')
-            self.assertEqual(player.counts['provider_settings'], 1)
+            status, out, err, player, _ = run(self.config(), player)
+            self.assertEqual((status, err), (1, ''))
+            self.assert_stopped_after_stalker_save(player, out)
             self.assertEqual(player.saved, [])
-            self.assertEqual(player.provider, 'stalker')
 
     def test_applied_stalker_save_with_lost_ack_is_never_replayed(self):
         def applied_without_ack(player, params):
@@ -180,13 +204,8 @@ class StalkerPresetTests(unittest.TestCase):
         player = FakePlayer(faults={('provider_settings', 1): applied_without_ack})
         status, out, err, player, _ = run(self.config(), player)
         self.assertEqual((status, err), (1, ''))
-        self.assertEqual([action for _, action, _ in player.calls], ['provider', 'provider_settings'])
-        self.assertEqual(len(player.saved), 1)
-        self.assertEqual(json.loads(out), {
-            'preset': 'local', 'status': 'failed', 'stage': 'save_stalker_1',
-            'completed': ['select_stalker'],
-            'error': 'Loading stopped. A request may have executed; inspect the player before retrying.',
-        })
+        self.assert_stopped_after_stalker_save(player, out)
+        self.assertEqual(player.saved, [('stalker', player.calls[1][2])])
 
 
 class PresetValidationTests(unittest.TestCase):
