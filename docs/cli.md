@@ -611,3 +611,60 @@ OTT_CLI=/path/to/cli/ott.py node scripts/smoke-remote-cli.cjs
 ## Scoped remote diagnostics
 
 `ott diagnostics --help` opens the separate diagnostics CLI without reading the legacy administrator configuration. Install `diagnostics.py` beside `ott.py`. See [Diagnostics CLI and MCP](diagnostics-cli.md) for operator credentials, runtime selection and temporary sessions.
+
+## Kiosk mode
+
+Requires updated player **and** controller builds. The player must be connected
+to the controller with its device credentials and have loaded live channels.
+
+```sh
+ott tv kiosk                # current policy and playback health
+ott tv kiosk on             # lock the next channel selected in the player's UI
+ott tv kiosk on 12          # immediately select and lock channel 12 from `s`
+ott tv kiosk on "Новости"   # lock the first name containing Новости, ignoring case
+ott tv kiosk set 7          # remotely replace the locked channel
+ott tv kiosk off            # disable kiosk mode
+ott --json tv kiosk status
+```
+
+`on` without a channel arms the player; it does not lock the currently playing
+channel. Repeating it while already locked preserves that lock. `set` requires
+kiosk to be enabled and changes the channel within the current source. Both `on`
+and `set` treat text as a literal case-insensitive substring and select the first
+matching channel in `ott tv s` order. A later exact name has no priority, and
+multiple matches are not an error. For example, with `Новости HD` listed before
+`Новости`, the query `Новости` locks `Новости HD`. This is not regex/glob syntax.
+Numbers still select a one-based catalogue row. No match, or an unavailable or
+protected first match, rejects without changing the lock or skipping to another
+match. Retries keep the selected channel ID, even if the list is later reordered.
+It never uses random channel/programme/archive fallback. Disable kiosk before changing
+provider, profile or provider settings, then re-enable it on the desired source.
+Parental access must already allow the requested channel; kiosk does not bypass it.
+
+After selection the player blocks local navigation, channel switching, archives
+and VOD. Ordinary remote playback/provider/profile mutations and exit commands
+are rejected as well. Read queries, volume/mute, notifications and explicit remote
+restarts remain available. Only the `kiosk` request changes this policy.
+
+The client retries the same channel every ten seconds without playback progress,
+resolving its stream URL again. Healthy playback continues uninterrupted. The lock
+uses channel and source identities, so list reordering or a missing channel never
+selects an unrelated stream. Policy persists across page reloads and controller
+outages, and is excluded from portable settings. The running page owns recovery;
+this does not relaunch a crashed process or wake a suspended device.
+
+`status` reports `off`, `waiting` or `locked`, channel/provider metadata,
+`retry_seconds: 10`, retry count and observed health. A successful mutation means
+policy was stored and any requested launch attempted, not that visible playback
+was verified. Delivery and uncertain-result handling match the other CLI requests;
+do not repeat an uncertain mutation blindly. Inspect `kiosk status` first.
+
+Direct API example, submitted to the existing authenticated `/api/requests`
+route for the selected device:
+
+```json
+{"action":"kiosk","params":{"mode":"on","query":"12"}}
+```
+
+`status` and `off` accept only `mode`; `on` optionally accepts `query`, and `set`
+requires it. Queries contain 1–1024 UTF-8 bytes without control characters.
