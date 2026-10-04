@@ -104,7 +104,30 @@ class StalkerPresetTests(unittest.TestCase):
         status, out, err, player, _ = run(source)
         self.assertEqual((status, err), (0, ''))
         receipt = json.loads(out)
-        self.assertEqual(receipt['completed'][:2], ['select_stalker', 'save_stalker_1'])
+        self.assertEqual(receipt, {
+            'preset': 'local', 'status': 'loaded', 'provider': 'm3u', 'active_profile': 1,
+            'completed': ['select_stalker', 'save_stalker_1', 'select_plex', 'wait_plex',
+                          'save_plex', 'select_m3u', 'wait_m3u', 'save_profile_1',
+                          'select_profile_1', 'save_profile_2', 'verify_profiles'],
+        })
+        settings = source['presets']['local']
+        self.assertEqual(player.calls, [
+            ('dev_tv', 'provider', {'query': 'stalker'}),
+            ('dev_tv', 'provider_settings', {'provider': 'stalker', 'settings': {
+                'profile': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
+                'mac': '02:00:00:00:00:01'}}),
+            ('dev_tv', 'provider', {'query': 'plex'}),
+            ('dev_tv', 'status', {}),
+            ('dev_tv', 'provider_settings', {'provider': 'plex', 'settings': settings['plex']}),
+            ('dev_tv', 'provider', {'query': 'm3u'}),
+            ('dev_tv', 'profiles', {}),
+            ('dev_tv', 'profile_settings', {'number': 1, 'settings': {
+                key: value for key, value in settings['m3u'][0].items() if key != 'number'}}),
+            ('dev_tv', 'profile', {'number': 1}),
+            ('dev_tv', 'profile_settings', {'number': 2, 'settings': {
+                key: value for key, value in settings['m3u'][1].items() if key != 'number'}}),
+            ('dev_tv', 'profiles', {}),
+        ])
         self.assertEqual(player.saved[0][0], 'stalker')
         self.assertEqual(player.saved[0][1]['settings'],
                          {'profile': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
@@ -148,6 +171,22 @@ class StalkerPresetTests(unittest.TestCase):
             self.assertEqual(player.counts['provider_settings'], 1)
             self.assertEqual(player.saved, [])
             self.assertEqual(player.provider, 'stalker')
+
+    def test_applied_stalker_save_with_lost_ack_is_never_replayed(self):
+        def applied_without_ack(player, params):
+            player.saved.append(('stalker', copy.deepcopy(params)))
+            raise ott.Error('Lost acknowledgement')
+
+        player = FakePlayer(faults={('provider_settings', 1): applied_without_ack})
+        status, out, err, player, _ = run(self.config(), player)
+        self.assertEqual((status, err), (1, ''))
+        self.assertEqual([action for _, action, _ in player.calls], ['provider', 'provider_settings'])
+        self.assertEqual(len(player.saved), 1)
+        self.assertEqual(json.loads(out), {
+            'preset': 'local', 'status': 'failed', 'stage': 'save_stalker_1',
+            'completed': ['select_stalker'],
+            'error': 'Loading stopped. A request may have executed; inspect the player before retrying.',
+        })
 
 
 class PresetValidationTests(unittest.TestCase):
