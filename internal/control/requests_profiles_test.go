@@ -9,6 +9,11 @@ import (
 func TestProfileAndRestartRequestRoundTrip(t *testing.T) {
 	for _, body := range []string{
 		`{"action":"profiles","params":{}}`,
+		`{"action":"kiosk","params":{"mode":"status"}}`,
+		`{"action":"kiosk","params":{"mode":"on"}}`,
+		`{"action":"kiosk","params":{"mode":"on","query":"Новости"}}`,
+		`{"action":"kiosk","params":{"mode":"set","query":"12"}}`,
+		`{"action":"kiosk","params":{"mode":"off"}}`,
 		`{"action":"profile","params":{"number":1}}`,
 		`{"action":"profile","params":{"number":15}}`,
 		`{"action":"profile_settings","params":{"number":2,"settings":{"name":"Гостиная 😀","playlist":"https://playlist.example/list?key=test-only","history_hours":8760,"vportal":"https://portal.example/link"}}}`,
@@ -56,6 +61,17 @@ func TestProfileAndRestartRequestRoundTrip(t *testing.T) {
 
 func TestProfileRequestsRejectInvalidParametersBeforeQueueing(t *testing.T) {
 	bodies := []string{
+		`{"action":"kiosk","params":{}}`,
+		`{"action":"kiosk","params":{"mode":"set"}}`,
+		`{"action":"kiosk","params":{"mode":"status","query":"1"}}`,
+		`{"action":"kiosk","params":{"mode":"off","query":"1"}}`,
+		`{"action":"kiosk","params":{"mode":"on","query":1}}`,
+		`{"action":"kiosk","params":{"mode":"on","query":""}}`,
+		`{"action":"kiosk","params":{"mode":"on","query":" "}}`,
+		`{"action":"kiosk","params":{"mode":"on","query":"` + strings.Repeat("x", 1025) + `"}}`,
+		`{"action":"kiosk","params":{"mode":"on","extra":true}}`,
+		`{"action":"kiosk","params":{"mode":"on","mode":"off"}}`,
+		`{"action":"kiosk","params":{"mode":"ON"}}`,
 		`{"action":"profiles","params":{"provider":"m3u"}}`,
 		`{"action":"profile","params":{}}`,
 		`{"action":"profile","params":{"number":1,"extra":true}}`,

@@ -88,6 +88,18 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	switch action {
+	case "kiosk":
+		var mode string
+		ok = json.Unmarshal(params["mode"], &mode) == nil
+		switch mode {
+		case "status", "off":
+			ok = ok && len(params) == 1
+		case "on", "set":
+			_, validQuery := textValue(params["query"], 1024)
+			ok = ok && ((mode == "on" && len(params) == 1) || (len(params) == 2 && validQuery && profileText(params["query"], 1024)))
+		default:
+			ok = false
+		}
 	case "status", "providers", "profiles", "epg_catalog":
 		ok = len(params) == 0
 	case "profile":
