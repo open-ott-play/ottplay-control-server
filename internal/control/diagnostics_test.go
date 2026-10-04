@@ -19,7 +19,8 @@ var diagnosticOperatorToken = strings.Repeat("d", 32)
 func diagnosticConfig() config.Config {
 	c := testConfig()
 	digest := sha256.Sum256([]byte(diagnosticOperatorToken))
-	c.Diagnostics = &config.Diagnostics{Operators: []config.DiagnosticsOperator{{ID: "operator", CredentialSHA256: hex.EncodeToString(digest[:]), DeviceIDs: []string{"first"}, Actions: []string{"runtimes.read", "sessions.start", "sessions.stop", "sessions.read", "runtimes.revoke"}}}}
+	// Existing long-lease cases deliberately use the configurable upper TTL.
+	c.Diagnostics = &config.Diagnostics{RuntimeTTLMS: 600000, Operators: []config.DiagnosticsOperator{{ID: "operator", CredentialSHA256: hex.EncodeToString(digest[:]), DeviceIDs: []string{"first"}, Actions: []string{"runtimes.read", "sessions.start", "sessions.stop", "sessions.read", "runtimes.revoke"}}}}
 	c.Devices[0].Diagnostics = &config.DeviceDiagnostics{Enabled: true}
 	c.Defaults()
 	return c
