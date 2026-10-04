@@ -59,6 +59,10 @@ class FakePlayer:
         if action == 'status':
             return {'provider': self.provider, 'ready': False, 'channels': 0, 'private': TOKEN}
         if action == 'provider_settings':
+            if params['provider'] == 'stalker':
+                self.saved.append(('stalker', copy.deepcopy(params)))
+                return {'provider': 'stalker', 'saved': True, 'profile': params['settings']['profile'],
+                        'fields': ['profile', 'name', 'server', 'mac'], 'private': TOKEN}
             self.saved.append(('plex', copy.deepcopy(params)))
             return {'provider': 'plex', 'saved': True, 'fields': ['token', 'server'], 'private': TOKEN}
         if action == 'profiles':
@@ -85,6 +89,65 @@ def run(preset_config=None, player=None, words=None, json_output=True, timeout=4
         status = ott.main(['--timeout', str(timeout)] + (['--json'] if json_output else []) +
                           (words if words is not None else ['tv', 'load', 'local']))
     return status, output.getvalue(), errors.getvalue(), player, constructor
+
+
+class StalkerPresetTests(unittest.TestCase):
+    def config(self):
+        value = config()
+        value['presets']['local']['stalker'] = [
+            {'number': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
+             'mac': '02:00:00:00:00:01'}]
+        return value
+
+    def test_stalker_slot_is_acknowledged_before_other_providers_without_printing_secrets(self):
+        source = self.config()
+        status, out, err, player, _ = run(source)
+        self.assertEqual((status, err), (0, ''))
+        receipt = json.loads(out)
+        self.assertEqual(receipt['completed'][:2], ['select_stalker', 'save_stalker_1'])
+        self.assertEqual(player.saved[0][0], 'stalker')
+        self.assertEqual(player.saved[0][1]['settings'],
+                         {'profile': 1, 'name': 'Private portal', 'server': 'https://stalker.example/c/',
+                          'mac': '02:00:00:00:00:01'})
+        self.assertEqual((player.provider, player.active), ('m3u', 1))
+        for secret in ('https://stalker.example/c/', '02:00:00:00:00:01', TOKEN):
+            self.assertNotIn(secret, out + err)
+
+    def test_invalid_stalker_data_stops_before_any_device_request(self):
+        for change in [
+            {'number': True}, {'number': 0}, {'number': 16}, {'number': 1.5},
+            {'name': 'x' * 257}, {'name': 'a\x00b'}, {'name': '\ud800'},
+            {'server': 'http://u:p@stalker.example/'}, {'server': 'file:///private'},
+            {'server': 'http://127.1/c/'}, {'mac': 'invalid'}, {'mac': None}, {'unknown': TOKEN},
+        ]:
+            source = self.config()
+            source['presets']['local']['stalker'][0].update(change)
+            status, out, _, player, constructor = run(source)
+            self.assertEqual(status, 1)
+            self.assertEqual(json.loads(out)['stage'], 'validate')
+            self.assertEqual(player.calls, [])
+            constructor.assert_not_called()
+        for slots in [None, {}, [], [self.config()['presets']['local']['stalker'][0]] * 2]:
+            source = self.config()
+            source['presets']['local']['stalker'] = slots
+            self.assertEqual(run(source)[0], 1)
+
+    def test_old_player_or_uncertain_ack_does_not_overwrite_an_arbitrary_active_slot(self):
+        failures = [
+            ott.PlayerRejected('Unsupported provider settings fields.', {}),
+            ott.Error('Lost acknowledgement'),
+            {'provider': 'stalker', 'saved': True, 'profile': 3,
+             'fields': ['profile', 'name', 'server', 'mac']},
+            {'provider': 'stalker', 'saved': True, 'fields': ['server', 'mac']},
+        ]
+        for failure in failures:
+            player = FakePlayer(faults={('provider_settings', 1): failure})
+            status, out, _, player, _ = run(self.config(), player)
+            self.assertEqual(status, 1)
+            self.assertEqual(json.loads(out)['stage'], 'save_stalker_1')
+            self.assertEqual(player.counts['provider_settings'], 1)
+            self.assertEqual(player.saved, [])
+            self.assertEqual(player.provider, 'stalker')
 
 
 class PresetValidationTests(unittest.TestCase):

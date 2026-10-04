@@ -33,7 +33,7 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show player status
-  ott NAME load PRESET               apply a private Plex and M3U preset
+  ott NAME load PRESET               apply a private Plex, M3U and optional Stalker preset
   ott NAME 12                        play channel 12 from the s listing
   ott NAME TITLE                     search channels, current EPG, then archives within 144 hours
   ott NAME play s                    play a channel whose name is reserved
@@ -865,8 +865,9 @@ def validate_preset(config, requested):
         raise Error("Unknown preset; use ott presets to list local names")
     name = matches[0]
     value = config["presets"][name]
-    if not isinstance(value, dict) or set(value) != {"m3u", "plex", "active_profile"}:
-        raise Error("A preset must contain m3u, plex and active_profile")
+    if (not isinstance(value, dict) or not {"m3u", "plex", "active_profile"} <= set(value)
+            or set(value) - {"m3u", "plex", "active_profile", "stalker"}):
+        raise Error("A preset must contain m3u, plex and active_profile, with optional stalker profiles")
     if not isinstance(value["m3u"], list) or not 1 <= len(value["m3u"]) <= 15:
         raise Error("A preset must contain 1–15 complete M3U profiles")
     profiles = []
@@ -889,12 +890,32 @@ def validate_preset(config, requested):
     plex = validate_plex_settings(value["plex"])
     if not preset_url(plex["server"]):
         raise Error("Preset Plex server must be a valid HTTP(S) address")
+    stalker = []
+    if "stalker" in value:
+        if not isinstance(value["stalker"], list) or not 1 <= len(value["stalker"]) <= 15:
+            raise Error("A Stalker preset requires 1–15 complete profiles")
+        seen = set()
+        for row in value["stalker"]:
+            if (not isinstance(row, dict) or set(row) != {"number", "name", "server", "mac"}
+                    or type(row["number"]) is not int or not 1 <= row["number"] <= 15 or row["number"] in seen
+                    or not epg_text(row["name"], 256, "utf-8") or re.search(r"[\x00-\x1f\x7f]", row["name"])
+                    or not epg_text(row["server"], 8192, "utf-8")
+                    or not preset_url(row["server"]) or not isinstance(row["mac"], str)
+                    or not re.fullmatch(r"(?:[a-f0-9]{2}:){5}[a-f0-9]{2}", row["mac"], re.I)):
+                raise Error("Stalker profiles require unique numbers 1–15, a name, HTTP(S) server and MAC")
+            seen.add(row["number"])
+            stalker.append({"profile": row["number"], **{key: row[key] for key in ("name", "server", "mac")}})
+        stalker.sort(key=lambda row: row["profile"])
     requests = [("provider_settings", {"provider": "plex", "settings": plex})]
     requests.extend(("profile_settings", row) for row in profiles)
+    requests.extend(("provider_settings", {"provider": "stalker", "settings": row}) for row in stalker)
     for action, params in requests:
         if len(json.dumps({"action": action, "params": params}, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
             raise Error("A preset settings request exceeds the 16 KiB limit")
-    return name, {"m3u": sorted(profiles, key=lambda row: row["number"]), "plex": plex, "active_profile": active}
+    result = {"m3u": sorted(profiles, key=lambda row: row["number"]), "plex": plex, "active_profile": active}
+    if stalker:
+        result["stalker"] = stalker
+    return name, result
 
 
 def load_preset(client, device, name, preset):
@@ -956,6 +977,19 @@ def load_preset(client, device, name, preset):
         step("save_profile_" + str(row["number"]), "profile_settings", row, validate)
 
     try:
+        if preset.get("stalker"):
+            step("select_stalker", "provider", {"query": "stalker"}, provider("stalker"))
+            for row in preset["stalker"]:
+                def confirmed(data):
+                    if (not isinstance(data, dict) or data.get("provider") != "stalker" or data.get("saved") is not True
+                            or type(data.get("profile")) is not int or data["profile"] != row["profile"]
+                            or not isinstance(data.get("fields"), list) or len(data["fields"]) != 4
+                            or set(data["fields"]) != {"profile", "name", "server", "mac"}):
+                        raise Error("Stalker profile save was not confirmed")
+                    return True
+                step("save_stalker_" + str(row["profile"]), "provider_settings",
+                     {"provider": "stalker", "settings": row}, confirmed,
+                     ("Select this provider before changing its settings.",))
         step("select_plex", "provider", {"query": "plex"}, provider("plex"))
         step("wait_plex", "status", {}, plex_status)
         settings = {"provider": "plex", "settings": preset["plex"]}
