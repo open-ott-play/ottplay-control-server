@@ -607,3 +607,7 @@ Run the end-to-end test from the player repository:
 OTT_CONTROL_BINARY=/path/to/ottplay-control-server \
 OTT_CLI=/path/to/cli/ott.py node scripts/smoke-remote-cli.cjs
 ```
+
+## Scoped remote diagnostics
+
+`ott diagnostics --help` opens the separate diagnostics CLI without reading the legacy administrator configuration. Install `diagnostics.py` beside `ott.py`. See [Diagnostics CLI and MCP](diagnostics-cli.md) for operator credentials, runtime selection and temporary sessions.

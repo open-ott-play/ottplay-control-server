@@ -24,6 +24,7 @@ import urllib.request
 import warnings
 
 HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
+  ott diagnostics --help             scoped runtime diagnostics and session control
   ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
   ott alias NAME UUID                name an existing device
@@ -1276,6 +1277,17 @@ def management(client, config_path, words, json_output=False):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "diagnostics":
+        # Keep scoped diagnostic credentials separate from the legacy admin config.
+        module_path = Path(__file__).resolve().with_name("diagnostics.py")
+        if not module_path.is_file():
+            print("Error: Install diagnostics.py beside ott.py", file=sys.stderr)
+            return 1
+        spec = importlib.util.spec_from_file_location("ott_diagnostics", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.main(argv[1:])
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--config", default=os.environ.get("OTT_CONFIG", str(Path.home() / ".config/ottplay-control/cli.json")))
     parser.add_argument("--timeout", type=float, default=45)

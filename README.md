@@ -100,6 +100,13 @@ with urllib.request.urlopen(request, timeout=5) as response:
 
 Other commands select a channel by number or name, choose a random channel, switch providers, show a message, change an M3U playlist where supported, or exit the player. Availability depends on the player platform and current provider. See [the API contract](docs/api.md).
 
+## Remote diagnostics
+
+Optional [protocol 2 diagnostics](docs/remote-diagnostics.md) provides explicitly
+enabled, per-runtime sessions with separate scoped operator credentials and
+bounded structured telemetry. Local player consent remains mandatory. Diagnostic
+control polling is independent of the existing command queue.
+
 ## Deployment packages
 
 - [Docker / Compose, Kubernetes, k3s, systemd, macOS and Windows](docs/deployment.md)

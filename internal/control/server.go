@@ -54,6 +54,7 @@ type device struct {
 }
 
 type Server struct {
+	diagnostics            *diagnosticsState
 	mu                     sync.Mutex
 	admin                  [32]byte
 	devices                []*device
@@ -78,6 +79,11 @@ func New(c config.Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now}
+	var err error
+	s.diagnostics, err = newDiagnostics(c)
+	if err != nil {
+		return nil, err
+	}
 	for _, origin := range c.AllowedOrigins {
 		s.origins[origin] = true
 	}
@@ -230,6 +236,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	path := strings.TrimRight(r.URL.Path, "/")
+	if path == diagnosticsPrefix || strings.HasPrefix(path, diagnosticsPrefix+"/") {
+		s.serveDiagnostics(w, r, path)
+		return
+	}
 	methods := ""
 	switch path {
 	case "/api/discovery", "/api/pairings", "/api/pairings/approve":
