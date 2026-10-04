@@ -20,7 +20,10 @@ Use the exact HTTPS controller **base**, including any deployment prefix.
 Credentials come from a named environment variable or `--token-file`, never a
 token argument. On POSIX a token file must be an owned regular file with no
 group/other permissions, for example mode `0600`; symlinks are rejected. Windows
-uses the environment option. Supply the secret through your normal private
+uses `--token-env`: its file ACLs cannot be verified with these POSIX checks, so
+`--token-file` fails before reading the file and returns `token_file_unsupported`
+with environment-option guidance. Changing a Windows file to mode `0600` does
+not bypass that restriction. Supply the secret through your normal private
 credential mechanism. Do not save it in an MCP tool argument or checked-in config.
 
 ```sh
@@ -88,11 +91,61 @@ does not persist credentials or diagnostic events.
 
 ## MCP stdio
 
-`cli/diagnostics_mcp.py` exposes six tools using the same client and scoped
+`cli/diagnostics_mcp.py` exposes eight tools using the same client and scoped
 credential: `diagnostics_runtimes`, `diagnostics_start`, `diagnostics_status`,
-`diagnostics_events`, `diagnostics_stop`, `diagnostics_revoke`. There is no
+`diagnostics_events`, `diagnostics_stop`, `diagnostics_revoke`,
+`diagnostics_repair`, `diagnostics_repair_status`. The original six tools keep
+their names and argument schemas. There is no
 generic HTTP/command/eval/shell tool and no credential argument in any tool.
 Server scopes remain authoritative regardless of tool annotations.
+
+## Exact-runtime repair
+
+Repair is a separate permission from diagnostic capture. The operator needs
+`repairs.start` to request an action and `repairs.read` to inspect its receipt,
+scoped to the exact configured device. The selected live runtime must advertise
+the `repairs` capability and report current local consent. Discover its runtime
+and consent epoch with `runtimes`; never substitute another runtime based on a
+matching instance label or device token.
+
+```sh
+ott diagnostics --server https://controller.example/ott-control \
+  --token-env OTT_DIAGNOSTICS_TOKEN repair --device living-room \
+  --runtime RUNTIME_ID --consent-epoch CONSENT_EPOCH \
+  --action restart_stream --deadline-ms 10000 \
+  --server-epoch SERVER_EPOCH --idempotency-key restart-20261004-1
+ott diagnostics --server https://controller.example/ott-control \
+  --token-env OTT_DIAGNOSTICS_TOKEN repair-status --repair REPAIR_ID
+```
+
+The only actions are `restart_stream` and `reload_player`. They interrupt
+playback. `--deadline-ms` is the server's bounded delivery/effect window:
+1000–30000 milliseconds, default 10000. `--timeout` independently bounds each
+CLI HTTP request. The create reply contains `repair_id`, `state:pending`, and
+`idempotency_retention_ms`; it confirms queue acceptance, not execution.
+
+Read `repair-status` for that exact ID. `applied` means the player invoked the
+stream restart effect. `accepted` means it acknowledged reload intent; the
+player waits for the result acknowledgment before invoking reload. Neither
+state proves recovered playback or an observed completed reload. Other states
+are `pending`, `rejected`, `unsupported`, `expired`, and `revoked`.
+
+Record the idempotency key and epoch before sending a repair. A timeout or lost
+reply has an unknown outcome, so the client never retries automatically. Read
+the known receipt, or deliberately replay the same fields/key/epoch within the
+reported retention horizon. Do not change the key, epoch, runtime, or action
+to work around an uncertain result. A missing or expired receipt is not proof
+that the effect did not run. Stopping local support, revoking consent, or
+retiring a runtime prevents pending repair work from continuing.
+
+The MCP repair tool requires all seven arguments: `device_id`, `runtime_id`,
+`consent_epoch`, `action`, `deadline_ms`, `idempotency_key`, and `server_epoch`.
+It advertises `readOnlyHint:false`, `destructiveHint:true`, and
+`idempotentHint:false`. `diagnostics_repair_status` takes only `repair_id` and
+is read-only. These hints do not grant server permissions or establish that
+an effect completed.
+
+## MCP configuration
 
 Configure your MCP host to launch:
 
@@ -107,8 +160,9 @@ Configure your MCP host to launch:
 }
 ```
 
-The host must inject the named environment variable privately. Alternatively use
-`--token-file` with an absolute private file path. This is a stdio process, not a
+The host must inject the named environment variable privately. On POSIX,
+alternatively use `--token-file` with an absolute private file path. Windows
+hosts must use the environment option. This is a stdio process, not a
 public MCP HTTP endpoint, and requires no Python packages.
 
 The adapter pins MCP **2025-11-25**: initialize, then

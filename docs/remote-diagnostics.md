@@ -44,8 +44,9 @@ retained or listed. The server accepts labels matching `[A-Za-z0-9_.:-]{1,80}`.
 These character limits are not an anonymization guarantee.
 
 Registration requires `instance_id`, `boot_id`, `capabilities`, and `consent`.
-Capabilities is a unique list of at most four of `playback`, `network`, `input`,
-and `epg`. Consent is `{ "granted": true, "epoch": "opaque-grant" }` or exactly
+Capabilities is a unique list of at most five of `playback`, `network`, `input`,
+`epg`, and `repairs`. A client advertises `repairs` only when its typed repair
+callback is implemented. Consent is `{ "granted": true, "epoch": "opaque-grant" }` or exactly
 `{ "granted": false }`. False consent must omit `epoch`. Unknown, case-variant,
 duplicate, and null fields are rejected. The response includes the authenticated
 device ID, runtime handle/credential, `runtime_ttl_ms`, and exactly five limits:
@@ -53,7 +54,10 @@ device ID, runtime handle/credential, `runtime_ttl_ms`, and exactly five limits:
 and `poll_after_ms`. Runtime credentials are returned only at registration. Unconfirmed registration
 lasts at most 10000ms (returned as the initial `runtime_ttl_ms`); a successful
 granted-consent poll enables the normal configured sliding TTL. Lost registration
-responses therefore cannot consume runtime slots for the full ten-minute TTL.
+responses therefore cannot consume runtime slots for the full configured TTL.
+The default confirmed-runtime TTL is 30000ms, configurable from 10000 to 600000ms.
+Successful granted control polls keep an active runtime alive; if final revocation
+is lost, its slot becomes reclaimable after the TTL without matching tab metadata.
 
 ## Control lifecycle
 
@@ -162,11 +166,13 @@ than the requested number to stay within the reply byte limit. Dropped totals
 include forward sequence gaps and retention/byte-budget evictions. Oldest stored
 events are evicted first; no raw payload is written to logs or disk.
 
-Defaults and hard ceilings are 4 runtimes/device, 256 globally, 1024 retained
-sessions, 1024 idempotency records (minimum 2), 10-minute runtime TTL/session
-lease, five-minute event retention, 256 KiB of events/runtime and 16 MiB globally.
-Limits may be lowered in the diagnostic configuration, never raised above these
-ceilings. Control bodies/replies are 4096/8192 bytes; batches/retrieval replies
+Defaults are 4 runtimes/device, 256 globally, 1024 retained sessions, 1024
+idempotency records (minimum 2), a 30-second confirmed-runtime TTL, a maximum
+10-minute session lease, five-minute event retention, 256 KiB of events/runtime
+and 16 MiB globally. Runtime TTL may be configured from 10 seconds to the
+10-minute ceiling. The separate client connectivity lease remains 10 seconds.
+Other capacity/retention limits may be lowered in the diagnostic configuration,
+never raised above their documented ceilings. Control bodies/replies are 4096/8192 bytes; batches/retrieval replies
 are at most 16384 bytes; a batch has at most 32 events of at most 1024 bytes each.
 The caps count serialized stored event bytes; Go object/map overhead is additional
 and bounded by record and byte limits, not claimed equal to those byte ceilings.
@@ -179,3 +185,86 @@ Slow telemetry response writes hold no state mutex and cannot occupy control
 slots. Authentication, consent, sequence errors and over-limit bodies never
 reflect caller data in errors. Limits are resource bounds, not a claim of
 complete denial-of-service protection for the surrounding HTTP deployment.
+
+
+## Exact-runtime typed repairs
+
+Repairs are an additive control lane, independent of diagnostic capture sessions
+and event uploads. They do not change the `/poll` or `/results` schema and never
+enter the protocol 1 command queue. Only `restart_stream` and `reload_player` are
+permitted; there is no arbitrary command, script, parameter map, configuration
+write, credential access or provider API. Add `repairs.start` and/or `repairs.read`
+to a separate operator's exact device scopes to grant that authority. A diagnostic
+operator may have at most seven distinct actions including the two repair scopes.
+
+- `POST /repairs` requires the scoped operator bearer and exactly `server_epoch`,
+  `idempotency_key`, `device_id`, `runtime_id`, `consent_epoch`, `action`,
+  `deadline_ms`. Deadline is an integer 1000..30000 milliseconds from acceptance.
+  The target must be a live, consenting runtime advertising `repairs`; device
+  tokens, instance/boot labels and reported UUIDs cannot select another runtime.
+  At most one pending repair exists per runtime. A 202 reply contains `repair_id`,
+  `state: pending`, `idempotency_retention_ms`, and the protocol/epoch envelope.
+- `POST /repairs/poll` requires the runtime credential and exactly `runtime_id`.
+  The response is the envelope plus `repair`, either null or
+  `{repair_id,action,consent_epoch,lease_ms}`. There is no runtime ID echo or
+  diagnostic control revision. Delivery is read-only and does not consume the
+  repair, renew consent/runtime TTL, or extend its original deadline. The client
+  polls this independent lane every three seconds while eligible; the remaining
+  lease must never increase when it handles repeated delivery.
+- `POST /repairs/results` requires the same runtime credential and exactly
+  `runtime_id`, `repair_id`, `status`. `applied` is valid only for `restart_stream`;
+  `accepted` only for `reload_player`; `rejected`/`unsupported` for either action.
+  There are no free-text errors. Success returns envelope plus `status: recorded`.
+  Identical results replay only while the runtime credential, consent epoch and
+  original deadline remain valid. A conflicting recorded status returns 409
+  `result_conflict`; expired/revoked operations or an identical replay after the
+  deadline return 409 `repair_terminal`. Already recorded applied/accepted history
+  is preserved after that late rejection. A retired credential returns 401, wrong
+  runtime 403 and an unknown repair 404. Clients must not repeat effects on an
+  uncertain result acknowledgement.
+- `GET /repairs/<repair_id>` requires `repairs.read` for the exact device and
+  returns `repair_id`, `device_id`, `runtime_id`, `action`, `state`,
+  `lease_remaining_ms`, and the envelope. States are `pending`, `applied`,
+  `accepted`, `rejected`, `unsupported`, `expired`, and `revoked`.
+
+The server records the client's assertion, not observed recovery. For restart,
+clients invoke the existing guarded restart once and then report `applied`. For
+reload, clients first prepare an after-reply effect and report `accepted`; they
+execute only after an exact result acknowledgement while the original lease,
+consent and foreground eligibility still hold. `accepted` is acknowledged intent,
+not evidence of a reload. On terminal rejection, retire that pending repair effect
+and continue diagnostic control polling. On unknown acknowledgement outcomes,
+retry only the same result within the bounded deadline, never the repair effect.
+
+A pending repair is revoked on consent withdrawal/epoch change, runtime deletion,
+runtime expiry or disabled diagnostics, and expires on its own deadline. That
+transition releases its pending slot but preserves bounded history. A restart
+loses all repair state and changes the process epoch. The ten-second unconfirmed
+registration TTL still applies; repair polls/results do not confirm registration.
+
+There are at most 256 repair records globally. Terminal records are retained for
+15 minutes from their first terminal transition; replay does not extend retention.
+The server fails with 429 instead of evicting pending work. Repair creation shares
+operator/key idempotency with diagnostic start/stop and respects already reserved
+diagnostic-stop receipt slots. Changing the action, target or request for a key
+conflicts. The configured finite receipt horizon is returned honestly; after that
+horizon the same key can act again, even if older repair history is still retained.
+Use explicit status reads, not blind retries or a replacement key.
+
+Repair requests use the existing bounded control admission/rate budgets, never the
+telemetry budget. Browser requests still require an exact allowed origin. When
+`allow_null_origin` is explicitly enabled, `Origin: null` is permitted for the
+runtime repair POST routes `/repairs/poll` and `/repairs/results`, alongside device
+registration and diagnostic runtime routes. It does not permit null-origin
+operator creation (`POST /repairs`) or status reads (`GET /repairs/<id>`). CORS
+preflight grants only the route's method and allowed headers; it does not grant
+credentials, device/action scopes or repair authority. The server authenticates route role, action scope and URL target
+before admitting control work or reading a body, then revalidates current access
+and body targets after reading. No mutex is held across request/response I/O.
+Unauthenticated slow bodies cannot consume those control slots. This does not
+claim denial-of-service immunity against authorized clients or transport traffic.
+
+Client stop handling cancels the repair lane and pending after-reply effects.
+Server repair state is currently independent of a diagnostic session-only stop;
+that stop alone does not revoke a repair or its consent grant. Explicit consent
+withdrawal/runtime revocation provides the server-side retirement described above.

@@ -86,6 +86,7 @@ type diagRuntime struct {
 	pollHash                              [32]byte
 	revision                              uint64
 	active                                string
+	pendingRepair                         string
 	controlRate, eventRate, eventByteRate diagBudget
 }
 type diagControl struct {
@@ -131,6 +132,7 @@ type diagnosticsState struct {
 	operators                   []*diagOperator
 	runtimes                    map[string]*diagRuntime
 	sessions                    map[string]*diagSession
+	repairs                     map[string]*diagRepair
 	idempotency                 map[string]diagIdempotency
 	registrations               map[string]*diagBudget
 	globalControl, globalEvents diagBudget
@@ -152,7 +154,7 @@ func newDiagnostics(c config.Config) (*diagnosticsState, error) {
 	if e != nil {
 		return nil, e
 	}
-	d := &diagnosticsState{epoch: epoch, enabled: map[string]bool{}, runtimes: map[string]*diagRuntime{}, sessions: map[string]*diagSession{}, idempotency: map[string]diagIdempotency{}, registrations: map[string]*diagBudget{}, random: rand.Reader, controlSlots: make(chan struct{}, 64), eventSlots: make(chan struct{}, 16)}
+	d := &diagnosticsState{epoch: epoch, enabled: map[string]bool{}, runtimes: map[string]*diagRuntime{}, sessions: map[string]*diagSession{}, repairs: map[string]*diagRepair{}, idempotency: map[string]diagIdempotency{}, registrations: map[string]*diagBudget{}, random: rand.Reader, controlSlots: make(chan struct{}, 64), eventSlots: make(chan struct{}, 16)}
 	d.cfg.Defaults()
 	if c.Diagnostics != nil {
 		d.configured = true
@@ -199,9 +201,9 @@ func diagMethods(path string) (string, bool) {
 	switch path {
 	case diagnosticsPrefix + "/runtimes":
 		return "GET,POST", false
-	case diagnosticsPrefix + "/poll", diagnosticsPrefix + "/results", diagnosticsPrefix + "/events":
+	case diagnosticsPrefix + "/poll", diagnosticsPrefix + "/results", diagnosticsPrefix + "/events", diagnosticsPrefix + "/repairs/poll", diagnosticsPrefix + "/repairs/results":
 		return "POST", true
-	case diagnosticsPrefix + "/sessions":
+	case diagnosticsPrefix + "/sessions", diagnosticsPrefix + "/repairs":
 		return "POST", false
 	}
 	parts := strings.Split(strings.TrimPrefix(path, diagnosticsPrefix+"/"), "/")
@@ -209,7 +211,7 @@ func diagMethods(path string) (string, bool) {
 		if parts[0] == "runtimes" {
 			return "DELETE", false
 		}
-		if parts[0] == "sessions" {
+		if parts[0] == "sessions" || parts[0] == "repairs" {
 			return "GET", false
 		}
 	}
@@ -227,17 +229,6 @@ func (s *Server) serveDiagnostics(w http.ResponseWriter, r *http.Request, path s
 	d := s.diagnostics
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-OTT-Diagnostics-Epoch", d.epoch)
-	slots := d.controlSlots
-	if path == diagnosticsPrefix+"/events" {
-		slots = d.eventSlots
-	}
-	select {
-	case slots <- struct{}{}:
-		defer func() { <-slots }()
-	default:
-		d.write(w, 429, diagError("concurrency_limit"))
-		return
-	}
 	w.Header().Add("Vary", "Origin")
 	methods, runtimeRoute := diagMethods(path)
 	if methods == "" {
@@ -286,6 +277,25 @@ func (s *Server) serveDiagnostics(w http.ResponseWriter, r *http.Request, path s
 		return
 	}
 	now := s.now()
+	d.mu.Lock()
+	d.expire(now)
+	status, code := d.preauthenticate(s, r, path)
+	d.mu.Unlock()
+	if status != 0 {
+		d.write(w, status, diagError(code))
+		return
+	}
+	slots := d.controlSlots
+	if path == diagnosticsPrefix+"/events" {
+		slots = d.eventSlots
+	}
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		d.write(w, 429, diagError("concurrency_limit"))
+		return
+	}
 	d.mu.Lock()
 	b := &d.globalControl
 	limit := len(s.devices)*4*240 + 240

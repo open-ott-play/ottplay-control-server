@@ -37,11 +37,18 @@ def valid_reply(kind, **values):
                    "control_revision": 1, "dropped_total": 0},
         "events": {"events": [], "next_seq": 0, "truncated_before_seq": 1, "dropped_total": 0},
         "revoke": {"status": "revoked", "device_stop_confirmed": False},
+        "repair": {"repair_id": "repair-one", "state": "pending", "idempotency_retention_ms": 900000},
+        "repair_status": {"repair_id": "repair-one", "device_id": "device", "runtime_id": "runtime",
+                          "action": "restart_stream", "state": "applied", "lease_remaining_ms": 1000},
     }
     return {**data, **shapes[kind], **values}
 
 
 def route_reply(path, method):
+    if method == "POST" and path.endswith("/repairs"):
+        return valid_reply("repair")
+    if method == "GET" and "/repairs/" in path:
+        return valid_reply("repair_status")
     if method == "DELETE":
         return valid_reply("revoke")
     if method == "POST":
@@ -113,6 +120,108 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(opener.requests[-1].method, "DELETE")
         self.assertEqual(opener.requests[-1].get_header("X-ott-diagnostics-epoch"), EPOCH)
         self.assertIsNone(opener.requests[-1].data)
+
+    def test_exact_runtime_repair_routes_and_status(self):
+        opener = Opener()
+        client = self.client(opener)
+        result = client.repair("device", "runtime", "consent", "restart_stream", 30000, "repair-key", EPOCH)
+        request = opener.requests[-1]
+        self.assertEqual(request.full_url, "https://controller.example/ott-control/api/v2/diagnostics/repairs")
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(json.loads(request.data), {
+            "device_id": "device", "runtime_id": "runtime", "consent_epoch": "consent",
+            "action": "restart_stream", "deadline_ms": 30000,
+            "idempotency_key": "repair-key", "server_epoch": EPOCH,
+        })
+        self.assertEqual(request.get_header("Authorization"), "Bearer " + TOKEN)
+        self.assertNotIn(TOKEN, request.data.decode())
+        self.assertEqual(result["state"], "pending")
+        self.assertEqual(client.repair_status(result["repair_id"])["state"], "applied")
+        self.assertEqual(opener.requests[-1].method, "GET")
+        self.assertTrue(opener.requests[-1].full_url.endswith("/repairs/repair-one"))
+        for state in ("pending", "accepted", "rejected", "unsupported", "expired", "revoked"):
+            data = valid_reply("repair_status", action="reload_player", state=state)
+            self.assertEqual(self.client(Opener(Response(data))).repair_status("repair-one"), data)
+
+    def test_repair_validation_before_network_and_unknown_mutation_outcome(self):
+        opener = Opener()
+        client = self.client(opener)
+        valid = {"device_id": "device", "runtime_id": "runtime", "consent_epoch": "consent",
+                 "action": "restart_stream", "deadline_ms": 1000,
+                 "idempotency_key": "repair-key", "server_epoch": EPOCH}
+        invalid = [{"action": value} for value in ("eval", "restart_player", "", None, [], True)]
+        invalid += [{"deadline_ms": value} for value in (999, 30001, True, 1000.0, "1000")]
+        invalid += [{"device_id": "../other"}, {"runtime_id": ""}, {"consent_epoch": ""},
+                    {"idempotency_key": ""}, {"server_epoch": "x\r\nheader"}]
+        for change in invalid:
+            with self.subTest(change=change), self.assertRaises(diag.DiagnosticError):
+                client.repair(**{**valid, **change})
+        with self.assertRaises(diag.DiagnosticError):
+            client.repair_status("../another")
+        self.assertEqual(opener.requests, [])
+        failed = Opener(error=OSError(TOKEN))
+        with self.assertRaises(diag.DiagnosticError) as error:
+            self.client(failed).repair(**valid)
+        self.assertTrue(error.exception.unknown)
+        self.assertEqual(len(failed.requests), 1)
+        self.assertNotIn(TOKEN, json.dumps(error.exception.public()))
+
+    def test_repair_strict_reply_contract_and_scope_failures(self):
+        valid = {"device_id": "device", "runtime_id": "runtime", "consent_epoch": "consent",
+                 "action": "restart_stream", "deadline_ms": 1000,
+                 "idempotency_key": "repair-key", "server_epoch": EPOCH}
+        receipt = valid_reply("repair")
+        cases = [{key: value for key, value in receipt.items() if key != missing}
+                 for missing in ("repair_id", "state", "idempotency_retention_ms")]
+        cases += [{**receipt, "state": "applied"}, {**receipt, "raw": TOKEN},
+                  {**receipt, "idempotency_retention_ms": True}]
+        for data in cases:
+            with self.subTest(data=data), self.assertRaises(diag.DiagnosticError) as error:
+                self.client(Opener(Response(data, status=202))).repair(**valid)
+            self.assertTrue(error.exception.unknown)
+            self.assertNotIn(TOKEN, json.dumps(error.exception.public()))
+        states = [{"repair_id": "other"}, {"action": "eval"}, {"state": "recovered"},
+                  {"state": "accepted", "action": "restart_stream"},
+                  {"state": "applied", "action": "reload_player"},
+                  {"lease_remaining_ms": 30001}, {"lease_remaining_ms": True},
+                  {"extra": TOKEN}]
+        for change in states:
+            with self.subTest(change=change), self.assertRaises(diag.DiagnosticError) as error:
+                self.client(Opener(Response(valid_reply("repair_status", **change)))).repair_status("repair-one")
+            self.assertFalse(error.exception.unknown)
+            self.assertNotIn(TOKEN, json.dumps(error.exception.public()))
+        for status, code in ((403, "credential_role_denied"), (404, "not_found"),
+                             (403, "capability_required"), (409, "repair_busy")):
+            body = {"diagnostics_protocol": 2, "server_epoch": EPOCH, "error": {"code": code}}
+            response = urllib.error.HTTPError("https://controller.example", status, TOKEN,
+                                               {"Content-Type": "application/json"},
+                                               io.BytesIO(json.dumps(body).encode()))
+            opener = Opener(error=response)
+            with self.assertRaises(diag.DiagnosticError) as error:
+                self.client(opener).repair(**valid)
+            self.assertEqual(error.exception.public()["error"]["server_code"], code)
+            self.assertFalse(error.exception.unknown)
+            self.assertEqual(len(opener.requests), 1)
+
+    def test_repair_capability_and_cli_commands(self):
+        data = valid_reply("runtimes", runtimes=[{
+            "runtime_id": "runtime", "instance_id": "instance", "boot_id": "boot",
+            "last_seen_age_ms": 0, "consent": {"granted": True, "epoch": "consent"},
+            "capabilities": ["playback", "network", "input", "epg", "repairs"],
+        }])
+        self.assertEqual(self.client(Opener(Response(data))).runtimes("device"), data)
+        for command in (["repair", "--device", "device", "--runtime", "runtime", "--consent-epoch", "consent",
+                         "--action", "reload_player", "--server-epoch", EPOCH, "--idempotency-key", "repair-key"],
+                        ["repair-status", "--repair", "repair-one"]):
+            output = io.StringIO()
+            opener = Opener()
+            with mock.patch.dict(os.environ, {"OTT_TEST": TOKEN}), mock.patch.object(diag.urllib.request, "build_opener", return_value=opener), contextlib.redirect_stdout(output):
+                code = diag.main(["--server", "https://controller.example", "--token-env", "OTT_TEST", *command])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(output.getvalue())["repair_id"], "repair-one")
+            self.assertNotIn(TOKEN, output.getvalue())
+            if command[0] == "repair":
+                self.assertEqual(json.loads(opener.requests[0].data)["deadline_ms"], 10000)
 
     def test_mutations_never_retry_unknown_response(self):
         opener = Opener(error=OSError(TOKEN))
@@ -276,18 +385,20 @@ class DiagnosticsTests(unittest.TestCase):
                 client.start("device", "runtime", "consent", 1000, "start-key", EPOCH)
                 client.stop("session", "stop-key", EPOCH)
                 client.revoke("runtime", EPOCH)
-                self.assertEqual([request[0] for request in requests], ["GET", "POST", "POST", "DELETE"])
+                client.repair("device", "runtime", "consent", "restart_stream", 1000, "repair-key", EPOCH)
+                client.repair_status("repair-one")
+                self.assertEqual([request[0] for request in requests], ["GET", "POST", "POST", "DELETE", "POST", "GET"])
                 self.assertTrue(all(request[2] == "Bearer " + TOKEN for request in requests))
                 redirect = diag.DiagnosticsClient(base + "/redirect", TOKEN, opener=opener)
                 with self.assertRaises(diag.DiagnosticError) as error:
                     redirect.runtimes("device")
                 self.assertEqual(error.exception.code, "redirect_refused")
-                self.assertEqual(len(requests), 5)
+                self.assertEqual(len(requests), 7)
                 # Without the explicit synthetic CA the normal TLS verifier fails.
                 with self.assertRaises(diag.DiagnosticError) as error:
                     diag.DiagnosticsClient(base, TOKEN).runtimes("device")
                 self.assertEqual(error.exception.code, "transport_error")
-                self.assertEqual(len(requests), 5)
+                self.assertEqual(len(requests), 7)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -356,15 +467,41 @@ class DiagnosticsTests(unittest.TestCase):
             path = Path(directory) / "token"
             path.write_text(TOKEN + "\n")
             path.chmod(0o600)
-            self.assertEqual(diag.load_token(path=str(path)), TOKEN)
+            if os.name == "posix":
+                self.assertEqual(diag.load_token(path=str(path)), TOKEN)
+            else:
+                with self.assertRaises(diag.DiagnosticError) as error:
+                    diag.load_token(path=str(path))
+                self.assertEqual(error.exception.code, "token_file_unsupported")
+                self.assertIn("--token-env", str(error.exception))
             path.chmod(0o644)
             with self.assertRaises(diag.DiagnosticError):
                 diag.load_token(path=str(path))
-            path.chmod(0o600)
-            link = Path(directory) / "link"
-            link.symlink_to(path)
-            with self.assertRaises(diag.DiagnosticError):
-                diag.load_token(path=str(link))
+            if os.name == "posix":
+                path.chmod(0o600)
+                link = Path(directory) / "link"
+                link.symlink_to(path)
+                with self.assertRaises(diag.DiagnosticError):
+                    diag.load_token(path=str(link))
+
+    def test_non_posix_credentials_fail_closed_before_file_access(self):
+        with mock.patch.object(diag.os, "name", "nt"), mock.patch.object(diag.os, "open") as opened:
+            with self.assertRaises(diag.DiagnosticError) as error:
+                diag.load_token(path="synthetic-private-token-file")
+            self.assertEqual(error.exception.code, "token_file_unsupported")
+            self.assertIn("--token-env", str(error.exception))
+            opened.assert_not_called()
+            with mock.patch.dict(os.environ, {"OTT_WINDOWS_TEST": TOKEN}, clear=True):
+                self.assertEqual(diag.load_token(env="OTT_WINDOWS_TEST"), TOKEN)
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    code = diag.main(["--server", "https://controller.invalid", "--token-file",
+                                      "synthetic-private-token-file", "runtimes", "--device", "device"])
+                self.assertEqual(code, 1)
+                self.assertEqual(json.loads(stderr.getvalue())["error"]["code"], "token_file_unsupported")
+                self.assertNotIn(TOKEN, stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+            opened.assert_not_called()
 
     def test_cli_never_echoes_invalid_argument(self):
         stderr = io.StringIO()

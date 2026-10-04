@@ -37,7 +37,7 @@ func (d *Diagnostics) Defaults() {
 		p *int
 		n int
 	}{
-		{&d.RuntimeTTLMS, 600000}, {&d.SessionLeaseMSMax, 600000},
+		{&d.RuntimeTTLMS, 30000}, {&d.SessionLeaseMSMax, 600000},
 		{&d.MaxRuntimesPerDevice, 4}, {&d.MaxRuntimesTotal, 256},
 		{&d.MaxRetainedSessions, 1024}, {&d.EventRetentionMS, 300000},
 		{&d.EventBytesPerRuntime, 256 * 1024}, {&d.EventBytesTotal, 16 * 1024 * 1024},
@@ -91,7 +91,7 @@ func (c Config) validateDiagnostics() error {
 		}
 		ids[o.ID] = true
 		hashes[o.CredentialSHA256] = true
-		if len(o.DeviceIDs) == 0 || len(o.DeviceIDs) > MaxDevices || len(o.Actions) == 0 || len(o.Actions) > 5 {
+		if len(o.DeviceIDs) == 0 || len(o.DeviceIDs) > MaxDevices || len(o.Actions) == 0 || len(o.Actions) > 7 {
 			return errors.New("diagnostic operator requires bounded device and action scopes")
 		}
 		seen := map[string]bool{}
@@ -108,7 +108,7 @@ func (c Config) validateDiagnostics() error {
 			}
 			seen[a] = true
 			switch a {
-			case "runtimes.read", "sessions.start", "sessions.stop", "sessions.read", "runtimes.revoke":
+			case "runtimes.read", "sessions.start", "sessions.stop", "sessions.read", "runtimes.revoke", "repairs.start", "repairs.read":
 			default:
 				return errors.New("invalid diagnostic operator action")
 			}

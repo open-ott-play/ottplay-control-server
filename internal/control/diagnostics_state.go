@@ -39,6 +39,7 @@ func (d *diagnosticsState) expire(now time.Time) {
 					d.terminal(ss, "revoked", now)
 				}
 			}
+			d.revokeRepairs(rt.id, now)
 			delete(d.runtimes, rt.id)
 		}
 	}
@@ -54,6 +55,7 @@ func (d *diagnosticsState) expire(now time.Time) {
 			delete(d.sessions, id)
 		}
 	}
+	d.expireRepairs(now)
 	for key, v := range d.idempotency {
 		if !now.Before(v.until) {
 			delete(d.idempotency, key)
@@ -68,7 +70,7 @@ func (d *diagnosticsState) handle(s *Server, r *http.Request, path string, body 
 	admin, dev := s.authenticate(r)
 	rt := d.runtime(hash)
 	op := d.operator(hash)
-	runtimePath := path == diagnosticsPrefix+"/poll" || path == diagnosticsPrefix+"/results" || path == diagnosticsPrefix+"/events"
+	runtimePath := diagnosticRuntimeRoute(path)
 	if path == diagnosticsPrefix+"/runtimes" && r.Method == "POST" {
 		if dev == nil || admin {
 			return 403, diagError("credential_role_denied")
@@ -105,6 +107,12 @@ func (d *diagnosticsState) handle(s *Server, r *http.Request, path string, body 
 		}
 		if path == diagnosticsPrefix+"/poll" {
 			return d.controlPoll(rt, body, now)
+		}
+		if path == diagnosticsPrefix+"/repairs/poll" {
+			return d.repairPoll(rt, body, now)
+		}
+		if path == diagnosticsPrefix+"/repairs/results" {
+			return d.repairResult(rt, body, now)
 		}
 		return d.controlResult(rt, body, now)
 	}
@@ -157,10 +165,16 @@ func (d *diagnosticsState) handle(s *Server, r *http.Request, path string, body 
 	if !(r.Method == "GET" && strings.HasSuffix(path, "/events")) && r.URL.RawQuery != "" {
 		return 400, diagError("invalid_query")
 	}
+	if path == diagnosticsPrefix+"/repairs" {
+		return d.startRepair(op, body, now)
+	}
 	if path == diagnosticsPrefix+"/sessions" {
 		return d.startSession(op, body, now)
 	}
 	parts := strings.Split(strings.TrimPrefix(path, diagnosticsPrefix+"/"), "/")
+	if parts[0] == "repairs" {
+		return d.repairView(op, parts[1], now)
+	}
 	if parts[0] == "runtimes" {
 		rt := d.runtimes[parts[1]]
 		if rt == nil || !op.actions["runtimes.revoke"] || !op.devices[rt.device] {
@@ -175,6 +189,7 @@ func (d *diagnosticsState) handle(s *Server, r *http.Request, path string, body 
 				d.terminal(ss, "revoked", now)
 			}
 		}
+		d.revokeRepairs(rt.id, now)
 		delete(d.runtimes, rt.id)
 		return 200, map[string]any{"status": "revoked", "device_stop_confirmed": false}
 	}
@@ -205,7 +220,7 @@ func (d *diagnosticsState) register(device string, body []byte, now time.Time) (
 		Capabilities []string    `json:"capabilities"`
 		Consent      diagConsent `json:"consent"`
 	}
-	if !diagDecode(body, &v, []string{"instance_id", "boot_id", "capabilities", "consent"}, "reported_uuid") || !diagLabel.MatchString(v.Instance) || !diagLabel.MatchString(v.Boot) || (v.UUID != "" && !diagLabel.MatchString(v.UUID)) || !v.Consent.valid() || v.Capabilities == nil || len(v.Capabilities) > 4 {
+	if !diagDecode(body, &v, []string{"instance_id", "boot_id", "capabilities", "consent"}, "reported_uuid") || !diagLabel.MatchString(v.Instance) || !diagLabel.MatchString(v.Boot) || (v.UUID != "" && !diagLabel.MatchString(v.UUID)) || !v.Consent.valid() || v.Capabilities == nil || len(v.Capabilities) > 5 {
 		return 400, diagError("invalid_registration")
 	}
 	seen := map[string]bool{}
@@ -215,7 +230,7 @@ func (d *diagnosticsState) register(device string, body []byte, now time.Time) (
 		}
 		seen[x] = true
 		switch x {
-		case "playback", "network", "input", "epg":
+		case "playback", "network", "input", "epg", "repairs":
 		default:
 			return 400, diagError("invalid_capabilities")
 		}
@@ -409,6 +424,9 @@ func (d *diagnosticsState) controlPoll(rt *diagRuntime, body []byte, now time.Ti
 	}
 	if v.Seq > rt.pollSeq {
 		changed := rt.consent != *v.Consent.Granted || rt.consentEpoch != v.Consent.Epoch
+		if changed {
+			d.revokeRepairs(rt.id, now)
+		}
 		if changed && *v.Consent.Granted && rt.active != "" {
 			if ss := d.sessions[rt.active]; ss != nil {
 				if !d.issueStop(rt, ss) {
@@ -429,6 +447,7 @@ func (d *diagnosticsState) controlPoll(rt *diagRuntime, body []byte, now time.Ti
 				d.terminal(ss, "revoked", now)
 			}
 		}
+		d.revokeRepairs(rt.id, now)
 		delete(d.runtimes, rt.id)
 		return 200, map[string]any{"runtime_id": rt.id, "poll_after_ms": 3000, "control_revision": rt.revision, "control": nil}
 	}

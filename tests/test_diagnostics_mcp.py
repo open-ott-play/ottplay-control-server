@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cli"))
 import diagnostics as diag
@@ -29,7 +30,7 @@ class FakeClient:
             raise diag.DiagnosticError("timeout", unknown=True)
         return {"diagnostics_protocol": 2, "server_epoch": "epoch", "state": "start_pending"}
 
-    runtimes = start = status = events = stop = revoke = operation
+    runtimes = start = status = events = stop = revoke = repair = repair_status = operation
 
 
 class MCPTests(unittest.TestCase):
@@ -52,7 +53,11 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(len(replies), 4)
         self.assertEqual(replies[0]["result"]["protocolVersion"], mcp.PROTOCOL)
         tools = replies[1]["result"]["tools"]
-        self.assertEqual(len(tools), 6)
+        self.assertEqual(len(tools), 8)
+        self.assertEqual([tool["name"] for tool in tools[:6]], [
+            "diagnostics_runtimes", "diagnostics_start", "diagnostics_status",
+            "diagnostics_events", "diagnostics_stop", "diagnostics_revoke",
+        ])
         self.assertTrue(all("token" not in tool["inputSchema"]["properties"] for tool in tools))
         self.assertEqual(replies[2]["result"], {})
         self.assertEqual(replies[3]["error"]["code"], -32602)
@@ -93,6 +98,60 @@ class MCPTests(unittest.TestCase):
         start = next(tool for tool in mcp.TOOLS if tool["name"] == "diagnostics_start")
         self.assertIn("idempotency_key", start["inputSchema"]["required"])
         self.assertIn("server_epoch", start["inputSchema"]["required"])
+        repair = next(tool for tool in mcp.TOOLS if tool["name"] == "diagnostics_repair")
+        self.assertEqual(repair["annotations"], {
+            "readOnlyHint": False, "destructiveHint": True,
+            "idempotentHint": False, "openWorldHint": False,
+        })
+        self.assertEqual(repair["inputSchema"]["properties"]["action"]["enum"], ["restart_stream", "reload_player"])
+        self.assertEqual(set(repair["inputSchema"]["required"]), {
+            "device_id", "runtime_id", "consent_epoch", "action", "deadline_ms", "idempotency_key", "server_epoch",
+        })
+        status = next(tool for tool in mcp.TOOLS if tool["name"] == "diagnostics_repair_status")
+        self.assertTrue(status["annotations"]["readOnlyHint"])
+        self.assertFalse(status["annotations"]["destructiveHint"])
+        self.assertEqual(status["inputSchema"]["required"], ["repair_id"])
+
+    def test_repair_tool_arguments_and_execution_errors(self):
+        client = diag.DiagnosticsClient("https://controller.invalid", TOKEN)
+        adapter = mcp.Adapter(client)
+        adapter.handle(INITIALIZE)
+        adapter.handle(INITIALIZED)
+        arguments = {"device_id": "device", "runtime_id": "runtime", "consent_epoch": "consent",
+                     "action": "reload_player", "deadline_ms": 10000,
+                     "idempotency_key": "repair-key", "server_epoch": "epoch"}
+
+        def call(name, args):
+            return adapter.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                   "params": {"name": name, "arguments": args}})["result"]
+
+        receipt = {"diagnostics_protocol": 2, "server_epoch": "epoch", "repair_id": "repair-one",
+                   "state": "pending", "idempotency_retention_ms": 900000}
+        with mock.patch.object(client, "_request", return_value=receipt) as send:
+            result = call("diagnostics_repair", arguments)
+            self.assertFalse(result["isError"])
+            self.assertEqual(result["structuredContent"], receipt)
+            self.assertEqual(send.call_args.args[:2], ("POST", "/repairs"))
+            self.assertEqual(send.call_args.args[2], arguments)
+            self.assertEqual(send.call_args.kwargs["epoch"], "epoch")
+            send.reset_mock()
+            cases = [{}, {**arguments, "action": "eval"}, {**arguments, "action": ["reload_player"]},
+                     {**arguments, "deadline_ms": True}, {**arguments, "deadline_ms": 30001},
+                     {**arguments, "runtime_id": ""}, {**arguments, "token": TOKEN},
+                     {**arguments, "url": "https://elsewhere.invalid"}]
+            for args in cases:
+                with self.subTest(args=args):
+                    result = call("diagnostics_repair", args)
+                    self.assertTrue(result["isError"])
+                    self.assertNotIn(TOKEN, json.dumps(result))
+            send.assert_not_called()
+            call("diagnostics_repair_status", {"repair_id": "repair-one"})
+            self.assertEqual(send.call_args.args, ("GET", "/repairs/repair-one"))
+        with mock.patch.object(client, "_request", side_effect=diag.DiagnosticError("timeout", unknown=True)) as send:
+            result = call("diagnostics_repair", arguments)
+            self.assertTrue(result["isError"])
+            self.assertTrue(result["structuredContent"]["error"]["unknown_outcome"])
+            self.assertEqual(send.call_count, 1)
 
     def test_parse_errors_batch_rejection_and_size_limit(self):
         data = b'{"jsonrpc":"2.0","id":1,"id":2}\n[]\n' + b"x" * (mcp.MAX_MESSAGE + 1) + b"\n"

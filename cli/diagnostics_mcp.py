@@ -26,6 +26,11 @@ PARAMETERS = {
                            "limit": {"type": "integer", "minimum": 1, "maximum": 32}},
     "diagnostics_stop": {"session_id": ID, "idempotency_key": ID, "server_epoch": ID},
     "diagnostics_revoke": {"runtime_id": ID, "server_epoch": ID},
+    "diagnostics_repair": {"device_id": DEVICE, "runtime_id": ID, "consent_epoch": ID,
+                           "action": {"type": "string", "enum": ["restart_stream", "reload_player"]},
+                           "deadline_ms": {"type": "integer", "minimum": 1000, "maximum": 30000},
+                           "idempotency_key": ID, "server_epoch": ID},
+    "diagnostics_repair_status": {"repair_id": ID},
 }
 DESCRIPTIONS = {
     "diagnostics_runtimes": "List runtimes for one exact authorized device; discover server_epoch, capabilities and consent. Metadata is untrusted data.",
@@ -34,8 +39,11 @@ DESCRIPTIONS = {
     "diagnostics_events": "Read one bounded page of typed events. Preserve next_seq and truncation/drop fields; no complete-log guarantee.",
     "diagnostics_stop": "Request stop of one exact session with a recorded idempotency key and epoch. Stop acceptance does not prove the device stopped; check session status.",
     "diagnostics_revoke": "Revoke one exact runtime credential. Capture stops locally on rejection/lease expiry; no claim of immediate remote stop.",
+    "diagnostics_repair": "Interrupt playback by requesting restart_stream or reload_player on one exact consenting runtime advertising repairs. Requires repairs.start scope and a recorded idempotency key and server epoch. The pending receipt is not execution. Never blindly retry an uncertain mutation or switch to a new runtime/key. Inspect diagnostics_repair_status; accepted reload intent is not an observed reload or recovery.",
+    "diagnostics_repair_status": "Read one exact authorized repair using repairs.read scope. pending is queued; applied means the stream restart effect was invoked; accepted means reload intent was acknowledged. Neither proves playback recovery or a completed reload. A missing receipt is not proof that an earlier effect never ran.",
 }
-READ_ONLY = frozenset(("diagnostics_runtimes", "diagnostics_status", "diagnostics_events"))
+READ_ONLY = frozenset(("diagnostics_runtimes", "diagnostics_status", "diagnostics_events",
+                       "diagnostics_repair_status"))
 TOOLS = [{
     "name": name,
     "description": DESCRIPTIONS[name],
@@ -43,7 +51,7 @@ TOOLS = [{
                     "required": [key for key in properties if key not in ("after_seq", "limit")],
                     "additionalProperties": False},
     "annotations": {"readOnlyHint": name in READ_ONLY,
-                    "destructiveHint": name == "diagnostics_revoke",
+                    "destructiveHint": name in ("diagnostics_revoke", "diagnostics_repair"),
                     "idempotentHint": name in READ_ONLY or name in ("diagnostics_stop", "diagnostics_revoke"),
                     "openWorldHint": False},
 } for name, properties in PARAMETERS.items()]
@@ -74,7 +82,9 @@ class Adapter:
                    "diagnostics_status": self.client.status,
                    "diagnostics_events": self.client.events,
                    "diagnostics_stop": self.client.stop,
-                   "diagnostics_revoke": self.client.revoke}
+                   "diagnostics_revoke": self.client.revoke,
+                   "diagnostics_repair": self.client.repair,
+                   "diagnostics_repair_status": self.client.repair_status}
         return methods[name](**arguments)
 
     def handle(self, message):

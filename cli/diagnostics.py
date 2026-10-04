@@ -25,8 +25,9 @@ MESSAGES = {
     "invalid_server": "Use an HTTPS controller base without credentials, query or fragment.",
     "invalid_token": "A valid scoped operator credential is required.",
     "unsafe_token_file": "Token file must be an owned private regular file, not a symlink.",
+    "token_file_unsupported": "Token files require POSIX ownership checks; use --token-env on this platform.",
     "token_unavailable": "Cannot read the configured operator credential.",
-    "invalid_input": "Invalid identifier, epoch, lease or pagination value.",
+    "invalid_input": "Invalid identifier, epoch, action, time budget or pagination value.",
     "invalid_response": "The controller returned an invalid diagnostic response.",
     "response_too_large": "The controller response exceeded the bounded read limit.",
     "redirect_refused": "Controller redirects are prohibited.",
@@ -116,7 +117,7 @@ def load_token(*, env=None, path=None):
     else:
         # POSIX ownership/mode checks cannot establish a Windows ACL; use env there.
         if os.name != "posix":
-            raise DiagnosticError("unsafe_token_file")
+            raise DiagnosticError("token_file_unsupported")
         fd = None
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -150,7 +151,7 @@ age_ms remaining_lease_ms lease_remaining_ms lease_ms profile status result erro
 events seq first_seq last_seq next_seq truncated_before_seq dropped_total elapsed_ms
 kind code metrics target created_age_ms updated_age_ms retained_events accepted_through_seq
 start_request_id stop_request_id start_revision stop_revision last_result session event
-idempotency_retention_ms
+idempotency_retention_ms repair_id action
 """.split())
 BOOLEAN_METRICS = frozenset(("paused", "ended", "available", "enabled"))
 METRICS = frozenset("""errors dropped recoveries stalls waiting bufferAhead currentTime
@@ -199,6 +200,9 @@ SESSION_STATES = frozenset(("start_pending", "active", "stop_pending", "stopped"
 EVENT_KINDS = frozenset(("lifecycle", "playback", "network", "input", "epg"))
 EVENT_CODES = frozenset(("sample", "start", "stop", "waiting", "playing", "stalled",
                          "ended", "error", "ready"))
+REPAIR_ACTIONS = ("restart_stream", "reload_player")
+REPAIR_STATES = frozenset(("pending", "applied", "accepted", "rejected", "unsupported",
+                           "expired", "revoked"))
 
 
 def validate_reply(value, kind, context):
@@ -233,8 +237,8 @@ def validate_reply(value, kind, context):
             else:
                 check("epoch" not in consent)
             caps = row.get("capabilities")
-            check(isinstance(caps, list) and len(caps) <= 4)
-            check(all(isinstance(cap, str) and cap in EVENT_KINDS - {"lifecycle"} for cap in caps))
+            check(isinstance(caps, list) and len(caps) <= 5)
+            check(all(isinstance(cap, str) and cap in (EVENT_KINDS - {"lifecycle"}) | {"repairs"} for cap in caps))
             check(len(set(caps)) == len(caps))
             if row.get("active_session_id") not in (None, ""):
                 label(row["active_session_id"])
@@ -278,6 +282,23 @@ def validate_reply(value, kind, context):
         number(value.get("dropped_total"))
     elif kind == "revoke":
         check(value.get("status") == "revoked" and value.get("device_stop_confirmed") is False)
+    elif kind == "repair":
+        check(set(value) == {"diagnostics_protocol", "server_epoch", "repair_id", "state",
+                             "idempotency_retention_ms"})
+        label(value.get("repair_id"))
+        check(value.get("state") == "pending")
+        number(value.get("idempotency_retention_ms"), minimum=1)
+    elif kind == "repair_status":
+        check(set(value) == {"diagnostics_protocol", "server_epoch", "repair_id", "device_id",
+                             "runtime_id", "action", "state", "lease_remaining_ms"})
+        check(value.get("repair_id") == context)
+        label(value.get("device_id"), True)
+        label(value.get("runtime_id"))
+        check(isinstance(value.get("action"), str) and value["action"] in REPAIR_ACTIONS)
+        check(isinstance(value.get("state"), str) and value["state"] in REPAIR_STATES)
+        check(value["state"] != "applied" or value["action"] == "restart_stream")
+        check(value["state"] != "accepted" or value["action"] == "reload_player")
+        number(value.get("lease_remaining_ms"), 30000)
 
 
 SERVER_ERROR_CODES = frozenset("""body_limit consent_required credential_role_denied
@@ -289,7 +310,8 @@ method_denied not_found origin_denied preflight_denied rate_limited result_confl
 runtime_busy runtime_expired runtime_limit runtime_mismatch server_epoch_mismatch
 session_terminal stale_control stale_poll state_limit stop_already_requested
 telemetry_rate_limited unexpected_body response_limit invalid_events invalid_event
-session_inactive sequence_conflict event_storage_limit""".split())
+session_inactive sequence_conflict event_storage_limit invalid_repair capability_required
+repair_busy invalid_repair_poll invalid_repair_result repair_terminal""".split())
 
 
 def http_error(response, mutation, epoch):
@@ -351,7 +373,7 @@ class DiagnosticsClient:
             try:
                 with self._opener.open(request, timeout=self.timeout) as response:
                     status = response.status
-                    if status != (202 if kind in ("start", "stop") else 200):
+                    if status != (202 if kind in ("start", "stop", "repair") else 200):
                         raise DiagnosticError("http_error", status=status, unknown=mutation)
                     if response.headers.get_content_type() != "application/json":
                         raise DiagnosticError("invalid_response", unknown=mutation)
@@ -414,6 +436,20 @@ class DiagnosticsClient:
     def revoke(self, runtime_id, server_epoch):
         return self._request("DELETE", "/runtimes/" + identifier(runtime_id), epoch=server_epoch, kind="revoke")
 
+    def repair(self, device_id, runtime_id, consent_epoch, action, deadline_ms,
+               idempotency_key, server_epoch):
+        if not isinstance(action, str) or action not in REPAIR_ACTIONS:
+            raise DiagnosticError("invalid_input")
+        body = {"device_id": identifier(device_id, True), "runtime_id": identifier(runtime_id),
+                "consent_epoch": identifier(consent_epoch), "action": action,
+                "deadline_ms": integer(deadline_ms, 1000, 30000),
+                "idempotency_key": identifier(idempotency_key), "server_epoch": identifier(server_epoch)}
+        return self._request("POST", "/repairs", body, epoch=server_epoch, kind="repair")
+
+    def repair_status(self, repair_id):
+        return self._request("GET", "/repairs/" + identifier(repair_id),
+                             kind="repair_status", context=repair_id)
+
 
 class Parser(argparse.ArgumentParser):
     def error(self, message):
@@ -424,7 +460,7 @@ def connection_arguments(parser):
     parser.add_argument("--server", required=True, help="Exact HTTPS controller base, including deployment path")
     credentials = parser.add_mutually_exclusive_group(required=True)
     credentials.add_argument("--token-env", help="Environment variable name containing the scoped token")
-    credentials.add_argument("--token-file", help="Owned mode-0600 file containing only the scoped token")
+    credentials.add_argument("--token-file", help="POSIX owned mode-0600 file; use --token-env on Windows")
     parser.add_argument("--timeout", type=float, default=10, help="Total request seconds, at most 30")
 
 
@@ -458,6 +494,16 @@ def main(argv=None):
         revoke = commands.add_parser("revoke", help="Revoke one runtime; device stop remains unconfirmed")
         revoke.add_argument("--runtime", required=True)
         revoke.add_argument("--server-epoch", required=True)
+        repair = commands.add_parser("repair", help="Request an exact-runtime restart; acceptance does not prove recovery")
+        repair.add_argument("--device", required=True)
+        repair.add_argument("--runtime", required=True)
+        repair.add_argument("--consent-epoch", required=True)
+        repair.add_argument("--action", choices=REPAIR_ACTIONS, required=True)
+        repair.add_argument("--deadline-ms", type=int, default=10000)
+        repair.add_argument("--idempotency-key", required=True)
+        repair.add_argument("--server-epoch", required=True)
+        repair_status = commands.add_parser("repair-status", help="Read the exact repair receipt; accepted reload intent is not an observed reload")
+        repair_status.add_argument("--repair", required=True)
         args = parser.parse_args(argv)
         client = client_from_arguments(args)
         if args.command == "runtimes":
@@ -470,6 +516,11 @@ def main(argv=None):
             result = client.events(args.session, args.after_seq, args.limit)
         elif args.command == "stop":
             result = client.stop(args.session, args.idempotency_key, args.server_epoch)
+        elif args.command == "repair":
+            result = client.repair(args.device, args.runtime, args.consent_epoch, args.action,
+                                   args.deadline_ms, args.idempotency_key, args.server_epoch)
+        elif args.command == "repair-status":
+            result = client.repair_status(args.repair)
         else:
             result = client.revoke(args.runtime, args.server_epoch)
         print(json.dumps(result, ensure_ascii=True, allow_nan=False))
