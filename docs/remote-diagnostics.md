@@ -27,13 +27,18 @@ The following is a configuration fragment, not a usable credential:
 }
 ```
 
-Use a separate random operator bearer of at least 32 characters and store only
-its SHA-256 digest in server configuration. Do not hash a password in place of
+Use a separate random operator bearer matching `[A-Za-z0-9_-]{32,256}` so it
+works with the bundled CLI and MCP clients. Generate it with Python's
+`secrets.token_urlsafe(32)` or `secrets.token_hex(32)` and store only its lowercase
+SHA-256 digest in server configuration. Do not hash a password in place of
 generating a high-entropy token. Digests must be distinct from device/admin
 credentials and other operators. Scopes name exact configured devices and exact
 actions; there are no wildcards. Configuration changes apply after restart.
-Keep configuration and CLI credentials private. Use HTTPS for credentials and
-telemetry when the connection is not a trusted, isolated local network.
+Keep configuration and CLI credentials private. The bundled player diagnostics
+client and diagnostic CLI/MCP require HTTPS, including on a trusted LAN. Follow
+the [server TLS setup instructions](../README.md#start-a-server) to use
+`--tls-cert` and `--tls-key` or a TLS-terminating reverse proxy, with a certificate
+trusted by each client.
 
 `POST /runtimes` requires the device bearer. It creates a random `runtime_id` and
 a separate `runtime_credential`; two tabs using one device credential remain
