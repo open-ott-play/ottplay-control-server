@@ -78,10 +78,16 @@ docker compose -f deploy/compose.yml stop control-server
 docker compose -f deploy/compose.yml start control-server
 ```
 
-After editing the configuration, validate it with the downloaded executable and recreate the container so a file replaced by an editor or `ott add` is mounted again:
+After editing the configuration, validate it with the downloaded executable,
+restore the restricted container group permissions, and recreate the container.
+Editors and `ott add` can replace the file rather than update it in place;
+`ott add` writes the new local file with mode 600. Recreation mounts the current
+file, while the group/mode settings let the non-root container read it:
 
 ```sh
 ./ottplay-control-server validate --config "$CONTROL_SERVER_CONFIG"
+sudo chgrp 65532 "$CONTROL_SERVER_CONFIG"
+chmod 640 "$CONTROL_SERVER_CONFIG"
 docker compose -f deploy/compose.yml up -d --force-recreate control-server
 ```
 

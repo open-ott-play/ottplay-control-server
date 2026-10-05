@@ -97,12 +97,18 @@ must point to a private local copy of the configuration used by that controller,
 even when the controller runs remotely. Keep that copy synchronized after device
 or credential changes. Loopback `127.0.0.1` always means the machine executing the
 command: a TV cannot reach your Mac's server using its own loopback address.
-On macOS/Linux protect both configuration files:
+On macOS/Linux protect the CLI configuration:
 
 ```sh
-chmod 600 "$HOME/.config/ottplay-control/cli.json" /absolute/path/to/private-server-config.json
+chmod 600 "$HOME/.config/ottplay-control/cli.json"
 ott devices
 ```
+
+Use mode 600 for a server-configuration copy read only by your account. If that
+same file is consumed by a service/container account, preserve the restricted
+ownership and group-read permissions required by the [deployment guide](deployment.md).
+`ott add` replaces the local file with mode 600; reapply those service permissions
+before restarting a service that reads it directly.
 
 `devices` lists server registrations, last contact and pending commands. It does
 not discover every player on the LAN, and it can succeed even if no player is
