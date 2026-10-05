@@ -130,6 +130,9 @@ class StatusHttpCliTest(unittest.TestCase):
                 before = (config.read_bytes(), credentials.read_bytes())
                 output, errors = io.StringIO(), io.StringIO()
                 real_sleep, real_api = time.sleep, ott.Client.api
+                # Cross a clock tick even on platforms with coarse monotonic
+                # resolution, while keeping the fixture's polling accelerated.
+                poll_pause = max(0.005, 2 * time.get_clock_info('monotonic').resolution)
 
                 def api(client, path, payload=None, timeout=None):
                     clients.append(client)
@@ -139,7 +142,7 @@ class StatusHttpCliTest(unittest.TestCase):
                 # Preserve real HTTP and monotonic deadlines; only shorten the
                 # intentional poll pause. The spy observes, never replaces, IO.
                 with mock.patch.object(ott.Client, 'api', new=api), \
-                        mock.patch.object(ott.time, 'sleep', side_effect=lambda seconds: real_sleep(min(seconds, 0.005))), \
+                        mock.patch.object(ott.time, 'sleep', side_effect=lambda seconds: real_sleep(min(seconds, poll_pause))), \
                         mock.patch.dict(os.environ, {'NO_PROXY': '127.0.0.1', 'no_proxy': '127.0.0.1'}), \
                         contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
                     code = ott.main(['--config', str(config), '--timeout', '2', '--json', 'tv', 'status'])
@@ -165,8 +168,11 @@ class StatusHttpCliTest(unittest.TestCase):
                           ('POST', None), ('GET', ['b' * 32]), ('GET', ['b' * 32])])
         self.assertEqual(budgets[0], 2)
         self.assertEqual(len(budgets), len(events))
-        # A fresh full timeout for the secondary call would increase this list.
-        self.assertTrue(all(0 < later < earlier for earlier, later in zip(budgets, budgets[1:])))
+        # Adjacent reads can share a monotonic clock tick. The secondary POST
+        # must still inherit the spent budget instead of starting a fresh one.
+        self.assertTrue(all(0 < later <= earlier for earlier, later in zip(budgets, budgets[1:])))
+        self.assertLess(budgets[3], budgets[0])
+        self.assertLessEqual(budgets[3], budgets[2])
 
     def test_secondary_redirects_preserve_status_without_forwarding_credentials(self):
         for phase in ('enqueue', 'receipt'):
