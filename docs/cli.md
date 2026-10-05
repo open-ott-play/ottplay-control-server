@@ -19,6 +19,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Help, options and output](#help-options-and-output)
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
+- [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
@@ -690,6 +691,52 @@ Messages are fixed English text and never include request values or provider
 exceptions. Terminal-output refusal writes a fixed message to stderr without
 printing JSON or URLs. An empty successful result is distinct from a failed
 or incomplete search.
+
+## Check every registered player
+
+The source checkout includes an acceptance script that discovers the current
+registry instead of using a saved list of player names:
+
+```sh
+python3 scripts/check_registered_players.py --probe-timeout 15 --timeout 45
+python3 scripts/check_registered_players.py --archive-query "Programme title" --output /private/path/search-check.json
+```
+
+It reads `/api/devices`, checks each unique device ID once and attaches every
+matching local alias. Devices without aliases are included; aliases missing
+from the server registry appear separately. No personal device names or IDs are
+embedded in the script. It uses the same configuration path as `ott`, including
+`OTT_CONFIG` and `--config`.
+
+Catalogue and channel-list probes use up to four workers (`--workers 1` through
+`4`) and their own 15-second RPC deadline. A catalogue timeout is reported as
+`unresponsive`, with further presence probes skipped. Unsupported RPCs, empty
+catalogues and transport errors remain distinct. Neither an old `last_seen`
+timestamp nor a timeout proves that a device is offline. Status/capability
+responses do not gate catalogue checks.
+
+For available catalogues the script calls the real shared current-programme
+search with an empty query, requiring complete EPG coverage. `--timeout` supplies
+the deeper RPC deadline and aggregate current-EPG budget. Optional
+`--archive-query` also exercises the common archive search and availability
+checks; those run sequentially to respect provider connection limits. A current
+match is reported as `live_match`, never as successful archive coverage. Reports
+include archive-resolution request counts and identify results returned entirely
+from cached availability checks. `--refresh` bypasses archive-search caches;
+cold history searches can take several minutes.
+
+A read-only RPC allowlist prevents playback, restarts, profile/provider changes
+and other mutations, including accidental calls from search helpers. JSON output
+contains only identifiers, aliases, fixed statuses, counts and timings. It omits
+media URLs, catalogue receipts, credentials, request queries and raw exceptions.
+`--output` additionally writes that report atomically using private permissions
+on macOS/Linux; use a private directory with suitable ACLs on Windows.
+
+Exit `0` means every requested path was exercised successfully. Exit `3` marks
+incomplete coverage such as unavailable/unsupported players, empty catalogues,
+no archive matches, stale aliases or an empty registry. Exit `1` marks setup,
+invalid-response or search failures, and `130` an interrupted check. An omitted
+archive query is reported as `not_requested` and does not claim archive coverage.
 
 ## Provider settings
 
