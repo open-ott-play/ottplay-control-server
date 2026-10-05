@@ -25,6 +25,7 @@ import urllib.request
 import warnings
 
 HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMMAND ...]
+  ott resolve --request-stdin         resolve a private playlist search for a local player
   ott diagnostics --help             scoped runtime diagnostics and session control
   ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
@@ -1527,8 +1528,78 @@ def management(client, config_path, words, json_output=False):
     return False
 
 
+def resolve_main(argv):
+    """Private, read-only IPC for launchers; never load controller credentials."""
+    help_text = """ott resolve --request-stdin
+Read one version 1 JSON search request from stdin and return one JSON result.
+The result contains private media URLs: stdout must be redirected or captured.
+No controller configuration, player RPC or playback is used.
+See docs/cli.md for the request and result contract.
+"""
+    if argv in (["--help"], ["-h"]):
+        print(help_text, end="")
+        return 0
+
+    def failure(code, message, status=1):
+        # Never interpolate request data, module exceptions or URLs into errors.
+        if sys.stdout.isatty():
+            print("Error: " + message, file=sys.stderr)
+        else:
+            print(json.dumps({"version": 1, "error": {"code": code, "message": message}}))
+        return status
+
+    if argv != ["--request-stdin"]:
+        return failure("invalid_request", "Use ott resolve --request-stdin with a version 1 JSON request.")
+    if sys.stdout.isatty():
+        return failure("private_output_required", "Capture or redirect resolver output; it contains private media URLs.")
+    if sys.stdin.isatty():
+        return failure("invalid_request", "Send the resolver JSON request through standard input.")
+    try:
+        limit = 64 * 1024
+        source = getattr(sys.stdin, "buffer", sys.stdin)
+        raw = source.read(limit + 1)
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        if len(raw) > limit:
+            return failure("invalid_request", "The resolver request exceeds the 64 KiB limit.")
+        request = json.loads(raw.decode("utf-8"))
+        if not isinstance(request, dict) or type(request.get("version")) is not int or request["version"] != 1:
+            return failure("invalid_request", "The resolver requires a version 1 JSON object.")
+    except KeyboardInterrupt:
+        return failure("interrupted", "The resolver search was interrupted.", 130)
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return failure("invalid_request", "The resolver requires a valid UTF-8 JSON request.")
+    try:
+        module_path = Path(__file__).resolve().with_name("playlist_search.py")
+        if not module_path.is_file() or not module_path.with_name("programme_search.py").is_file():
+            return failure("resolver_unavailable", "Install playlist_search.py and programme_search.py beside ott.py.")
+        spec = importlib.util.spec_from_file_location("ott_playlist_search", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = module.resolve(request)
+        if (not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1
+                or result.get("kind") not in ("playlist", "live", "archive", "none")
+                or not isinstance(result.get("matches"), list)):
+            raise ValueError("Invalid resolver response")
+        # ASCII escapes keep the UTF-8 JSON wire format independent of the
+        # host's pipe encoding (for example Windows cp1252).
+        encoded = json.dumps(result, ensure_ascii=True)
+        if len(encoded.encode("utf-8")) > 16 * 1024 * 1024:
+            raise ValueError("Oversized resolver response")
+    except KeyboardInterrupt:
+        return failure("interrupted", "The resolver search was interrupted.", 130)
+    except Exception:
+        # This boundary receives provider data and private URLs. Even unexpected
+        # failures must not expose them in a traceback or exception message.
+        return failure("resolution_failed", "Could not resolve the playlist search. Check the source settings and network.")
+    print(encoded)
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "resolve":
+        return resolve_main(argv[1:])
     if argv and argv[0] == "diagnostics":
         # Keep scoped diagnostic credentials separate from the legacy admin config.
         module_path = Path(__file__).resolve().with_name("diagnostics.py")

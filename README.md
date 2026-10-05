@@ -44,7 +44,9 @@ Both server and player must include the request/response extension.
 
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
-cover macOS/Linux and Windows, Python/PATH setup and all four required CLI files.
+cover macOS/Linux and Windows, Python/PATH setup and all five required CLI files.
+Local launchers can use the read-only [playlist resolver](docs/cli.md#local-playlist-resolver)
+to search channels, current programmes and playable archives without a controller.
 Once installed and configured:
 
 ```sh

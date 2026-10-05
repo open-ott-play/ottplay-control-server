@@ -1,8 +1,8 @@
 # Control players from the terminal
 
 The CLI uses Python 3 and its standard library; no `pip install` is needed.
-Keep all four files together: `ott.py`, `programme_search.py`, `diagnostics.py`
-and `diagnostics_mcp.py`. Python 3.12 is the version used by CI. Commands take a short
+Keep all five files together: `ott.py`, `programme_search.py`, `playlist_search.py`,
+`diagnostics.py` and `diagnostics_mcp.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -18,6 +18,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Disconnect, deregister or revoke a player](#disconnect-deregister-or-revoke-a-player)
 - [Help, options and output](#help-options-and-output)
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
+- [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
@@ -30,7 +31,10 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 Install Python 3 and Git first. The native server release archives contain the
 Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
 source archive for the same release. This first-install example pins a published
-release containing the commands in this guide:
+release containing the remote-control commands in this guide. The local
+`resolve` command requires a source revision containing `playlist_search.py`;
+it is not included in `v0.1.0-beta.41`. Until a release includes it, install all
+five CLI files from that newer source revision together:
 
 ```sh
 python3 --version
@@ -51,7 +55,7 @@ zsh or the appropriate bash startup file), then open a new terminal. `command -v
 shows which installation is selected. If `ott` already exists, inspect it before
 changing it; the example intentionally does not overwrite an existing command.
 From any checkout you can instead run `python3 /absolute/path/to/cli/ott.py --help`.
-If copying the files out of a source archive, copy all four together and make
+If copying the files out of a source archive, copy all five together and make
 `ott.py` executable with `chmod u+x /absolute/path/to/cli/ott.py` before linking it.
 
 ### Install on Windows
@@ -368,7 +372,7 @@ ott diagnostics --help
 ```
 
 The existing symlink follows the checkout. For a copied installation replace all
-four sibling Python files together from one version. Keep `cli.json`, presets
+five sibling Python files together from one version. Keep `cli.json`, presets
 and server credentials outside the checkout; updating CLI files does not update
 or restart the command server, native apps or players already open in a browser.
 After updating a hosted player, reload it and inspect `ott PLAYER caps`.
@@ -615,6 +619,77 @@ FOSS client used by web, Tauri desktop, Capacitor/iOS and packaged TV players.
 Old installations retain live searches and report the needed update if an
 archive fallback is required. Local validation of shared code does not install
 new packages on offline TVs or phones.
+
+## Local playlist resolver
+
+`ott resolve --request-stdin` lets a local launcher such as VL use the same
+EPG matching, archive-chain selection and media verification as the remote CLI.
+It reads the configured hls-proxy playlist directly and returns candidates to
+the launcher. It does not read `cli.json` or `OTT_CONFIG`, connect to the
+command server, send a player RPC or start playback. `ott resolve --help` checks
+that the command is installed without reading a playlist.
+
+The command accepts exactly one UTF-8 JSON object on stdin, up to 64 KiB:
+
+```json
+{
+  "version": 1,
+  "query": "Three Cats",
+  "playlist_url": "https://proxy.example/playlist.m3u",
+  "epg_url": "https://epg.example/epg/v1",
+  "refresh": false,
+  "cache_seconds": 7200,
+  "playlist_cache_seconds": 604800,
+  "archive_cache_seconds": 604800
+}
+```
+
+`version`, `query` and `playlist_url` are required. `epg_url` is required only
+when no playlist title matches and programme lookup is needed. The query is
+limited to 1024 UTF-8 bytes. Cache settings are optional: guide/search TTL is
+capped at two hours, playlist and successful archive checks at seven days;
+zero disables the corresponding cache; `cache_seconds: 0` disables all caches.
+An optional `cache_dir` selects a private
+local cache directory. `refresh: true` bypasses caches for this request. Private
+provider URLs belong in this stdin object, never in command-line arguments or
+shared logs. A launcher should use a subprocess argument list and capture stdout.
+
+Search order is playlist title, currently airing programme, then playable
+archive within the channel's retention and 144 hours. Only named HTTP(S)
+streams on the playlist's origin are eligible. EPG requests contain channel
+metadata only. Matching archives start at the earliest playable programme in
+each uninterrupted chain, using the same chain and media checks as remote
+player searches. Programme starts/ends and retention limits can invalidate
+cached results before their TTL expires.
+
+Success exits with `0` and returns one JSON object, up to 16 MiB:
+
+```json
+{"version": 1, "kind": "none", "matches": []}
+```
+
+`kind` is `playlist`, `live`, `archive` or `none`. Each match includes `name`,
+`group`, `url`, `archive_hours`, `epg_shift`, `tvg_id`, `tvg_name` and `search`.
+Programme matches also include `mode`, `programme_start`, `programme_end` and
+`details`. The caller lists candidates, selects one and owns playback; the
+resolver never chooses or launches a player. Archive URLs use hls-proxy's
+`utc`/`lutc` format. Immediately before playback, the launcher must recheck the
+programme time/retention and refresh `lutc` to the current Unix time.
+
+Output contains private media URLs, so the resolver refuses terminal stdout.
+Capture it through a pipe, or redirect it to a file protected with mode 600.
+Do not merge stderr into stdout or print the entire response in user-facing
+logs. A cold EPG/archive search may take several minutes; the remote CLI's
+`--timeout` does not apply. Launchers should cancel the subprocess when a newer
+request supersedes it.
+
+Failures exit with `1` (`130` for an interrupted search) and return
+`{"version":1,"error":{"code":"resolution_failed","message":"..."}}`.
+Other codes are `invalid_request`, `resolver_unavailable` and `interrupted`.
+Messages are fixed English text and never include request values or provider
+exceptions. Terminal-output refusal writes a fixed message to stderr without
+printing JSON or URLs. An empty successful result is distinct from a failed
+or incomplete search.
 
 ## Provider settings
 
@@ -1094,7 +1169,7 @@ Add `~/.local/bin` to the current shell's PATH and its startup file, then reopen
 the terminal. Inspect `command -v ott` (or `type -a ott` in bash/zsh) for an older
 installation taking precedence. Check the symlink target still exists. Use
 `python3 /absolute/path/to/cli/ott.py --help` to separate PATH/executable problems
-from Python problems. Keep all four CLI files from the same source version in
+from Python problems. Keep all five CLI files from the same source version in
 the resolved target directory. A copied `ott.py` alone is not a complete install.
 On Windows use the `py -3 ...` invocation from the installation section.
 
