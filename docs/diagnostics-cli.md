@@ -6,10 +6,26 @@ credential; an existing administrator or device token does not grant these
 permissions. The device must also have diagnostics enabled and current local
 consent. Existing `ott` playback commands are unchanged.
 
+## Install and prepare access
+
+Install the complete CLI from a source checkout using the
+[installation guide](cli.md#installation-and-connection). The native server
+release archives contain the server, not these Python clients. Keep all four
+`cli/*.py` files together; Python 3 is the only client dependency. Check the
+installation without contacting a server:
+
+```sh
+ott diagnostics --help
+python3 /absolute/path/to/ottplay-control-server/cli/diagnostics_mcp.py --help
+```
+
 The same commands are available as `ott diagnostics ...`, before any legacy CLI
 configuration is read. Install `diagnostics.py` beside the real `ott.py` file;
 symlinks such as `/usr/local/bin/ott` resolve to that directory. Install
-`diagnostics_mcp.py` beside `diagnostics.py` to use the MCP adapter. For example:
+`diagnostics_mcp.py` beside `diagnostics.py` to use the MCP adapter. This client
+does not read `OTT_CONFIG`, player aliases or the administrator credential from
+`cli.json`. Pass the exact configured device ID, not an `ott` nickname such as
+`a1`. All connection options go **before** the subcommand. For example:
 
 ```sh
 ott diagnostics --server https://controller.example/ott-control \
@@ -26,8 +42,65 @@ with environment-option guidance. Changing a Windows file to mode `0600` does
 not bypass that restriction. Supply the secret through your normal private
 credential mechanism. Do not save it in an MCP tool argument or checked-in config.
 
+The server administrator must first enable `diagnostics.enabled` on the existing
+device entry and create a separate operator with exact device/action scopes in
+the [diagnostic server configuration](remote-diagnostics.md#enablement-and-credentials).
+Validate the server configuration and restart the server through its normal
+[deployment procedure](deployment.md) to apply it. A server restart invalidates
+existing runtimes, sessions, repair receipts and epochs.
+
+On macOS/Linux, this example creates a new private operator token without printing
+it or overwriting an existing token. It prints only the digest to put in the
+operator's `credential_sha256` field:
+
 ```sh
-python3 cli/diagnostics.py --server https://controller.example/ott-control \
+python3 - <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import secrets
+
+directory = Path.home() / ".config" / "ottplay-control"
+directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+token = secrets.token_urlsafe(32)
+path = directory / "diagnostics-token"
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="ascii") as stream:
+    stream.write(token + "\n")
+print(hashlib.sha256(token.encode("ascii")).hexdigest())
+PY
+ott diagnostics --server https://controller.example/ott-control \
+  --token-file "$HOME/.config/ottplay-control/diagnostics-token" \
+  runtimes --device living-room
+```
+
+For the remaining examples, have your credential mechanism provide
+`OTT_DIAGNOSTICS_TOKEN`, or replace `--token-env OTT_DIAGNOSTICS_TOKEN` with the
+POSIX `--token-file` option above. Do not configure both options.
+
+## Register a runtime and grant support
+
+Registration is performed by the player; there is no operator CLI `register`
+command. In **Settings → Remote control**, connect the player to the configured
+HTTPS command server with its **device** access code. Then choose one of:
+
+- **Allow diagnostics for 10 minutes**: a temporary foreground grant, discarded
+  on suspension, disconnect, loss of connectivity or expiry.
+- **Trust this server for remote support**: a device-local saved grant for that
+  controller and device credential. Reconnects create a new runtime and consent
+  epoch; captures and repairs still require a new operator request.
+
+These choices permit structured observations and the two typed repairs when the
+operator has their scopes. They cannot be enabled by a remote input command.
+Trust requires working IndexedDB on the player; temporary mode remains available
+when durable storage is unavailable. See the player's
+[support lifecycle and platform guide](https://github.com/open-ott-play/ottplay-foss/blob/main/docs/remote-diagnostics.md)
+for browser, LG webOS, Tauri and Capacitor behavior.
+
+Now discover the exact registered runtime:
+
+```sh
+ott diagnostics --server https://controller.example/ott-control \
   --token-env OTT_DIAGNOSTICS_TOKEN runtimes --device living-room
 ```
 
@@ -36,8 +109,10 @@ consent metadata. Choose the exact target and use its current consent epoch.
 `reported_uuid`/instance labels do not select a runtime. Record a new operation
 key before the first start; keep that key and epoch if the response is lost.
 
+## Capture, inspect and stop
+
 ```sh
-python3 cli/diagnostics.py --server https://controller.example/ott-control \
+ott diagnostics --server https://controller.example/ott-control \
   --token-env OTT_DIAGNOSTICS_TOKEN start --device living-room \
   --runtime RUNTIME_ID --consent-epoch CONSENT_EPOCH --server-epoch SERVER_EPOCH \
   --lease-ms 600000 --idempotency-key capture-20261004-1
@@ -47,9 +122,9 @@ python3 cli/diagnostics.py --server https://controller.example/ott-control \
 does not establish that capture is active. Read the returned exact session ID:
 
 ```sh
-python3 cli/diagnostics.py --server https://controller.example/ott-control \
+ott diagnostics --server https://controller.example/ott-control \
   --token-env OTT_DIAGNOSTICS_TOKEN status --session SESSION_ID
-python3 cli/diagnostics.py --server https://controller.example/ott-control \
+ott diagnostics --server https://controller.example/ott-control \
   --token-env OTT_DIAGNOSTICS_TOKEN events --session SESSION_ID --after-seq 0 --limit 32
 ```
 
@@ -59,16 +134,52 @@ history. Use the returned cursor on the next call. The first implementation does
 not keep polling in the background or accumulate an unbounded tail.
 
 ```sh
-python3 cli/diagnostics.py --server https://controller.example/ott-control \
+ott diagnostics --server https://controller.example/ott-control \
   --token-env OTT_DIAGNOSTICS_TOKEN stop --session SESSION_ID \
   --server-epoch SERVER_EPOCH --idempotency-key stop-20261004-1
-python3 cli/diagnostics.py --server https://controller.example/ott-control \
+ott diagnostics --server https://controller.example/ott-control \
   --token-env OTT_DIAGNOSTICS_TOKEN revoke --runtime RUNTIME_ID --server-epoch SERVER_EPOCH
 ```
 
 Stop immediately denies new server ingestion, but queued stop is not confirmation
 that the device stopped. Inspect `device_stop_confirmed`. Revoke retires the
 runtime credential; the device stops on rejection or its connectivity lease.
+
+### Deregister, remove trust or remove operator access
+
+These actions have different lifetimes:
+
+- `stop --session SESSION_ID` ends that capture. It preserves the runtime and
+  consent; it does **not** revoke an independent pending repair. On the player,
+  **Stop current capture** also leaves trusted support available.
+- `revoke --runtime RUNTIME_ID --server-epoch SERVER_EPOCH` retires that exact
+  runtime credential and revokes pending repairs. It does not remove the saved
+  device access code or another tab's runtime. The current player clears local
+  support when it observes the authorization rejection, but the server cannot
+  directly erase an offline player's saved trust. This is not a permanent ban
+  on device registration; use local revocation or disable the device's
+  diagnostics for a lasting block.
+- On the player, **Stop diagnostics**, **Disable trusted remote support**, or
+  the diagnostic indicator removes local support permission and cancels pending
+  diagnostic repairs. Disconnecting the saved controller also clears trust.
+  If removing stored permission fails, retry the visible storage-error action
+  before restarting the player; local capture stops immediately, but saved trust
+  may remain until deletion succeeds.
+- To deny diagnostics for a device at the server, set its `diagnostics.enabled`
+  to `false`, validate configuration and restart the service. To remove an
+  operator, remove its entry from `diagnostics.operators`; to rotate its token,
+  generate a new separate token and replace `credential_sha256`. Validate and
+  restart before distributing the new credential. Removing a scope narrows
+  authority, but an operator entry must retain at least one device and one action;
+  remove the whole entry to revoke all its access.
+
+Closing this CLI or an MCP host is not a stop or deregistration request. Captures
+remain governed by their session/connectivity leases. Runtime retirement and
+diagnostic permission changes do not unregister the player's ordinary command
+queue; for that separate operation see
+[disconnecting or deregistering a player](cli.md#disconnect-deregister-or-revoke-a-player).
+
+### Timeouts and uncertain outcomes
 
 The client never retries requests automatically. A timeout or malformed/lost
 mutation reply is an `unknown_outcome`, not proof of failure. Inspect session
@@ -174,9 +285,129 @@ for execution failures. It advertises no tasks, resources, prompts, streaming or
 background work. Closing stdin ends the adapter; it does not revoke an existing
 capture session. Its duration remains governed by the device/server leases.
 
+### All CLI commands and MCP arguments
+
+The examples above cover the eight commands below. Diagnostics has no short
+command aliases. Use `ott diagnostics --help` for the command list. For a
+subcommand's help, include the required connection-option positions, for example
+`ott diagnostics --server https://controller.example --token-env OTT_DIAGNOSTICS_TOKEN start --help`;
+help itself does not read the credential or make a request.
+
+- `runtimes --device DEVICE_ID` → `diagnostics_runtimes(device_id)`;
+  requires `runtimes.read`.
+- `start --device DEVICE_ID --runtime RUNTIME_ID --consent-epoch CONSENT_EPOCH
+  --lease-ms 600000 --idempotency-key OPERATION_KEY --server-epoch SERVER_EPOCH`
+  → `diagnostics_start(device_id, runtime_id, consent_epoch, lease_ms,
+  idempotency_key, server_epoch)`; requires `sessions.start`.
+- `status --session SESSION_ID` → `diagnostics_status(session_id)`;
+  requires `sessions.read`.
+- `events --session SESSION_ID --after-seq 0 --limit 32`
+  → `diagnostics_events(session_id, after_seq=0, limit=32)`; requires `sessions.read`.
+- `stop --session SESSION_ID --idempotency-key OPERATION_KEY
+  --server-epoch SERVER_EPOCH`
+  → `diagnostics_stop(session_id, idempotency_key, server_epoch)`;
+  requires `sessions.stop`.
+- `revoke --runtime RUNTIME_ID --server-epoch SERVER_EPOCH`
+  → `diagnostics_revoke(runtime_id, server_epoch)`; requires `runtimes.revoke`.
+- `repair --device DEVICE_ID --runtime RUNTIME_ID --consent-epoch CONSENT_EPOCH
+  --action restart_stream --deadline-ms 10000 --idempotency-key OPERATION_KEY
+  --server-epoch SERVER_EPOCH`
+  → `diagnostics_repair(device_id, runtime_id, consent_epoch, action,
+  deadline_ms, idempotency_key, server_epoch)`; requires `repairs.start`.
+  The other allowed action is `reload_player`.
+- `repair-status --repair REPAIR_ID` → `diagnostics_repair_status(repair_id)`;
+  requires `repairs.read`.
+
+MCP event arguments `after_seq` and `limit` are optional and default to 0 and 32.
+All other MCP arguments listed here are required, including `lease_ms` and
+`deadline_ms`. CLI defaults are `--lease-ms 600000`, `--after-seq 0`, `--limit 32`,
+and `--deadline-ms 10000`. Event limits are 1–32; cursors are integers from 0
+through 9007199254740991. Device IDs allow `[A-Za-z0-9_.:-]`, 1–128 characters;
+runtime/session/repair IDs, epochs and operation keys use the same characters
+with an 80-character maximum. Preserve the server-issued IDs exactly.
+
+An MCP host sends `tools/call` with the tool name and its arguments, for example:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "diagnostics_events",
+    "arguments": {"session_id": "SESSION_ID", "after_seq": 0, "limit": 32}
+  }
+}
+```
+
+Send this only after the initialization handshake. Tool arguments never contain
+the controller address or token: the MCP process receives those at startup.
+
 References: official MCP [lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle),
 [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#stdio),
 and [tools/error handling](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+
+## Troubleshooting
+
+- **`ott diagnostics` cannot import its module:** locate the real `ott.py`
+  behind the command's symlink and reinstall all four sibling Python files from
+  one checkout. The server binary alone does not install the CLI.
+- **`invalid_arguments` or `invalid_input`:** put `--server`, one credential
+  option and optional `--timeout` before the command. Check exact identifiers,
+  numeric limits and the command reference above. Legacy `ott a1 ...` aliases
+  and `--json` are not diagnostic options; diagnostics always emits JSON.
+- **`invalid_token`, `token_unavailable` or `unsafe_token_file`:** use the scoped
+  operator token, not the device/admin token or its digest. Check that the named
+  environment variable reaches this process. On POSIX, inspect ownership and
+  remove group/other permissions from a regular token file; do not use a symlink.
+  For `token_file_unsupported` on Windows, use `--token-env` instead.
+- **`invalid_server`, `redirect_refused` or `transport_error`:** use the final
+  HTTPS base address and correct deployment prefix; omit `/api/v2/diagnostics`
+  from `--server`. Check certificate hostname, expiry and trusted CA chain on
+  the machine running Python. Check connectivity and the reverse proxy route;
+  this client ignores ambient proxy settings and provides no TLS-verification
+  bypass. Browser registration additionally needs the player's exact allowed
+  origin in server configuration.
+- **HTTP 401/403, `credential_role_denied` or `diagnostics_disabled`:** verify
+  the operator's digest, exact device scope, action scope and per-device
+  diagnostics flag, then validate/restart after configuration changes. A valid
+  administrator token grants no diagnostic access.
+- **HTTP 404 / `not_found`:** verify the exact device/runtime/session/repair ID
+  and the operator's device and action scopes. An out-of-scope request deliberately
+  returns the same response as an absent target. Check the controller base path
+  and server version too. A missing receipt after restart or expiry does not
+  prove that the earlier operation never executed.
+- **No runtimes, `runtime_expired`, or `consent_required`:** confirm the player
+  is foreground, connected over HTTPS, and has temporary consent or saved trust.
+  Discover again after reconnect/reload and select its new runtime and consent
+  epoch. Do not infer identity from a tab label. With a temporary grant, a local
+  action is needed to grant access again.
+- **`runtime_busy` or `repair_busy`:** read the existing exact session/repair
+  state; `active_session_id` identifies an occupied capture. Finish that work or
+  wait for expiry before creating another operation. Do not send new keys to
+  evade an uncertain mutation or a capacity conflict.
+- **`capability_required`, `unsupported` or `rejected`:** inspect the runtime's
+  capabilities and update compatible player/server builds. Repairs require
+  `repairs`; ordinary lifecycle commands such as native app exit or OS reboot
+  are not tools in this MCP adapter. Consult [player command support](cli.md).
+- **`start_pending` or empty events:** acceptance only queued the action. Read
+  status until `active` or a terminal state and check the remaining lease.
+  Capture pauses/stops on backgrounding or connectivity loss. Advance event
+  reads using `next_seq`; inspect truncation and drop counts for missing history.
+- **`epoch_changed`, `server_epoch_mismatch`, `idempotency_conflict`, timeout or
+  `unknown_outcome: true`:** inspect current state first. Reuse the original
+  fields/key/epoch only within the recorded retention horizon. A server restart
+  clears in-memory state; a new epoch or a missing receipt does not prove the
+  earlier effect never ran. Never automatically replace the operation key.
+- **HTTP 429, `rate_limited`, `runtime_limit` or `state_limit`:** reduce polling
+  and concurrent work, inspect stale runtimes and wait for bounded records to
+  expire. The CLI does not automatically retry; review uncertain mutations
+  before taking any further action.
+- **MCP connects but shows no tools or exits:** use the absolute Python/script
+  paths, keep `diagnostics.py` beside the adapter, pass the credential privately
+  into the launched process, and check the host's stderr. The host must negotiate
+  MCP `2025-11-25` and send `notifications/initialized` before listing/calling
+  tools. Stdout must contain only the adapter's newline-delimited JSON-RPC.
 
 ## Local verification
 

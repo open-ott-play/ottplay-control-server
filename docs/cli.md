@@ -1,25 +1,81 @@
 # Control players from the terminal
 
-`cli/ott.py` and its sibling `cli/programme_search.py` use Python 3 without additional packages. Keep both files together when installing a copy. Commands take a short
+The CLI uses Python 3 and its standard library; no `pip install` is needed.
+Keep all four files together: `ott.py`, `programme_search.py`, `diagnostics.py`
+and `diagnostics_mcp.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
 command queue.
 
+Use this guide for the terminal client. The [deployment guide](deployment.md)
+covers installing, starting and stopping the separate Go command server;
+the [player connection guide](https://github.com/open-ott-play/ottplay-foss/blob/main/docs/remote-command-server.md)
+covers the settings on the TV, browser, Tauri or Capacitor installation.
+
+- [Install and configure the CLI](#installation-and-connection)
+- [Register and connect a player](#register-and-connect-a-player)
+- [Disconnect, deregister or revoke a player](#disconnect-deregister-or-revoke-a-player)
+- [Help, options and output](#help-options-and-output)
+- [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
+- [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
+- [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [kiosk mode](#kiosk-mode)
+- [Scoped diagnostics and MCP](diagnostics-cli.md)
+- [Troubleshooting](#troubleshooting)
+
 ## Installation and connection
 
-The following setup is for macOS/Linux, where the CLI creates private files with
-mode 600. On Windows, run `python cli/ott.py` and store configuration in a private
-directory protected by NTFS permissions. POSIX mode 600 does not apply there;
-new files inherit access rules from the parent directory's ACL.
+### Install on macOS or Linux
+
+Install Python 3 and Git first. The native server release archives contain the
+Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
+source archive for the same release. This first-install example pins a published
+release containing the commands in this guide:
 
 ```sh
-mkdir -p ~/.local/bin ~/.config/ottplay-control
-ln -s /absolute/path/to/ottplay-control-server/cli/ott.py ~/.local/bin/ott
-chmod 700 ~/.config/ottplay-control
+python3 --version
+mkdir -p "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.config/ottplay-control"
+git clone --branch v0.1.0-beta.41 --depth 1 \
+  https://github.com/open-ott-play/ottplay-control-server.git \
+  "$HOME/.local/share/ottplay-control-server"
+ln -s "$HOME/.local/share/ottplay-control-server/cli/ott.py" "$HOME/.local/bin/ott"
+export PATH="$HOME/.local/bin:$PATH"
+ott --help
+ott diagnostics --help
+chmod 700 "$HOME/.config/ottplay-control"
 ```
 
-Create `~/.config/ottplay-control/cli.json` with mode 600:
+Keep the checkout after making the symlink; moving or deleting it breaks `ott`.
+Persist the PATH line in your shell's startup file (`~/.zshrc` for interactive
+zsh or the appropriate bash startup file), then open a new terminal. `command -v ott`
+shows which installation is selected. If `ott` already exists, inspect it before
+changing it; the example intentionally does not overwrite an existing command.
+From any checkout you can instead run `python3 /absolute/path/to/cli/ott.py --help`.
+If copying the files out of a source archive, copy all four together and make
+`ott.py` executable with `chmod u+x /absolute/path/to/cli/ott.py` before linking it.
+
+### Install on Windows
+
+Use a private source checkout and invoke the script through Python:
+
+```powershell
+py -3 --version
+git clone --branch v0.1.0-beta.41 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
+py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" --help
+py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" diagnostics --help
+```
+
+In the remaining examples replace `ott` with that Python invocation. Store
+configuration in a directory protected by NTFS permissions for your account;
+POSIX mode 600 does not establish Windows access control. Files inherit the
+parent directory's ACL. Use `--config C:\private\cli.json` before the player name
+if you choose a location other than the default under your home directory.
+
+### Configure the administrator client
+
+Start and validate the command server using the [deployment guide](deployment.md).
+The CLI is a one-command process, not another background server. Create
+`~/.config/ottplay-control/cli.json`; this is separate from the server's `config.json`:
 
 ```json
 {
@@ -36,71 +92,64 @@ used by the CLI; `player_server` is the address to enter in players. Both may us
 the same HTTPS address. Set `OTT_CONFIG` or pass `--config FILE` to select another
 configuration file.
 
-To search current programmes on the shared EPG service, add this optional field
-to the same CLI configuration:
+Replace the example paths and UUIDs with the actual configuration. `server_config`
+must point to a private local copy of the configuration used by that controller,
+even when the controller runs remotely. Keep that copy synchronized after device
+or credential changes. Loopback `127.0.0.1` always means the machine executing the
+command: a TV cannot reach your Mac's server using its own loopback address.
+On macOS/Linux protect both configuration files:
 
-```json
-"epg": {"url": "https://epg.2560801.xyz/epg/v1", "source": "epg-one"}
+```sh
+chmod 600 "$HOME/.config/ottplay-control/cli.json" /absolute/path/to/private-server-config.json
+ott devices
 ```
 
-With `epg` configured, all `p` commands ask the player only for its channel
-metadata and catalogue identity. The CLI sends that metadata to `/current` on
-the configured EPG service and receives current titles. It sends no controller
-token, provider credentials, playlist URLs or stream URLs to that service.
-The service URL must be HTTP(S) without credentials, a query or a fragment;
-redirects are refused. Use HTTPS outside a trusted local network.
+`devices` lists server registrations, last contact and pending commands. It does
+not discover every player on the LAN, and it can succeed even if no player is
+currently online. For an already registered device, use `ott alias tv DEVICE_UUID`;
+for a new one, follow [registration](#register-and-connect-a-player).
 
-The player must support `epg_catalog` and `play_catalog`. Catalogue metadata is
-limited to 10,000 channels. The CLI searches the entire catalogue in batches of
-at most 2048 channels, leaving space within the service's 512 KiB request limit
-even for multibyte names. Every batch must use the same guide generation; missing
-or invalid later batches reject the entire query without playback. The service must return a complete,
-fresh result for the fixed public `epg-one` source; the service and CLI clocks
-must be within one minute. Other `epg.source` values are rejected. Selecting
-`epg-one` searches the public guide even if the player uses a private or custom
-guide; those sources are neither used nor uploaded. An unsupported player,
-stale result or service failure exits with an error. It never falls back to scanning
-every channel's EPG on the player. Current-programme HTTP requests are limited
-to ten seconds (or the smaller remaining budget) and 2 MiB of response data;
-all current-programme batches together share the `--timeout` budget. Archive
-history requests allow twenty seconds and 16 MiB per response.
+## Register and connect a player
 
-Title launch now follows the same order on every registered player:
-`ott PLAYER TITLE` searches channel names first, then current programme titles,
-then available archive programmes. `ott PLAYER p TITLE` starts at the programme
-step. Both list the matches and choose one randomly when several match.
-`p --list TITLE` searches without launching playback.
-
-Archive lookup uses `/match` and `/programmes` on the same EPG service. Only
-channels advertising archive support are eligible, within the smaller of their
-retention and **144 hours**. Adjacent matching programmes form one result; an
-intervening title, gap, overlap or retention boundary breaks the chain. Playback
-starts at the earliest programme in the chain whose manifest and initial media
-bytes are available. Separate chains on the same channel remain separate
-choices. The first successful fragment is a startup check, not a guarantee for
-every subsequent segment. The archive continues along the channel after launch.
-
-EPG mappings, history and successful search results are cached for **two hours**;
-successful media checks are reused for **seven days**, subject to the current
-retention boundary. Files are private (0600) under `~/.cache/ottplay-control`
-or `OTT_CACHE`. Read hits do not extend cache lifetime. Programme boundaries and
-guide expiry invalidate search results earlier. `ott --refresh PLAYER p TITLE`
-bypasses these caches. Current EPG is still checked first on every invocation;
-the player's current catalogue is read again before dispatch, so a source change
-cannot silently redirect an old search. Failed archive checks are not cached.
-
-Archive search requires updated player and controller builds with
-`resolve_archive` and `play_archive_catalog`. Those handlers belong to the shared
-FOSS client used by web, Tauri desktop, Capacitor/iOS and packaged TV players.
-Old installations retain live searches and report the needed update if an
-archive fallback is required. Local validation of shared code does not install
-new packages on offline TVs or phones.
+For each browser installation, TV or native app, open its settings and read its
+Device UUID. Register that exact UUID under an unused local alias. The same Mac
+can run the CLI, the command server and several player instances; the alias
+selects a player registration, not a computer hostname.
 
 ```sh
 ott devices
 ott add tv DEVICE_UUID
+# For an ordinary server, validate and restart it here before connecting the player.
 ott pair tv
 ```
+
+`add` saves a new registration and a random device token in `server_config`.
+It also records `tv` in the CLI's `players` mapping. On a regular installation,
+validate the changed server configuration, copy it to the server if needed and
+restart the server as described in [deployment](deployment.md). Merely editing a
+local copy does not update a remote controller. Kubernetes provisioning is
+described below and performs its own Secret update and restart.
+
+For a UUID already present in `server_config`, `ott alias tv DEVICE_UUID` assigns
+an alias without changing server credentials. Adding the same UUID again also
+keeps its existing token; `add` is not token rotation. Aliases are case-insensitive,
+up to 32 Latin/Cyrillic letters, digits, underscores or hyphens. Use distinct names
+such as `a1` and `living_room`, avoiding command names such as `devices` or `presets`.
+An existing alias cannot be reassigned to another UUID without editing `cli.json`.
+
+`pair` prints the device access code, so use it in a private terminal. Enter that
+address and code in the player's command-server settings, select **Connect**, and
+wait for **Connected**. Then verify the connection before sending a change:
+
+```sh
+ott devices
+ott tv                      # status and currently available controls
+ott tv s                    # read-only channel list
+ott tv 12                   # select catalogue row 12 when ready
+```
+
+The CLI and Go server can run in different places. No SSH connection to the player
+is required for these commands: the connected player polls the controller.
 
 ### Discover and pair without entering a device token
 
@@ -125,9 +174,7 @@ before approval or delivery. Cancelling on the player removes its request when
 the server is reachable. `--json` supports `discover`, `pending` and `approve`.
 An uncertain approval response is never retried automatically.
 
-`add` creates a separate random token, saves it in `server_config` and binds the
-name. Restart the command server afterwards for a regular installation. For a
-server running in k3s, you can add a `kubernetes` object to `cli.json` with
+For a server running in k3s, you can add a `kubernetes` object to `cli.json` with
 `context`, `namespace`, `secret` and `deployment` fields. Then `add` updates the
 Secret's `config.json` entry and restarts the Deployment. It checks
 `resourceVersion` and compares local and cluster configuration to avoid
@@ -161,12 +208,178 @@ incoming port on the TV. Packaged TV apps with an Origin of `null` can use the
 separate `allow_null_origin: true` setting, which applies only to the device API.
 The central player server on ports 8443–8446 is separate from the command server.
 
+## Disconnect, deregister or revoke a player
+
+These are different operations. There is currently no `ott remove`, `delete`,
+`deregister` or `unpair` command, and no CLI command that remotely grants local
+diagnostic consent.
+
+### Temporarily disconnect or forget a connection
+
+On the player, open **Settings → Remote control → Command server → Disconnect**.
+Polling stops, but the saved address and access code remain; **Connect** resumes
+them. To forget the connection on that installation, clear the server address and
+access code in the same screen. Clearing either field also stops polling.
+**Cancel pairing** cancels an in-progress discovery pairing, not an already
+registered device. Disconnecting, clearing settings or uninstalling a player does
+not revoke its token at the server.
+
+### Remove or rename only a local alias
+
+Edit the `players` object in the selected `cli.json`. For example, replacing
+`"tv": "dev_your_tv_uuid"` with `"living_room": "dev_your_tv_uuid"` renames the
+local shortcut; deleting that entry removes it. No controller restart is needed.
+Other aliases and a full registered device ID can still address the same queue:
+
+```sh
+ott alias living_room DEVICE_UUID  # add another name for an existing registration
+ott living_room
+ott DEVICE_UUID                   # also works without a local alias
+```
+
+Removing an alias alone does not deregister the device or change its credentials.
+If another administrator has their own `cli.json`, their aliases are independent.
+
+### Revoke server access permanently
+
+Use this when retiring a player or when its device token must no longer work:
+
+1. Record the exact device ID with `ott devices` and make a private backup of the
+   server configuration. If a Kubernetes `add` recovery journal exists, finish or
+   reconcile that operation before editing its configuration.
+2. Remove that device's complete `{id, token}` entry from the server's `devices`
+   array. Remove the ID from every `diagnostics.operators[].device_ids` grant;
+   remove operators left with no authorized devices. The validator requires
+   **1–64 devices** and nonempty operator scopes. To retire the last device and
+   controller, stop/uninstall the service instead of starting it with an empty list.
+3. Validate the edited configuration. Deploy that exact configuration to the
+   actual server and restart it using the [deployment procedure](deployment.md).
+   In Kubernetes update the Secret as well as any private local copy; a rollout
+   restart alone does not change its contents. Keep unrelated devices, settings
+   and deployment overrides intact.
+4. Remove all local `players` aliases mapped to the retired ID, and disconnect or
+   clear the saved connection on the player when it is accessible.
+5. Run `ott devices` against the restarted controller: the ID must be absent.
+   Its old device token is now rejected. Deleting only the local copy or alias
+   would not produce this revocation.
+
+For the local files, validation and the final registration check are:
+
+```sh
+./ottplay-control-server validate --config /absolute/private/config.json
+# Apply the validated file and restart using the procedure for your deployment.
+ott devices
+```
+
+Server restarts discard pending commands, pairing requests and diagnostic
+sessions for every device. They cannot undo actions already performed by a player.
+Removing the server registration does not erase its local playlists or player
+settings. Local diagnostic trust and scoped operator access have their own
+[revocation procedure](diagnostics-cli.md).
+
+To rotate a device token without removing its registration, keep its ID, replace
+its token in the private server configuration with a newly generated URL-safe
+random token (32–256 characters, distinct from every other token), validate,
+deploy and restart. Update the private CLI copy before using `ott pair NAME` to
+enter the new code on the intended player. The old token then fails, and `add`
+must not be used as a substitute for rotation. The administrator token and
+diagnostic operator credentials are separate credentials.
+
+## Help, options and output
+
+`ott`, `ott help` and `ott --help` print help without a configuration or network
+connection. There is no `ott --version` or built-in CLI update command; record
+the source tag/commit used for installation. `ott PLAYER caps` reports the
+**player's** version, while the Go server has its own `version` subcommand.
+
+Options for the ordinary CLI must precede `PLAYER` or the management verb:
+
+```sh
+ott --help
+ott -c /private/cli.json tv
+ott --config /private/cli.json --timeout 60 --json tv status
+ott -t 60 -j tv channels
+ott --refresh tv p --list "Кино"
+```
+
+- `-c FILE` / `--config FILE`: configuration path; otherwise `OTT_CONFIG`, then
+  `~/.config/ottplay-control/cli.json`.
+- `-t SECONDS` / `--timeout SECONDS`: finite value from 1 to 300; default 45.
+  Multi-step searches/setups can take longer than one request budget; see their
+  sections below. Increasing it does not extend a command's server-side TTL.
+- `-j` / `--json`: machine-readable results for player commands and for
+  `presets`, `discover`, `pending`, `approve`. `devices`, `add`, `alias` and `pair`
+  still print text, even with this option; `pair` includes the private device token.
+- `--refresh`: bypass EPG history/search and archive-probe caches on the
+  configured central EPG path. It does not reload the player or playlist.
+- `-h` / `--help`: display the command summary.
+
+`--list` / `-l` is different: it follows `p`, `vp` or `vpr` before the title.
+Place global flags before `PLAYER`, because everything after it is parsed as a
+player command or search text. Quote multiword names and URLs containing shell
+characters. Exact aliases such as `vol` and `volume` are interchangeable; an
+arbitrary shortened command is a channel search, not a command abbreviation.
+
+Management commands address the controller or local configuration:
+
+```sh
+ott devices                    # registered devices, last contact and queue size
+ott add tv DEVICE_UUID          # register a device and bind an alias
+ott alias lounge DEVICE_UUID    # another alias for an existing registration
+ott pair tv                    # privately display the player's address and token
+ott discover                   # optional controller DNS discovery metadata
+ott pending                    # pending pairing requests and approval codes
+ott approve tv ABCD2345         # approve the code actually displayed on this player
+ott presets                    # names of saved local setups, without credentials
+```
+
+`ott diagnostics` is a separate command family with separate credentials and
+options: `diagnostics` must be the first argument. Use, for example,
+`ott diagnostics --server https://control.example.com --token-file /private/operator.token runtimes --device DEVICE_UUID`.
+Do not prefix it with ordinary `--config` or `--json` flags. Its full command and
+MCP tool reference is in [Diagnostics CLI and MCP](diagnostics-cli.md).
+
+Ordinary CLI exit codes are `0` for a successful result, `1` for configuration,
+transport or command errors, `2` for argparse syntax errors, `3` for incomplete
+legacy programme searches, and `130` for an interrupted running command. In
+particular, exit `3` can accompany a dispatched choice from the partial results;
+use `p --list` when investigating without playback. Diagnostics has its own
+output and errors. Human warnings and playback confirmations may use stderr;
+do not merge stderr into stdout when consuming JSON.
+
+### Update or uninstall the CLI
+
+For the Git installation above, choose a published `RELEASE_TAG` and update a
+clean checkout. Review `git status --short` first and preserve any local edits:
+
+```sh
+cd "$HOME/.local/share/ottplay-control-server"
+git status --short
+git fetch origin tag RELEASE_TAG
+git switch --detach RELEASE_TAG
+ott --help
+ott diagnostics --help
+```
+
+The existing symlink follows the checkout. For a copied installation replace all
+four sibling Python files together from one version. Keep `cli.json`, presets
+and server credentials outside the checkout; updating CLI files does not update
+or restart the command server, native apps or players already open in a browser.
+After updating a hosted player, reload it and inspect `ott PLAYER caps`.
+
+To uninstall the symlink installation, remove only the `~/.local/bin/ott` link you
+created and, when no longer needed, its source checkout. Keep private configuration
+until any required deregistration is complete. Uninstalling the CLI does not
+stop the controller or revoke player/operator credentials.
+
 ## Commands
 
 ```sh
 ott tv                      # player status and available control commands
 ott tv 12                   # one-based channel number from s
 ott tv news                 # list name matches and play a random matching channel
+ott tv "РЕН"                # short case-insensitive channel-name fragment
+ott tv "РЕН ТВ HD"          # longer channel-name query; same matching rules
 ott tv play s               # channel named s, which is also a command
 ott tv s                    # all channels from the active provider
 ott tv s HD                 # filter by channel name
@@ -176,6 +389,7 @@ ott tv p --list news        # filter programme titles without switching channels
 ott tv vp wedding          # loop all VPortal videos with matching titles
 ott tv vpr wedding         # shuffle all matching videos and loop that queue
 ott tv vp --list wedding   # list the matches without changing playback
+ott tv vpr -l wedding       # same read-only listing; do not start a shuffled queue
 ott tv v                    # current volume, 0–100%
 ott tv v 35                 # absolute volume
 ott tv v +5                 # relative change applied by the player
@@ -333,6 +547,68 @@ narrower filter when a catalog limit is reached. Only natural video completion
 advances the queue. Stop, manual playback or a provider change interrupts it. Each
 visit resolves a fresh stream URL; an unavailable next item stops playback instead
 of being silently skipped. Queues are not restored after restarting the player.
+
+## Programme search configuration and archives
+
+To search current programmes on the shared EPG service, add this optional field
+to the same CLI configuration:
+
+```json
+"epg": {"url": "https://epg.2560801.xyz/epg/v1", "source": "epg-one"}
+```
+
+With `epg` configured, all `p` commands ask the player only for its channel
+metadata and catalogue identity. The CLI sends that metadata to `/current` on
+the configured EPG service and receives current titles. It sends no controller
+token, provider credentials, playlist URLs or stream URLs to that service.
+The service URL must be HTTP(S) without credentials, a query or a fragment;
+redirects are refused. Use HTTPS outside a trusted local network.
+
+The player must support `epg_catalog` and `play_catalog`. Catalogue metadata is
+limited to 10,000 channels. The CLI searches the entire catalogue in batches of
+at most 2048 channels, leaving space within the service's 512 KiB request limit
+even for multibyte names. Every batch must use the same guide generation; missing
+or invalid later batches reject the entire query without playback. The service must return a complete,
+fresh result for the fixed public `epg-one` source; the service and CLI clocks
+must be within one minute. Other `epg.source` values are rejected. Selecting
+`epg-one` searches the public guide even if the player uses a private or custom
+guide; those sources are neither used nor uploaded. An unsupported player,
+stale result or service failure exits with an error. It never falls back to scanning
+every channel's EPG on the player. Current-programme HTTP requests are limited
+to ten seconds (or the smaller remaining budget) and 2 MiB of response data;
+all current-programme batches together share the `--timeout` budget. Archive
+history requests allow twenty seconds and 16 MiB per response.
+
+With this optional EPG service configured, title launch follows this order:
+`ott PLAYER TITLE` searches channel names first, then current programme titles,
+then available archive programmes. `ott PLAYER p TITLE` starts at the programme
+step. Both list the matches and choose one randomly when several match.
+`p --list TITLE` searches without launching playback.
+
+Archive lookup uses `/match` and `/programmes` on the same EPG service. Only
+channels advertising archive support are eligible, within the smaller of their
+retention and **144 hours**. Adjacent matching programmes form one result; an
+intervening title, gap, overlap or retention boundary breaks the chain. Playback
+starts at the earliest programme in the chain whose manifest and initial media
+bytes are available. Separate chains on the same channel remain separate
+choices. The first successful fragment is a startup check, not a guarantee for
+every subsequent segment. The archive continues along the channel after launch.
+
+EPG mappings, history and successful search results are cached for **two hours**;
+successful media checks are reused for **seven days**, subject to the current
+retention boundary. Files are private (0600) under `~/.cache/ottplay-control`
+or `OTT_CACHE`. Read hits do not extend cache lifetime. Programme boundaries and
+guide expiry invalidate search results earlier. `ott --refresh PLAYER p TITLE`
+bypasses these caches. Current EPG is still checked first on every invocation;
+the player's current catalogue is read again before dispatch, so a source change
+cannot silently redirect an old search. Failed archive checks are not cached.
+
+Archive search requires updated player and controller builds with
+`resolve_archive` and `play_archive_catalog`. Those handlers belong to the shared
+FOSS client used by web, Tauri desktop, Capacitor/iOS and packaged TV players.
+Old installations retain live searches and report the needed update if an
+archive fallback is required. Local validation of shared code does not install
+new packages on offline TVs or phones.
 
 ## Provider settings
 
@@ -785,3 +1061,149 @@ route for the selected device:
 
 `status` and `off` accept only `mode`; `on` optionally accepts `query`, and `set`
 requires it. Queries contain 1–1024 UTF-8 bytes without control characters.
+
+## Troubleshooting
+
+Start with read-only checks, replacing `tv` with your registered alias:
+
+```sh
+command -v ott
+python3 --version
+ott --help
+ott devices
+ott tv
+ott tv caps
+```
+
+Do not include `ott pair` output, private configuration, provider URLs with
+credentials or operator tokens in a shared report. Useful evidence is the exact
+command with secrets removed, exit code, fixed error message, time, player
+version/platform and whether the problem affects one player or every player.
+For structured capture use the [diagnostics workflow](diagnostics-cli.md), which
+requires separate permissions and local consent.
+
+### `ott: command not found`, wrong installation or missing Python module
+
+Add `~/.local/bin` to the current shell's PATH and its startup file, then reopen
+the terminal. Inspect `command -v ott` (or `type -a ott` in bash/zsh) for an older
+installation taking precedence. Check the symlink target still exists. Use
+`python3 /absolute/path/to/cli/ott.py --help` to separate PATH/executable problems
+from Python problems. Keep all four CLI files from the same source version in
+the resolved target directory. A copied `ott.py` alone is not a complete install.
+On Windows use the `py -3 ...` invocation from the installation section.
+
+### Configuration cannot be read or the wrong controller is selected
+
+Check the path in `--config`, then `OTT_CONFIG`, then the default file. Global
+flags must come before the player name. Confirm the JSON is valid and has no
+duplicate fields, and that `server_config` points to an existing private file
+with the administrator token and device registrations for this exact server.
+Use an absolute path when a service or terminal has a different working directory.
+The CLI refuses credential-bearing URLs, query/fragment suffixes and redirects;
+set `server` to the final HTTP(S) base address, including the intended proxy prefix.
+Keep credentials in the private configuration, not in the address.
+
+### `Unknown player`, wrong alias or registration missing
+
+`ott devices` reads the live server, while alias resolution also uses the local
+configuration. Synchronize `server_config` after registration changes made
+elsewhere. Use `ott alias NAME UUID` for an existing device or `ott add NAME UUID`
+for a new one. Apply the edited server configuration and restart as needed.
+An alias is not a hostname and does not require SSH. Check the exact device ID
+on the intended player; give every active installation its own device token.
+
+### The server is healthy, but the player is offline or commands time out
+
+Check **Connected** in the player's command-server settings and keep the app
+awake. `last_seen=never` means no contact has been recorded since that server
+started; a historical timestamp does not prove the player is connected now.
+A successful `/healthz` or `/readyz` probe confirms the server process, not
+player polling or playback. Verify that the player can reach `player_server`,
+not just that the CLI can reach `server`.
+
+For a browser, allow the exact origin (scheme, hostname and port) and use HTTPS
+from an HTTPS page such as here.now. Check trusted certificates and proxy paths.
+Packaged TV pages with `Origin: null` require the explicit device-route opt-in;
+it does not authorize administrator routes. Native apps retain their transport
+restrictions. If one token is shared by two players, they compete for commands;
+register them separately. Update/reload old clients that lack request-protocol-1
+replies. See [server troubleshooting](deployment.md#troubleshooting).
+
+### HTTP errors
+
+- **401/403:** check which credential is being used. The player needs its device
+  token, ordinary CLI requests need `admin_token`, and diagnostics need their own
+  scoped operator credential. Verify the configuration was applied and restarted,
+  and check origin or operator-scope restrictions for the affected route.
+- **404:** check the final server base URL/proxy prefix and the server version.
+  Discovery/pairing endpoints require optional discovery configuration. A missing
+  receipt after a restart or expiry does not prove the command never ran.
+- **429 / queue full:** stop flooding the queue, inspect connectivity and wait
+  before another read. An offline player cannot drain requests. After an accepted
+  mutation, a failed receipt lookup is an uncertain result, not permission to send
+  the mutation again.
+- **502/503/504 or transport timeout:** inspect the reverse proxy and server
+  readiness. The ordinary CLI retries eligible reads of the same request ID
+  within its budget; it never automatically submits the command twice.
+
+### A change timed out or returned an uncertain result
+
+Inspect `ott tv`, the relevant read-only query (`v`, `profiles`, `kiosk status`)
+and the actual player before repeating it. A timeout does not cancel an accepted
+command, and it may execute before server expiry. A reload, native restart or
+exit acknowledgement confirms acceptance rather than completion. After a reload,
+run `caps` again to observe the new page-runtime identity. Increasing `--timeout`
+can allow more response time but cannot fix an unsupported operation or prove
+that a previous mutation failed. Diagnostics use a separate epoch/idempotency
+workflow; follow [unknown-outcome recovery](diagnostics-cli.md#timeouts-and-uncertain-outcomes).
+
+### Status succeeds, but available controls are missing
+
+The status and capabilities requests share one timeout. An old client, a reload
+between replies, unavailable capabilities or an exhausted budget may leave valid
+status with `capabilities: null` and `capabilities_error`. Check the player version,
+then rerun a read-only status/capabilities query after the connection settles.
+Do not assume a control is supported because another platform exposes it.
+
+### A control, provider setting or channel change is rejected
+
+Read `caps` for currently supported lifecycle/input/playback operations. Ordinary
+browsers cannot perform native app exit/relaunch or an OS reboot; OS reboot is
+currently unsupported by every shipped player platform. `wake` only addresses
+player standby while connected, not a powered-off machine. Live streams do not
+support the archive/VOD `pause`/`resume` controls or VOD seeking.
+
+Check `kiosk status`, parental/settings locks, the active provider and whether
+its catalogue has finished loading. Use local interaction for PINs and consent.
+Select M3U before managing its profiles; select the matching provider before
+applying `provider-config` or Plex settings. Disabling kiosk or changing a lock
+is a deliberate policy change, not an automatic recovery step. Successful settings
+storage does not prove provider login, media availability or visible playback.
+
+### A search is empty, incomplete, or plays an unexpected match
+
+Use `ott tv s "РЕН"` or `ott tv p --list "Кино"` to inspect results without
+switching. Channel queries use literal case-insensitive substrings: a full title
+can still match a longer title. Ordinary matching selects randomly among multiple
+matches; kiosk matching selects the first. Use the displayed catalogue number
+for a particular channel, keeping the provider/catalogue unchanged. Use
+`play TITLE` when the title is reserved by a command.
+
+For programme searches check the configured EPG service, guide coverage and
+clock accuracy. Exit `3` on the legacy path reports incomplete coverage; repeat
+a read-only `p --list` query after the guide cache warms. On the central-service
+path, `ott --refresh tv p --list "Кино"` bypasses search/archive-probe caches.
+Archive searches additionally require supported retention, matching server/player
+actions and accessible media. A failed availability check is not fixed by blindly
+replaying the same mutation. Narrow overly broad VPortal searches rather than
+assuming a partial catalogue represents every match.
+
+### Kubernetes registration was interrupted
+
+Preserve `cli.json.pending-add.json` and repeat the exact `ott add NAME UUID`
+operation after resolving connectivity or rollout problems. It reconciles the
+recorded before/after state and preserves the generated token. If another
+operator changed the configuration, reconcile those changes before retrying;
+deleting the journal or adding a second credential can lose the recovery path.
+Check context, namespace, Secret, Deployment and Pod events. Connect the player
+only after registration finishes successfully.

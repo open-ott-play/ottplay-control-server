@@ -29,7 +29,7 @@ Use a player release that includes the command-server connection feature. Open *
 2. **Access code**: the `token` of that player's entry in `devices`, never `admin_token`.
 3. **Connect**: enable polling and check the status shown in the same dialog.
 
-The player stores this connection only on the current installation and excludes it from settings backups/cloud transfer. It does not require the separate local HTTP listener. Web browsers require an allowed CORS origin; packaged TV pages with `Origin: null` may use the explicit `allow_null_origin` setting, which permits device polling and acknowledgement only.
+The player stores this connection only on the current installation and excludes it from settings backups/cloud transfer. It does not require the separate local HTTP listener. Web browsers require an allowed CORS origin; packaged TV pages with `Origin: null` may use the explicit `allow_null_origin` setting for designated device/bootstrap routes. This does not enable administrator or diagnostic operator routes.
 
 ## Terminal remote
 
@@ -41,6 +41,28 @@ manual connections continue to work without enabling discovery.
 Use the Python CLI for player aliases, live volume, channel search, current EPG,
 provider selection and supported provider configuration: [CLI guide](docs/cli.md).
 Both server and player must include the request/response extension.
+
+The Python CLI is installed from a source checkout, separately from the native
+server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
+cover macOS/Linux and Windows, Python/PATH setup and all four required CLI files.
+Once installed and configured:
+
+```sh
+ott --help                 # all CLI command families
+ott devices                # controller registrations and last contact
+ott a1                     # this player's status and available controls
+ott a1 channels "РЕН"       # list channel-name matches without playing
+ott a1 "РЕН ТВ HD"          # search and play a matching channel
+ott a1 volume 35            # vol/v are equivalent command aliases
+ott a1 restart             # reload the player
+ott a1 restart stream      # restart only the current stream
+```
+
+`a1` is an example alias for a registered player, not a computer hostname. See
+[registration and pairing](docs/cli.md#register-and-connect-a-player),
+[all commands with examples](docs/cli.md#commands),
+[disconnecting and revoking access](docs/cli.md#disconnect-deregister-or-revoke-a-player),
+and [troubleshooting](docs/cli.md#troubleshooting).
 
 To shuffle all VPortal videos matching a title and play them on repeat:
 
@@ -106,6 +128,12 @@ Optional [protocol 2 diagnostics](docs/remote-diagnostics.md) provides explicitl
 enabled, per-runtime sessions with separate scoped operator credentials and
 bounded structured telemetry. Local player consent remains mandatory. Diagnostic
 control polling is independent of the existing command queue.
+
+The [diagnostic CLI and MCP guide](docs/diagnostics-cli.md) covers installation,
+operator credentials, local permission, every diagnostic command/tool, capture
+and repair examples, runtime revocation and troubleshooting. `ott diagnostics --help`
+lists this separate command family; ordinary player aliases and administrator
+credentials do not grant diagnostic access.
 
 ## Deployment packages
 
