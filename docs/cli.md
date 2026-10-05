@@ -187,10 +187,59 @@ ott tv playlist https://example.com/list.m3u
 ott tv random               # random channel from the current playback list
 ott tv random 1 10
 ott tv msg Hello
-ott tv exit                 # close / standby, depending on the platform
+ott tv caps                 # version, runtime identity and supported controls
+ott tv key enter            # one named OK/select input
+ott tv input channel_up     # supported input, subject to local UI restrictions
+ott tv pause                # pause supported archive/VOD playback
+ott tv resume
+ott tv seek 90.5            # absolute position in seconds; supported VOD only
+ott tv reload               # reload the player page after acknowledgement
+ott tv restart app          # relaunch a supported native app
+ott tv standby              # enter player standby
+ott tv wake                 # leave player standby
+ott tv exit                 # exit a supported app; no standby fallback
+ott tv reboot device        # reboot the device OS only if advertised/supported
 ott --json tv s             # machine-readable output
 ott --timeout 60 tv p
 ```
+
+Short and full command names share the same dispatch and output behavior:
+
+Global flags before `PLAYER` also have standard short forms:
+`-c` / `--config FILE`, `-t` / `--timeout SECONDS`, and `-j` / `--json`.
+
+- `status` / `st`
+- `s` / `channels`
+- `p` / `programs` / `programmes`
+- `v` / `vol` / `volume`
+- `vp` / `vportal`, and `vpr` / `vportal-random`
+- `msg` / `message`
+- `profile` / `prof`, and `profiles` / `profs`
+- `provider` / `prov`, and `providers` / `provs`
+- `capabilities` / `caps`, and `input` / `key`
+- `exit` / `quit` / `close`
+
+Aliases are case-insensitive exact tokens. They are not prefix completion:
+`rest` does not restart a player. An invalid argument list for a recognized
+command is an error; it does not fall through to channel playback. Use
+`ott tv play volume` for a channel whose title is also a command or alias.
+Channel text itself is preserved, including case and Unicode characters.
+
+`p`, `programs`, `programmes`, `vp`, `vportal`, `vpr` and `vportal-random`
+accept both `-l` and `--list` before the search text. These options only list
+results and never switch channels or start a VPortal queue.
+
+Profile setters accept `url` / `playlist`, `history` / `history-hours` /
+`history_hours`, `vp` / `vportal`, and `n` / `name`. For example,
+`ott tv prof 2 playlist https://example.com/list.m3u` and
+`ott tv profile 2 url https://example.com/list.m3u` are equivalent.
+These are CLI token aliases; JSON configuration keeps its canonical field names.
+
+Volume queries print the numeric percentage, or only `{"volume": 35}` with
+`--json`. Mutations additionally return `"dispatched": true` in JSON. Both
+formats reject missing, nonnumeric or out-of-range readings; a failed volume
+receipt never triggers an automatic retry. This is the platform's reported
+volume, not proof of physical audio output.
 
 Searches for channels, programmes, VPortal titles, providers and aliases are case-insensitive,
 including Cyrillic text. A text channel query lists every channel whose name
@@ -575,14 +624,67 @@ can discard the pending reload. Check the player before manually repeating an
 uncertain request. A full player reload does not restore an in-memory VPortal
 repeat queue.
 
+`restart s` and `restart p` are exact aliases for `restart stream` and
+`restart player`. `reload` or `reload player` also reloads the page through the
+new acknowledged lifecycle API. `restart app`, `restart application` and
+`restart a` request a native app relaunch. `reboot` or `reboot device` requests
+an operating-system reboot, never a page reload. `exit`, `quit` and `close`
+request app exit, never standby. `standby` and `wake` are separate player-state
+operations; `wake` cannot contact an offline or powered-off player.
+
+Lifecycle availability is platform-specific. The player must advertise and
+implement the operation; an unavailable native exit, relaunch or OS reboot
+returns unsupported. None of these commands falls back to another operation.
+Existing `restart stream/player` retains its original request/ACK shape;
+new lifecycle requests return `accepted: true`, `dispatched: false` and
+`effect: "lifecycle-after-ack"`. The effect runs only after the player receives
+the controller ACK, with current local restrictions checked again.
+
+## Capabilities, input and playback control
+
+`ott tv caps` / `capabilities` reports the application's version, platform and a
+public runtime identifier for the current page, plus supported lifecycle,
+input and playback operations. It excludes provider credentials, channel IDs
+and stream URLs. Current `status` also includes this public player identity;
+older versions may omit it. A changed runtime after a reload provides stronger
+evidence than a readiness response alone. These capabilities describe
+the current state: an operation can become unavailable before it executes.
+
+`key KEY` / `input KEY` accepts one named input from the capabilities response.
+Available names include `up`, `down`, `left`, `right`, `ok`, `back`, `menu`,
+`settings`, `channels`, `guide`, `info`, `channel_up`, `channel_down`,
+`volume_up`, `volume_down`, `mute`, `play_pause`, `audio`, `aspect`, `zoom`,
+`pip` and `fullscreen`. Exact parameter aliases are:
+
+- `u/d/l/r` → `up/down/left/right`; `enter` or `select` → `ok`; `return` → `back`.
+- `setup` → `settings`; `channel-list` → `channels`; `epg` → `guide`; `i` → `info`.
+- `ch+` or `channel-up` → `channel_up`; `ch-` or `channel-down` → `channel_down`.
+- `vol+` or `volume-up` → `volume_up`; `vol-` or `volume-down` → `volume_down`.
+- `pp` or `play-pause` → `play_pause`; `fs` → `fullscreen`.
+
+The CLI does not accept numeric keycodes or arbitrary scripts. An input receipt
+contains the exact key, `accepted: true`, `dispatched: false` and
+`effect: "input-after-ack"`; it does not prove that the visible UI changed.
+Kiosk and parental restrictions still apply.
+
+`pause` and `resume` use the typed playback API for an owned, active archive/VOD
+decoder. `seek SECONDS` is available only for VOD, because archive seeking uses
+its separate programme timeline. Live streams do not advertise these operations.
+Seek is an absolute, finite position from 0 to 9007199254740991 seconds; `+5`
+is not a relative seek. The CLI validates the returned operation and, for seek, the
+requested position before reporting dispatch. A valid receipt does not prove
+that the decoder reached that position or recovered. An unsupported player or
+changed playback state fails explicitly, without a keypress fallback or retry.
+
 ## Acknowledgements and limitations
 
 The CLI requires a server and player supporting `request_protocol=1`. Older
 versions still accept legacy commands but do not answer CLI requests.
 `ok` means the player handler returned a result; `dispatched` means it invoked
 the normal player action. Neither confirms visible playback, PIN acceptance or
-the TV's physical volume. `v` shows the value reported by the platform API. The
-application may close before it can send a response to `exit`.
+the TV's physical volume. `v` shows the value reported by the platform API.
+New input and lifecycle commands wait for acknowledgement before invoking their
+effect; an accepted response still does not prove that the effect completed.
 
 Commands and results are held in memory with size and lifetime limits. Retrying
 a lost result in the same player session does not apply relative volume twice;
