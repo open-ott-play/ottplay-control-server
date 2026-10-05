@@ -79,7 +79,7 @@ class ProfileParsingTest(unittest.TestCase):
             ott.parse_command(['profile-config', '1', 'private.json'])
 
     def test_restart_parsing_has_only_two_targets(self):
-        for words, target in [(['restart'], 'stream'), (['restart', 'stream'], 'stream'), (['RESTART', 'PLAYER'], 'player')]:
+        for words, target in [(['restart'], 'player'), (['restart', 'stream'], 'stream'), (['RESTART', 'PLAYER'], 'player')]:
             self.assertEqual(ott.parse_command(words), ('restart', {'target': target}))
         for words in [['restart', 'all'], ['restart', 'player', 'again'], ['restart', '']]:
             with self.subTest(words=words), self.assertRaises(ott.Error):

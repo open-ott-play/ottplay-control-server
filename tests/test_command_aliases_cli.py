@@ -21,16 +21,21 @@ class AliasDispatchTest(unittest.TestCase):
                         config = {'selected': 'private-test-config'}
                         client = mock.Mock()
                         client.device.return_value = 'dev_tv'
-                        client.call.return_value = {'ready': True}
+                        client.call.side_effect = [{'ready': True}, ott.PlayerUnsupported('old client')]
                         output, errors = io.StringIO(), io.StringIO()
                         with mock.patch.object(ott, 'read_json', return_value=config) as read, \
                                 mock.patch.object(ott, 'Client', return_value=client) as create, \
                                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
                             code = ott.main([config_flag, 'private config.json', timeout_flag, '12.5', json_flag, 'tv', 'st'])
-                        self.assertEqual((code, errors.getvalue(), json.loads(output.getvalue())), (0, '', {'ready': True}))
+                        self.assertEqual((code, errors.getvalue()), (0, ''))
+                        result = json.loads(output.getvalue())
+                        self.assertTrue(result['ready'])
+                        self.assertIsNone(result['capabilities'])
+                        self.assertIn('not reported', result['capabilities_error'])
                         read.assert_called_once_with('private config.json')
                         create.assert_called_once_with(config, 12.5)
-                        client.call.assert_called_once_with('dev_tv', 'status', {})
+                        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'status', {}),
+                                                                     mock.call('dev_tv', 'capabilities', {})])
 
     def run_cli(self, words, responses, json_output=False):
         client = mock.Mock()
@@ -80,9 +85,11 @@ class AliasDispatchTest(unittest.TestCase):
     def test_status_and_channel_listing_aliases_do_not_switch(self):
         for command in ['status', 'ST']:
             response = {'ready': True, 'volume': None}
-            code, out, err, calls, _ = self.run_cli([command], [response], True)
-            self.assertEqual((code, err, json.loads(out)), (0, '', response))
-            self.assertEqual(calls, [mock.call('dev_tv', 'status', {})])
+            code, out, err, calls, _ = self.run_cli([command], [response, ott.PlayerUnsupported('old client')], True)
+            result = json.loads(out)
+            self.assertEqual((code, err, result['ready'], result['volume']), (0, '', True, None))
+            self.assertIsNone(result['capabilities'])
+            self.assertEqual(calls, [mock.call('dev_tv', 'status', {}), mock.call('dev_tv', 'capabilities', {})])
         for command in ['s', 'S', 'channels', 'CHANNELS']:
             for text in ['РЕН', 'рЕн ТВ']:
                 rows = [{'number': 2, 'name': 'РЕН ТВ'}, {'number': 3, 'name': 'РЕН ТВ HD'}]

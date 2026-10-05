@@ -164,7 +164,7 @@ The central player server on ports 8443–8446 is separate from the command serv
 ## Commands
 
 ```sh
-ott tv                      # UUID, provider, readiness, channel count and volume
+ott tv                      # player status and available control commands
 ott tv 12                   # one-based channel number from s
 ott tv news                 # list name matches and play a random matching channel
 ott tv play s               # channel named s, which is also a command
@@ -193,6 +193,8 @@ ott tv input channel_up     # supported input, subject to local UI restrictions
 ott tv pause                # pause supported archive/VOD playback
 ott tv resume
 ott tv seek 90.5            # absolute position in seconds; supported VOD only
+ott tv restart             # reload the player page after acknowledgement
+ott tv restart stream      # restart only the current stream
 ott tv reload               # reload the player page after acknowledgement
 ott tv restart app          # relaunch a supported native app
 ott tv standby              # enter player standby
@@ -609,9 +611,12 @@ no deployment change.
 
 ## Restarting playback or the player
 
-`ott tv restart` and `ott tv restart stream` request a restart of the current
-stream through the playback backend. `ott tv restart player` requests a full
-player reload. Neither command selects another provider or profile. Backends
+`ott tv restart` requests a full player reload. `ott tv restart player` and
+`ott tv restart p` are explicit equivalents. `ott tv restart stream` (or
+`restart s`) restarts only the current stream through the playback backend.
+Bare `restart` previously defaulted to the stream; scripts needing that behavior
+must use the explicit `restart stream` command. Neither operation selects
+another provider or profile. Backends
 that cannot perform the requested operation return an explicit unsupported result.
 
 A stream result means the restart was dispatched, not that video has resumed.
@@ -641,6 +646,16 @@ new lifecycle requests return `accepted: true`, `dispatched: false` and
 the controller ACK, with current local restrictions checked again.
 
 ## Capabilities, input and playback control
+
+`ott tv`, `ott tv status` and `ott tv st` show status followed by commands for
+the controls that the device currently advertises, including `ott tv restart`
+when page reload is available. They make two read-only requests within one
+`--timeout` budget. `--json` retains the status fields and adds a validated
+`capabilities` object. If that secondary request fails, is unsupported or belongs
+to a different player runtime, status still succeeds with `capabilities: null`
+and a `capabilities_error` explanation; text output shows the same limitation.
+Unavailable controls are never inferred from another platform. Volume-only
+queries (`v`, `vol`, `volume`) remain a single request with compact output.
 
 `ott tv caps` / `capabilities` reports the application's version, platform and a
 public runtime identifier for the current page, plus supported lifecycle,

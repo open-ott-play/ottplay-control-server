@@ -50,7 +50,7 @@ class LifecycleCliTest(unittest.TestCase):
                     else: self.assertIn('request accepted', out); self.assertIn(operation, out)
 
     def test_legacy_restart_stream_and_player_preserve_wire_and_ack(self):
-        for target, words in [('stream', ['restart']), ('stream', ['restart', 's']), ('stream', ['restart', 'stream']),
+        for target, words in [('player', ['restart']), ('stream', ['restart', 's']), ('stream', ['restart', 'stream']),
                               ('player', ['restart', 'p']), ('player', ['restart', 'player'])]:
             ack = {'accepted': True, 'target': target, 'dispatched': target == 'stream'}
             if target == 'player': ack['effect'] = 'reload-after-ack'

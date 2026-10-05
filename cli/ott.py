@@ -13,6 +13,7 @@ from pathlib import Path
 import queue
 import re
 import secrets
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -33,7 +34,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott discover                       show controllers advertised in network DNS
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
-  ott NAME                           show player status
+  ott NAME                           show player status and available controls
   ott NAME load PRESET               apply a private Plex, M3U and optional Stalker preset
   ott NAME 12                        play channel 12 from the s listing
   ott NAME TITLE                     search channels, current EPG, then archives within 144 hours
@@ -68,7 +69,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME key KEY                   send one supported named input after acknowledgement
   ott NAME pause / resume            pause or resume supported archive/VOD playback
   ott NAME seek SECONDS              seek supported VOD to an absolute position (0–9007199254740991)
-  ott NAME restart [stream|player|app] restart stream (default), reload page or relaunch native app
+  ott NAME restart                   reload the player after acknowledgement
+  ott NAME restart stream            restart only the current stream
+  ott NAME restart app               relaunch a supported native app
   ott NAME reload                    reload the player after acknowledgement
   ott NAME reboot [device]           reboot the device OS only when supported
   ott NAME standby / wake            enter or leave player standby
@@ -665,7 +668,7 @@ def parse_command(words):
             raise Error("Profile settings exceed the 16 KiB request limit")
         return "profile_settings", params
     if verb == "restart":
-        target = tail[0].casefold() if len(tail) == 1 else "stream"
+        target = tail[0].casefold() if len(tail) == 1 else "player"
         target = {"s": "stream", "p": "player", "a": "app", "application": "app"}.get(target, target)
         if len(tail) > 1 or target not in ("stream", "player", "app"):
             raise Error("Use restart [stream|player|app]; reboot device is a separate operation")
@@ -1243,6 +1246,68 @@ def capabilities_metadata(data):
     return result
 
 
+def status_capabilities(client, device, data, deadline):
+    """Enrich a successful status within the original timeout, without mutations."""
+    if not isinstance(data, dict):
+        raise Error("The player returned invalid status metadata")
+    result = dict(data, capabilities=None)
+    result.pop("capabilities_error", None)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        result["capabilities_error"] = "No time remains to read available controls; run status again."
+        return result
+    previous_timeout = client.timeout
+    try:
+        client.timeout = remaining
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        identity = data.get("player")
+        if time.monotonic() >= deadline:
+            result["capabilities_error"] = "Available controls did not arrive within --timeout; run status again."
+        elif identity is not None and (not isinstance(identity, dict) or any(
+                identity.get(key) != value for key, value in controls["player"].items())):
+            result["capabilities_error"] = "The player changed while reading status; run status again."
+        else:
+            result["capabilities"] = controls
+    except PlayerUnsupported:
+        result["capabilities_error"] = "Available controls are not reported by this player/controller."
+    except Error:
+        # A secondary request must not hide a valid status or expose raw errors.
+        result["capabilities_error"] = "Available controls could not be read; run status again."
+    finally:
+        client.timeout = previous_timeout
+    return result
+
+
+def print_player_status(data, name):
+    print(json.dumps({key: value for key, value in data.items()
+                      if key not in ("capabilities", "capabilities_error")}, ensure_ascii=False, indent=2))
+    controls = data["capabilities"]
+    if controls is None:
+        print("\n" + data["capabilities_error"])
+        return
+    prefix = "ott " + shlex.quote(clean(name))
+    lifecycle = {
+        "reload_player": ("restart", "reload the player"),
+        "restart_stream": ("restart stream", "restart the current stream"),
+        "restart_app": ("restart app", "relaunch the native app"),
+        "standby": ("standby", "enter standby"),
+        "wake": ("wake", "leave standby"),
+        "exit_app": ("exit", "exit the app"),
+        "reboot_device": ("reboot", "reboot the device OS"),
+    }
+    print("\nAvailable controls now:")
+    for operation, (command, description) in lifecycle.items():
+        if operation in controls["lifecycle"]:
+            print(f"  {prefix} {command}  — {description}")
+    for operation in controls["playback"]:
+        command = "seek SECONDS" if operation == "seek" else operation
+        print(f"  {prefix} {command}")
+    if controls["input"]:
+        print(f"  {prefix} key KEY  — " + ", ".join(controls["input"]))
+    if not any(controls[key] for key in ("lifecycle", "playback", "input")):
+        print("  No controls are currently advertised by the player.")
+
+
 def deferred_control_metadata(data, action, params):
     field = "key" if action == "input" else "operation"
     if (not isinstance(data, dict) or data.get(field) != params[field] or data.get("accepted") is not True or
@@ -1504,6 +1569,8 @@ def main(argv=None):
         device = client.device(args.words[0])
         words = args.words[1:]
         action, params = parse_command(words)
+        status_overview = action == "status" and command_verb(words) != "v"
+        status_deadline = time.monotonic() + args.timeout if status_overview else None
         catalog_play = None
         playback_error = None
         plex_settings = action == "provider_settings" and params.get("provider") == "plex"
@@ -1543,6 +1610,8 @@ def main(argv=None):
             data = plex_settings_metadata(data, params["settings"])
         elif action == "status" and command_verb(words) == "v":
             data = volume_metadata(data)
+        elif status_overview:
+            data = status_capabilities(client, device, data, status_deadline)
         elif action == "command" and params.get("command") == "set_volume":
             data = volume_metadata(data, mutating=True)
         elif action == "capabilities":
@@ -1597,6 +1666,8 @@ def main(argv=None):
                 print(f"{row['number']}: {clean(row['title'])}")
         elif action == "status" and command_verb(words) == "v":
             print(f"{data['volume']:g}%")
+        elif status_overview:
+            print_player_status(data, args.words[0])
         elif action == "providers":
             for row in data["providers"]:
                 print(f"{'*' if row['active'] else ' '} {row['index']}: {clean(row['id'])} — {clean(row['name'])}")
