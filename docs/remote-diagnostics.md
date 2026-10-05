@@ -1,5 +1,10 @@
 # Remote diagnostics protocol 2
 
+For installation, operator credential setup, player registration and local trust,
+all CLI/MCP commands, revocation and troubleshooting, start with the
+[operator guide](diagnostics-cli.md). This page defines the HTTP protocol and
+server configuration used by those tools.
+
 Diagnostics is an additive, in-memory API under `/api/v2/diagnostics`. It never
 enters the protocol 1 command queue. Registration, control polling and telemetry
 are separate requests; a legacy request waiting for a player does not block a
@@ -12,7 +17,11 @@ Diagnostics is off by default. Enable it explicitly on each device with
 `"diagnostics": {"enabled": true}` and add a top-level `diagnostics` configuration.
 The existing administrator token has no diagnostic operator privileges.
 
-The following is a configuration fragment, not a usable credential:
+The following is a capture-and-repair operator configuration fragment, not a
+usable credential or complete server configuration. Add it to an existing
+configuration, enable `"diagnostics": {"enabled": true}` on the existing
+`living-room` device entry, and retain that device's own token. Omit the repair
+scopes if that operator should only capture diagnostics:
 
 ```json
 {
@@ -21,7 +30,10 @@ The following is a configuration fragment, not a usable credential:
       "id": "support",
       "credential_sha256": "REPLACE_WITH_LOWERCASE_SHA256_OF_A_SEPARATE_RANDOM_OPERATOR_TOKEN",
       "device_ids": ["living-room"],
-      "actions": ["runtimes.read", "sessions.start", "sessions.stop", "sessions.read", "runtimes.revoke"]
+      "actions": [
+        "runtimes.read", "sessions.start", "sessions.stop", "sessions.read",
+        "runtimes.revoke", "repairs.start", "repairs.read"
+      ]
     }]
   }
 }
@@ -34,6 +46,18 @@ SHA-256 digest in server configuration. Do not hash a password in place of
 generating a high-entropy token. Digests must be distinct from device/admin
 credentials and other operators. Scopes name exact configured devices and exact
 actions; there are no wildcards. Configuration changes apply after restart.
+Remove an operator entry to revoke all of its access, or replace its digest to
+rotate its credential. An operator cannot have empty device/action scopes; at
+least one of each is required. Setting a device's diagnostics flag to `false`
+denies its diagnostic registration/operator access after restart. These
+configuration edits do not directly change the player's saved connection or trust.
+An online player observing a diagnostic authorization rejection stops local
+support and attempts to remove its saved trust; an offline player's stored
+permission cannot be erased remotely. Removing an operator does not revoke the
+player's separate device access code; the required server restart still retires
+all current runtime credentials. Use the
+[revocation procedures](diagnostics-cli.md#deregister-remove-trust-or-remove-operator-access)
+for the intended lifetime.
 Keep configuration and CLI credentials private. The bundled player diagnostics
 client and diagnostic CLI/MCP require HTTPS, including on a trusted LAN. Follow
 the [server TLS setup instructions](../README.md#start-a-server) to use
