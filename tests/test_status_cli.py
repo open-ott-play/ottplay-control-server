@@ -25,6 +25,10 @@ class StatusCliTest(unittest.TestCase):
         with mock.patch.object(ott, 'Client', return_value=client), mock.patch.object(ott, 'read_json', return_value={}), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             code = ott.main((['--json'] if machine else []) + [alias] + words)
+        expected = [mock.call('dev_tv', 'status', {})]
+        if not isinstance(status, ott.Error):
+            expected.append(mock.call('dev_tv', 'capabilities', {}))
+        self.assertEqual(client.call.call_args_list, expected)
         return code, output.getvalue(), errors.getvalue(), client
 
     def test_default_and_explicit_status_include_only_advertised_commands(self):
