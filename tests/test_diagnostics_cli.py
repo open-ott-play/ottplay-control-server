@@ -269,19 +269,54 @@ class DiagnosticsTests(unittest.TestCase):
                 handler.redirect_request(request, None, code, "reason", {}, "https://evil.example")
 
     def test_bounded_total_timeout_and_worker_backpressure(self):
-        opener = Opener(delay=0.08)
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        failures = []
+
+        class BlockedOpener(Opener):
+            def open(self, request, timeout):
+                entered.set()
+                release.wait()
+                return super().open(request, timeout)
+
+        opener = BlockedOpener()
         client = self.client(opener, timeout=0.01)
-        started = time.monotonic()
-        with self.assertRaises(diag.DiagnosticError) as caught:
-            client.stop("s", "k", EPOCH)
-        self.assertLess(time.monotonic() - started, 0.07)
-        self.assertEqual(caught.exception.code, "timeout")
-        self.assertTrue(caught.exception.unknown)
-        with self.assertRaises(diag.DiagnosticError) as busy:
-            client.status("s")
-        self.assertEqual(busy.exception.code, "request_in_progress")
+
+        def stop():
+            try:
+                client.stop("session", "k", EPOCH)
+            except Exception as error:
+                failures.append(error)
+            finally:
+                finished.set()
+
+        caller = threading.Thread(target=stop, daemon=True)
+        caller.start()
+        try:
+            self.assertTrue(entered.wait(5), "transport worker did not start")
+            # The request must time out while transport remains blocked. Events
+            # establish that ordering without a sub-100 ms scheduler assumption.
+            self.assertTrue(finished.wait(5), "request waited for blocked transport")
+            self.assertEqual(len(failures), 1)
+            self.assertIsInstance(failures[0], diag.DiagnosticError)
+            self.assertEqual(failures[0].code, "timeout")
+            self.assertTrue(failures[0].unknown)
+            with self.assertRaises(diag.DiagnosticError) as busy:
+                client.status("session")
+            self.assertEqual(busy.exception.code, "request_in_progress")
+            self.assertFalse(release.is_set())
+        finally:
+            release.set()
+            caller.join(5)
+        self.assertFalse(caller.is_alive())
+        self.assertTrue(client._busy.acquire(timeout=5), "transport worker did not finish")
+        client._busy.release()
         self.assertEqual(len(opener.requests), 1)
-        time.sleep(0.08)
+        # Once the original worker finishes, the client accepts another request.
+        client.timeout = 5
+        self.assertEqual(client.status("session")["state"], "active")
+        self.assertEqual(len(opener.requests), 2)
 
     def test_strict_bounded_response_and_no_raw_errors(self):
         cases = [Response(raw=b"x" * (diag.MAX_REPLY + 1)), Response(raw=b'{"a":1,"a":2}'),
