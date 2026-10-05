@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import warnings
 
-HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
+HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMMAND ...]
   ott diagnostics --help             scoped runtime diagnostics and session control
   ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
@@ -64,18 +64,68 @@ HELP = """ott [--config FILE] [--json] PLAYER [COMMAND ...]
   ott NAME profile N vportal LINK    set a profile's VPortal link
   ott NAME profile N name NAME       rename a profile
   ott NAME profile-config N FILE     update profile settings atomically from JSON
-  ott NAME restart [stream|player]   restart the stream (default) or reload the player
+  ott NAME caps                      show runtime identity and supported controls
+  ott NAME key KEY                   send one supported named input after acknowledgement
+  ott NAME pause / resume            pause or resume supported archive/VOD playback
+  ott NAME seek SECONDS              seek supported VOD to an absolute position (0–9007199254740991)
+  ott NAME restart [stream|player|app] restart stream (default), reload page or relaunch native app
+  ott NAME reload                    reload the player after acknowledgement
+  ott NAME reboot [device]           reboot the device OS only when supported
+  ott NAME standby / wake            enter or leave player standby
   ott NAME kiosk [status]            show kiosk policy and playback health
   ott NAME kiosk on [CHANNEL]        lock number/first name match, or await UI selection
   ott NAME kiosk set CHANNEL         replace by number or first name match
   ott NAME kiosk off                 release the kiosk lock
   ott NAME random [FROM TO]          play a random channel
   ott NAME msg TEXT                  show an on-screen message
-  ott NAME exit                      close the player / enter standby
+  ott NAME exit / quit / close        exit the app only when the platform supports it
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 Player, channel, programme, VPortal and provider searches are case-insensitive.
+Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
+vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
+provider/prov; providers/provs; capabilities/caps; input/key.
+Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
+ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
+Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
+Only these exact aliases are expanded; use play TITLE for a reserved channel name.
 """
+
+COMMAND_ALIASES = {
+    "st": "status",
+    "channels": "s", "programs": "p", "programmes": "p",
+    "vol": "v", "volume": "v", "vportal": "vp", "vportal-random": "vpr",
+    "message": "msg", "prof": "profile", "profs": "profiles",
+    "prov": "provider", "provs": "providers",
+    "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
+}
+PROFILE_FIELD_ALIASES = {
+    "url": "playlist", "playlist": "playlist",
+    "history": "history_hours", "history-hours": "history_hours", "history_hours": "history_hours",
+    "vp": "vportal", "vportal": "vportal", "n": "name", "name": "name",
+}
+LIFECYCLE_OPERATIONS = frozenset(("restart_stream", "reload_player", "restart_app", "standby", "wake", "exit_app", "reboot_device"))
+INPUT_KEYS = frozenset(("up", "down", "left", "right", "ok", "back", "menu", "settings", "channels", "guide", "info",
+                        "channel_up", "channel_down", "volume_up", "volume_down", "mute", "play_pause", "audio", "aspect",
+                        "zoom", "pip", "fullscreen"))
+INPUT_ALIASES = {
+    "u": "up", "d": "down", "l": "left", "r": "right", "enter": "ok", "select": "ok", "return": "back",
+    "setup": "settings", "channel-list": "channels", "epg": "guide", "i": "info",
+    "channel-up": "channel_up", "ch+": "channel_up", "channel-down": "channel_down", "ch-": "channel_down",
+    "volume-up": "volume_up", "vol+": "volume_up", "volume-down": "volume_down", "vol-": "volume_down",
+    "play-pause": "play_pause", "pp": "play_pause", "fs": "fullscreen",
+}
+PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek"))
+
+
+def command_verb(words):
+    """Normalize exact command tokens without changing user search text."""
+    value = words[0].casefold() if words else ""
+    return COMMAND_ALIASES.get(value, value)
+
+
+def listing_option(words):
+    return len(words) > 1 and words[1].casefold() in ("--list", "-l")
 
 
 class Error(Exception):
@@ -564,7 +614,7 @@ def select_programme(programs):
 def parse_command(words):
     if not words:
         return "status", {}
-    verb, tail = words[0].casefold(), words[1:]
+    verb, tail = command_verb(words), words[1:]
     text = " ".join(tail)
     if verb == "kiosk":
         mode = tail[0].casefold() if tail else "status"
@@ -600,9 +650,9 @@ def parse_command(words):
         elif len(tail) == 1:
             return "profile", {"number": number}
         else:
-            field = {"url": "playlist", "history": "history_hours", "vportal": "vportal", "name": "name"}.get(tail[1].casefold())
+            field = PROFILE_FIELD_ALIASES.get(tail[1].casefold())
             if field is None or len(tail) < 3 or (field != "name" and len(tail) != 3):
-                raise Error("Use profile N [url URL | history HOURS | vportal LINK | name NAME]")
+                raise Error("Use profile N [url/playlist URL | history/history_hours HOURS | vp/vportal LINK | n/name NAME]")
             value = " ".join(tail[2:])
             if field == "history_hours":
                 if not re.fullmatch(r"0|[1-9][0-9]{0,3}", value):
@@ -616,11 +666,41 @@ def parse_command(words):
         return "profile_settings", params
     if verb == "restart":
         target = tail[0].casefold() if len(tail) == 1 else "stream"
-        if len(tail) > 1 or target not in ("stream", "player"):
-            raise Error("Use restart, restart stream or restart player")
+        target = {"s": "stream", "p": "player", "a": "app", "application": "app"}.get(target, target)
+        if len(tail) > 1 or target not in ("stream", "player", "app"):
+            raise Error("Use restart [stream|player|app]; reboot device is a separate operation")
+        if target == "app":
+            return "lifecycle", {"operation": "restart_app"}
         return "restart", {"target": target}
+    if verb == "capabilities":
+        if tail:
+            raise Error("Use capabilities or caps without arguments")
+        return "capabilities", {}
+    if verb in ("reload", "reboot", "exit", "standby", "wake"):
+        if tail and not (verb in ("reload", "reboot") and len(tail) == 1 and
+                         tail[0].casefold() == ("player" if verb == "reload" else "device")):
+            raise Error("Use reload [player], reboot [device], exit, standby or wake")
+        operation = {"reload": "reload_player", "reboot": "reboot_device", "exit": "exit_app"}.get(verb, verb)
+        return "lifecycle", {"operation": operation}
+    if verb == "input":
+        key = tail[0].casefold() if len(tail) == 1 else ""
+        key = INPUT_ALIASES.get(key, key)
+        if key not in INPUT_KEYS:
+            raise Error("Use key/input with one supported named key; run caps for available inputs")
+        return "input", {"key": key}
+    if verb in PLAYBACK_OPERATIONS:
+        if verb != "seek":
+            if tail:
+                raise Error("Use " + verb + " without arguments")
+            return "playback", {"operation": verb}
+        if len(tail) != 1 or not re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)", tail[0]):
+            raise Error("Use seek SECONDS with an absolute nonnegative position")
+        position = float(tail[0])
+        if not math.isfinite(position) or not 0 <= position <= 9007199254740991:
+            raise Error("Seek position must be finite and between 0 and 9007199254740991 seconds")
+        return "playback", {"operation": "seek", "position": position}
     if verb in ("vp", "vpr"):
-        listing = tail[:1] == ["--list"]
+        listing = listing_option(words)
         text = " ".join(tail[1:] if listing else tail).strip()
         try:
             length = len(text.encode("utf-8"))
@@ -632,7 +712,7 @@ def parse_command(words):
         return action, {"query": text}
     if verb in ("s", "p"):
         if verb == "p":
-            text = " ".join(tail[1:] if tail[:1] == ["--list"] else tail).strip()
+            text = " ".join(tail[1:] if listing_option(words) else tail).strip()
         return ("channels" if verb == "s" else "programs"), {"search": text}
     if verb == "v":
         if not tail:
@@ -644,9 +724,13 @@ def parse_command(words):
         if not math.isfinite(value) or (not relative and not 0 <= value <= 100):
             raise Error("Absolute volume must be between 0 and 100")
         return "command", {"command": "set_volume", "volume_step" if relative else "volume": value}
-    if verb in ("status", "providers") and not tail:
+    if verb in ("status", "providers"):
+        if tail:
+            raise Error("Use " + verb + " without arguments")
         return verb, {}
-    if verb == "provider" and tail:
+    if verb == "provider":
+        if not tail:
+            raise Error("provider requires a provider ID, index or name")
         return "provider", {"query": text}
     if verb == "provider-config":
         if len(tail) != 1:
@@ -659,12 +743,14 @@ def parse_command(words):
         return "provider_settings", data
     if verb == "plex":
         return "provider_settings", {"provider": "plex", "settings": parse_plex_settings(tail)}
-    if verb == "playlist" and len(tail) == 1:
+    if verb == "playlist":
+        if len(tail) != 1:
+            raise Error("Use playlist URL")
         return "provider_settings", {"provider": "m3u", "settings": {"playlist": text}}
-    if verb == "msg" and tail:
+    if verb == "msg":
+        if not tail:
+            raise Error("message requires text")
         return "command", {"command": "popup_message", "message": text}
-    if verb == "exit" and not tail:
-        return "command", {"command": "exit_player"}
     if verb == "random":
         params = {"command": "random_channel"}
         if tail:
@@ -1123,6 +1209,61 @@ def restart_metadata(data, target):
     return result
 
 
+def volume_metadata(data, mutating=False):
+    """Project the platform reading before either text or JSON output."""
+    if not isinstance(data, dict) or (mutating and data.get("dispatched") is not True):
+        raise Error("The player did not confirm the volume request. It may have executed; do not repeat the change blindly." if mutating else
+                    "The player returned invalid volume metadata")
+    value = data.get("volume")
+    if value is None:
+        raise Error("The command was sent, but the platform does not report volume" if mutating else
+                    "The platform does not report volume")
+    if type(value) not in (int, float) or not 0 <= value <= 100 or not math.isfinite(value):
+        raise Error("The player returned invalid volume metadata" +
+                    (". The request may have executed; do not repeat the change blindly." if mutating else ""))
+    return {"volume": value, **({"dispatched": True} if mutating else {})}
+
+
+def capabilities_metadata(data):
+    invalid = "The player returned invalid capabilities metadata"
+    if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
+        raise Error(invalid)
+    player = data.get("player")
+    patterns = {"version": r"[A-Za-z0-9_.-]{1,64}", "platform": r"[a-z0-9_-]{1,32}", "runtime": r"[a-z0-9-]{1,64}"}
+    if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
+                                           for key, pattern in patterns.items()):
+        raise Error(invalid)
+    result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    for key, allowed in (("lifecycle", LIFECYCLE_OPERATIONS), ("input", INPUT_KEYS), ("playback", PLAYBACK_OPERATIONS)):
+        values = data.get(key)
+        if (not isinstance(values, list) or len(values) > len(allowed) or
+                any(not isinstance(value, str) or value not in allowed for value in values) or len(set(values)) != len(values)):
+            raise Error(invalid)
+        result[key] = list(values)
+    return result
+
+
+def deferred_control_metadata(data, action, params):
+    field = "key" if action == "input" else "operation"
+    if (not isinstance(data, dict) or data.get(field) != params[field] or data.get("accepted") is not True or
+            data.get("dispatched") is not False or data.get("effect") != action + "-after-ack"):
+        raise Error("The player did not confirm the " + action + " request. It may have executed; do not repeat the change blindly.")
+    return {field: params[field], "accepted": True, "dispatched": False, "effect": action + "-after-ack"}
+
+
+def playback_metadata(data, params):
+    invalid = "The player did not confirm the playback request. It may have executed; do not repeat the change blindly."
+    if not isinstance(data, dict) or data.get("operation") != params["operation"] or data.get("dispatched") is not True:
+        raise Error(invalid)
+    result = {"operation": params["operation"], "dispatched": True}
+    if params["operation"] == "seek":
+        position = data.get("position")
+        if type(position) not in (int, float) or position != params["position"] or not math.isfinite(position) or position < 0:
+            raise Error(invalid)
+        result["position"] = position
+    return result
+
+
 def vportal_metadata(data, playing, shuffled=False):
     """Validate queue acknowledgement and expose only public video metadata."""
     message = "The player returned invalid VPortal metadata"
@@ -1334,9 +1475,9 @@ def main(argv=None):
         spec.loader.exec_module(module)
         return module.main(argv[1:])
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--config", default=os.environ.get("OTT_CONFIG", str(Path.home() / ".config/ottplay-control/cli.json")))
-    parser.add_argument("--timeout", type=float, default=45)
-    parser.add_argument("--json", action="store_true")
+    parser.add_argument("-c", "--config", default=os.environ.get("OTT_CONFIG", str(Path.home() / ".config/ottplay-control/cli.json")))
+    parser.add_argument("-t", "--timeout", type=float, default=45)
+    parser.add_argument("-j", "--json", action="store_true")
     parser.add_argument("--refresh", action="store_true", help="Refresh cached EPG history and archive checks")
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("words", nargs=argparse.REMAINDER)
@@ -1380,6 +1521,9 @@ def main(argv=None):
             try:
                 data = client.call(device, action, params)
             except (PlayerRejected, PlayerUnsupported) as exc:
+                if action in ("capabilities", "lifecycle", "input", "playback"):
+                    reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+                    raise Error(f"The {action} request was {reason}; use an updated player/controller and check capabilities and local restrictions") from None
                 if action not in ("profiles", "profile", "profile_settings", "restart") and not plex_settings:
                     raise
                 # Settings can contain credentials: do not echo player-supplied errors.
@@ -1397,7 +1541,17 @@ def main(argv=None):
             data = kiosk_metadata(data, "set" if params.get("query") else params["mode"])
         elif plex_settings:
             data = plex_settings_metadata(data, params["settings"])
-        if action == "programs" and params["search"] and words[1:2] != ["--list"]:
+        elif action == "status" and command_verb(words) == "v":
+            data = volume_metadata(data)
+        elif action == "command" and params.get("command") == "set_volume":
+            data = volume_metadata(data, mutating=True)
+        elif action == "capabilities":
+            data = capabilities_metadata(data)
+        elif action in ("lifecycle", "input"):
+            data = deferred_control_metadata(data, action, params)
+        elif action == "playback":
+            data = playback_metadata(data, params)
+        if action == "programs" and params["search"] and not listing_option(words):
             selected = select_programme(data["programs"])
             if selected:
                 try:
@@ -1441,9 +1595,7 @@ def main(argv=None):
         elif action in ("vportal", "vportal_random", "vportal_search"):
             for row in data["items"]:
                 print(f"{row['number']}: {clean(row['title'])}")
-        elif action == "status" and words and words[0].casefold() == "v":
-            if data.get("volume") is None:
-                raise Error("The platform does not report volume")
+        elif action == "status" and command_verb(words) == "v":
             print(f"{data['volume']:g}%")
         elif action == "providers":
             for row in data["providers"]:
@@ -1460,6 +1612,12 @@ def main(argv=None):
         elif action == "restart":
             print("Stream restart requested." if data["target"] == "stream" else
                   "Player reload accepted; waiting for the acknowledgement to reach the player.")
+        elif action == "lifecycle":
+            print(f"Lifecycle request accepted: {data['operation']}; waiting for the acknowledgement to reach the player.")
+        elif action == "input":
+            print(f"Input request accepted: {data['key']}; waiting for the acknowledgement to reach the player.")
+        elif action == "playback":
+            print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")
         elif action == "kiosk":
             if data["state"] == "off":
                 print("Kiosk mode disabled.")
@@ -1472,8 +1630,6 @@ def main(argv=None):
         elif action == "play":
             print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
         elif action == "command" and params.get("command") == "set_volume":
-            if data.get("volume") is None:
-                raise Error("The command was sent, but the platform does not report volume")
             print(f"{data['volume']:g}%")
         else:
             print(json.dumps(data, ensure_ascii=False, indent=2))

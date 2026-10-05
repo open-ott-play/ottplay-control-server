@@ -100,8 +100,10 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		default:
 			ok = false
 		}
-	case "status", "providers", "profiles", "epg_catalog":
+	case "status", "providers", "profiles", "epg_catalog", "capabilities":
 		ok = len(params) == 0
+	case "lifecycle", "input", "playback":
+		ok = validControlRequest(action, params)
 	case "profile":
 		ok = len(params) == 1 && profileInteger(params["number"], 1, 15)
 	case "profile_settings":
