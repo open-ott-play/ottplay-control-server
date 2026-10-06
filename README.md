@@ -58,7 +58,7 @@ ott a1 "РЕН ТВ HD"          # search and play a matching channel
 ott a1 volume 35            # vol/v are equivalent command aliases
 ott a1 restart             # reload the player
 ott a1 restart stream      # restart only the current stream
-ott a1 screenshot          # save a PNG after local screenshot permission
+ott a1 screenshot          # save a PNG; browser builds need a selected capture source
 ott a1 shot -o screen.png  # short alias; never overwrites an existing file
 ```
 
@@ -69,9 +69,13 @@ ott a1 shot -o screen.png  # short alias; never overwrites an existing file
 and [troubleshooting](docs/cli.md#troubleshooting).
 
 Remote [screenshots](docs/cli.md#remote-screenshots) require an updated CLI,
-controller and a player with a supported capture adapter. Grant screenshot
-permission locally in the player for 10 minutes; `ott a1` reports availability
-and any required local action. Screenshots are separate from telemetry capture.
+controller and a player with a supported capture adapter. Enabling the player's
+Remote control connection authorizes screenshots and diagnostics for that
+controller; native screenshots need no separate permission toggle. Browsers
+still require their local source picker. Images can include player settings,
+PIN screens and visible credentials, so connect only to a controller you trust.
+`ott a1` reports availability and any required source selection. Screenshots
+are separate from structured telemetry capture.
 
 To shuffle all VPortal videos matching a title and play them on repeat:
 
@@ -153,11 +157,13 @@ a PIN; see [kiosk mode](docs/cli.md#kiosk-mode).
 
 Optional [protocol 2 diagnostics](docs/remote-diagnostics.md) provides explicitly
 enabled, per-runtime sessions with separate scoped operator credentials and
-bounded structured telemetry. Local player consent remains mandatory. Diagnostic
+bounded structured telemetry. The enabled player connection supplies local
+authorization without another trust prompt; each capture still has a bounded
+session lease. Diagnostic
 control polling is independent of the existing command queue.
 
 The [diagnostic CLI and MCP guide](docs/diagnostics-cli.md) covers installation,
-operator credentials, local permission, every diagnostic command/tool, capture
+operator credentials, connection setup, every diagnostic command/tool, capture
 and repair examples, runtime revocation and troubleshooting. `ott diagnostics --help`
 lists this separate command family; ordinary player aliases and administrator
 credentials do not grant diagnostic access.

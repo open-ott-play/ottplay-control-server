@@ -133,15 +133,20 @@ player session. Do not submit a new request after an uncertain result.
 
 `screenshot` accepts exactly `{runtime:"page-runtime-id"}`, where runtime matches
 `^[a-z0-9-]{1,64}$` and is the identity from `capabilities.player.runtime`.
-The player must verify its current runtime, an unexpired local screenshot grant,
-the same controller connection and local protected-screen policy before capture.
-This action never opens a permission dialog remotely. It does not extend the
+The player must verify its current runtime, enabled controller connection and
+available capture source before capture. That connection authorizes native
+screenshots without a separate grant or expiry. Browser capture still needs a
+source selected through the browser's local picker; this action never opens that
+picker remotely. Player settings, PIN screens and visible credentials may be
+captured. OS capture policy and adapter limitations still apply. It does not extend the
 legacy command envelope or protocol-2 telemetry/repair scopes.
 
 Capabilities optionally add
 `{screenshot:{state:"ready"|"permission_required"|"unsupported",source:"player-view"|"player-window"|"browser-tab"|"window"|"display"|null}}`.
 A ready state requires a non-null source. Omission denotes an older player, not
-capture support. Source and runtime are rechecked by the CLI after capture.
+capture support. `permission_required` remains the compatible wire value for a
+missing browser source or disabled connection; older players can also use it for
+their legacy local permission. Source and runtime are rechecked by the CLI after capture.
 
 A successful `status:"ok"` screenshot response contains exactly:
 
@@ -174,7 +179,8 @@ before storage. Other request actions retain their existing response behavior.
 The existing authenticated device/admin boundaries, allowed origins, request
 TTL, 2 MiB result-envelope limit, total result-memory bound and 60-second result
 TTL apply. Images remain in memory only and responses use `Cache-Control: no-store`.
-The player drops cached/pending image bytes on local revocation and at the
+The player drops cached/pending image bytes on disconnect, connection changes,
+browser sharing stop or reload, and at the
 earlier of original request expiry or 60 seconds after capture completion.
 Bounded rejection tombstones prevent recapture on replay after image eviction.
 Already accepted server receipts keep their separate result TTL; local
@@ -182,7 +188,7 @@ revocation cannot retract an in-flight upload. `rejected` and `unsupported`
 remain explicit negative response statuses. Clients
 must not retry capture automatically after an uncertain receipt; they may retry
 reads of the same result ID within their deadline. See [CLI screenshots](cli.md#remote-screenshots)
-for local grant, filesystem handling and platform limitations.
+for connection/source setup, filesystem handling and platform limitations.
 
 `epg_catalog` accepts exactly `{}` and returns a lightweight snapshot:
 `{catalog,channels:[{id,number,name,tvgId,tvgName,shift,archiveHours}],archive:{version:1,revision}}`.

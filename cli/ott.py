@@ -72,7 +72,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME profile N name NAME       rename a profile
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME caps                      show runtime identity and supported controls
-  ott NAME screenshot                save one locally permitted remote screenshot
+  ott NAME screenshot                save one remote screenshot; browser source selection may be needed
   ott NAME shot -o FILE.png           same capture, with an explicit output file
   ott NAME key KEY                   send one supported named input after acknowledgement
   ott NAME pause / resume            pause or resume supported archive/VOD playback
@@ -1448,8 +1448,14 @@ def save_screenshot(path, parent_fd, image):
             os.unlink(target, **options)
 
 
+def screenshot_setup_guidance():
+    return ("Screenshots need an enabled Remote control connection and a capture source. "
+            "In a browser, use Settings → Remote control → Select screenshot source in browser. "
+            "Older players may still require their local screenshot permission.")
+
+
 def screenshot_command(client, device, name, output, timeout):
-    # Player consent protects the upload. Apply the same policy to the CLI's
+    # Player transport policy protects the upload. Apply the same policy to the CLI's
     # download before sending any request or opening an output directory.
     try:
         server = urllib.parse.urlsplit(client.server if isinstance(client.server, str) else "")
@@ -1469,7 +1475,7 @@ def screenshot_command(client, device, name, output, timeout):
         if shot is None or shot["state"] == "unsupported":
             raise Error("Screenshots are not supported by this player/controller; update both and check caps")
         if shot["state"] == "permission_required":
-            raise Error("Allow screenshots locally: Settings → Remote control → Allow screenshots for 10 minutes, then close settings. No capture was requested")
+            raise Error(screenshot_setup_guidance() + " No capture was requested")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Screenshot capability discovery exceeded --timeout; no capture was requested")
@@ -1482,7 +1488,7 @@ def screenshot_command(client, device, name, output, timeout):
         save_screenshot(path, parent_fd, image)
         return dict(metadata, path=str(path), bytes=len(image))
     except (PlayerRejected, PlayerUnsupported):
-        raise Error("Screenshot unavailable or rejected; check caps, local screenshot permission and protected settings. No image was saved; the capture was not repeated") from None
+        raise Error("Screenshot unavailable or rejected; check the connection, current runtime, capture source and OS/adapter support. Older players may still require local permission. No image was saved; the capture was not repeated") from None
     except HTTPError as exc:
         if exc.code in (400, 404):
             raise Error("This controller does not accept screenshot requests; update the controller and player. No image was saved") from None
@@ -1587,7 +1593,7 @@ def print_player_status(data, name):
     if shot.get("state") == "ready":
         print(f"  {prefix} screenshot / shot [-o FILE.png]  — capture {shot['source']}")
     elif shot.get("state") == "permission_required":
-        print("  Screenshots need local permission: Settings → Remote control → Allow screenshots for 10 minutes; then close settings.")
+        print("  " + screenshot_setup_guidance())
     elif shot.get("state") == "unsupported":
         print("  Screenshots are not supported by this player/platform.")
     if not any(controls[key] for key in ("lifecycle", "playback", "input")) and shot.get("state") != "ready":

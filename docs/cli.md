@@ -241,6 +241,14 @@ wait for **Connected**. Each browser origin, TV and Tauri instance has its own
 settings. For a new browser address, add its exact origin to `allowed_origins`
 and restart the command server.
 
+Enabling this connection authorizes the controller to operate the player and
+request diagnostics and supported screenshots. There is no additional player
+trust switch or ten-minute authorization prompt. Screenshots can include
+settings, PIN screens and visible credentials; connect only to a controller you
+trust. Browser screenshots still require a local source selection, and diagnostic
+operators still need their separate server scopes. See [screenshots](#remote-screenshots)
+and [diagnostics](diagnostics-cli.md).
+
 HTTPS pages, including here.now, require an HTTPS command server. Tauri uses its
 native HTTP bridge. TV browsers send outgoing XHR requests and do not need an
 incoming port on the TV. Packaged TV apps with an Origin of `null` can use the
@@ -250,14 +258,17 @@ The central player server on ports 8443–8446 is separate from the command serv
 ## Disconnect, deregister or revoke a player
 
 These are different operations. There is currently no `ott remove`, `delete`,
-`deregister` or `unpair` command, and no CLI command that remotely grants local
-diagnostic consent.
+`deregister` or `unpair` command. The player authorizes remote support through its
+enabled controller connection; there is no separate diagnostic consent to grant
+from the CLI.
 
 ### Temporarily disconnect or forget a connection
 
 On the player, open **Settings → Remote control → Command server → Disconnect**.
-Polling stops, but the saved address and access code remain; **Connect** resumes
-them. To forget the connection on that installation, clear the server address and
+Polling, diagnostic authority and screenshot access stop, but the saved address
+and access code remain; **Connect** restores support with a new runtime. Native
+screenshots become available again when the adapter is ready; browser screenshots
+need a newly selected source. To forget the connection on that installation, clear the server address and
 access code in the same screen. Clearing either field also stops polling.
 **Cancel pairing** cancels an in-progress discovery pairing, not an already
 registered device. Disconnecting, clearing settings or uninstalling a player does
@@ -972,7 +983,7 @@ the controller ACK, with current local restrictions checked again.
 ## Remote screenshots
 
 ```sh
-ott tv                      # shows screenshot availability or local permission guidance
+ott tv                      # shows screenshot availability or browser source guidance
 ott tv caps                 # machine-readable screenshot state and source
 ott tv screenshot           # save one PNG with a unique name in the current directory
 ott tv shot                 # exact short alias
@@ -988,25 +999,41 @@ an installed app. Follow [the installation update guide](#update-the-installatio
 Use the existing [device registration and pairing](#register-and-connect-a-player);
 there is no extra screenshot account, listening port or screenshot registration.
 The screenshot connection requires an **HTTPS controller**, or HTTP on loopback
-(`localhost`, `127.0.0.1`, `[::1]`). Plain HTTP to another LAN host cannot receive
-a local screenshot grant, even when ordinary remote controls work over it.
+(`localhost`, `127.0.0.1`, `[::1]`). Plain HTTP to another LAN host cannot carry
+screenshots, even when ordinary remote controls work over it.
 The CLI enforces the same HTTPS/loopback policy on its configured `server`
 download address before sending a request; a secure player upload does not
 make a plain-HTTP CLI download private.
 
-On the player, open **Settings → Remote control → Allow screenshots for 10 minutes**
-and enable it locally, then close settings. Permission is temporary, kept only
-in memory and bound to that command-server connection. Expiry, local revocation,
-controller address/access-code change, explicit disconnect or player reload
-revokes it. A temporary network interruption does not itself revoke the grant.
-A remote command cannot enable permission, operate the permission control or
-capture protected PIN/settings screens. In a supported desktop browser, the
-local permission action also opens the browser's screen-share picker; the user
-chooses the source. Cancelling the picker or stopping sharing does not grant a
-usable capture source. Remote requests never open a new permission dialog.
+Enabling the player's Remote control connection authorizes this controller to
+take supported screenshots. Native capture becomes ready automatically when
+the connection and adapter are available, including after startup or reload;
+there is no separate screenshot switch or ten-minute permission expiry. Only
+connect to a controller you trust with full access to the player. Images can
+include player settings, PIN screens, provider credentials and other visible
+private data. The player does not mask those screens or refuse capture solely
+because its page is in the background. The OS can still suspend the app or
+restrict what its native adapter can capture.
+
+In a supported desktop browser, open **Settings → Remote control → Select
+screenshot source in browser** locally and choose a source in the browser's
+screen-share picker. This browser requirement cannot be bypassed by a remote
+command. Cancelling the picker leaves capture unavailable. **Stop browser
+sharing**, an explicit disconnect, a controller address/access-code change or
+reload releases the source; select it again before a new browser capture.
+Remote screenshot requests never open the picker themselves. A temporary network
+interruption does not itself clear the configured connection or selected source.
+
+Older screenshot-capable players may still show **Allow screenshots for 10
+minutes** and require their legacy local permission. Update the actual player
+installation to use connection-based authorization; the CLI remains compatible
+with the older capability state.
 
 `caps.screenshot` reports `state: "ready"`, `"permission_required"` or
-`"unsupported"`, plus `source` (or `null` when unavailable). Source labels mean:
+`"unsupported"`, plus `source` (or `null` when unavailable). `permission_required`
+is the compatible wire name for a browser source still to be selected or a
+connection that is not enabled; older players also use it for their local grant.
+Source labels mean:
 
 - `player-view`: the native player web view; native window chrome is excluded.
 - `player-window`: the app window, including its native surfaces when supported.
@@ -1024,8 +1051,9 @@ DOM-image fallback.
 
 The CLI reads capabilities and submits **one** screenshot request, bound to the
 reported player runtime, within the single `--timeout` budget. A reload between
-those requests requires a new local permission grant and a deliberate new
-command. The image is a PNG no larger than 1280×720 or 1 MiB. Both controller
+those requests invalidates that request; read the new capabilities and issue a
+deliberate new command. In a browser, select the source again after reload. The
+image is a PNG no larger than 1280×720 or 1 MiB. Both controller
 and CLI validate the PNG and its metadata before accepting it. The existing
 2 MiB response transport limit is unchanged.
 
@@ -1043,14 +1071,18 @@ Screenshots use the authenticated command request/result API: the CLI's existing
 administrator credential queues/reads the request and the device credential
 uploads its response. A diagnostics-only operator token cannot request images.
 The server keeps the receipt only in bounded memory for 60 seconds, with
-`Cache-Control: no-store`; it does not save images to disk or log them. The player drops queued/cached image bytes on local revocation or when the
+`Cache-Control: no-store`; it does not save images to disk or log them. The player
+drops queued/cached image bytes on disconnect, connection changes, browser sharing
+stop, reload or when the
 original request expires, and in all cases within 60 seconds of completing the
 capture. Small rejection receipts prevent the same delivery from recapturing.
 Revocation cannot retract an image already sent or already in flight: an accepted
 server receipt retains its separate 60-second TTL. Local PNG files remain until
 you remove them. Disconnecting/revoking the device uses
 [the existing revocation procedure](#disconnect-deregister-or-revoke-a-player).
-Screenshot permission is separate from protocol-2 telemetry consent.
+The enabled player connection authorizes both screenshots and diagnostics, but
+their server APIs and credentials remain separate: an administrator can request
+images, while diagnostic operators need their configured protocol-2 scopes.
 
 ## Capabilities, input and playback control
 
@@ -1296,7 +1328,7 @@ credentials or operator tokens in a shared report. Useful evidence is the exact
 command with secrets removed, exit code, fixed error message, time, player
 version/platform and whether the problem affects one player or every player.
 For structured capture use the [diagnostics workflow](diagnostics-cli.md), which
-requires separate permissions and local consent.
+requires separate operator scopes and an enabled player connection.
 
 ### `ott: command not found`, wrong installation or missing Python module
 
@@ -1386,12 +1418,15 @@ Do not assume a control is supported because another platform exposes it.
 - **No screenshot capability / unsupported:** update CLI, controller and the
   actual player installation. Older players omit the field. Do not repeatedly
   request captures or assume every TV/browser/native package supports them.
-- **Permission required:** grant the 10-minute screenshot permission locally,
-  finish the browser picker when applicable, then close settings/PIN dialogs.
-  Renew permission after its expiry, a reload or a changed connection.
-- **Rejected after readiness:** the grant may have expired, the runtime/source
-  may have changed, or protected local UI may have opened. Read `caps` and check
-  the local player before issuing a new request.
+- **Permission required:** confirm Remote control is enabled. In a browser, use
+  **Select screenshot source in browser** and finish its local picker; select
+  again after reload, disconnect or stopping sharing. Older players may still
+  require their legacy local screenshot grant until updated.
+- **Rejected after readiness:** the connection, runtime or selected source may
+  have changed, another capture may be running, or the OS/adapter may be unable
+  to capture the current surface. Read `caps` and inspect the player before
+  issuing a new request. Settings/PIN screens and background visibility are not
+  additional application permission gates in updated players.
 - **Invalid PNG/runtime/source:** no file is saved. Check matching released
   versions and inspect the player locally; malformed remote data is not printed.
 - **Existing/unsafe output path:** choose another filename in an existing real
@@ -1399,7 +1434,8 @@ Do not assume a control is supported because another platform exposes it.
   permissions and free disk space when saving fails.
 - **Timeout:** an accepted capture may still complete before the request expires.
   The CLI does not repeat the capture automatically. Check connectivity before
-  manually trying again; increasing `--timeout` does not grant local permission.
+  manually trying again; increasing `--timeout` does not select a browser source
+  or bypass an OS capture restriction.
 - **Black or missing video:** inspect the receipt's source and `video` fields.
   Native/protected video surfaces can be absent even when the surrounding UI is
   captured. Use playback diagnostics to investigate decoding separately.
@@ -1431,7 +1467,8 @@ player standby while connected, not a powered-off machine. Live streams do not
 support the archive/VOD `pause`/`resume` controls or VOD seeking.
 
 Check `kiosk status`, parental/settings locks, the active provider and whether
-its catalogue has finished loading. Use local interaction for PINs and consent.
+its catalogue has finished loading. Use local interaction for PIN entry and the
+browser capture source picker.
 Select M3U before managing its profiles; select the matching provider before
 applying `provider-config` or Plex settings. Disabling kiosk or changing a lock
 is a deliberate policy change, not an automatic recovery step. Successful settings
