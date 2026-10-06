@@ -145,7 +145,8 @@ class LifecycleCliTest(unittest.TestCase):
     def test_invalid_signed_offsets_fail_locally_without_search_or_mutation(self):
         for command in ['+0', '-0', '+000', '-000', '+9007199254740992', '-9007199254740992',
                         '+' + '9' * 5000, '-' + '9' * 5000, '+1.5', '-1.5', '+1e3', '-1e3',
-                        '+.5', '-.5', '+', '-', '++15', '--15', '+ 15', '+１５', '-١٥']:
+                        '+.5', '-.5', '+', '-', '++15', '--15', '+ 15', '+１５', '-١٥',
+                        '+²', '-Ⅻ', '+½', '+.²', '--Ⅻ']:
             for machine in [False, True]:
                 with self.subTest(command=command[:30], json=machine):
                     code, out, err, calls = self.run_cli([command], {}, machine)
@@ -156,7 +157,7 @@ class LifecycleCliTest(unittest.TestCase):
             code, out, err, calls = self.run_cli(words, {})
             self.assertEqual((code, out, calls), (1, '', []))
             self.assertIn('Use +N or -N alone', err)
-        for name in ['+News', '-News']:
+        for name in ['+News', '-News', '+²', '-Ⅻ', '+½']:
             self.assertEqual(ott.parse_command(['play', name]), ('play', {'query': name}))
 
     def test_signed_offset_does_not_change_absolute_channel_or_volume_commands(self):
