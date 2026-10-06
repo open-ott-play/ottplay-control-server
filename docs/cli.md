@@ -29,19 +29,23 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 
 Install Python 3 and Git first. The native server release archives contain the
 Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
-source archive for that CLI release. The examples below pin CLI
-v0.1.0-beta.45, including signed channel offsets and the Unicode numeric-input
-validation fix. `prev`/`previous`/`next` require CLI/controller
+source archive for that CLI release. The examples below pin stable CLI v0.1.0,
+including signed channel offsets and the Unicode numeric-input validation fix.
+For the complete released set of remote features, use player v1.1.52 or newer;
+the CLI, controller and player must each be updated separately.
+
+For older prerelease installations, `prev`/`previous`/`next` require CLI/controller
 v0.1.0-beta.42 or newer and player frontend v1.1.52-beta.54 or newer. Signed
 offsets (`+15`/`-15`) require CLI/controller v0.1.0-beta.43 or newer and player
 frontend v1.1.52-beta.55 or newer. The target player must also advertise the
 matching operations in `caps.playback`, including `step_channel` for offsets.
-The controller can remain on beta.43 when updating the CLI to beta.45:
+The controller can remain on beta.43 for these channel controls when updating
+the CLI to v0.1.0:
 
 ```sh
 python3 --version
 mkdir -p "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.config/ottplay-control"
-git clone --branch v0.1.0-beta.45 --depth 1 \
+git clone --branch v0.1.0 --depth 1 \
   https://github.com/open-ott-play/ottplay-control-server.git \
   "$HOME/.local/share/ottplay-control-server"
 ln -s "$HOME/.local/share/ottplay-control-server/cli/ott.py" "$HOME/.local/bin/ott"
@@ -66,7 +70,7 @@ Use a private source checkout and invoke the script through Python:
 
 ```powershell
 py -3 --version
-git clone --branch v0.1.0-beta.45 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
+git clone --branch v0.1.0 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
 py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" --help
 py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" diagnostics --help
 ```
@@ -1284,7 +1288,7 @@ for that instance. A timeout means its current version could not be verified;
 increasing the timeout or repeatedly issuing a channel change does not update it.
 
 For `+N`/`-N`, check CLI/controller v0.1.0-beta.43 or newer and player frontend
-v1.1.52-beta.55 or newer; the installation examples use CLI beta.45 for its
+v1.1.52-beta.55 or newer; the installation examples use stable CLI v0.1.0 for its
 additional numeric-input validation. The target's `caps.playback` must advertise
 `step_channel`. Support for `previous_channel` or
 `next_channel` alone does not imply support for arbitrary offsets. Update the
