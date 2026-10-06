@@ -147,6 +147,12 @@ resolves media URLs again for recovery. Use `kiosk off` to choose another title
 or change profiles, then `kiosk on` to lock it. The kiosk receipt shows the title
 and episode count; provider requests and stream URLs stay on the player.
 
+Use `ott a1 kiosk on --strict` for child-facing playback: local taps only show
+the read-only video footer, and local player controls are blocked. An existing
+lock keeps its target. Release it with `ott a1 kiosk off` from the controller.
+On Android websites, system exit protection requires separate app pinning with
+a PIN; see [kiosk mode](docs/cli.md#kiosk-mode).
+
 ## Remote diagnostics
 
 Optional [protocol 2 diagnostics](docs/remote-diagnostics.md) provides explicitly

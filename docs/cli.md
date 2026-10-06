@@ -1264,6 +1264,26 @@ and VOD. Ordinary remote playback/provider/profile mutations and exit commands
 are rejected as well. Read queries, volume/mute, notifications and explicit remote
 restarts remain available. Only the `kiosk` request changes this policy.
 
+Use `ott tv kiosk on --strict [CHANNEL]` to allow only a short tap or the Info key
+to display a read-only video footer for five seconds. Local pause, seeking,
+volume/mute, menus, player exit, swipes, long presses and multi-touch are blocked.
+Repeated taps do not expand details. Stopping the current diagnostic capture remains
+available locally; it does not disconnect the remote controller. Remote volume/mute and recovery are unchanged.
+
+With an existing lock, `kiosk on --strict` upgrades it without changing the target;
+with no TV lock it waits for the first UI selection. `kiosk set CHANNEL` preserves
+strictness, or add `--strict` to upgrade during replacement. `kiosk off` releases
+the lock remotely. The policy, including strictness, survives reloads. Old players
+that omit or ignore the strict flag cannot produce a successful strict CLI receipt.
+
+For the standalone VPortal provider, select the configured profile, then run
+`ott tv vp "три кота"` followed by `ott tv kiosk on --strict`. This locks the
+current repeating episode queue rather than arming a future TV selection.
+
+A web page on here.now cannot block Android Home, Recents or browser navigation
+outside the page. Android app pinning with a PIN, or managed-device Lock Task,
+is needed to restrict exit from the browser.
+
 The client retries the same channel every ten seconds without playback progress,
 resolving its stream URL again. Healthy playback continues uninterrupted. The lock
 uses channel and source identities, so list reordering or a missing channel never
@@ -1285,7 +1305,10 @@ route for the selected device:
 ```
 
 `status` and `off` accept only `mode`; `on` optionally accepts `query`, and `set`
-requires it. Queries contain 1–1024 UTF-8 bytes without control characters.
+requires it. Both `on` and `set` accept optional boolean `strict`. Omission
+preserves the existing mode (ordinary for new locks); explicit `false` downgrades
+an existing lock without releasing its target. Updated status receipts include
+boolean `strict`. Queries contain 1–1024 UTF-8 bytes without control characters.
 
 ## Troubleshooting
 

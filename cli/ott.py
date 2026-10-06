@@ -85,6 +85,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME standby / wake            enter or leave player standby
   ott NAME kiosk [status]            show kiosk policy and playback health
   ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal video/episode queue
+  ott NAME kiosk on --strict [CHANNEL]  allow only the read-only video info footer locally
   ott NAME kiosk set CHANNEL         replace by number or first name match
   ott NAME kiosk off                 release the kiosk lock
   ott NAME random [FROM TO]          play a random channel
@@ -646,11 +647,18 @@ def parse_command(words):
         return "playback", {"operation": "step_channel", "offset": offset}
     if verb == "kiosk":
         mode = tail[0].casefold() if tail else "status"
-        if mode not in ("status", "on", "off", "set") or (mode in ("status", "off") and len(tail) > 1) or (mode == "set" and len(tail) < 2):
-            raise Error("Use kiosk [status], kiosk on [CHANNEL], kiosk set CHANNEL or kiosk off")
+        values = tail[1:]
+        strict = "--strict" in values
+        if values.count("--strict") > 1 or (strict and mode not in ("on", "set")):
+            raise Error("Use --strict only with kiosk on or kiosk set")
+        values = [value for value in values if value != "--strict"]
+        if mode not in ("status", "on", "off", "set") or (mode in ("status", "off") and values) or (mode == "set" and not values):
+            raise Error("Use kiosk [status], kiosk on [--strict] [CHANNEL], kiosk set [--strict] CHANNEL or kiosk off")
         params = {"mode": mode}
-        if len(tail) > 1:
-            query = " ".join(tail[1:])
+        if strict:
+            params["strict"] = True
+        if values:
+            query = " ".join(values)
             try:
                 valid = 0 < len(query.strip().encode("utf-8")) <= 1024 and all(ord(c) >= 32 and ord(c) != 127 for c in query)
             except UnicodeEncodeError:
@@ -1212,7 +1220,7 @@ def preset_command(config, words, timeout, json_output):
     return 0 if receipt["status"] == "loaded" else 130 if receipt["status"] == "interrupted" else 1
 
 
-def kiosk_metadata(data, mode):
+def kiosk_metadata(data, mode, require_strict=False):
     message = "The player did not confirm the kiosk policy. Check kiosk status before repeating the change."
     if (not isinstance(data, dict) or type(data.get("enabled")) is not bool
             or data.get("state") not in ("off", "waiting", "locked")
@@ -1222,6 +1230,9 @@ def kiosk_metadata(data, mode):
             or data.get("health") not in ("idle", "waiting", "starting", "playing", "retrying", "error", "source-unavailable", "channel-unavailable")
             or (mode == "off" and data["enabled"])
             or (mode in ("on", "set") and not data["enabled"])
+            or ("strict" in data and type(data["strict"]) is not bool)
+            or (not data["enabled"] and data.get("strict", False))
+            or (require_strict and data.get("strict") is not True)
             or (mode == "set" and data["state"] != "locked")):
         raise Error(message)
     channel = data.get("channel")
@@ -1243,7 +1254,8 @@ def kiosk_metadata(data, mode):
     if (data["enabled"] and not isinstance(provider, str)) or (not data["enabled"] and provider is not None):
         raise Error(message)
     return {**{key: data[key] for key in ("enabled", "state", "retry_seconds", "retries", "health")},
-            "channel": channel, "provider": provider, **({"media": media} if media is not None else {})}
+            "channel": channel, "provider": provider, **({"media": media} if media is not None else {}),
+            **({"strict": data["strict"]} if "strict" in data else {})}
 
 
 def restart_metadata(data, target):
@@ -1898,7 +1910,7 @@ def main(argv=None):
         elif action == "restart":
             data = restart_metadata(data, params["target"])
         elif action == "kiosk":
-            data = kiosk_metadata(data, "set" if params.get("query") else params["mode"])
+            data = kiosk_metadata(data, "set" if params.get("query") else params["mode"], params.get("strict", False))
         elif plex_settings:
             data = plex_settings_metadata(data, params["settings"])
         elif action == "status" and command_verb(words) == "v":
@@ -1991,6 +2003,8 @@ def main(argv=None):
             else:
                 print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")
         elif action == "kiosk":
+            if data.get("strict"):
+                print("Strict kiosk: local controls locked; only the read-only video info footer is available.")
             if data["state"] == "off":
                 print("Kiosk mode disabled.")
             elif data["state"] == "waiting":

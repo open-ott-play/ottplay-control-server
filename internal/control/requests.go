@@ -96,7 +96,13 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 			ok = ok && len(params) == 1
 		case "on", "set":
 			_, validQuery := textValue(params["query"], 1024)
-			ok = ok && ((mode == "on" && len(params) == 1) || (len(params) == 2 && validQuery && profileText(params["query"], 1024)))
+			count := len(params)
+			if raw, exists := params["strict"]; exists {
+				count--
+				var strict *bool
+				ok = ok && json.Unmarshal(raw, &strict) == nil && strict != nil
+			}
+			ok = ok && ((mode == "on" && count == 1) || (count == 2 && validQuery && profileText(params["query"], 1024)))
 		default:
 			ok = false
 		}
