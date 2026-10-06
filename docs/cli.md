@@ -1267,8 +1267,8 @@ restarts remain available. Only the `kiosk` request changes this policy.
 Use `ott tv kiosk on --strict [CHANNEL]` to allow only a short tap or the Info key
 to display a read-only video footer for five seconds. Local pause, seeking,
 volume/mute, menus, player exit, swipes, long presses and multi-touch are blocked.
-Repeated taps do not expand details. Local diagnostic-access revocation remains
-available. Remote volume/mute and recovery are unchanged.
+Repeated taps do not expand details. Stopping the current diagnostic capture remains
+available locally; it does not disconnect the remote controller. Remote volume/mute and recovery are unchanged.
 
 With an existing lock, `kiosk on --strict` upgrades it without changing the target;
 with no TV lock it waits for the first UI selection. `kiosk set CHANNEL` preserves
