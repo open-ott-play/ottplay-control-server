@@ -5,6 +5,11 @@ all CLI/MCP commands, revocation and troubleshooting, start with the
 [operator guide](diagnostics-cli.md). This page defines the HTTP protocol and
 server configuration used by those tools.
 
+Protocol-2 **capture** means structured telemetry, not an image. Remote
+[screenshots](cli.md#remote-screenshots) use the separate authenticated request
+API and a temporary local screenshot grant. Diagnostic operator scopes and
+telemetry consent do not authorize images.
+
 Diagnostics is an additive, in-memory API under `/api/v2/diagnostics`. It never
 enters the protocol 1 command queue. Registration, control polling and telemetry
 are separate requests; a legacy request waiting for a player does not block a

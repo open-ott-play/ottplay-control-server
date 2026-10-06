@@ -13,6 +13,8 @@ from pathlib import Path
 import queue
 import re
 import secrets
+import stat
+import struct
 import shlex
 import subprocess
 import sys
@@ -23,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
+import zlib
 
 HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMMAND ...]
   ott diagnostics --help             scoped runtime diagnostics and session control
@@ -69,6 +72,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME profile N name NAME       rename a profile
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME caps                      show runtime identity and supported controls
+  ott NAME screenshot                save one locally permitted remote screenshot
+  ott NAME shot -o FILE.png           same capture, with an explicit output file
   ott NAME key KEY                   send one supported named input after acknowledgement
   ott NAME pause / resume            pause or resume supported archive/VOD playback
   ott NAME seek SECONDS              seek supported VOD to an absolute position (0–9007199254740991)
@@ -90,7 +95,7 @@ Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
-provider/prov; providers/provs; capabilities/caps; input/key; prev/previous.
+provider/prov; providers/provs; capabilities/caps; input/key; prev/previous; screenshot/shot.
 Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
 Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
@@ -106,7 +111,7 @@ COMMAND_ALIASES = {
     "message": "msg", "prof": "profile", "profs": "profiles",
     "prov": "provider", "provs": "providers",
     "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
-    "previous": "prev",
+    "previous": "prev", "shot": "screenshot",
 }
 PROFILE_FIELD_ALIASES = {
     "url": "playlist", "playlist": "playlist",
@@ -127,6 +132,8 @@ INPUT_ALIASES = {
 CHANNEL_STEPS = {"prev": "previous_channel", "next": "next_channel"}
 CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
 PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
+SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
+MAX_SCREENSHOT_BYTES = 1024 * 1024
 
 
 def command_verb(words):
@@ -685,6 +692,12 @@ def parse_command(words):
         if len(json.dumps({"action": "profile_settings", "params": params}, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
             raise Error("Profile settings exceed the 16 KiB request limit")
         return "profile_settings", params
+    if verb == "screenshot":
+        if not tail:
+            return "screenshot", {}
+        if len(tail) == 2 and tail[0] in ("-o", "--output") and tail[1]:
+            return "screenshot", {"output": tail[1]}
+        raise Error("Use screenshot/shot [-o/--output FILE.png]")
     if verb == "restart":
         target = tail[0].casefold() if len(tail) == 1 else "player"
         target = {"s": "stream", "p": "player", "a": "app", "application": "app"}.get(target, target)
@@ -1259,6 +1272,205 @@ def volume_metadata(data, mutating=False):
     return {"volume": value, **({"dispatched": True} if mutating else {})}
 
 
+def screenshot_png(image, width, height):
+    """Validate a bounded PNG without loading an imaging library or trusting IHDR."""
+    if not image.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    offset, header, palette, ended, idat_done = 8, None, None, False, False
+    compressed = bytearray()
+    while offset < len(image):
+        if len(image) - offset < 12:
+            return False
+        length = struct.unpack_from(">I", image, offset)[0]
+        end = offset + 8 + length
+        if end + 4 > len(image):
+            return False
+        kind, chunk = image[offset + 4:offset + 8], image[offset + 8:end]
+        if (not re.fullmatch(b"[A-Za-z]{4}", kind) or kind[2] & 32
+                or zlib.crc32(image[offset + 4:end]) != struct.unpack_from(">I", image, end)[0]):
+            return False
+        if header is None and kind != b"IHDR":
+            return False
+        if compressed and kind != b"IDAT":
+            idat_done = True
+        if kind == b"IHDR":
+            if header is not None or length != 13:
+                return False
+            header = struct.unpack(">IIBBBBB", chunk)
+            w, h, depth, color, compression, filtering, interlace = header
+            legal_depths = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
+            if ((w, h) != (width, height) or depth not in legal_depths.get(color, ())
+                    or compression or filtering or interlace not in (0, 1)):
+                return False
+        elif kind == b"PLTE":
+            if palette is not None or compressed or not length or length % 3 or length > 768 or header[3] in (0, 4):
+                return False
+            palette = length // 3
+        elif kind == b"IDAT":
+            if idat_done or (header[3] == 3 and (palette is None or palette > 2 ** header[2])):
+                return False
+            compressed.extend(chunk)
+        elif kind == b"IEND":
+            if length or not compressed or end + 4 != len(image):
+                return False
+            ended = True
+        elif not kind[0] & 32:
+            return False
+        offset = end + 4
+    if not ended or header is None:
+        return False
+    _, _, depth, color, _, _, interlace = header
+    bits = depth * {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
+    passes = ((0, 0, 1, 1),) if interlace == 0 else (
+        (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+        (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+    rows = []
+    for x, y, dx, dy in passes:
+        cols, count = max(0, (width - x + dx - 1) // dx), max(0, (height - y + dy - 1) // dy)
+        if cols and count:
+            rows.extend([1 + (cols * bits + 7) // 8] * count)
+    expected = sum(rows)
+    try:
+        decoder = zlib.decompressobj()
+        pixels = decoder.decompress(compressed, expected + 1)
+        if len(pixels) != expected or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+            return False
+    except zlib.error:
+        return False
+    offset = 0
+    for length in rows:
+        if pixels[offset] > 4:
+            return False
+        offset += length
+    return True
+
+
+def screenshot_metadata(data, runtime, source):
+    invalid = "The player returned an invalid screenshot; no image was saved"
+    fields = {"version", "runtime", "mime", "encoding", "image", "width", "height", "captured_at", "source", "video"}
+    if (not isinstance(data, dict) or set(data) != fields or type(data.get("version")) is not int
+            or data["version"] != 1 or data.get("runtime") != runtime or data.get("source") != source
+            or data.get("mime") != "image/png" or data.get("encoding") != "base64"
+            or type(data.get("width")) is not int or not 1 <= data["width"] <= 1280
+            or type(data.get("height")) is not int or not 1 <= data["height"] <= 720
+            or type(data.get("captured_at")) is not int or not 1 <= data["captured_at"] <= 9007199254740991
+            or data.get("video") not in ("unknown", "excluded") or not isinstance(data.get("image"), str)
+            or not 0 < len(data["image"]) <= ((MAX_SCREENSHOT_BYTES + 2) // 3) * 4):
+        raise Error(invalid)
+    try:
+        image = base64.b64decode(data["image"], validate=True)
+    except (ValueError, UnicodeEncodeError):
+        raise Error(invalid) from None
+    if (len(image) > MAX_SCREENSHOT_BYTES or base64.b64encode(image).decode("ascii") != data["image"]
+            or not screenshot_png(image, data["width"], data["height"])):
+        raise Error(invalid)
+    return {key: data[key] for key in fields - {"image", "encoding"}}, image
+
+
+def screenshot_destination(output, name):
+    """Open an existing directory without following symlinks; never use remote filenames."""
+    if output is None:
+        alias = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:32] or "player"
+        output = f"ott-{alias}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{secrets.token_hex(4)}.png"
+    if not isinstance(output, str) or not output or any(ord(c) < 32 or ord(c) == 127 for c in output):
+        raise Error("Screenshot output must be a local filename without control characters")
+    path = Path(output).expanduser()
+    if ".." in path.parts or path.name in ("", ".", "..") or str(output).endswith(("/", "\\")):
+        raise Error("Screenshot output must name a file without parent traversal")
+    path = Path.cwd() / path if not path.is_absolute() else path
+    parent_fd = None
+    try:
+        if os.open in os.supports_dir_fd and os.link in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW"):
+            parent_fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+            for part in path.parent.parts[1:]:
+                following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                os.close(parent_fd)
+                parent_fd = following
+            try:
+                os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise Error("Screenshot output already exists; choose another filename")
+        else:
+            # Windows uses an exclusive hard-link install below as well. Reject
+            # existing links/junctions and unsafe parents before contacting a player.
+            if path.parent.resolve(strict=True) != path.parent or any(
+                    not stat.S_ISDIR(parent.lstat().st_mode) for parent in (path.parent, *path.parent.parents)):
+                raise Error("Screenshot output parent must be an existing directory without symlinks")
+            if os.path.lexists(path):
+                raise Error("Screenshot output already exists; choose another filename")
+        return path, parent_fd
+    except (OSError, Error) as exc:
+        if parent_fd is not None:
+            os.close(parent_fd)
+        if isinstance(exc, Error):
+            raise
+        raise Error("Screenshot output parent must be an existing writable directory without symlinks") from None
+
+
+def save_screenshot(path, parent_fd, image):
+    temporary = ".ott-shot-" + secrets.token_hex(16)
+    target = temporary if parent_fd is not None else str(path.parent / temporary)
+    options = {"dir_fd": parent_fd} if parent_fd is not None else {}
+    created = False
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, **options)
+        created = True
+        with os.fdopen(fd, "wb") as stream:
+            if hasattr(os, "fchmod"):
+                os.fchmod(stream.fileno(), 0o600)
+            stream.write(image)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if parent_fd is not None:
+            os.link(temporary, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
+        else:
+            os.link(target, path)
+    except FileExistsError:
+        raise Error("Screenshot output already exists; choose another filename. The capture was not repeated") from None
+    except OSError:
+        raise Error("Could not save the screenshot privately; check output permissions and disk space. The capture was not repeated") from None
+    finally:
+        if created:
+            os.unlink(target, **options)
+
+
+def screenshot_command(client, device, name, output, timeout):
+    path, parent_fd = screenshot_destination(output, name)
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        shot = controls.get("screenshot")
+        if shot is None or shot["state"] == "unsupported":
+            raise Error("Screenshots are not supported by this player/controller; update both and check caps")
+        if shot["state"] == "permission_required":
+            raise Error("Allow screenshots locally: Settings → Remote control → Allow screenshots for 10 minutes, then close settings. No capture was requested")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Screenshot capability discovery exceeded --timeout; no capture was requested")
+        client.timeout = remaining
+        runtime = controls["player"]["runtime"]
+        data = client.call(device, "screenshot", {"runtime": runtime})
+        if time.monotonic() >= deadline:
+            raise Error("Screenshot response exceeded --timeout; no image was saved. The capture was not repeated")
+        metadata, image = screenshot_metadata(data, runtime, shot["source"])
+        save_screenshot(path, parent_fd, image)
+        return dict(metadata, path=str(path), bytes=len(image))
+    except (PlayerRejected, PlayerUnsupported):
+        raise Error("Screenshot unavailable or rejected; check caps, local screenshot permission and protected settings. No image was saved; the capture was not repeated") from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("This controller does not accept screenshot requests; update the controller and player. No image was saved") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
 def capabilities_metadata(data):
     invalid = "The player returned invalid capabilities metadata"
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
@@ -1275,6 +1487,15 @@ def capabilities_metadata(data):
                 any(not isinstance(value, str) or value not in allowed for value in values) or len(set(values)) != len(values)):
             raise Error(invalid)
         result[key] = list(values)
+    if "screenshot" in data:
+        shot = data["screenshot"]
+        if (not isinstance(shot, dict) or set(shot) != {"state", "source"}
+                or shot.get("state") not in ("ready", "permission_required", "unsupported")
+                or (shot.get("source") is not None and
+                    (not isinstance(shot["source"], str) or shot["source"] not in SCREENSHOT_SOURCES))
+                or (shot["state"] == "ready" and shot["source"] is None)):
+            raise Error(invalid)
+        result["screenshot"] = dict(shot)
     return result
 
 
@@ -1340,7 +1561,14 @@ def print_player_status(data, name):
         print(f"  {prefix} {command}")
     if controls["input"]:
         print(f"  {prefix} key KEY  — " + ", ".join(controls["input"]))
-    if not any(controls[key] for key in ("lifecycle", "playback", "input")):
+    shot = controls.get("screenshot", {})
+    if shot.get("state") == "ready":
+        print(f"  {prefix} screenshot / shot [-o FILE.png]  — capture {shot['source']}")
+    elif shot.get("state") == "permission_required":
+        print("  Screenshots need local permission: Settings → Remote control → Allow screenshots for 10 minutes; then close settings.")
+    elif shot.get("state") == "unsupported":
+        print("  Screenshots are not supported by this player/platform.")
+    if not any(controls[key] for key in ("lifecycle", "playback", "input")) and shot.get("state") != "ready":
         print("  No controls are currently advertised by the player.")
 
 
@@ -1621,7 +1849,9 @@ def main(argv=None):
         catalog_play = None
         playback_error = None
         plex_settings = action == "provider_settings" and params.get("provider") == "plex"
-        if action == "programs" and "epg" in config:
+        if action == "screenshot":
+            data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
+        elif action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
         elif action == "play":
             data, playback_error = play_channel(client, device, params)
@@ -1698,6 +1928,8 @@ def main(argv=None):
                       "No current programmes match the search.", file=sys.stderr)
         if args.json:
             print(json.dumps(data, ensure_ascii=False, indent=2))
+        elif action == "screenshot":
+            print(f"Screenshot saved: {clean(data['path'])} ({data['width']}×{data['height']}; {data['source']}; video: {data['video']})")
         elif action == "channels" or (action == "play" and "channels" in data):
             for row in data["channels"]:
                 print(f"{row['number']}: {clean(row['name'])}")

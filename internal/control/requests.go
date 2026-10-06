@@ -102,6 +102,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		}
 	case "status", "providers", "profiles", "epg_catalog", "capabilities":
 		ok = len(params) == 0
+	case "screenshot":
+		ok = validScreenshotRequest(params)
 	case "lifecycle", "input", "playback":
 		ok = validControlRequest(action, params)
 	case "profile":
@@ -173,7 +175,11 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 429, "request queue is full")
 		return
 	}
-	d.queue = append(d.queue, entry{id: id, data: data, expires: expires, rpc: true})
+	e := entry{id: id, data: data, expires: expires, rpc: true}
+	if action == "screenshot" {
+		_ = json.Unmarshal(params["runtime"], &e.screenshotRuntime)
+	}
+	d.queue = append(d.queue, e)
 	s.bytes += len(data)
 	s.mu.Unlock()
 	reply(w, 202, map[string]string{"status": "queued", "id": id})
@@ -260,6 +266,22 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		return
 	}
 	now := s.now()
+	// Decode image data outside the shared queue lock. The normal result path
+	// below rechecks expiry and ownership before storing this validated result.
+	s.mu.Lock()
+	screenshotRuntime := ""
+	for _, pending := range d.queue {
+		if pending.rpc && pending.id == id {
+			screenshotRuntime = pending.screenshotRuntime
+			break
+		}
+	}
+	s.mu.Unlock()
+	if screenshotRuntime != "" && status == "ok" && !validScreenshotResult(m["data"], screenshotRuntime) {
+		failure(w, 400, "invalid screenshot result")
+		return
+	}
+	now = s.now()
 	s.mu.Lock()
 	s.expire(now)
 	if _, exists := d.results[id]; exists {
