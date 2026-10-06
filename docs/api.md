@@ -131,6 +131,59 @@ require an updated controller and player; there is no legacy/input fallback.
 Response retries use the same request ID and do not repeat the step within the
 player session. Do not submit a new request after an uncertain result.
 
+`screenshot` accepts exactly `{runtime:"page-runtime-id"}`, where runtime matches
+`^[a-z0-9-]{1,64}$` and is the identity from `capabilities.player.runtime`.
+The player must verify its current runtime, an unexpired local screenshot grant,
+the same controller connection and local protected-screen policy before capture.
+This action never opens a permission dialog remotely. It does not extend the
+legacy command envelope or protocol-2 telemetry/repair scopes.
+
+Capabilities optionally add
+`{screenshot:{state:"ready"|"permission_required"|"unsupported",source:"player-view"|"player-window"|"browser-tab"|"window"|"display"|null}}`.
+A ready state requires a non-null source. Omission denotes an older player, not
+capture support. Source and runtime are rechecked by the CLI after capture.
+
+A successful `status:"ok"` screenshot response contains exactly:
+
+```json
+{
+  "version": 1,
+  "runtime": "page-runtime-id",
+  "mime": "image/png",
+  "encoding": "base64",
+  "image": "CANONICAL_BASE64_PNG_BYTES",
+  "width": 1280,
+  "height": 720,
+  "captured_at": 1791288000000,
+  "source": "player-view",
+  "video": "unknown"
+}
+```
+
+`width` and `height` are integers in 1–1280 and 1–720; `captured_at` is a positive
+JavaScript-safe integer Unix timestamp in milliseconds. `source` uses the
+non-null capability source values; `video` is `"unknown"` or `"excluded"`.
+The decoded PNG is at most 1 MiB. No URL, filename or alternate image encoding
+is accepted. The controller binds the successful result to the runtime in its
+queued action, validates exact metadata, canonical base64, actual PNG dimensions,
+chunk checksums and compressed pixels before storing it. Invalid results return
+HTTP 400 and do not remove the request or create a result. Full PNG validation
+runs outside the shared queue lock; queue ownership/expiry is checked again
+before storage. Other request actions retain their existing response behavior.
+
+The existing authenticated device/admin boundaries, allowed origins, request
+TTL, 2 MiB result-envelope limit, total result-memory bound and 60-second result
+TTL apply. Images remain in memory only and responses use `Cache-Control: no-store`.
+The player drops cached/pending image bytes on local revocation and at the
+earlier of original request expiry or 60 seconds after capture completion.
+Bounded rejection tombstones prevent recapture on replay after image eviction.
+Already accepted server receipts keep their separate result TTL; local
+revocation cannot retract an in-flight upload. `rejected` and `unsupported`
+remain explicit negative response statuses. Clients
+must not retry capture automatically after an uncertain receipt; they may retry
+reads of the same result ID within their deadline. See [CLI screenshots](cli.md#remote-screenshots)
+for local grant, filesystem handling and platform limitations.
+
 `epg_catalog` accepts exactly `{}` and returns a lightweight snapshot:
 `{catalog,channels:[{id,number,name,tvgId,tvgName,shift,archiveHours}],archive:{version:1,revision}}`.
 `archiveHours` is the channel retention capped at 144 hours; zero means no archive.

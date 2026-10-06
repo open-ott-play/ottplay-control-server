@@ -19,7 +19,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Help, options and output](#help-options-and-output)
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
-- [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [kiosk mode](#kiosk-mode)
+- [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
 - [Troubleshooting](#troubleshooting)
 
@@ -477,7 +477,7 @@ Global flags before `PLAYER` also have standard short forms:
 - `msg` / `message`
 - `profile` / `prof`, and `profiles` / `profs`
 - `provider` / `prov`, and `providers` / `provs`
-- `capabilities` / `caps`, and `input` / `key`
+- `capabilities` / `caps`, `input` / `key`, and `screenshot` / `shot`
 - `exit` / `quit` / `close`
 
 Aliases are case-insensitive exact tokens. They are not prefix completion:
@@ -969,6 +969,89 @@ new lifecycle requests return `accepted: true`, `dispatched: false` and
 `effect: "lifecycle-after-ack"`. The effect runs only after the player receives
 the controller ACK, with current local restrictions checked again.
 
+## Remote screenshots
+
+```sh
+ott tv                      # shows screenshot availability or local permission guidance
+ott tv caps                 # machine-readable screenshot state and source
+ott tv screenshot           # save one PNG with a unique name in the current directory
+ott tv shot                 # exact short alias
+ott tv shot -o living-room.png
+ott tv screenshot --output /absolute/existing/directory/living-room.png
+ott --timeout 60 --json tv shot -o incident.png
+```
+
+Install screenshot-capable versions of **the CLI, controller and the target player**.
+The earlier stable controller v0.1.0 and player v1.1.52 do not implement this
+operation. Updating the controller alone cannot add a native capture adapter to
+an installed app. Follow [the installation update guide](#update-the-installation-used-by-the-target-player).
+Use the existing [device registration and pairing](#register-and-connect-a-player);
+there is no extra screenshot account, listening port or screenshot registration.
+The screenshot connection requires an **HTTPS controller**, or HTTP on loopback
+(`localhost`, `127.0.0.1`, `[::1]`). Plain HTTP to another LAN host cannot receive
+a local screenshot grant, even when ordinary remote controls work over it.
+The CLI enforces the same HTTPS/loopback policy on its configured `server`
+download address before sending a request; a secure player upload does not
+make a plain-HTTP CLI download private.
+
+On the player, open **Settings → Remote control → Allow screenshots for 10 minutes**
+and enable it locally, then close settings. Permission is temporary, kept only
+in memory and bound to that command-server connection. Expiry, local revocation,
+controller address/access-code change, explicit disconnect or player reload
+revokes it. A temporary network interruption does not itself revoke the grant.
+A remote command cannot enable permission, operate the permission control or
+capture protected PIN/settings screens. In a supported desktop browser, the
+local permission action also opens the browser's screen-share picker; the user
+chooses the source. Cancelling the picker or stopping sharing does not grant a
+usable capture source. Remote requests never open a new permission dialog.
+
+`caps.screenshot` reports `state: "ready"`, `"permission_required"` or
+`"unsupported"`, plus `source` (or `null` when unavailable). Source labels mean:
+
+- `player-view`: the native player web view; native window chrome is excluded.
+- `player-window`: the app window, including its native surfaces when supported.
+- `browser-tab`: the browser tab selected in the local screen-share picker.
+- `window`: a window selected in that picker.
+- `display`: a whole display selected in that picker.
+
+Availability depends on the installed platform adapter, OS and browser. An
+Android app or LG TV must explicitly report support; a generic Capacitor or
+browser build alone does not imply that screenshots work. Protected video and
+hardware video surfaces may be blank. The receipt reports `video: "unknown"`
+or `"excluded"`; a screenshot does not establish that video is decoding or
+that every video surface was captured. An unsupported adapter has no simulated
+DOM-image fallback.
+
+The CLI reads capabilities and submits **one** screenshot request, bound to the
+reported player runtime, within the single `--timeout` budget. A reload between
+those requests requires a new local permission grant and a deliberate new
+command. The image is a PNG no larger than 1280×720 or 1 MiB. Both controller
+and CLI validate the PNG and its metadata before accepting it. The existing
+2 MiB response transport limit is unchanged.
+
+By default a name such as `ott-tv-20261006T120000Z-a1b2c3d4.png` is generated.
+`-o` and `--output` choose a **local** file; its directory must already exist.
+Existing files, symlinks, symlinked parent directories and `..` path traversal
+are rejected. Saving uses a private temporary file and an exclusive atomic
+installation, so another process creating the destination cannot be overwritten.
+Files use mode `0600` on Unix. On Windows, keep the containing directory's ACL
+restricted to your account. No output path is sent to the player. `--json`
+prints the local path, byte count, dimensions, capture time, runtime, source and
+video limitation; it never prints the image/base64 data.
+
+Screenshots use the authenticated command request/result API: the CLI's existing
+administrator credential queues/reads the request and the device credential
+uploads its response. A diagnostics-only operator token cannot request images.
+The server keeps the receipt only in bounded memory for 60 seconds, with
+`Cache-Control: no-store`; it does not save images to disk or log them. The player drops queued/cached image bytes on local revocation or when the
+original request expires, and in all cases within 60 seconds of completing the
+capture. Small rejection receipts prevent the same delivery from recapturing.
+Revocation cannot retract an image already sent or already in flight: an accepted
+server receipt retains its separate 60-second TTL. Local PNG files remain until
+you remove them. Disconnecting/revoking the device uses
+[the existing revocation procedure](#disconnect-deregister-or-revoke-a-player).
+Screenshot permission is separate from protocol-2 telemetry consent.
+
 ## Capabilities, input and playback control
 
 `ott tv`, `ott tv status` and `ott tv st` show status followed by commands for
@@ -1274,6 +1357,29 @@ between replies, unavailable capabilities or an exhausted budget may leave valid
 status with `capabilities: null` and `capabilities_error`. Check the player version,
 then rerun a read-only status/capabilities query after the connection settles.
 Do not assume a control is supported because another platform exposes it.
+
+### A screenshot is unavailable, rejected or cannot be saved
+
+- **No screenshot capability / unsupported:** update CLI, controller and the
+  actual player installation. Older players omit the field. Do not repeatedly
+  request captures or assume every TV/browser/native package supports them.
+- **Permission required:** grant the 10-minute screenshot permission locally,
+  finish the browser picker when applicable, then close settings/PIN dialogs.
+  Renew permission after its expiry, a reload or a changed connection.
+- **Rejected after readiness:** the grant may have expired, the runtime/source
+  may have changed, or protected local UI may have opened. Read `caps` and check
+  the local player before issuing a new request.
+- **Invalid PNG/runtime/source:** no file is saved. Check matching released
+  versions and inspect the player locally; malformed remote data is not printed.
+- **Existing/unsafe output path:** choose another filename in an existing real
+  directory. Existing files and symlinks are never overwritten. Check directory
+  permissions and free disk space when saving fails.
+- **Timeout:** an accepted capture may still complete before the request expires.
+  The CLI does not repeat the capture automatically. Check connectivity before
+  manually trying again; increasing `--timeout` does not grant local permission.
+- **Black or missing video:** inspect the receipt's source and `video` fields.
+  Native/protected video surfaces can be absent even when the surrounding UI is
+  captured. Use playback diagnostics to investigate decoding separately.
 
 ### A control, provider setting or channel change is rejected
 

@@ -58,6 +58,8 @@ ott a1 "РЕН ТВ HD"          # search and play a matching channel
 ott a1 volume 35            # vol/v are equivalent command aliases
 ott a1 restart             # reload the player
 ott a1 restart stream      # restart only the current stream
+ott a1 screenshot          # save a PNG after local screenshot permission
+ott a1 shot -o screen.png  # short alias; never overwrites an existing file
 ```
 
 `a1` is an example alias for a registered player, not a computer hostname. See
@@ -65,6 +67,11 @@ ott a1 restart stream      # restart only the current stream
 [all commands with examples](docs/cli.md#commands),
 [disconnecting and revoking access](docs/cli.md#disconnect-deregister-or-revoke-a-player),
 and [troubleshooting](docs/cli.md#troubleshooting).
+
+Remote [screenshots](docs/cli.md#remote-screenshots) require an updated CLI,
+controller and a player with a supported capture adapter. Grant screenshot
+permission locally in the player for 10 minutes; `ott a1` reports availability
+and any required local action. Screenshots are separate from telemetry capture.
 
 To shuffle all VPortal videos matching a title and play them on repeat:
 
