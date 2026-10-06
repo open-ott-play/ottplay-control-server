@@ -77,7 +77,7 @@ func TestControlRequestsRejectAmbiguityAndPrivilegeExpansion(t *testing.T) {
 		`{"action":"playback","params":{"operation":"next_chanel"}}`,
 	}
 	for _, op := range []string{"previous_channel", "next_channel"} {
-		for _, extra := range []string{`"position":0`, `"position":null`, `"repeat":2`, `"key":"channel_up"`, `"operation":"pause"`} {
+		for _, extra := range []string{`"position":0`, `"position":null`, `"repeat":2`, `"offset":15`, `"offset":null`, `"key":"channel_up"`, `"operation":"pause"`} {
 			bodies = append(bodies, `{"action":"playback","params":{"operation":"`+op+`",`+extra+`}}`)
 		}
 		bodies = append(bodies, `{"action":"input","params":{"key":"`+op+`"}}`)
@@ -106,7 +106,7 @@ func TestControlRequestsRejectAmbiguityAndPrivilegeExpansion(t *testing.T) {
 }
 
 func TestControlRequestsKeepOperatorAndDeviceBoundaries(t *testing.T) {
-	for _, body := range []string{`{"action":"capabilities","params":{}}`, `{"action":"lifecycle","params":{"operation":"reboot_device"}}`, `{"action":"input","params":{"key":"ok"}}`, `{"action":"playback","params":{"operation":"pause"}}`, `{"action":"playback","params":{"operation":"previous_channel"}}`, `{"action":"playback","params":{"operation":"next_channel"}}`} {
+	for _, body := range []string{`{"action":"capabilities","params":{}}`, `{"action":"lifecycle","params":{"operation":"reboot_device"}}`, `{"action":"input","params":{"key":"ok"}}`, `{"action":"playback","params":{"operation":"pause"}}`, `{"action":"playback","params":{"operation":"previous_channel"}}`, `{"action":"playback","params":{"operation":"next_channel"}}`, `{"action":"playback","params":{"operation":"step_channel","offset":15}}`, `{"action":"playback","params":{"operation":"step_channel","offset":-15}}`} {
 		s := newTestServer(t)
 		expect(t, request(s, "POST", "/api/requests?device_id=first", firstToken, body, nil), 403)
 		expect(t, request(s, "POST", "/api/requests?device_id=first", "", body, nil), 401)
@@ -122,7 +122,7 @@ func TestControlRequestsKeepOperatorAndDeviceBoundaries(t *testing.T) {
 }
 
 func TestChannelStepRequestsDoNotExpandLegacyCommands(t *testing.T) {
-	for _, op := range []string{"previous_channel", "next_channel"} {
+	for _, op := range []string{"previous_channel", "next_channel", "step_channel"} {
 		t.Run(op, func(t *testing.T) {
 			s := newTestServer(t)
 			expect(t, request(s, "POST", "/api/webhook/commands?device_id=first", adminToken, `{"command":"`+op+`"}`, nil), 400)

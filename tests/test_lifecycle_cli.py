@@ -123,6 +123,71 @@ class LifecycleCliTest(unittest.TestCase):
                     self.assertEqual(json.loads(out) if machine else out,
                                      receipt if machine else 'Channel switch requested: 12: РЕН ТВ HD\n')
 
+    def test_signed_offsets_survive_argparse_and_dispatch_one_exact_integer_request(self):
+        for command, offset in [('+15', 15), ('-15', -15), ('+1', 1), ('-1', -1),
+                                ('+00015', 15), ('-00015', -15),
+                                ('+9007199254740991', 9007199254740991),
+                                ('-9007199254740991', -9007199254740991),
+                                ('+' + '0' * 5000 + '15', 15)]:
+            params = {'operation': 'step_channel', 'offset': offset}
+            channel = {'id': 7, 'number': 12, 'name': 'РЕН ТВ HD'}
+            receipt = dict(params, dispatched=True, channel=channel)
+            for machine in [False, True]:
+                with self.subTest(command=command[:30], json=machine):
+                    private = dict(receipt, secret='never-print', channel=dict(channel, url='never-print'))
+                    code, out, err, calls = self.run_cli([command], private, machine)
+                    self.assertEqual((code, err), (0, ''))
+                    self.assertEqual(calls, [mock.call('dev_tv', 'playback', params)])
+                    self.assertIs(type(calls[0].args[2]['offset']), int)
+                    self.assertEqual(json.loads(out) if machine else out,
+                                     receipt if machine else 'Channel switch requested: 12: РЕН ТВ HD\n')
+
+    def test_invalid_signed_offsets_fail_locally_without_search_or_mutation(self):
+        for command in ['+0', '-0', '+000', '-000', '+9007199254740992', '-9007199254740992',
+                        '+' + '9' * 5000, '-' + '9' * 5000, '+1.5', '-1.5', '+1e3', '-1e3',
+                        '+.5', '-.5', '+', '-', '++15', '--15', '+ 15', '+１５', '-١٥',
+                        '+²', '-Ⅻ', '+½', '+.²', '--Ⅻ']:
+            for machine in [False, True]:
+                with self.subTest(command=command[:30], json=machine):
+                    code, out, err, calls = self.run_cli([command], {}, machine)
+                    self.assertEqual((code, out, calls), (1, '', []))
+                    self.assertIn('Channel offset must be nonzero' if command[1:].isascii() and command[1:].isdigit()
+                                  else 'Use +N or -N alone', err)
+        for words in [['+15', 'now'], ['-15', '15'], ['+15', '--list']]:
+            code, out, err, calls = self.run_cli(words, {})
+            self.assertEqual((code, out, calls), (1, '', []))
+            self.assertIn('Use +N or -N alone', err)
+        for name in ['+News', '-News', '+²', '-Ⅻ', '+½']:
+            self.assertEqual(ott.parse_command(['play', name]), ('play', {'query': name}))
+
+    def test_signed_offset_does_not_change_absolute_channel_or_volume_commands(self):
+        response = {'dispatched': True, 'channel': {'id': 15, 'number': 15, 'name': 'News'}}
+        code, _, err, calls = self.run_cli(['15'], response)
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(calls, [mock.call('dev_tv', 'play', {'query': '15'})])
+        for command in ['v', 'vol', 'volume']:
+            for argument, offset in [('+15', 15), ('-15', -15)]:
+                code, _, err, calls = self.run_cli([command, argument], {'volume': 50, 'dispatched': True})
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(calls, [mock.call('dev_tv', 'command', {'command': 'set_volume', 'volume_step': offset})])
+
+    def test_signed_offset_receipt_must_echo_the_requested_integer_and_channel(self):
+        for command, offset in [('+15', 15), ('-15', -15), ('+1', 1), ('-1', -1)]:
+            valid = {'operation': 'step_channel', 'offset': offset, 'dispatched': True,
+                     'channel': {'id': 'a', 'number': 1, 'name': 'Первый'}}
+            invalid = [None, {}, {k: v for k, v in valid.items() if k != 'offset'},
+                       {**valid, 'operation': 'next_channel'}, {**valid, 'dispatched': 1},
+                       {**valid, 'dispatched': False}, {**valid, 'channel': None},
+                       {**valid, 'channel': {**valid['channel'], 'number': 0}}]
+            invalid.extend({**valid, 'offset': value} for value in
+                           [None, True, False, str(offset), float(offset), -offset, 0, offset + 1,
+                            float('nan'), float('inf'), 9007199254740992])
+            for receipt in invalid:
+                for machine in [False, True]:
+                    code, out, err, calls = self.run_cli([command], receipt, machine)
+                    self.assertEqual((code, out, len(calls)), (1, '', 1))
+                    self.assertIn('do not repeat', err)
+
     def test_adjacent_channel_receipt_must_identify_the_dispatched_channel(self):
         channel = {'id': 'a', 'number': 1, 'name': 'Первый'}
         valid = {'operation': 'previous_channel', 'dispatched': True, 'channel': channel}
@@ -176,7 +241,7 @@ class LifecycleCliTest(unittest.TestCase):
             self.assertIn('invalid capabilities', err)
 
     def test_unsupported_rejected_and_lost_control_replies_have_no_legacy_fallback(self):
-        for words in [['caps'], ['exit'], ['reboot'], ['key', 'ok'], ['pause'], ['seek', '1'], ['prev'], ['previous'], ['next']]:
+        for words in [['caps'], ['exit'], ['reboot'], ['key', 'ok'], ['pause'], ['seek', '1'], ['prev'], ['previous'], ['next'], ['+15'], ['-15']]:
             for error in [ott.PlayerUnsupported('private-player-detail'), ott.PlayerRejected('private-player-detail', {}),
                           ott.TransportError('Lost reply; do not repeat blindly')]:
                 code, out, err, calls = self.run_cli(words, error, True)
@@ -184,7 +249,8 @@ class LifecycleCliTest(unittest.TestCase):
                 self.assertNotIn('private-player-detail', err)
                 expected = {'caps': 'capabilities', 'exit': 'lifecycle', 'reboot': 'lifecycle',
                             'key': 'input', 'pause': 'playback', 'seek': 'playback',
-                            'prev': 'playback', 'previous': 'playback', 'next': 'playback'}[words[0]]
+                            'prev': 'playback', 'previous': 'playback', 'next': 'playback',
+                            '+15': 'playback', '-15': 'playback'}[words[0]]
                 self.assertEqual(calls[0].args[1], expected)
 
     def test_malformed_controls_are_rejected_locally_and_reserved_names_can_be_played(self):
