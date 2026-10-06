@@ -129,6 +129,15 @@ class ProfileOutputTest(unittest.TestCase):
                 self.assertIn('history: unknown h', output)
                 self.assertEqual(len(output.splitlines()), 15)
 
+    def test_vportal_profiles_have_no_tv_playlist_and_preserve_provider(self):
+        data = self.listing()
+        data['provider'] = 'vportal'
+        for row in data['profiles']:
+            row.update(history_hours=0, playlist_configured=False, vportal_configured=True)
+        status, output, errors, calls = self.run_command(['profiles'], data, True)
+        self.assertEqual((status, errors), (0, ''))
+        self.assertEqual(json.loads(output), data)
+
     def test_invalid_listing_never_claims_success(self):
         cases = [None, {}, {'provider': 'xtream', 'profiles': self.listing()['profiles']}]
         for field, value in [('number', True), ('number', 1.0), ('name', '\ud800'), ('name', 'я' * 129),
@@ -151,7 +160,7 @@ class ProfileOutputTest(unittest.TestCase):
             with self.subTest(data=data):
                 status, output, errors, calls = self.run_command(['profiles'], data, True)
                 self.assertEqual((status, output, len(calls)), (1, '', 1))
-                self.assertIn('invalid M3U profile metadata', errors)
+                self.assertIn('invalid profile metadata', errors)
 
     def test_selection_checks_requested_number_active_and_dispatch(self):
         good = {'provider': 'm3u', 'profile': self.row(2), 'dispatched': True, 'url': 'secret'}

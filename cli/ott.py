@@ -60,8 +60,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME plex token [TOKEN]        update the Plex token (hidden prompt if omitted)
   ott NAME plex token-file FILE      update the Plex token from a file
   ott NAME playlist URL              update the M3U playlist
-  ott NAME profiles                  list the 15 M3U profiles without URLs
-  ott NAME profile N                 select M3U profile 1–15
+  ott NAME profiles                  list the active provider’s 15 profiles without URLs
+  ott NAME profile N                 select M3U or VPortal profile 1–15
   ott NAME profile N url URL         change a profile's playlist URL
   ott NAME profile N history HOURS   set archive depth in hours (0–8760)
   ott NAME profile N vportal LINK    set a profile's VPortal link
@@ -78,7 +78,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME reboot [device]           reboot the device OS only when supported
   ott NAME standby / wake            enter or leave player standby
   ott NAME kiosk [status]            show kiosk policy and playback health
-  ott NAME kiosk on [CHANNEL]        lock number/first name match, or await UI selection
+  ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal video/episode queue
   ott NAME kiosk set CHANNEL         replace by number or first name match
   ott NAME kiosk off                 release the kiosk lock
   ott NAME random [FROM TO]          play a random channel
@@ -887,7 +887,7 @@ def validate_profile_settings(settings):
 
 
 def profile_metadata(data, action, params):
-    message = "The player returned invalid M3U profile metadata"
+    message = "The player returned invalid profile metadata"
     if action != "profiles":
         message += ". The request may have executed; do not repeat the change blindly."
     def fail():
@@ -900,7 +900,7 @@ def profile_metadata(data, action, params):
                     and (type(row["history_hours"]) is not int or not 0 <= row["history_hours"] <= 8760))):
             fail()
         return {key: row[key] for key in ("number", "name", "active", "history_hours", "playlist_configured", "vportal_configured")}
-    if not isinstance(data, dict) or data.get("provider") != "m3u":
+    if not isinstance(data, dict) or data.get("provider") not in ("m3u", "vportal"):
         fail()
     if action == "profiles":
         if not isinstance(data.get("profiles"), list) or len(data["profiles"]) != 15:
@@ -908,14 +908,14 @@ def profile_metadata(data, action, params):
         rows = [profile(row) for row in data["profiles"]]
         if any(row["number"] != number for number, row in enumerate(rows, 1)) or sum(row["active"] for row in rows) != 1:
             fail()
-        return {"provider": "m3u", "profiles": rows}
+        return {"provider": data["provider"], "profiles": rows}
     row = profile(data.get("profile"))
     if row["number"] != params["number"]:
         fail()
     if action == "profile":
         if data.get("dispatched") is not True or row["active"] is not True:
             fail()
-        return {"provider": "m3u", "profile": row, "dispatched": True}
+        return {"provider": data["provider"], "profile": row, "dispatched": True}
     if data.get("saved") is not True:
         fail()
     for key, value in params["settings"].items():
@@ -924,7 +924,7 @@ def profile_metadata(data, action, params):
                 fail()
         elif row[key + "_configured"] != bool(value):
             fail()
-    return {"provider": "m3u", "profile": row, "saved": True}
+    return {"provider": data["provider"], "profile": row, "saved": True}
 
 
 def preset_name(value):
@@ -1196,7 +1196,15 @@ def kiosk_metadata(data, mode):
             or (mode == "set" and data["state"] != "locked")):
         raise Error(message)
     channel = data.get("channel")
-    if data["state"] == "locked":
+    media = data.get("media")
+    if media is not None:
+        if (data["state"] != "locked" or data.get("provider") != "vportal" or channel is not None
+                or not isinstance(media, dict) or not epg_text(media.get("title"), 65536, "utf-8")
+                or type(media.get("total")) is not int or not 1 <= media["total"] <= 1000
+                or type(media.get("index")) is not int or not 0 <= media["index"] < media["total"]):
+            raise Error(message)
+        media = {key: media[key] for key in ("title", "index", "total")}
+    elif data["state"] == "locked":
         if not isinstance(channel, dict) or not isinstance(channel.get("id"), str) or not channel["id"] or not isinstance(channel.get("name"), str):
             raise Error(message)
         channel = {"id": channel["id"], "name": channel["name"]}
@@ -1206,7 +1214,7 @@ def kiosk_metadata(data, mode):
     if (data["enabled"] and not isinstance(provider, str)) or (not data["enabled"] and provider is not None):
         raise Error(message)
     return {**{key: data[key] for key in ("enabled", "state", "retry_seconds", "retries", "health")},
-            "channel": channel, "provider": provider}
+            "channel": channel, "provider": provider, **({"media": media} if media is not None else {})}
 
 
 def restart_metadata(data, target):
@@ -1688,9 +1696,12 @@ def main(argv=None):
                 print(f"{'*' if row['active'] else ' '} {row['index']}: {clean(row['id'])} — {clean(row['name'])}")
         elif action == "profiles":
             for row in data["profiles"]:
-                history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
-                print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | history: {history} h | "
-                      f"playlist: {'set' if row['playlist_configured'] else 'empty'} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
+                if data["provider"] == "vportal":
+                    print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
+                else:
+                    history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
+                    print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | history: {history} h | "
+                          f"playlist: {'set' if row['playlist_configured'] else 'empty'} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
         elif action == "profile":
             print(f"Profile switch requested: {data['profile']['number']}: {clean(data['profile']['name'])}")
         elif action == "profile_settings":
@@ -1712,6 +1723,8 @@ def main(argv=None):
                 print("Kiosk mode disabled.")
             elif data["state"] == "waiting":
                 print("Kiosk mode enabled; waiting for the first channel selection in the player.")
+            elif "media" in data:
+                print(f"Kiosk VPortal: {clean(data['media']['title'])} | {data['media']['index'] + 1}/{data['media']['total']} | {data['health']} | retries: {data['retries']}")
             else:
                 print(f"Kiosk channel: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
         elif plex_settings:
