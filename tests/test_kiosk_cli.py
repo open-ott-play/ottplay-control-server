@@ -12,6 +12,9 @@ class KioskTest(unittest.TestCase):
             (['kiosk'], {'mode':'status'}),
             (['KIOSK','STATUS'], {'mode':'status'}),
             (['kiosk','on'], {'mode':'on'}),
+            (['kiosk','on','--strict'], {'mode':'on','strict':True}),
+            (['kiosk','on','--strict','Новости','HD'], {'mode':'on','strict':True,'query':'Новости HD'}),
+            (['kiosk','set','12','--strict'], {'mode':'set','strict':True,'query':'12'}),
             (['kiosk','on','12'], {'mode':'on','query':'12'}),
             (['kiosk','on','нОвОсТи'], {'mode':'on','query':'нОвОсТи'}),
             (['kiosk','set','ВоСт'], {'mode':'set','query':'ВоСт'}),
@@ -34,6 +37,18 @@ class KioskTest(unittest.TestCase):
         for words in [['kiosk','set'],['kiosk','other'],['kiosk','off','1'],['kiosk','status','1'],['kiosk','on',''],['kiosk','set','\ud800'],['kiosk','set','a\n'],['kiosk','set','я'*513]]:
             with self.subTest(words=words), self.assertRaises(ott.Error):
                 ott.parse_command(words)
+        for words in [['kiosk','off','--strict'],['kiosk','status','--strict'],['kiosk','set','--strict'],['kiosk','on','--strict','--strict']]:
+            with self.subTest(words=words), self.assertRaises(ott.Error):
+                ott.parse_command(words)
+
+    def test_strict_requires_explicit_confirmation(self):
+        data={'enabled':True,'state':'locked','channel':{'id':'a','name':'News'},'provider':'m3u','retry_seconds':10,'retries':0,'health':'starting'}
+        for strict in [None,False,1,'true']:
+            value = data if strict is None else {**data,'strict':strict}
+            with self.subTest(strict=strict), self.assertRaises(ott.Error):
+                ott.kiosk_metadata(value,'on',True)
+        self.assertTrue(ott.kiosk_metadata({**data,'strict':True},'on',True)['strict'])
+        self.assertFalse(ott.kiosk_metadata({**data,'strict':False},'on')['strict'])
 
     def test_receipts_and_metadata_only_output(self):
         data={'enabled':True,'state':'locked','channel':{'id':'a','name':'Новости','url':'secret'},'provider':'m3u','retry_seconds':10,'retries':0,'health':'starting','source':'private'}
