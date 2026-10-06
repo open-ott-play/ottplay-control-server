@@ -36,6 +36,12 @@ func validControlRequest(action string, params map[string]json.RawMessage) bool 
 		switch value {
 		case "pause", "resume", "previous_channel", "next_channel":
 			return len(params) == 1
+		case "step_channel":
+			// Decode the integer token directly: float64 could round a fractional
+			// offset into an integer before validation. Bound it for the JS player.
+			var offset *int64
+			return len(params) == 2 && json.Unmarshal(params["offset"], &offset) == nil && offset != nil &&
+				*offset != 0 && *offset >= -9007199254740991 && *offset <= 9007199254740991
 		case "seek":
 			return len(params) == 2 && numberValue(params["position"], 0, 9007199254740991, false)
 		}

@@ -39,6 +39,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME 12                        play channel 12 from the s listing
   ott NAME prev / previous           play the previous channel in the current category
   ott NAME next                      play the next channel in the current category
+  ott NAME +15 / -15                 move forward / back 15 channels in that category, wrapping
   ott NAME TITLE                     search channels, current EPG, then archives within 144 hours
   ott NAME play s                    play a channel whose name is reserved
   ott NAME s [TEXT]                  list channels, optionally matching TEXT
@@ -94,6 +95,8 @@ Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
 Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
 Only these exact aliases are expanded; use play TITLE for a reserved channel name.
+Signed channel offsets are nonzero whole numbers from -9007199254740991 to
++9007199254740991; each offset sends one request. Unsigned 15 selects channel 15.
 """
 
 COMMAND_ALIASES = {
@@ -122,7 +125,8 @@ INPUT_ALIASES = {
     "play-pause": "play_pause", "pp": "play_pause", "fs": "fullscreen",
 }
 CHANNEL_STEPS = {"prev": "previous_channel", "next": "next_channel"}
-PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_STEPS.values()))
+CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
+PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
 
 
 def command_verb(words):
@@ -623,6 +627,15 @@ def parse_command(words):
         return "status", {}
     verb, tail = command_verb(words), words[1:]
     text = " ".join(tail)
+    # Reserve numeric-looking offsets while preserving names such as +HD.
+    if verb in ("+", "-") or re.match(r"[+-](?:\s*(?:\d|\.\d)|[+-]+(?:\d|\.\d))", verb):
+        if tail or not re.fullmatch(r"[+-][0-9]+", verb):
+            raise Error("Use +N or -N alone with a whole-number channel offset; use play TITLE for a signed channel name")
+        digits = verb[1:].lstrip("0") or "0"
+        if len(digits) > 16 or not 0 < int(digits) <= 9007199254740991:
+            raise Error("Channel offset must be nonzero and between -9007199254740991 and +9007199254740991")
+        offset = int(digits) * (-1 if verb[0] == "-" else 1)
+        return "playback", {"operation": "step_channel", "offset": offset}
     if verb == "kiosk":
         mode = tail[0].casefold() if tail else "status"
         if mode not in ("status", "on", "off", "set") or (mode in ("status", "off") and len(tail) > 1) or (mode == "set" and len(tail) < 2):
@@ -1308,6 +1321,10 @@ def print_player_status(data, name):
         if operation in controls["lifecycle"]:
             print(f"  {prefix} {command}  — {description}")
     for operation in controls["playback"]:
+        if operation == "step_channel":
+            print(f"  {prefix} +N  — move forward N channels in the current category, wrapping")
+            print(f"  {prefix} -N  — move back N channels in the current category, wrapping")
+            continue
         command = {"seek": "seek SECONDS", "previous_channel": "prev", "next_channel": "next"}.get(operation, operation)
         print(f"  {prefix} {command}")
     if controls["input"]:
@@ -1329,7 +1346,11 @@ def playback_metadata(data, params):
     if not isinstance(data, dict) or data.get("operation") != params["operation"] or data.get("dispatched") is not True:
         raise Error(invalid)
     result = {"operation": params["operation"], "dispatched": True}
-    if params["operation"] in CHANNEL_STEPS.values():
+    if params["operation"] == "step_channel":
+        if type(data.get("offset")) is not int or data["offset"] != params["offset"]:
+            raise Error(invalid)
+        result["offset"] = data["offset"]
+    if params["operation"] in CHANNEL_OPERATIONS:
         channel = data.get("channel")
         if (not isinstance(channel, dict) or channel_identity(channel.get("id")) is None
                 or type(channel.get("number")) is not int or not 0 < channel["number"] <= 9007199254740991
