@@ -21,6 +21,15 @@ class KioskTest(unittest.TestCase):
             self.assertEqual(ott.parse_command(words), ('kiosk',params))
         self.assertEqual(ott.parse_command(['play','kiosk']), ('play',{'query':'kiosk'}))
 
+    def test_vportal_receipt_is_metadata_only(self):
+        data={'enabled':True,'state':'locked','channel':None,'provider':'vportal','retry_seconds':10,'retries':0,'health':'starting',
+              'media':{'title':'Episode','index':0,'total':2,'request':{'private':'secret'}}}
+        result=ott.kiosk_metadata(data,'on')
+        self.assertEqual(result['media'],{'title':'Episode','index':0,'total':2})
+        for patch in [{'provider':'m3u'},{'channel':{'id':'a','name':'Channel'}},{'media':{'title':'Episode','index':2,'total':2}}]:
+            with self.subTest(patch=patch),self.assertRaises(ott.Error):
+                ott.kiosk_metadata({**data,**patch},'on')
+
     def test_invalid_commands(self):
         for words in [['kiosk','set'],['kiosk','other'],['kiosk','off','1'],['kiosk','status','1'],['kiosk','on',''],['kiosk','set','\ud800'],['kiosk','set','a\n'],['kiosk','set','я'*513]]:
             with self.subTest(words=words), self.assertRaises(ott.Error):

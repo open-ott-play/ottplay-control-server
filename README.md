@@ -124,6 +124,18 @@ with urllib.request.urlopen(request, timeout=5) as response:
 
 Other commands select a channel by number or name, choose a random channel, switch providers, show a message, change an M3U playlist where supported, or exit the player. Availability depends on the player platform and current provider. See [the API contract](docs/api.md).
 
+With a player supporting the standalone VPortal provider, `ott a1 provider
+vportal` selects its own 15 profiles. Use `profile N vportal LINK`, `profile N
+name NAME` or a private `profile-config N FILE` containing `name` and `vportal`,
+then select the configured slot with `profile N`. Existing M3U profiles stay
+separate. `profiles` reports metadata without exposing cabinet links or keys.
+
+After starting a VPortal film or episode queue, `ott a1 kiosk on` locks that
+selection. The player preserves the queue and its position across reloads and
+resolves media URLs again for recovery. Use `kiosk off` to choose another title
+or change profiles, then `kiosk on` to lock it. The kiosk receipt shows the title
+and episode count; provider requests and stream URLs stay on the player.
+
 ## Remote diagnostics
 
 Optional [protocol 2 diagnostics](docs/remote-diagnostics.md) provides explicitly
