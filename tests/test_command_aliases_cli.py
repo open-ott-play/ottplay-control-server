@@ -140,6 +140,14 @@ class AliasDispatchTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(calls, [mock.call('dev_tv', 'channels', {'search': 'Volume'}), mock.call('dev_tv', 'play', {'query': '1'})])
 
+    def test_nonnumeric_signed_channel_names_keep_normal_search(self):
+        for name in ['+HD', '-Новости']:
+            row = {'id': 'signed-title', 'number': 8, 'name': name}
+            code, _, err, calls, _ = self.run_cli([name], [{'channels': [row]}, {'dispatched': True, 'channel': row}])
+            self.assertEqual((code, err), (0, 'Channel switch requested: 8: ' + name + '\n'))
+            self.assertEqual(calls, [mock.call('dev_tv', 'channels', {'search': name}),
+                                     mock.call('dev_tv', 'play', {'query': '8'})])
+
     def test_recognized_malformed_commands_fail_before_requests(self):
         invalid = [['status', 'extra'], ['st', 'extra'], ['providers', 'extra'], ['provs', 'extra'],
                    ['provider'], ['prov'], ['profiles', 'extra'], ['profs', 'extra'], ['profile'], ['prof'],
