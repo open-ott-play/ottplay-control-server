@@ -3,8 +3,10 @@
 `cli/diagnostics.py` is a Python 3 standard-library client for the additive
 diagnostics protocol 2. It uses a separately configured scoped operator
 credential; an existing administrator or device token does not grant these
-permissions. The device must also have diagnostics enabled and current local
-consent. Existing `ott` playback commands are unchanged.
+permissions. The server must have diagnostics enabled for the device. On updated
+players, the enabled Remote control connection supplies local authorization;
+there is no separate diagnostics permission or trust toggle. Existing `ott`
+playback commands are unchanged.
 
 ## Install and prepare access
 
@@ -78,22 +80,25 @@ For the remaining examples, have your credential mechanism provide
 `OTT_DIAGNOSTICS_TOKEN`, or replace `--token-env OTT_DIAGNOSTICS_TOKEN` with the
 POSIX `--token-file` option above. Do not configure both options.
 
-## Register a runtime and grant support
+## Connect the player and register a runtime
 
 Registration is performed by the player; there is no operator CLI `register`
 command. In **Settings → Remote control**, connect the player to the configured
-HTTPS command server with its **device** access code. Then choose one of:
+HTTPS command server with its **device** access code. Enabling that connection
+authorizes player diagnostics, supported screenshots and controls for that
+controller, including on later startups. Connect only to a controller you trust:
+screenshots may include settings, PIN screens and visible credentials. Browser
+screenshots additionally need their local source picker; see
+[remote screenshots](cli.md#remote-screenshots).
 
-- **Allow diagnostics for 10 minutes**: a temporary foreground grant, discarded
-  on suspension, disconnect, loss of connectivity or expiry.
-- **Trust this server for remote support**: a device-local saved grant for that
-  controller and device credential. Reconnects create a new runtime and consent
-  epoch; captures and repairs still require a new operator request.
-
-These choices permit structured observations and the two typed repairs when the
-operator has their scopes. They cannot be enabled by a remote input command.
-Trust requires working IndexedDB on the player; temporary mode remains available
-when durable storage is unavailable. See the player's
+The player automatically registers a diagnostic runtime without another local
+prompt. Reconnects and reloads create a new runtime and consent epoch; captures
+and repairs still require a new operator request. Consent fields remain in the
+protocol to bind operations to this connection and exact runtime. Server-side
+device enablement and operator scopes are unchanged. Older players may still
+need their temporary or saved local grant; update them to use connection-based
+authorization. Each telemetry session still has a maximum ten-minute lease;
+this bounds resource use and does not expire connection authority. See the player's
 [support lifecycle and platform guide](https://github.com/open-ott-play/ottplay-foss/blob/main/docs/remote-diagnostics.md)
 for browser, LG webOS, Tauri and Capacitor behavior.
 
@@ -145,26 +150,26 @@ Stop immediately denies new server ingestion, but queued stop is not confirmatio
 that the device stopped. Inspect `device_stop_confirmed`. Revoke retires the
 runtime credential; the device stops on rejection or its connectivity lease.
 
-### Deregister, remove trust or remove operator access
+### Deregister, disconnect or remove operator access
 
 These actions have different lifetimes:
 
 - `stop --session SESSION_ID` ends that capture. It preserves the runtime and
-  consent; it does **not** revoke an independent pending repair. On the player,
-  **Stop current capture** also leaves trusted support available.
+  connection authorization; it does **not** revoke an independent pending
+  repair. On the player, **Stop current capture** or clicking the active capture
+  indicator retires the current runtime and cancels its work, then registers
+  a fresh ready runtime. It keeps the controller connection enabled. A new
+  capture still requires a new operator request.
 - `revoke --runtime RUNTIME_ID --server-epoch SERVER_EPOCH` retires that exact
   runtime credential and revokes pending repairs. It does not remove the saved
-  device access code or another tab's runtime. The current player clears local
-  support when it observes the authorization rejection, but the server cannot
-  directly erase an offline player's saved trust. This is not a permanent ban
-  on device registration; use local revocation or disable the device's
+  device access code or another tab's runtime. This is not a permanent ban
+  on device registration: an enabled connection can register a new runtime on
+  reconnection. Disconnect the player or disable the device's
   diagnostics for a lasting block.
-- On the player, **Stop diagnostics**, **Disable trusted remote support**, or
-  the diagnostic indicator removes local support permission and cancels pending
-  diagnostic repairs. Disconnecting the saved controller also clears trust.
-  If removing stored permission fails, retry the visible storage-error action
-  before restarting the player; local capture stops immediately, but saved trust
-  may remain until deletion succeeds.
+- On the player, **Disconnect** stops diagnostics and screenshots and invalidates
+  pending callbacks for that connection. Changing its address/access code also
+  retires the old runtime. **Connect** restores authority for the configured
+  controller; there is no separate saved trust flag to remove.
 - To deny diagnostics for a device at the server, set its `diagnostics.enabled`
   to `false`, validate configuration and restart the service. To remove an
   operator, remove its entry from `diagnostics.operators`; to rotate its token,
@@ -215,7 +220,7 @@ Server scopes remain authoritative regardless of tool annotations.
 Repair is a separate permission from diagnostic capture. The operator needs
 `repairs.start` to request an action and `repairs.read` to inspect its receipt,
 scoped to the exact configured device. The selected live runtime must advertise
-the `repairs` capability and report current local consent. Discover its runtime
+the `repairs` capability and report current connection consent. Discover its runtime
 and consent epoch with `runtimes`; never substitute another runtime based on a
 matching instance label or device token.
 
@@ -246,7 +251,7 @@ reply has an unknown outcome, so the client never retries automatically. Read
 the known receipt, or deliberately replay the same fields/key/epoch within the
 reported retention horizon. Do not change the key, epoch, runtime, or action
 to work around an uncertain result. A missing or expired receipt is not proof
-that the effect did not run. Stopping local support, revoking consent, or
+that the effect did not run. Disconnecting the player, withdrawing connection consent, or
 retiring a runtime prevents pending repair work from continuing.
 
 The MCP repair tool requires all seven arguments: `device_id`, `runtime_id`,
@@ -377,11 +382,12 @@ and [tools/error handling](https://modelcontextprotocol.io/specification/2025-11
   returns the same response as an absent target. Check the controller base path
   and server version too. A missing receipt after restart or expiry does not
   prove that the earlier operation never executed.
-- **No runtimes, `runtime_expired`, or `consent_required`:** confirm the player
-  is foreground, connected over HTTPS, and has temporary consent or saved trust.
+- **No runtimes, `runtime_expired`, or `consent_required`:** confirm the player's
+  Remote control connection is enabled over HTTPS and server-side diagnostics
+  are enabled for that device. Updated players register automatically.
   Discover again after reconnect/reload and select its new runtime and consent
-  epoch. Do not infer identity from a tab label. With a temporary grant, a local
-  action is needed to grant access again.
+  epoch. Do not infer identity from a tab label. Older players may still require
+  their local diagnostic grant until updated.
 - **`runtime_busy` or `repair_busy`:** read the existing exact session/repair
   state; `active_session_id` identifies an occupied capture. Finish that work or
   wait for expiry before creating another operation. Do not send new keys to
@@ -392,7 +398,9 @@ and [tools/error handling](https://modelcontextprotocol.io/specification/2025-11
   are not tools in this MCP adapter. Consult [player command support](cli.md).
 - **`start_pending` or empty events:** acceptance only queued the action. Read
   status until `active` or a terminal state and check the remaining lease.
-  Capture pauses/stops on backgrounding or connectivity loss. Advance event
+  Background visibility alone does not stop capture. OS suspension/pagehide or
+  a lost connectivity lease can retire its runtime; resume/reconnect registers
+  a new runtime but does not restart that capture. Advance event
   reads using `next_seq`; inspect truncation and drop counts for missing history.
 - **`epoch_changed`, `server_epoch_mismatch`, `idempotency_conflict`, timeout or
   `unknown_outcome: true`:** inspect current state first. Reuse the original
