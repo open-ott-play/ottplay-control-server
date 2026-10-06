@@ -628,7 +628,8 @@ def parse_command(words):
     verb, tail = command_verb(words), words[1:]
     text = " ".join(tail)
     # Reserve numeric-looking offsets while preserving names such as +HD.
-    if verb in ("+", "-") or re.match(r"[+-](?:\s*(?:\d|\.\d)|[+-]+(?:\d|\.\d))", verb):
+    signed_head = re.match(r"[+-][+-]*\s*\.?(.)", verb)
+    if verb in ("+", "-") or (signed_head and signed_head[1].isnumeric()):
         if tail or not re.fullmatch(r"[+-][0-9]+", verb):
             raise Error("Use +N or -N alone with a whole-number channel offset; use play TITLE for a signed channel name")
         digits = verb[1:].lstrip("0") or "0"
