@@ -92,10 +92,12 @@ class StatusCliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('No controls are currently advertised', out)
         caps.update(lifecycle=['restart_stream', 'restart_app', 'exit_app', 'reboot_device'],
-                    playback=['pause', 'resume', 'seek'])
+                    playback=['pause', 'resume', 'seek', 'previous_channel', 'next_channel'])
         code, out, _, _ = self.run_cli([], {'ready': True}, caps, alias='Living room')
-        for command in ('restart stream', 'restart app', 'exit', 'reboot', 'pause', 'resume', 'seek SECONDS'):
+        for command in ('restart stream', 'restart app', 'exit', 'reboot', 'pause', 'resume', 'seek SECONDS', 'prev', 'next'):
             self.assertIn("ott 'Living room' " + command, out)
+        self.assertNotIn('previous_channel', out)
+        self.assertNotIn('next_channel', out)
         self.assertNotIn("ott 'Living room' restart  — reload", out)
 
     def test_status_failure_never_submits_capabilities_request(self):

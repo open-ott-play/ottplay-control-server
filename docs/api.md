@@ -113,6 +113,24 @@ replay and is discarded on expiry or command-server reconfiguration/disable.
 Clients must not infer completed restart from either acknowledgement or replay
 an uncertain request. Unsupported playback backends use `status:"unsupported"`.
 
+`playback` accepts exactly `{operation:"previous_channel"}` or
+`{operation:"next_channel"}` for one adjacent-channel switch in the active
+playback category, with wrap at either end. These are the operations behind
+`ott PLAYER prev` / `previous` and `ott PLAYER next`. No index, position,
+repeat count or UI key is accepted. The player validates the current channel
+selection and local access policy before calling its normal remote channel
+selection path, which closes an open channel list. Browsing a different category
+does not change the playback category used for the step. Unready/stale state,
+protected UI, standby, kiosk and settings locks reject the operation.
+
+Success data is `{operation,dispatched:true,channel:{id,number,name}}`, without
+stream URLs or credentials. `number` is the one-based `channels` catalogue
+position, not the index within the active category. `capabilities` with empty
+params reports these operations in its `playback` list when available. They
+require an updated controller and player; there is no legacy/input fallback.
+Response retries use the same request ID and do not repeat the step within the
+player session. Do not submit a new request after an uncertain result.
+
 `epg_catalog` accepts exactly `{}` and returns a lightweight snapshot:
 `{catalog,channels:[{id,number,name,tvgId,tvgName,shift,archiveHours}],archive:{version:1,revision}}`.
 `archiveHours` is the channel retention capped at 144 hours; zero means no archive.

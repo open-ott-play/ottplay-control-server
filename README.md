@@ -51,6 +51,8 @@ Once installed and configured:
 ott --help                 # all CLI command families
 ott devices                # controller registrations and last contact
 ott a1                     # this player's status and available controls
+ott a1 prev                # previous channel in the active category (previous also works)
+ott a1 next                # next channel, wrapping at the end of the category
 ott a1 channels "РЕН"       # list channel-name matches without playing
 ott a1 "РЕН ТВ HD"          # search and play a matching channel
 ott a1 volume 35            # vol/v are equivalent command aliases
