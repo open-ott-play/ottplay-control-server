@@ -990,6 +990,9 @@ there is no extra screenshot account, listening port or screenshot registration.
 The screenshot connection requires an **HTTPS controller**, or HTTP on loopback
 (`localhost`, `127.0.0.1`, `[::1]`). Plain HTTP to another LAN host cannot receive
 a local screenshot grant, even when ordinary remote controls work over it.
+The CLI enforces the same HTTPS/loopback policy on its configured `server`
+download address before sending a request; a secure player upload does not
+make a plain-HTTP CLI download private.
 
 On the player, open **Settings → Remote control → Allow screenshots for 10 minutes**
 and enable it locally, then close settings. Permission is temporary, kept only

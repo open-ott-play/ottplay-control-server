@@ -48,6 +48,8 @@ class ScreenshotCliTest(unittest.TestCase):
 
     def run_cli(self, words, replies=None, machine=False, client=None):
         client = client or mock.Mock(timeout=45)
+        if not isinstance(client.server, str):
+            client.server = 'https://controller.example'
         client.device.return_value = 'dev_tv'
         if replies is not None:
             client.call.side_effect = replies
@@ -125,6 +127,24 @@ class ScreenshotCliTest(unittest.TestCase):
                 code, output, errors, client = self.run_cli(['shot'], replies, True)
             self.assertEqual((code, output, client.call.call_count), (1, '', expected_calls))
             self.assertIn('--timeout', errors)
+
+    def test_screenshot_download_requires_https_or_exact_loopback_before_any_work(self):
+        for server in ['http://controller.example', 'http://192.168.1.12', 'http://localhost.evil',
+                       'http://127.0.0.1.evil', 'http://127.0.0.2', 'http://[2001:db8::1]', 'http://[invalid']:
+            client = mock.Mock(timeout=45, server=server)
+            with mock.patch.object(ott, 'screenshot_destination') as destination:
+                code, output, errors, client = self.run_cli(['shot'], [], client=client)
+            self.assertEqual((code, output, client.call.call_count), (1, '', 0))
+            self.assertIn('HTTPS controller or HTTP loopback', errors)
+            destination.assert_not_called()
+        for server in ['https://controller.example', 'http://localhost:8081', 'http://LOCALHOST:8081',
+                       'http://127.0.0.1:8081', 'http://[::1]:8081/prefix']:
+            client = mock.Mock(timeout=45, server=server)
+            code, _, errors, _ = self.run_cli(['shot'], [caps(), receipt()], client=client)
+            self.assertEqual((code, errors), (0, ''))
+        client = mock.Mock(timeout=45, server='http://192.168.1.12')
+        code, _, errors, client = self.run_cli(['caps'], [caps()], client=client)
+        self.assertEqual((code, errors, client.call.call_count), (0, '', 1))
 
     def test_runtime_source_schema_size_and_png_validation_precede_file_creation(self):
         invalid = []

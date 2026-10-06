@@ -1437,6 +1437,16 @@ def save_screenshot(path, parent_fd, image):
 
 
 def screenshot_command(client, device, name, output, timeout):
+    # Player consent protects the upload. Apply the same policy to the CLI's
+    # download before sending any request or opening an output directory.
+    try:
+        server = urllib.parse.urlsplit(client.server if isinstance(client.server, str) else "")
+        secure = bool(server.hostname) and (server.scheme == "https" or
+                 (server.scheme == "http" and server.hostname in ("localhost", "127.0.0.1", "::1")))
+    except ValueError:
+        secure = False
+    if not secure:
+        raise Error("Screenshots require an HTTPS controller or HTTP loopback address; no capture was requested")
     path, parent_fd = screenshot_destination(output, name)
     deadline = time.monotonic() + timeout
     previous_timeout = client.timeout
