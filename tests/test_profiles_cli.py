@@ -137,6 +137,22 @@ class ProfileOutputTest(unittest.TestCase):
         status, output, errors, calls = self.run_command(['profiles'], data, True)
         self.assertEqual((status, errors), (0, ''))
         self.assertEqual(json.loads(output), data)
+        self.assertEqual(calls, [mock.call('dev_tv', 'profiles', {})])
+
+    def test_standalone_vportal_profile_mutations_remain_supported(self):
+        row = self.row(2, name='Cinema', history_hours=0,
+                       playlist_configured=False, vportal_configured=True)
+        for words, action, params, receipt in [
+            (['profile', '2'], 'profile', {'number': 2}, {'dispatched': True}),
+            (['profile', '2', 'name', 'Cinema'], 'profile_settings',
+             {'number': 2, 'settings': {'name': 'Cinema'}}, {'saved': True}),
+        ]:
+            with self.subTest(action=action):
+                data = {'provider': 'vportal', 'profile': row, **receipt}
+                status, output, errors, calls = self.run_command(words, data, True)
+                self.assertEqual((status, errors), (0, ''))
+                self.assertEqual(json.loads(output), data)
+                self.assertEqual(calls, [mock.call('dev_tv', action, params)])
 
     def test_invalid_listing_never_claims_success(self):
         cases = [None, {}, {'provider': 'xtream', 'profiles': self.listing()['profiles']}]

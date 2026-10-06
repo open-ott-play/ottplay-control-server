@@ -402,6 +402,38 @@ class PresetExecutionTests(unittest.TestCase):
             self.assertEqual(player.counts['profiles'], 1)
             self.assert_no_secrets(out + err)
 
+    def test_vportal_receipts_stop_every_m3u_phase_without_followup_requests(self):
+        cases = [
+            ('profiles', 1, 'wait_m3u', 5),
+            ('profile_settings', 1, 'save_profile_1', 6),
+            ('profile', 1, 'select_profile_1', 7),
+            ('profile_settings', 2, 'save_profile_2', 8),
+            ('profiles', 2, 'verify_profiles', 9),
+        ]
+        for action, occurrence, stage, count in cases:
+            with self.subTest(stage=stage):
+                player = FakePlayer()
+                original_call = player.call
+
+                def changed_provider(device, request, params):
+                    data = original_call(device, request, params)
+                    if request == action and player.counts[request] == occurrence:
+                        # All metadata and acknowledgements match the request;
+                        # only provider ownership has changed.
+                        data['provider'] = 'vportal'
+                        player.provider = 'vportal'
+                    return data
+
+                player.call = changed_provider
+                status, out, err, _, _ = run(player=player)
+                receipt = json.loads(out)
+                self.assertEqual((status, receipt['status'], receipt.get('stage')), (1, 'failed', stage))
+                self.assertNotIn(stage, receipt['completed'])
+                self.assertNotIn('provider', receipt)
+                self.assertEqual(len(player.calls), count)
+                self.assertEqual(player.calls[-1][1], action)
+                self.assert_no_secrets(out + err)
+
     def test_deadline_limits_mount_polling_and_late_ack_stops_next_step(self):
         now = [0.0]
         def sleep(seconds):

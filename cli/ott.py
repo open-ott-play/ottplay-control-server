@@ -886,7 +886,7 @@ def validate_profile_settings(settings):
             raise Error("Profile settings must be UTF-8 text without control characters: name up to 256 bytes, playlist and VPortal links up to 8192 bytes")
 
 
-def profile_metadata(data, action, params):
+def profile_metadata(data, action, params, *, expected_provider=None):
     message = "The player returned invalid profile metadata"
     if action != "profiles":
         message += ". The request may have executed; do not repeat the change blindly."
@@ -900,7 +900,8 @@ def profile_metadata(data, action, params):
                     and (type(row["history_hours"]) is not int or not 0 <= row["history_hours"] <= 8760))):
             fail()
         return {key: row[key] for key in ("number", "name", "active", "history_hours", "playlist_configured", "vportal_configured")}
-    if not isinstance(data, dict) or data.get("provider") not in ("m3u", "vportal"):
+    if (not isinstance(data, dict) or data.get("provider") not in ("m3u", "vportal")
+            or (expected_provider is not None and data.get("provider") != expected_provider)):
         fail()
     if action == "profiles":
         if not isinstance(data.get("profiles"), list) or len(data["profiles"]) != 15:
@@ -1083,11 +1084,12 @@ def load_preset(client, device, name, preset):
         return True if data["provider"] == "plex" else None
 
     def profiles(data):
-        return profile_metadata(data, "profiles", {})["profiles"]
+        # Presets own M3U slots even though standalone commands also accept VPortal.
+        return profile_metadata(data, "profiles", {}, expected_provider="m3u")["profiles"]
 
     def save_profile(row, active):
         def validate(data):
-            result = profile_metadata(data, "profile_settings", row)
+            result = profile_metadata(data, "profile_settings", row, expected_provider="m3u")
             if result["profile"]["active"] != (row["number"] == active):
                 raise Error("The active profile changed during loading")
             return True
@@ -1125,7 +1127,7 @@ def load_preset(client, device, name, preset):
             save_profile(next(row for row in preset["m3u"] if row["number"] == current), current)
         params = {"number": desired}
         def selected(data):
-            result = profile_metadata(data, "profile", params)
+            result = profile_metadata(data, "profile", params, expected_provider="m3u")
             expected = next(row for row in preset["m3u"] if row["number"] == desired)
             profile_metadata({"provider": "m3u", "saved": True, "profile": result["profile"]},
                              "profile_settings", expected)
