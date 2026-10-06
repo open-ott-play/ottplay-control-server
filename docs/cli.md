@@ -29,19 +29,19 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 
 Install Python 3 and Git first. The native server release archives contain the
 Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
-source archive for the same release. This first-install example pins the release
-that introduced `prev`/`previous`/`next`. Those commands
-require CLI and controller v0.1.0-beta.42 or newer, plus player frontend
-v1.1.52-beta.54 or newer. The target player must also advertise the matching
-playback operations in `caps`. Signed offsets (`+15`/`-15`) require newer CLI,
-controller and player builds implementing `step_channel`; the versions pinned
-below do not include them. Check for `step_channel` in the target player's
-`caps.playback` after updating all three components:
+source archive for that CLI release. The examples below pin CLI
+v0.1.0-beta.45, including signed channel offsets and the Unicode numeric-input
+validation fix. `prev`/`previous`/`next` require CLI/controller
+v0.1.0-beta.42 or newer and player frontend v1.1.52-beta.54 or newer. Signed
+offsets (`+15`/`-15`) require CLI/controller v0.1.0-beta.43 or newer and player
+frontend v1.1.52-beta.55 or newer. The target player must also advertise the
+matching operations in `caps.playback`, including `step_channel` for offsets.
+The controller can remain on beta.43 when updating the CLI to beta.45:
 
 ```sh
 python3 --version
 mkdir -p "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.config/ottplay-control"
-git clone --branch v0.1.0-beta.42 --depth 1 \
+git clone --branch v0.1.0-beta.45 --depth 1 \
   https://github.com/open-ott-play/ottplay-control-server.git \
   "$HOME/.local/share/ottplay-control-server"
 ln -s "$HOME/.local/share/ottplay-control-server/cli/ott.py" "$HOME/.local/bin/ott"
@@ -66,7 +66,7 @@ Use a private source checkout and invoke the script through Python:
 
 ```powershell
 py -3 --version
-git clone --branch v0.1.0-beta.42 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
+git clone --branch v0.1.0-beta.45 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
 py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" --help
 py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" diagnostics --help
 ```
@@ -1043,8 +1043,10 @@ escape a numeric-looking signed channel query.
 frontend v1.1.52-beta.54 or newer on the target instance. The player advertises
 `previous_channel` and `next_channel` in `caps.playback`;
 bare `ott l` shows the corresponding `prev` and `next` commands. Signed
-offsets require newer builds of all three components implementing
-`step_channel`; bare status shows `+N` and `-N` when the player advertises it.
+offsets require CLI/controller v0.1.0-beta.43 or newer and player frontend
+v1.1.52-beta.55 or newer. Use CLI v0.1.0-beta.44 or newer for the Unicode
+numeric-input validation fix. Bare status shows `+N` and `-N` when the player
+advertises `step_channel`.
 The CLI/controller and the target frontend must support the requested
 operation. An unloaded or stale
 channel selection, protected UI/PIN, standby, kiosk or settings lock can reject
@@ -1281,9 +1283,10 @@ not establish that a local web player or native app has been updated. Follow
 for that instance. A timeout means its current version could not be verified;
 increasing the timeout or repeatedly issuing a channel change does not update it.
 
-For `+N`/`-N`, the beta.42 controller/CLI and beta.54 frontend are insufficient:
-all three components must implement `step_channel`, and the target's
-`caps.playback` must advertise it. Support for `previous_channel` or
+For `+N`/`-N`, check CLI/controller v0.1.0-beta.43 or newer and player frontend
+v1.1.52-beta.55 or newer; the installation examples use CLI beta.45 for its
+additional numeric-input validation. The target's `caps.playback` must advertise
+`step_channel`. Support for `previous_channel` or
 `next_channel` alone does not imply support for arbitrary offsets. Update the
 installation actually used by that player; reload/restart does not install a
 new embedded native frontend.
