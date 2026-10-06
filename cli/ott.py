@@ -37,6 +37,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME                           show player status and available controls
   ott NAME load PRESET               apply a private Plex, M3U and optional Stalker preset
   ott NAME 12                        play channel 12 from the s listing
+  ott NAME prev / previous           play the previous channel in the current category
+  ott NAME next                      play the next channel in the current category
   ott NAME TITLE                     search channels, current EPG, then archives within 144 hours
   ott NAME play s                    play a channel whose name is reserved
   ott NAME s [TEXT]                  list channels, optionally matching TEXT
@@ -87,7 +89,7 @@ Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
-provider/prov; providers/provs; capabilities/caps; input/key.
+provider/prov; providers/provs; capabilities/caps; input/key; prev/previous.
 Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
 Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
@@ -101,6 +103,7 @@ COMMAND_ALIASES = {
     "message": "msg", "prof": "profile", "profs": "profiles",
     "prov": "provider", "provs": "providers",
     "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
+    "previous": "prev",
 }
 PROFILE_FIELD_ALIASES = {
     "url": "playlist", "playlist": "playlist",
@@ -118,7 +121,8 @@ INPUT_ALIASES = {
     "volume-up": "volume_up", "vol+": "volume_up", "volume-down": "volume_down", "vol-": "volume_down",
     "play-pause": "play_pause", "pp": "play_pause", "fs": "fullscreen",
 }
-PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek"))
+CHANNEL_STEPS = {"prev": "previous_channel", "next": "next_channel"}
+PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_STEPS.values()))
 
 
 def command_verb(words):
@@ -691,7 +695,11 @@ def parse_command(words):
         if key not in INPUT_KEYS:
             raise Error("Use key/input with one supported named key; run caps for available inputs")
         return "input", {"key": key}
-    if verb in PLAYBACK_OPERATIONS:
+    if verb in CHANNEL_STEPS:
+        if tail:
+            raise Error("Use prev/previous or next without arguments")
+        return "playback", {"operation": CHANNEL_STEPS[verb]}
+    if verb in ("pause", "resume", "seek"):
         if verb != "seek":
             if tail:
                 raise Error("Use " + verb + " without arguments")
@@ -1300,7 +1308,7 @@ def print_player_status(data, name):
         if operation in controls["lifecycle"]:
             print(f"  {prefix} {command}  — {description}")
     for operation in controls["playback"]:
-        command = "seek SECONDS" if operation == "seek" else operation
+        command = {"seek": "seek SECONDS", "previous_channel": "prev", "next_channel": "next"}.get(operation, operation)
         print(f"  {prefix} {command}")
     if controls["input"]:
         print(f"  {prefix} key KEY  — " + ", ".join(controls["input"]))
@@ -1321,6 +1329,13 @@ def playback_metadata(data, params):
     if not isinstance(data, dict) or data.get("operation") != params["operation"] or data.get("dispatched") is not True:
         raise Error(invalid)
     result = {"operation": params["operation"], "dispatched": True}
+    if params["operation"] in CHANNEL_STEPS.values():
+        channel = data.get("channel")
+        if (not isinstance(channel, dict) or channel_identity(channel.get("id")) is None
+                or type(channel.get("number")) is not int or not 0 < channel["number"] <= 9007199254740991
+                or not epg_text(channel.get("name"), 16384) or not channel["name"].strip()):
+            raise Error(invalid)
+        result["channel"] = {key: channel[key] for key in ("id", "number", "name")}
     if params["operation"] == "seek":
         position = data.get("position")
         if type(position) not in (int, float) or position != params["position"] or not math.isfinite(position) or position < 0:
@@ -1688,7 +1703,10 @@ def main(argv=None):
         elif action == "input":
             print(f"Input request accepted: {data['key']}; waiting for the acknowledgement to reach the player.")
         elif action == "playback":
-            print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")
+            if "channel" in data:
+                print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
+            else:
+                print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")
         elif action == "kiosk":
             if data["state"] == "off":
                 print("Kiosk mode disabled.")

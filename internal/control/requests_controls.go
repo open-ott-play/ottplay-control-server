@@ -34,7 +34,7 @@ func validControlRequest(action string, params map[string]json.RawMessage) bool 
 		}
 	case "playback":
 		switch value {
-		case "pause", "resume":
+		case "pause", "resume", "previous_channel", "next_channel":
 			return len(params) == 1
 		case "seek":
 			return len(params) == 2 && numberValue(params["position"], 0, 9007199254740991, false)

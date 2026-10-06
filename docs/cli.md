@@ -30,7 +30,8 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 Install Python 3 and Git first. The native server release archives contain the
 Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
 source archive for the same release. This first-install example pins a published
-release containing the commands in this guide:
+release for the base CLI. For `prev`/`previous`/`next`, use a release that includes
+adjacent-channel control on both the controller and the player:
 
 ```sh
 python3 --version
@@ -383,6 +384,9 @@ stop the controller or revoke player/operator credentials.
 ```sh
 ott tv                      # player status and available control commands
 ott tv 12                   # one-based channel number from s
+ott tv prev                 # previous channel in the current category; wraps
+ott tv previous             # full spelling of prev
+ott tv next                 # next channel in the current category; wraps
 ott tv news                 # list name matches and play a random matching channel
 ott tv "РЕН"                # short case-insensitive channel-name fragment
 ott tv "РЕН ТВ HD"          # longer channel-name query; same matching rules
@@ -433,6 +437,7 @@ Global flags before `PLAYER` also have standard short forms:
 - `status` / `st`
 - `s` / `channels`
 - `p` / `programs` / `programmes`
+- `prev` / `previous`; `next`
 - `v` / `vol` / `volume`
 - `vp` / `vportal`, and `vpr` / `vportal-random`
 - `msg` / `message`
@@ -963,6 +968,38 @@ The CLI does not accept numeric keycodes or arbitrary scripts. An input receipt
 contains the exact key, `accepted: true`, `dispatched: false` and
 `effect: "input-after-ack"`; it does not prove that the visible UI changed.
 Kiosk and parental restrictions still apply.
+
+### Previous and next channel
+
+```sh
+ott l prev                 # previous channel on the player registered as l
+ott l previous             # same command, full spelling
+ott l next                 # next channel
+ott --json l prev          # operation, dispatched and selected channel metadata
+```
+
+These commands switch one position in the **currently playing category or
+favourites**, with wrap from first to last and last to first. `prev` means the
+preceding entry in that list, not the previously watched channel. The player
+uses its current playback selection when handling the request; a different
+category being browsed in the open channel list does not change this order.
+An admitted switch closes that list. A single-channel category selects that
+same channel. Each command accepts no arguments.
+
+The player advertises `previous_channel` and `next_channel` in `caps.playback`;
+bare `ott l` shows the corresponding `prev` and `next` commands. Both the
+controller and the player must support these operations. An unloaded or stale
+channel selection, protected UI/PIN, standby, kiosk or settings lock can reject
+the request. Unlock locally and retry only after checking the result of the
+first request. These operations never fall back to UI keypresses: `key ch+`
+and `key ch-` retain the normal remote-key meaning, which can paginate an open
+list instead of changing playback.
+
+JSON contains `operation`, `dispatched: true` and `channel: {id, number, name}`;
+the number is from `s`, while adjacency follows the current category. A receipt
+confirms dispatch, not rendered video. The CLI submits only one mutation and
+never resubmits it after a lost or invalid receipt. Use `ott l play prev` or
+`ott l play next` to search a channel whose name is a reserved command.
 
 `pause` and `resume` use the typed playback API for an owned, active archive/VOD
 decoder. `seek SECONDS` is available only for VOD, because archive seeking uses
