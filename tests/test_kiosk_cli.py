@@ -1,6 +1,10 @@
+import contextlib
 import importlib.util
+import io
+import json
 from pathlib import Path
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('ott_kiosk', Path(__file__).resolve().parents[1] / 'cli/ott.py')
 ott = importlib.util.module_from_spec(spec)
@@ -12,6 +16,9 @@ class KioskTest(unittest.TestCase):
             (['kiosk'], {'mode':'status'}),
             (['KIOSK','STATUS'], {'mode':'status'}),
             (['kiosk','on'], {'mode':'on'}),
+            (['kiosk','on','--strict'], {'mode':'on','strict':True}),
+            (['kiosk','on','--strict','Новости','HD'], {'mode':'on','strict':True,'query':'Новости HD'}),
+            (['kiosk','set','12','--strict'], {'mode':'set','strict':True,'query':'12'}),
             (['kiosk','on','12'], {'mode':'on','query':'12'}),
             (['kiosk','on','нОвОсТи'], {'mode':'on','query':'нОвОсТи'}),
             (['kiosk','set','ВоСт'], {'mode':'set','query':'ВоСт'}),
@@ -34,6 +41,42 @@ class KioskTest(unittest.TestCase):
         for words in [['kiosk','set'],['kiosk','other'],['kiosk','off','1'],['kiosk','status','1'],['kiosk','on',''],['kiosk','set','\ud800'],['kiosk','set','a\n'],['kiosk','set','я'*513]]:
             with self.subTest(words=words), self.assertRaises(ott.Error):
                 ott.parse_command(words)
+        for words in [['kiosk','off','--strict'],['kiosk','status','--strict'],['kiosk','set','--strict'],['kiosk','on','--strict','--strict']]:
+            with self.subTest(words=words), self.assertRaises(ott.Error):
+                ott.parse_command(words)
+
+    def test_strict_requires_explicit_confirmation(self):
+        data={'enabled':True,'state':'locked','channel':{'id':'a','name':'News'},'provider':'m3u','retry_seconds':10,'retries':0,'health':'starting'}
+        for strict in [None,False,1,'true']:
+            value = data if strict is None else {**data,'strict':strict}
+            with self.subTest(strict=strict), self.assertRaises(ott.Error):
+                ott.kiosk_metadata(value,'on',True)
+        self.assertTrue(ott.kiosk_metadata({**data,'strict':True},'on',True)['strict'])
+        self.assertFalse(ott.kiosk_metadata({**data,'strict':False},'on')['strict'])
+
+    def test_strict_command_requires_confirmed_receipt(self):
+        data={'enabled':True,'state':'locked','channel':{'id':'a','name':'News'},'provider':'m3u','retry_seconds':10,'retries':0,'health':'starting'}
+        for machine in [False, True]:
+            for strict in [None, False, True]:
+                with self.subTest(machine=machine, strict=strict):
+                    client = mock.Mock(timeout=45)
+                    client.device.return_value = 'dev_tv'
+                    client.call.return_value = data if strict is None else {**data, 'strict':strict}
+                    output, errors = io.StringIO(), io.StringIO()
+                    with mock.patch.object(ott, 'Client', return_value=client), \
+                            mock.patch.object(ott, 'read_json', return_value={}), \
+                            contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                        code = ott.main((['--json'] if machine else []) + ['tv', 'kiosk', 'on', '--strict'])
+                    client.call.assert_called_once_with('dev_tv', 'kiosk', {'mode':'on', 'strict':True})
+                    if strict is True:
+                        self.assertEqual((code, errors.getvalue()), (0, ''))
+                        if machine:
+                            self.assertTrue(json.loads(output.getvalue())['strict'])
+                        else:
+                            self.assertIn('Strict kiosk:', output.getvalue())
+                    else:
+                        self.assertEqual((code, output.getvalue()), (1, ''))
+                        self.assertIn('did not confirm the kiosk policy', errors.getvalue())
 
     def test_receipts_and_metadata_only_output(self):
         data={'enabled':True,'state':'locked','channel':{'id':'a','name':'Новости','url':'secret'},'provider':'m3u','retry_seconds':10,'retries':0,'health':'starting','source':'private'}

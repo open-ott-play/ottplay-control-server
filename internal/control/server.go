@@ -27,6 +27,8 @@ type entry struct {
 	data    json.RawMessage
 	expires time.Time
 	rpc     bool
+	// Bound at enqueue time; never trust a responding page's runtime identity.
+	screenshotRuntime string
 }
 type bucket struct {
 	start time.Time
