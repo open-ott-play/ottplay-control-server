@@ -31,7 +31,8 @@ Install Python 3 and Git first. The native server release archives contain the
 Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
 source archive for the same release. This first-install example pins a published
 release containing the CLI commands in this guide. `prev`/`previous`/`next`
-require controller v0.1.0-beta.42 or newer and a player advertising the matching
+require CLI and controller v0.1.0-beta.42 or newer, plus player frontend
+v1.1.52-beta.54 or newer. The target player must also advertise the matching
 playback operations in `caps`:
 
 ```sh
@@ -72,6 +73,29 @@ configuration in a directory protected by NTFS permissions for your account;
 POSIX mode 600 does not establish Windows access control. Files inherit the
 parent directory's ACL. Use `--config C:\private\cli.json` before the player name
 if you choose a location other than the default under your home directory.
+
+### Update the installation used by the target player
+
+The CLI, command server and each player frontend have separate installations.
+A healthy, updated controller can deliver a command to an older player that
+does not implement it. Update the component serving the target instance:
+
+- **CLI and controller:** update the Python CLI files and the Go command server
+  separately. Updating the controller does not replace player files.
+- **Local web player:** install or build the updated player files in the local
+  web server's served directory, then reload that browser page. Another source
+  checkout or a published site does not update this directory.
+- **Hosted player, including here.now:** publish the updated frontend to the
+  exact site the player opens, then reload that page. This updates that site;
+  it does not update a local web installation or an installed native app.
+- **Packaged Tauri or Capacitor player:** install an app release containing the
+  updated embedded frontend. Reloading its page or relaunching the app uses the
+  installed files and does not install a newer native release.
+
+Use `ott --json tv caps` to read the target's `player.version`, `player.runtime`
+and available operations. `ott --json tv status` also reports its UUID and
+catalogue readiness. After updating, verify the expected player version and
+the same target UUID; a completed reload should have a new runtime identity.
 
 ### Configure the administrator client
 
@@ -906,6 +930,9 @@ Bare `restart` previously defaulted to the stream; scripts needing that behavior
 must use the explicit `restart stream` command. Neither operation selects
 another provider or profile. Backends
 that cannot perform the requested operation return an explicit unsupported result.
+Reload/restart is not an installation command. For a native app, install the
+updated package first; for a web player, update the files at its actual serving
+location. See [the installation update guide](#update-the-installation-used-by-the-target-player).
 
 A stream result means the restart was dispatched, not that video has resumed.
 A player reload result means the request was accepted: the player reloads only
@@ -987,7 +1014,9 @@ category being browsed in the open channel list does not change this order.
 An admitted switch closes that list. A single-channel category selects that
 same channel. Each command accepts no arguments.
 
-The player advertises `previous_channel` and `next_channel` in `caps.playback`;
+These operations require CLI/controller v0.1.0-beta.42 or newer and player
+frontend v1.1.52-beta.54 or newer on the target instance. The player advertises
+`previous_channel` and `next_channel` in `caps.playback`;
 bare `ott l` shows the corresponding `prev` and `next` commands. Both the
 controller and the player must support these operations. An unloaded or stale
 channel selection, protected UI/PIN, standby, kiosk or settings lock can reject
@@ -1212,6 +1241,16 @@ then rerun a read-only status/capabilities query after the connection settles.
 Do not assume a control is supported because another platform exposes it.
 
 ### A control, provider setting or channel change is rejected
+
+For `prev`/`previous`/`next`, first read `ott --json tv caps` and
+`ott --json tv status`. Check the target UUID, frontend version and advertised
+operations. A controller on v0.1.0-beta.42 or newer can still receive a rejection
+from a player older than v1.1.52-beta.54; the CLI's generic rejection message
+does not distinguish this from a local restriction. A newer here.now site does
+not establish that a local web player or native app has been updated. Follow
+[the installation update guide](#update-the-installation-used-by-the-target-player)
+for that instance. A timeout means its current version could not be verified;
+increasing the timeout or repeatedly issuing a channel change does not update it.
 
 Read `caps` for currently supported lifecycle/input/playback operations. Ordinary
 browsers cannot perform native app exit/relaunch or an OS reboot; OS reboot is
