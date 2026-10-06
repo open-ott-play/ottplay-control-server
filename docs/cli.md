@@ -30,13 +30,14 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 Install Python 3 and Git first. The native server release archives contain the
 Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
 source archive for the same release. This first-install example pins a published
-release for the base CLI. For `prev`/`previous`/`next`, use a release that includes
-adjacent-channel control on both the controller and the player:
+release containing the CLI commands in this guide. `prev`/`previous`/`next`
+require controller v0.1.0-beta.42 or newer and a player advertising the matching
+playback operations in `caps`:
 
 ```sh
 python3 --version
 mkdir -p "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.config/ottplay-control"
-git clone --branch v0.1.0-beta.41 --depth 1 \
+git clone --branch v0.1.0-beta.42 --depth 1 \
   https://github.com/open-ott-play/ottplay-control-server.git \
   "$HOME/.local/share/ottplay-control-server"
 ln -s "$HOME/.local/share/ottplay-control-server/cli/ott.py" "$HOME/.local/bin/ott"
@@ -61,7 +62,7 @@ Use a private source checkout and invoke the script through Python:
 
 ```powershell
 py -3 --version
-git clone --branch v0.1.0-beta.41 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
+git clone --branch v0.1.0-beta.42 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
 py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" --help
 py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" diagnostics --help
 ```
@@ -1000,6 +1001,8 @@ the number is from `s`, while adjacency follows the current category. A receipt
 confirms dispatch, not rendered video. The CLI submits only one mutation and
 never resubmits it after a lost or invalid receipt. Use `ott l play prev` or
 `ott l play next` to search a channel whose name is a reserved command.
+
+### Pause, resume and seek
 
 `pause` and `resume` use the typed playback API for an owned, active archive/VOD
 decoder. `seek SECONDS` is available only for VOD, because archive seeking uses
