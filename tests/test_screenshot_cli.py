@@ -96,22 +96,38 @@ class ScreenshotCliTest(unittest.TestCase):
             self.assertIn('Use screenshot/shot', errors)
         self.assertEqual(ott.parse_command(['play', 'shot']), ('play', {'query': 'shot'}))
 
-    def test_older_players_permission_required_and_unsupported_never_request_capture(self):
+    def test_older_players_source_required_and_unsupported_never_request_capture(self):
         legacy = caps(); del legacy['screenshot']
         for controls in [legacy, caps('unsupported', None), caps('permission_required')]:
             code, output, errors, client = self.run_cli(['shot'], [controls], True)
             self.assertEqual((code, output, client.call.call_count), (1, '', 1))
             self.assertEqual(list(self.directory.iterdir()), [])
-            self.assertIn('Allow screenshots locally' if controls.get('screenshot', {}).get('state') == 'permission_required'
+            self.assertIn('Select screenshot source in browser' if controls.get('screenshot', {}).get('state') == 'permission_required'
                           else 'not supported', errors)
         for error in [ott.PlayerUnsupported('private-image-data'), ott.PlayerRejected('private-image-data', {})]:
             code, output, errors, client = self.run_cli(['shot'], [caps(), error], True)
             self.assertEqual((code, output, client.call.call_count), (1, '', 2))
             self.assertNotIn('private-image-data', errors)
             self.assertIn('not repeated', errors)
+            self.assertIn('current runtime, capture source and OS/adapter support', errors)
+            self.assertNotIn('protected settings', errors)
         code, output, errors, client = self.run_cli(['shot'], [caps(), ott.HTTPError(400)])
         self.assertEqual((code, output, client.call.call_count), (1, '', 2))
         self.assertIn('update the controller', errors)
+
+    def test_source_setup_guidance_preserves_legacy_compatibility_without_a_temporary_grant_requirement(self):
+        for platform, source in [('browser', None), ('tauri', 'player-view'), ('webos', None)]:
+            controls = caps('permission_required', source)
+            controls['player']['platform'] = platform
+            code, output, errors, client = self.run_cli(['shot'], [controls], True)
+            self.assertEqual((code, output, client.call.call_count), (1, '', 1))
+            self.assertIn('enabled Remote control connection', errors)
+            self.assertIn('In a browser', errors)
+            self.assertIn('Older players may still require their local screenshot permission', errors)
+            self.assertIn('No capture was requested', errors)
+            self.assertNotIn('10 minutes', errors)
+            self.assertNotIn('close settings', errors)
+            self.assertEqual(list(self.directory.iterdir()), [])
 
     def test_all_phases_share_deadline_and_restore_client_timeout(self):
         timeouts = []
@@ -218,7 +234,7 @@ class ScreenshotCliTest(unittest.TestCase):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 ott.print_player_status({'capabilities': value}, 'tv')
-            self.assertIn({'ready': 'ott tv screenshot / shot', 'permission_required': 'Allow screenshots for 10 minutes',
+            self.assertIn({'ready': 'ott tv screenshot / shot', 'permission_required': 'Select screenshot source in browser',
                            'unsupported': 'not supported'}[state], output.getvalue())
         for value in [None, {}, {'state': 'ready', 'source': None}, {'state': 'ready', 'source': 'evil'},
                       {'state': 'ready', 'source': 'window', 'private': 'secret'}, {'state': 'unknown', 'source': None}]:
