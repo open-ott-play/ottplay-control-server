@@ -1,9 +1,16 @@
 # Remote diagnostics protocol 2
 
-For installation, operator credential setup, player registration and local trust,
+For installation, operator credential setup, player registration and connection authorization,
 all CLI/MCP commands, revocation and troubleshooting, start with the
 [operator guide](diagnostics-cli.md). This page defines the HTTP protocol and
 server configuration used by those tools.
+
+Protocol-2 **capture** means structured telemetry, not an image. Remote
+[screenshots](cli.md#remote-screenshots) use the separate authenticated request
+API. An enabled player connection authorizes both diagnostics and supported
+screenshots without separate local grants. Diagnostic operator credentials
+cannot request images; screenshots require the command API's administrator
+credential and, in a browser, a locally selected capture source.
 
 Diagnostics is an additive, in-memory API under `/api/v2/diagnostics`. It never
 enters the protocol 1 command queue. Registration, control polling and telemetry
@@ -50,13 +57,13 @@ Remove an operator entry to revoke all of its access, or replace its digest to
 rotate its credential. An operator cannot have empty device/action scopes; at
 least one of each is required. Setting a device's diagnostics flag to `false`
 denies its diagnostic registration/operator access after restart. These
-configuration edits do not directly change the player's saved connection or trust.
-An online player observing a diagnostic authorization rejection stops local
-support and attempts to remove its saved trust; an offline player's stored
-permission cannot be erased remotely. Removing an operator does not revoke the
+configuration edits do not change the player's saved connection. An online
+player observing a diagnostic authorization rejection stops the affected runtime;
+its enabled connection may register a new one later. Disable the device's
+diagnostics for a lasting server-side block. Removing an operator does not revoke the
 player's separate device access code; the required server restart still retires
 all current runtime credentials. Use the
-[revocation procedures](diagnostics-cli.md#deregister-remove-trust-or-remove-operator-access)
+[revocation procedures](diagnostics-cli.md#deregister-disconnect-or-remove-operator-access)
 for the intended lifetime.
 Keep configuration and CLI credentials private. The bundled player diagnostics
 client and diagnostic CLI/MCP require HTTPS, including on a trusted LAN. Follow
@@ -88,6 +95,14 @@ The default confirmed-runtime TTL is 30000ms, configurable from 10000 to 600000m
 Successful granted control polls keep an active runtime alive; if final revocation
 is lost, its slot becomes reclaimable after the TTL without matching tab metadata.
 
+Updated players derive consent from the configured, enabled HTTPS controller
+connection. No separate temporary grant, saved trust switch or foreground-only
+authorization is required. Startup, reload and reconnection register new
+runtimes automatically. The wire consent epoch still binds each operation to the
+exact connection/runtime. It does not remove server scopes, session deadlines or
+the need for a new operator request to start each capture or repair. Older
+players can continue to use their existing local consent policy with this API.
+
 ## Control lifecycle
 
 All responses contain `diagnostics_protocol: 2` and `server_epoch`, including
@@ -114,7 +129,7 @@ use that epoch; do not discover and silently retry a failed mutation.
   poll instead permanently retires the runtime credential and slot, revokes its
   nonterminal sessions without claiming an acknowledged stop, and returns null
   control. Subsequent requests with that credential fail 401, including a replay
-  of the final false poll. A later local grant must register a new runtime.
+  of the final false poll. A later enabled connection must register a new runtime.
   A response may contain newly available control;
   replay does not freeze the response in time.
 - The poll reply contains `control_revision` at the top level and `control`
@@ -154,11 +169,14 @@ an uncertain mutation blindly, do not replace its key to evade a conflict, and
 do not treat a process epoch as indefinite replay protection. Session records
 have a fixed terminal retention horizon too; duplicate requests do not extend it.
 
-The client must additionally enforce foreground local consent, a monotonic
-session deadline and an independent ten-second connectivity lease. Hidden pages,
-pagehide, local stop, revoked consent and lost connectivity stop capture locally.
-Clients must not reopen the same session after suspension or extend a deadline
-on duplicate control. These client duties are not server-side hardware proof.
+The client must additionally enforce current connection authorization, a
+monotonic session deadline and an independent ten-second connectivity lease.
+Background visibility alone does not stop capture. OS suspension/pagehide, local
+capture stop, disconnect and a lost connectivity lease retire the affected work.
+Resume/reconnection can register a new ready runtime without another permission
+prompt, but must not reopen the old session or extend a deadline on duplicate
+control. These client duties are not server-side hardware proof. The maximum
+ten-minute session lease is a resource bound, not an authorization expiry.
 
 ## Structured telemetry and bounds
 
@@ -260,7 +278,8 @@ The server records the client's assertion, not observed recovery. For restart,
 clients invoke the existing guarded restart once and then report `applied`. For
 reload, clients first prepare an after-reply effect and report `accepted`; they
 execute only after an exact result acknowledgement while the original lease,
-consent and foreground eligibility still hold. `accepted` is acknowledged intent,
+connection consent and the repair action's own safety checks still hold.
+`accepted` is acknowledged intent,
 not evidence of a reload. On terminal rejection, retire that pending repair effect
 and continue diagnostic control polling. On unknown acknowledgement outcomes,
 retry only the same result within the bounded deadline, never the repair effect.

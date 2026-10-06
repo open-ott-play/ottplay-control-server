@@ -21,7 +21,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
-- [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [kiosk mode](#kiosk-mode)
+- [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
 - [Troubleshooting](#troubleshooting)
 
@@ -31,16 +31,23 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 
 Install Python 3 and Git first. The native server release archives contain the
 Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
-source archive for the same release. This first-install example pins a published
-release containing the remote-control commands in this guide. The local
-`resolve` command requires a source revision containing `playlist_search.py`;
-it is not included in `v0.1.0-beta.41`. Until a release includes it, install all
-five CLI files from that newer source revision together:
+source archive for that CLI release. The examples below pin stable CLI v0.1.0,
+including signed channel offsets and the Unicode numeric-input validation fix.
+For the complete released set of remote features, use player v1.1.52 or newer;
+the CLI, controller and player must each be updated separately.
+
+For older prerelease installations, `prev`/`previous`/`next` require CLI/controller
+v0.1.0-beta.42 or newer and player frontend v1.1.52-beta.54 or newer. Signed
+offsets (`+15`/`-15`) require CLI/controller v0.1.0-beta.43 or newer and player
+frontend v1.1.52-beta.55 or newer. The target player must also advertise the
+matching operations in `caps.playback`, including `step_channel` for offsets.
+The controller can remain on beta.43 for these channel controls when updating
+the CLI to v0.1.0:
 
 ```sh
 python3 --version
 mkdir -p "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.config/ottplay-control"
-git clone --branch v0.1.0-beta.41 --depth 1 \
+git clone --branch v0.1.0 --depth 1 \
   https://github.com/open-ott-play/ottplay-control-server.git \
   "$HOME/.local/share/ottplay-control-server"
 ln -s "$HOME/.local/share/ottplay-control-server/cli/ott.py" "$HOME/.local/bin/ott"
@@ -49,6 +56,10 @@ ott --help
 ott diagnostics --help
 chmod 700 "$HOME/.config/ottplay-control"
 ```
+
+The local `resolve` command is not included in stable CLI v0.1.0. Until a
+release includes it, use a reviewed source revision containing
+`playlist_search.py` and keep all five CLI files from that revision together.
 
 Keep the checkout after making the symlink; moving or deleting it breaks `ott`.
 Persist the PATH line in your shell's startup file (`~/.zshrc` for interactive
@@ -65,7 +76,7 @@ Use a private source checkout and invoke the script through Python:
 
 ```powershell
 py -3 --version
-git clone --branch v0.1.0-beta.41 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
+git clone --branch v0.1.0 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
 py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" --help
 py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" diagnostics --help
 ```
@@ -75,6 +86,29 @@ configuration in a directory protected by NTFS permissions for your account;
 POSIX mode 600 does not establish Windows access control. Files inherit the
 parent directory's ACL. Use `--config C:\private\cli.json` before the player name
 if you choose a location other than the default under your home directory.
+
+### Update the installation used by the target player
+
+The CLI, command server and each player frontend have separate installations.
+A healthy, updated controller can deliver a command to an older player that
+does not implement it. Update the component serving the target instance:
+
+- **CLI and controller:** update the Python CLI files and the Go command server
+  separately. Updating the controller does not replace player files.
+- **Local web player:** install or build the updated player files in the local
+  web server's served directory, then reload that browser page. Another source
+  checkout or a published site does not update this directory.
+- **Hosted player, including here.now:** publish the updated frontend to the
+  exact site the player opens, then reload that page. This updates that site;
+  it does not update a local web installation or an installed native app.
+- **Packaged Tauri or Capacitor player:** install an app release containing the
+  updated embedded frontend. Reloading its page or relaunching the app uses the
+  installed files and does not install a newer native release.
+
+Use `ott --json tv caps` to read the target's `player.version`, `player.runtime`
+and available operations. `ott --json tv status` also reports its UUID and
+catalogue readiness. After updating, verify the expected player version and
+the same target UUID; a completed reload should have a new runtime identity.
 
 ### Configure the administrator client
 
@@ -213,6 +247,14 @@ wait for **Connected**. Each browser origin, TV and Tauri instance has its own
 settings. For a new browser address, add its exact origin to `allowed_origins`
 and restart the command server.
 
+Enabling this connection authorizes the controller to operate the player and
+request diagnostics and supported screenshots. There is no additional player
+trust switch or ten-minute authorization prompt. Screenshots can include
+settings, PIN screens and visible credentials; connect only to a controller you
+trust. Browser screenshots still require a local source selection, and diagnostic
+operators still need their separate server scopes. See [screenshots](#remote-screenshots)
+and [diagnostics](diagnostics-cli.md).
+
 HTTPS pages, including here.now, require an HTTPS command server. Tauri uses its
 native HTTP bridge. TV browsers send outgoing XHR requests and do not need an
 incoming port on the TV. Packaged TV apps with an Origin of `null` can use the
@@ -222,14 +264,17 @@ The central player server on ports 8443–8446 is separate from the command serv
 ## Disconnect, deregister or revoke a player
 
 These are different operations. There is currently no `ott remove`, `delete`,
-`deregister` or `unpair` command, and no CLI command that remotely grants local
-diagnostic consent.
+`deregister` or `unpair` command. The player authorizes remote support through its
+enabled controller connection; there is no separate diagnostic consent to grant
+from the CLI.
 
 ### Temporarily disconnect or forget a connection
 
 On the player, open **Settings → Remote control → Command server → Disconnect**.
-Polling stops, but the saved address and access code remain; **Connect** resumes
-them. To forget the connection on that installation, clear the server address and
+Polling, diagnostic authority and screenshot access stop, but the saved address
+and access code remain; **Connect** restores support with a new runtime. Native
+screenshots become available again when the adapter is ready; browser screenshots
+need a newly selected source. To forget the connection on that installation, clear the server address and
 access code in the same screen. Clearing either field also stops polling.
 **Cancel pairing** cancels an in-progress discovery pairing, not an already
 registered device. Disconnecting, clearing settings or uninstalling a player does
@@ -388,6 +433,11 @@ stop the controller or revoke player/operator credentials.
 ```sh
 ott tv                      # player status and available control commands
 ott tv 12                   # one-based channel number from s
+ott tv prev                 # previous channel in the current category; wraps
+ott tv previous             # full spelling of prev
+ott tv next                 # next channel in the current category; wraps
+ott tv +15                  # forward 15 positions in that category; wraps
+ott tv -15                  # back 15 positions in that category; wraps
 ott tv news                 # list name matches and play a random matching channel
 ott tv "РЕН"                # short case-insensitive channel-name fragment
 ott tv "РЕН ТВ HD"          # longer channel-name query; same matching rules
@@ -438,12 +488,13 @@ Global flags before `PLAYER` also have standard short forms:
 - `status` / `st`
 - `s` / `channels`
 - `p` / `programs` / `programmes`
+- `prev` / `previous`; `next`
 - `v` / `vol` / `volume`
 - `vp` / `vportal`, and `vpr` / `vportal-random`
 - `msg` / `message`
 - `profile` / `prof`, and `profiles` / `profs`
 - `provider` / `prov`, and `providers` / `provs`
-- `capabilities` / `caps`, and `input` / `key`
+- `capabilities` / `caps`, `input` / `key`, and `screenshot` / `shot`
 - `exit` / `quit` / `close`
 
 Aliases are case-insensitive exact tokens. They are not prefix completion:
@@ -1022,6 +1073,9 @@ Bare `restart` previously defaulted to the stream; scripts needing that behavior
 must use the explicit `restart stream` command. Neither operation selects
 another provider or profile. Backends
 that cannot perform the requested operation return an explicit unsupported result.
+Reload/restart is not an installation command. For a native app, install the
+updated package first; for a web player, update the files at its actual serving
+location. See [the installation update guide](#update-the-installation-used-by-the-target-player).
 
 A stream result means the restart was dispatched, not that video has resumed.
 A player reload result means the request was accepted: the player reloads only
@@ -1048,6 +1102,110 @@ Existing `restart stream/player` retains its original request/ACK shape;
 new lifecycle requests return `accepted: true`, `dispatched: false` and
 `effect: "lifecycle-after-ack"`. The effect runs only after the player receives
 the controller ACK, with current local restrictions checked again.
+
+## Remote screenshots
+
+```sh
+ott tv                      # shows screenshot availability or browser source guidance
+ott tv caps                 # machine-readable screenshot state and source
+ott tv screenshot           # save one PNG with a unique name in the current directory
+ott tv shot                 # exact short alias
+ott tv shot -o living-room.png
+ott tv screenshot --output /absolute/existing/directory/living-room.png
+ott --timeout 60 --json tv shot -o incident.png
+```
+
+Install screenshot-capable versions of **the CLI, controller and the target player**.
+The earlier stable controller v0.1.0 and player v1.1.52 do not implement this
+operation. Updating the controller alone cannot add a native capture adapter to
+an installed app. Follow [the installation update guide](#update-the-installation-used-by-the-target-player).
+Use the existing [device registration and pairing](#register-and-connect-a-player);
+there is no extra screenshot account, listening port or screenshot registration.
+The screenshot connection requires an **HTTPS controller**, or HTTP on loopback
+(`localhost`, `127.0.0.1`, `[::1]`). Plain HTTP to another LAN host cannot carry
+screenshots, even when ordinary remote controls work over it.
+The CLI enforces the same HTTPS/loopback policy on its configured `server`
+download address before sending a request; a secure player upload does not
+make a plain-HTTP CLI download private.
+
+Enabling the player's Remote control connection authorizes this controller to
+take supported screenshots. Native capture becomes ready automatically when
+the connection and adapter are available, including after startup or reload;
+there is no separate screenshot switch or ten-minute permission expiry. Only
+connect to a controller you trust with full access to the player. Images can
+include player settings, PIN screens, provider credentials and other visible
+private data. The player does not mask those screens or refuse capture solely
+because its page is in the background. The OS can still suspend the app or
+restrict what its native adapter can capture.
+
+In a supported desktop browser, open **Settings → Remote control → Select
+screenshot source in browser** locally and choose a source in the browser's
+screen-share picker. This browser requirement cannot be bypassed by a remote
+command. Cancelling the picker leaves capture unavailable. **Stop browser
+sharing**, an explicit disconnect, a controller address/access-code change or
+reload releases the source; select it again before a new browser capture.
+Remote screenshot requests never open the picker themselves. A temporary network
+interruption does not itself clear the configured connection or selected source.
+
+Older screenshot-capable players may still show **Allow screenshots for 10
+minutes** and require their legacy local permission. Update the actual player
+installation to use connection-based authorization; the CLI remains compatible
+with the older capability state.
+
+`caps.screenshot` reports `state: "ready"`, `"permission_required"` or
+`"unsupported"`, plus `source` (or `null` when unavailable). `permission_required`
+is the compatible wire name for a browser source still to be selected or a
+connection that is not enabled; older players also use it for their local grant.
+Source labels mean:
+
+- `player-view`: the native player web view; native window chrome is excluded.
+- `player-window`: the app window, including its native surfaces when supported.
+- `browser-tab`: the browser tab selected in the local screen-share picker.
+- `window`: a window selected in that picker.
+- `display`: a whole display selected in that picker.
+
+Availability depends on the installed platform adapter, OS and browser. An
+Android app or LG TV must explicitly report support; a generic Capacitor or
+browser build alone does not imply that screenshots work. Protected video and
+hardware video surfaces may be blank. The receipt reports `video: "unknown"`
+or `"excluded"`; a screenshot does not establish that video is decoding or
+that every video surface was captured. An unsupported adapter has no simulated
+DOM-image fallback.
+
+The CLI reads capabilities and submits **one** screenshot request, bound to the
+reported player runtime, within the single `--timeout` budget. A reload between
+those requests invalidates that request; read the new capabilities and issue a
+deliberate new command. In a browser, select the source again after reload. The
+image is a PNG no larger than 1280×720 or 1 MiB. Both controller
+and CLI validate the PNG and its metadata before accepting it. The existing
+2 MiB response transport limit is unchanged.
+
+By default a name such as `ott-tv-20261006T120000Z-a1b2c3d4.png` is generated.
+`-o` and `--output` choose a **local** file; its directory must already exist.
+Existing files, symlinks, symlinked parent directories and `..` path traversal
+are rejected. Saving uses a private temporary file and an exclusive atomic
+installation, so another process creating the destination cannot be overwritten.
+Files use mode `0600` on Unix. On Windows, keep the containing directory's ACL
+restricted to your account. No output path is sent to the player. `--json`
+prints the local path, byte count, dimensions, capture time, runtime, source and
+video limitation; it never prints the image/base64 data.
+
+Screenshots use the authenticated command request/result API: the CLI's existing
+administrator credential queues/reads the request and the device credential
+uploads its response. A diagnostics-only operator token cannot request images.
+The server keeps the receipt only in bounded memory for 60 seconds, with
+`Cache-Control: no-store`; it does not save images to disk or log them. The player
+drops queued/cached image bytes on disconnect, connection changes, browser sharing
+stop, reload or when the
+original request expires, and in all cases within 60 seconds of completing the
+capture. Small rejection receipts prevent the same delivery from recapturing.
+Revocation cannot retract an image already sent or already in flight: an accepted
+server receipt retains its separate 60-second TTL. Local PNG files remain until
+you remove them. Disconnecting/revoking the device uses
+[the existing revocation procedure](#disconnect-deregister-or-revoke-a-player).
+The enabled player connection authorizes both screenshots and diagnostics, but
+their server APIs and credentials remain separate: an administrator can request
+images, while diagnostic operators need their configured protocol-2 scopes.
 
 ## Capabilities, input and playback control
 
@@ -1085,6 +1243,68 @@ The CLI does not accept numeric keycodes or arbitrary scripts. An input receipt
 contains the exact key, `accepted: true`, `dispatched: false` and
 `effect: "input-after-ack"`; it does not prove that the visible UI changed.
 Kiosk and parental restrictions still apply.
+
+### Previous and next channel
+
+```sh
+ott l prev                 # previous channel on the player registered as l
+ott l previous             # same command, full spelling
+ott l next                 # next channel
+ott --json l prev          # operation, dispatched and selected channel metadata
+ott t1 +15                 # forward 15 positions in t1's playing category
+ott t1 -15                 # back 15 positions, wrapping at either end
+ott --json t1 -15          # also confirms the requested offset: -15
+```
+
+These commands move through the **currently playing category or favourites**,
+with wrap from first to last and last to first. `prev` and `previous` move one
+position backward; `next` moves one forward. `prev` means the
+preceding entry in that list, not the previously watched channel. The player
+uses its current playback selection when handling the request; a different
+category being browsed in the open channel list does not change this order.
+An admitted switch closes that list. A single-channel category selects that
+same channel. Each command accepts no further arguments.
+
+`+N` moves forward N positions and `-N` moves backward N positions, in one
+atomic request. For example, in a 10-channel category, `+15` from position 8
+selects position 3 and `-15` from position 3 selects position 8. Only the final
+channel is selected; the player does not play the intermediate entries. A
+whole number of complete laps selects the current channel again. These are
+positions within the playing category, not channel numbers from `s`.
+
+Offsets must use an ASCII `+` or `-` followed by decimal digits, with a value
+from -9007199254740991 to +9007199254740991 excluding zero. `+0` and `-0`,
+fractions, exponent notation and out-of-range offsets are local errors that
+send no playback request. Leading zeros are accepted. Use `ott t1 15` for
+absolute channel number 15 and `ott t1 v +15` for a relative volume increase;
+neither is a channel offset. A negative offset needs no `--` before it. Names
+such as `+HD` and `-Новости` keep normal channel search; use `play TITLE` to
+escape a numeric-looking signed channel query.
+
+`prev`/`previous`/`next` require CLI/controller v0.1.0-beta.42 or newer and player
+frontend v1.1.52-beta.54 or newer on the target instance. The player advertises
+`previous_channel` and `next_channel` in `caps.playback`;
+bare `ott l` shows the corresponding `prev` and `next` commands. Signed
+offsets require CLI/controller v0.1.0-beta.43 or newer and player frontend
+v1.1.52-beta.55 or newer. Use CLI v0.1.0-beta.44 or newer for the Unicode
+numeric-input validation fix. Bare status shows `+N` and `-N` when the player
+advertises `step_channel`.
+The CLI/controller and the target frontend must support the requested
+operation. An unloaded or stale
+channel selection, protected UI/PIN, standby, kiosk or settings lock can reject
+the request. Unlock locally and retry only after checking the result of the
+first request. These operations never fall back to UI keypresses: `key ch+`
+and `key ch-` retain the normal remote-key meaning, which can paginate an open
+list instead of changing playback.
+
+JSON contains `operation`, `dispatched: true` and `channel: {id, number, name}`;
+signed offsets also include the exact requested integer `offset`. The number
+is from `s`, while the step follows the current category. A receipt
+confirms dispatch, not rendered video. The CLI submits only one mutation and
+never resubmits it after a lost or invalid receipt. Use `ott l play prev` or
+`ott l play next` to search a channel whose name is a reserved command.
+
+### Pause, resume and seek
 
 `pause` and `resume` use the typed playback API for an owned, active archive/VOD
 decoder. `seek SECONDS` is available only for VOD, because archive seeking uses
@@ -1167,6 +1387,26 @@ and VOD. Ordinary remote playback/provider/profile mutations and exit commands
 are rejected as well. Read queries, volume/mute, notifications and explicit remote
 restarts remain available. Only the `kiosk` request changes this policy.
 
+Use `ott tv kiosk on --strict [CHANNEL]` to allow only a short tap or the Info key
+to display a read-only video footer for five seconds. Local pause, seeking,
+volume/mute, menus, player exit, swipes, long presses and multi-touch are blocked.
+Repeated taps do not expand details. Stopping the current diagnostic capture remains
+available locally; it does not disconnect the remote controller. Remote volume/mute and recovery are unchanged.
+
+With an existing lock, `kiosk on --strict` upgrades it without changing the target;
+with no TV lock it waits for the first UI selection. `kiosk set CHANNEL` preserves
+strictness, or add `--strict` to upgrade during replacement. `kiosk off` releases
+the lock remotely. The policy, including strictness, survives reloads. Old players
+that omit or ignore the strict flag cannot produce a successful strict CLI receipt.
+
+For the standalone VPortal provider, select the configured profile, then run
+`ott tv vp "три кота"` followed by `ott tv kiosk on --strict`. This locks the
+current repeating episode queue rather than arming a future TV selection.
+
+A web page on here.now cannot block Android Home, Recents or browser navigation
+outside the page. Android app pinning with a PIN, or managed-device Lock Task,
+is needed to restrict exit from the browser.
+
 The client retries the same channel every ten seconds without playback progress,
 resolving its stream URL again. Healthy playback continues uninterrupted. The lock
 uses channel and source identities, so list reordering or a missing channel never
@@ -1188,7 +1428,10 @@ route for the selected device:
 ```
 
 `status` and `off` accept only `mode`; `on` optionally accepts `query`, and `set`
-requires it. Queries contain 1–1024 UTF-8 bytes without control characters.
+requires it. Both `on` and `set` accept optional boolean `strict`. Omission
+preserves the existing mode (ordinary for new locks); explicit `false` downgrades
+an existing lock without releasing its target. Updated status receipts include
+boolean `strict`. Queries contain 1–1024 UTF-8 bytes without control characters.
 
 ## Troubleshooting
 
@@ -1208,7 +1451,7 @@ credentials or operator tokens in a shared report. Useful evidence is the exact
 command with secrets removed, exit code, fixed error message, time, player
 version/platform and whether the problem affects one player or every player.
 For structured capture use the [diagnostics workflow](diagnostics-cli.md), which
-requires separate permissions and local consent.
+requires separate operator scopes and an enabled player connection.
 
 ### `ott: command not found`, wrong installation or missing Python module
 
@@ -1293,7 +1536,52 @@ status with `capabilities: null` and `capabilities_error`. Check the player vers
 then rerun a read-only status/capabilities query after the connection settles.
 Do not assume a control is supported because another platform exposes it.
 
+### A screenshot is unavailable, rejected or cannot be saved
+
+- **No screenshot capability / unsupported:** update CLI, controller and the
+  actual player installation. Older players omit the field. Do not repeatedly
+  request captures or assume every TV/browser/native package supports them.
+- **Permission required:** confirm Remote control is enabled. In a browser, use
+  **Select screenshot source in browser** and finish its local picker; select
+  again after reload, disconnect or stopping sharing. Older players may still
+  require their legacy local screenshot grant until updated.
+- **Rejected after readiness:** the connection, runtime or selected source may
+  have changed, another capture may be running, or the OS/adapter may be unable
+  to capture the current surface. Read `caps` and inspect the player before
+  issuing a new request. Settings/PIN screens and background visibility are not
+  additional application permission gates in updated players.
+- **Invalid PNG/runtime/source:** no file is saved. Check matching released
+  versions and inspect the player locally; malformed remote data is not printed.
+- **Existing/unsafe output path:** choose another filename in an existing real
+  directory. Existing files and symlinks are never overwritten. Check directory
+  permissions and free disk space when saving fails.
+- **Timeout:** an accepted capture may still complete before the request expires.
+  The CLI does not repeat the capture automatically. Check connectivity before
+  manually trying again; increasing `--timeout` does not select a browser source
+  or bypass an OS capture restriction.
+- **Black or missing video:** inspect the receipt's source and `video` fields.
+  Native/protected video surfaces can be absent even when the surrounding UI is
+  captured. Use playback diagnostics to investigate decoding separately.
+
 ### A control, provider setting or channel change is rejected
+
+For `prev`/`previous`/`next`, first read `ott --json tv caps` and
+`ott --json tv status`. Check the target UUID, frontend version and advertised
+operations. A controller on v0.1.0-beta.42 or newer can still receive a rejection
+from a player older than v1.1.52-beta.54; the CLI's generic rejection message
+does not distinguish this from a local restriction. A newer here.now site does
+not establish that a local web player or native app has been updated. Follow
+[the installation update guide](#update-the-installation-used-by-the-target-player)
+for that instance. A timeout means its current version could not be verified;
+increasing the timeout or repeatedly issuing a channel change does not update it.
+
+For `+N`/`-N`, check CLI/controller v0.1.0-beta.43 or newer and player frontend
+v1.1.52-beta.55 or newer; the installation examples use stable CLI v0.1.0 for its
+additional numeric-input validation. The target's `caps.playback` must advertise
+`step_channel`. Support for `previous_channel` or
+`next_channel` alone does not imply support for arbitrary offsets. Update the
+installation actually used by that player; reload/restart does not install a
+new embedded native frontend.
 
 Read `caps` for currently supported lifecycle/input/playback operations. Ordinary
 browsers cannot perform native app exit/relaunch or an OS reboot; OS reboot is
@@ -1302,7 +1590,8 @@ player standby while connected, not a powered-off machine. Live streams do not
 support the archive/VOD `pause`/`resume` controls or VOD seeking.
 
 Check `kiosk status`, parental/settings locks, the active provider and whether
-its catalogue has finished loading. Use local interaction for PINs and consent.
+its catalogue has finished loading. Use local interaction for PIN entry and the
+browser capture source picker.
 Select M3U before managing its profiles; select the matching provider before
 applying `provider-config` or Plex settings. Disabling kiosk or changing a lock
 is a deliberate policy change, not an automatic recovery step. Successful settings

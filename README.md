@@ -53,11 +53,15 @@ Once installed and configured:
 ott --help                 # all CLI command families
 ott devices                # controller registrations and last contact
 ott a1                     # this player's status and available controls
+ott a1 prev                # previous channel in the active category (previous also works)
+ott a1 next                # next channel, wrapping at the end of the category
 ott a1 channels "РЕН"       # list channel-name matches without playing
 ott a1 "РЕН ТВ HD"          # search and play a matching channel
 ott a1 volume 35            # vol/v are equivalent command aliases
 ott a1 restart             # reload the player
 ott a1 restart stream      # restart only the current stream
+ott a1 screenshot          # save a PNG; browser builds need a selected capture source
+ott a1 shot -o screen.png  # short alias; never overwrites an existing file
 ```
 
 `a1` is an example alias for a registered player, not a computer hostname. See
@@ -65,6 +69,15 @@ ott a1 restart stream      # restart only the current stream
 [all commands with examples](docs/cli.md#commands),
 [disconnecting and revoking access](docs/cli.md#disconnect-deregister-or-revoke-a-player),
 and [troubleshooting](docs/cli.md#troubleshooting).
+
+Remote [screenshots](docs/cli.md#remote-screenshots) require an updated CLI,
+controller and a player with a supported capture adapter. Enabling the player's
+Remote control connection authorizes screenshots and diagnostics for that
+controller; native screenshots need no separate permission toggle. Browsers
+still require their local source picker. Images can include player settings,
+PIN screens and visible credentials, so connect only to a controller you trust.
+`ott a1` reports availability and any required source selection. Screenshots
+are separate from structured telemetry capture.
 
 To shuffle all VPortal videos matching a title and play them on repeat:
 
@@ -124,15 +137,35 @@ with urllib.request.urlopen(request, timeout=5) as response:
 
 Other commands select a channel by number or name, choose a random channel, switch providers, show a message, change an M3U playlist where supported, or exit the player. Availability depends on the player platform and current provider. See [the API contract](docs/api.md).
 
+With a player supporting the standalone VPortal provider, `ott a1 provider
+vportal` selects its own 15 profiles. Use `profile N vportal LINK`, `profile N
+name NAME` or a private `profile-config N FILE` containing `name` and `vportal`,
+then select the configured slot with `profile N`. Existing M3U profiles stay
+separate. `profiles` reports metadata without exposing cabinet links or keys.
+
+After starting a VPortal film or episode queue, `ott a1 kiosk on` locks that
+selection. The player preserves the queue and its position across reloads and
+resolves media URLs again for recovery. Use `kiosk off` to choose another title
+or change profiles, then `kiosk on` to lock it. The kiosk receipt shows the title
+and episode count; provider requests and stream URLs stay on the player.
+
+Use `ott a1 kiosk on --strict` for child-facing playback: local taps only show
+the read-only video footer, and local player controls are blocked. An existing
+lock keeps its target. Release it with `ott a1 kiosk off` from the controller.
+On Android websites, system exit protection requires separate app pinning with
+a PIN; see [kiosk mode](docs/cli.md#kiosk-mode).
+
 ## Remote diagnostics
 
 Optional [protocol 2 diagnostics](docs/remote-diagnostics.md) provides explicitly
 enabled, per-runtime sessions with separate scoped operator credentials and
-bounded structured telemetry. Local player consent remains mandatory. Diagnostic
+bounded structured telemetry. The enabled player connection supplies local
+authorization without another trust prompt; each capture still has a bounded
+session lease. Diagnostic
 control polling is independent of the existing command queue.
 
 The [diagnostic CLI and MCP guide](docs/diagnostics-cli.md) covers installation,
-operator credentials, local permission, every diagnostic command/tool, capture
+operator credentials, connection setup, every diagnostic command/tool, capture
 and repair examples, runtime revocation and troubleshooting. `ott diagnostics --help`
 lists this separate command family; ordinary player aliases and administrator
 credentials do not grant diagnostic access.

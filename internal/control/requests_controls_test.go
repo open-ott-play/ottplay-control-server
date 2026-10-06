@@ -14,7 +14,7 @@ func TestControlRequestsRoundTrip(t *testing.T) {
 	for _, key := range []string{"up", "down", "left", "right", "ok", "back", "menu", "settings", "channels", "guide", "info", "channel_up", "channel_down", "volume_up", "volume_down", "mute", "play_pause", "audio", "aspect", "zoom", "pip", "fullscreen"} {
 		bodies = append(bodies, `{"action":"input","params":{"key":"`+key+`"}}`)
 	}
-	for _, params := range []string{`{"operation":"pause"}`, `{"operation":"resume"}`, `{"operation":"seek","position":0}`, `{"operation":"seek","position":12.5}`} {
+	for _, params := range []string{`{"operation":"pause"}`, `{"operation":"resume"}`, `{"operation":"previous_channel"}`, `{"operation":"next_channel"}`, `{"operation":"seek","position":0}`, `{"operation":"seek","position":12.5}`} {
 		bodies = append(bodies, `{"action":"playback","params":`+params+`}`)
 	}
 	for _, body := range bodies {
@@ -72,6 +72,19 @@ func TestControlRequestsRejectAmbiguityAndPrivilegeExpansion(t *testing.T) {
 		`{"action":"playback","params":{"operation":"play"}}`,
 		`{"action":"playback","params":{"operation":"seek","position":0,"relative":true}}`,
 		`{"action":"playback","params":{"operation":"seek","position":0,"position":1}}`,
+		`{"action":"playback","params":{"operation":null}}`,
+		`{"action":"playback","params":{"operation":"previous_chanel"}}`,
+		`{"action":"playback","params":{"operation":"next_chanel"}}`,
+	}
+	for _, op := range []string{"previous_channel", "next_channel"} {
+		for _, extra := range []string{`"position":0`, `"position":null`, `"repeat":2`, `"offset":15`, `"offset":null`, `"key":"channel_up"`, `"operation":"pause"`} {
+			bodies = append(bodies, `{"action":"playback","params":{"operation":"`+op+`",`+extra+`}}`)
+		}
+		bodies = append(bodies, `{"action":"input","params":{"key":"`+op+`"}}`)
+	}
+	for _, alias := range []string{"prev", "previous", "next", "PREVIOUS_CHANNEL", "NEXT_CHANNEL"} {
+		bodies = append(bodies, `{"action":"playback","params":{"operation":"`+alias+`"}}`)
+		bodies = append(bodies, `{"action":"input","params":{"key":"`+alias+`"}}`)
 	}
 	for _, value := range []string{`null`, `true`, `"1"`, `-1`, `1e309`, `9007199254740992`, `[]`, `{}`} {
 		bodies = append(bodies, `{"action":"playback","params":{"operation":"seek","position":`+value+`}}`)
@@ -93,7 +106,7 @@ func TestControlRequestsRejectAmbiguityAndPrivilegeExpansion(t *testing.T) {
 }
 
 func TestControlRequestsKeepOperatorAndDeviceBoundaries(t *testing.T) {
-	for _, body := range []string{`{"action":"capabilities","params":{}}`, `{"action":"lifecycle","params":{"operation":"reboot_device"}}`, `{"action":"input","params":{"key":"ok"}}`, `{"action":"playback","params":{"operation":"pause"}}`} {
+	for _, body := range []string{`{"action":"capabilities","params":{}}`, `{"action":"lifecycle","params":{"operation":"reboot_device"}}`, `{"action":"input","params":{"key":"ok"}}`, `{"action":"playback","params":{"operation":"pause"}}`, `{"action":"playback","params":{"operation":"previous_channel"}}`, `{"action":"playback","params":{"operation":"next_channel"}}`, `{"action":"playback","params":{"operation":"step_channel","offset":15}}`, `{"action":"playback","params":{"operation":"step_channel","offset":-15}}`} {
 		s := newTestServer(t)
 		expect(t, request(s, "POST", "/api/requests?device_id=first", firstToken, body, nil), 403)
 		expect(t, request(s, "POST", "/api/requests?device_id=first", "", body, nil), 401)
@@ -105,5 +118,17 @@ func TestControlRequestsKeepOperatorAndDeviceBoundaries(t *testing.T) {
 		if len(s.devices[0].queue) != 1 {
 			t.Fatal("another device acknowledged the control")
 		}
+	}
+}
+
+func TestChannelStepRequestsDoNotExpandLegacyCommands(t *testing.T) {
+	for _, op := range []string{"previous_channel", "next_channel", "step_channel"} {
+		t.Run(op, func(t *testing.T) {
+			s := newTestServer(t)
+			expect(t, request(s, "POST", "/api/webhook/commands?device_id=first", adminToken, `{"command":"`+op+`"}`, nil), 400)
+			if len(s.devices[0].queue) != 0 || s.bytes != 0 {
+				t.Fatal("modern playback operation entered the legacy command queue")
+			}
+		})
 	}
 }
