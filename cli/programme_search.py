@@ -40,16 +40,16 @@ def matches(title, query):
     return bool(terms) and all(term in text_key(title) for term in terms)
 
 
-def cache_path(kind, key):
+def cache_path(kind, key, directory=None):
     digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
-    return CACHE / (kind + "-" + digest + ".json")
+    return (CACHE if directory is None else directory) / (kind + "-" + digest + ".json")
 
 
-def cached(kind, key, ttl, refresh=False):
-    if refresh:
+def cached(kind, key, ttl, refresh=False, directory=None):
+    if refresh or ttl <= 0:
         return None
     try:
-        value = json.loads(cache_path(kind, key).read_text())
+        value = json.loads(cache_path(kind, key, directory).read_text())
         if value["version"] == 1 and 0 <= time.time() - value["saved_at"] < ttl:
             return value["data"]
     except (OSError, KeyError, TypeError, ValueError):
@@ -57,14 +57,15 @@ def cached(kind, key, ttl, refresh=False):
     return None
 
 
-def remember(kind, key, data):
+def remember(kind, key, data, directory=None):
     temporary = None
+    directory = CACHE if directory is None else directory
     try:
-        CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix=".cache-", dir=str(CACHE))
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".cache-", dir=str(directory))
         with os.fdopen(fd, "w") as stream:
             json.dump({"version": 1, "saved_at": time.time(), "data": data}, stream)
-        os.replace(temporary, cache_path(kind, key))
+        os.replace(temporary, cache_path(kind, key, directory))
     except OSError:
         pass
     finally:
@@ -77,12 +78,23 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def epg_request(base, path, payload=None):
+def epg_request(base, path, payload=None, attempts=1):
     body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode()
     request = Request(base + path, data=body, headers={"Content-Type": "application/json", "User-Agent": "ottplay-cli/1.0"})
     try:
-        with build_opener(NoRedirect()).open(request, timeout=20) as response:
-            raw = response.read(16 * 1024 * 1024 + 1)
+        for attempt in range(attempts):
+            try:
+                with build_opener(NoRedirect()).open(request, timeout=20) as response:
+                    raw = response.read(16 * 1024 * 1024 + 1)
+                break
+            except HTTPError as exc:
+                exc.close()
+                if attempt + 1 == attempts or exc.code not in (429, 500, 502, 503, 504):
+                    raise
+            except (OSError, HTTPException):
+                if attempt + 1 == attempts:
+                    raise
+            time.sleep(attempt + 1)
         if len(raw) > 16 * 1024 * 1024:
             raise ValueError()
         value = json.loads(raw)
@@ -114,9 +126,9 @@ def clean_rows(rows):
     return [{"time": start, "time_to": end, "name": name} for start, end, name in sorted(clean)]
 
 
-def fresh(value, now):
+def fresh(value, now, ttl=GUIDE_TTL):
     return (isinstance(value, dict) and type(value.get("until")) in (int, float)
-            and now < value["until"] <= now + GUIDE_TTL)
+            and now < value["until"] <= now + ttl)
 
 
 def valid_match(value):
@@ -125,8 +137,8 @@ def valid_match(value):
             and -86400 <= value["shift"] <= 86400 and value["shift"] % 3600 == 0)
 
 
-def valid_mapping(value, metadata, now):
-    return (fresh(value, now) and isinstance(value.get("generation"), str)
+def valid_mapping(value, metadata, now, ttl=GUIDE_TTL):
+    return (fresh(value, now, ttl) and isinstance(value.get("generation"), str)
             and 1 <= len(value["generation"]) <= 256 and isinstance(value.get("mappings"), dict)
             and all(row["id"] in value["mappings"] and valid_match(value["mappings"][row["id"]])
                     for row in metadata))
@@ -154,28 +166,32 @@ def valid_candidates(rows, channels, now):
     return True
 
 
-def schedules(base, channels, refresh=False):
+def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts=1):
+    read = cached if cache is None else cache.read
+    write = remember if cache is None else cache.write
+    lifetime = max(1, ttl)
+    request = epg_request if attempts == 1 else lambda *args: epg_request(*args, attempts=attempts)
     metadata = [{k: c[k] for k in ("id", "name", "tvgId", "tvgName")} for c in channels]
     for attempt in range(2):
         try:
             clock = time.time()
             key = [base, metadata]
-            mapping = cached("mapping", key, GUIDE_TTL, refresh or bool(attempt))
-            if not valid_mapping(mapping, metadata, clock):
+            mapping = read("mapping", key, ttl, refresh or bool(attempt))
+            if not valid_mapping(mapping, metadata, clock, lifetime):
                 generation, mappings = None, {}
                 for start in range(0, len(metadata), 100):
                     batch = metadata[start:start + 100]
-                    response = epg_request(base, "/match", {"version": 1, "source": "epg-one", "channels": batch})
+                    response = request(base, "/match", {"version": 1, "source": "epg-one", "channels": batch})
                     if generation is not None and generation != response["generation"]:
                         raise GenerationChanged("EPG changed during channel matching")
                     generation = response["generation"]
                     if not isinstance(response.get("mappings"), dict):
                         raise SearchError("Invalid EPG channel mapping")
                     mappings.update({row["id"]: response["mappings"].get(row["id"]) for row in batch})
-                mapping = {"generation": generation, "mappings": mappings, "until": clock + GUIDE_TTL}
-                if not valid_mapping(mapping, metadata, clock):
+                mapping = {"generation": generation, "mappings": mappings, "until": clock + lifetime}
+                if not valid_mapping(mapping, metadata, clock, lifetime):
                     raise SearchError("Invalid EPG channel mapping")
-                remember("mapping", key, mapping)
+                write("mapping", key, mapping)
             ids = {}
             for channel in channels:
                 match = mapping["mappings"].get(channel["id"])
@@ -185,22 +201,22 @@ def schedules(base, channels, refresh=False):
 
             def fetch(key):
                 cache_key = [base, mapping["generation"], key]
-                saved = cached("guide", cache_key, GUIDE_TTL, refresh)
+                saved = read("guide", cache_key, ttl, refresh)
                 clock = time.time()
                 rows = None
-                if fresh(saved, clock):
+                if fresh(saved, clock, lifetime):
                     try:
                         rows = clean_rows(saved.get("rows"))
                     except SearchError:
                         pass
                 if rows is None:
-                    response = epg_request(base, "/programmes?" + urlencode({
+                    response = request(base, "/programmes?" + urlencode({
                         "channelId": key[0], "shift": key[1], "hours": 168, "generation": mapping["generation"]}))
                     if response["generation"] != mapping["generation"]:
                         raise GenerationChanged("EPG history changed")
                     rows = clean_rows(response.get("rows"))
-                    saved = {"rows": rows, "until": clock + GUIDE_TTL}
-                    remember("guide", cache_key, saved)
+                    saved = {"rows": rows, "until": clock + lifetime}
+                    write("guide", cache_key, saved)
                 return key, rows, saved["until"]
 
             guides, until = {}, mapping["until"]
@@ -234,28 +250,74 @@ def archive_chains(rows, query, now, hours):
     return result
 
 
+def select_from_schedules(guide, query, verify):
+    """Select live broadcasts or each earliest playable contiguous archive chain.
+
+    Sources supply only the private archive resolver/probe. Matching, retention,
+    adjacency and the late live recheck are shared by local and remote players.
+    """
+    def current(now):
+        return [(channel, row, "live", 1) for channel, rows in guide for row in rows
+                if row["time"] <= now < row["time_to"] and matches(row["name"], query)]
+
+    now = time.time()
+    selected = current(now)
+    if not selected:
+        for channel, rows in guide:
+            for chain in archive_chains(rows, query, now, channel["archiveHours"]):
+                for index, row in enumerate(chain):
+                    if row["time"] < time.time() - min(144, channel["archiveHours"]) * 3600:
+                        continue
+                    if verify(channel, row):
+                        selected.append((channel, row, "archive", len(chain) - index))
+                        break
+    # Availability probes can cross a programme boundary or retention cutoff.
+    now = time.time()
+    live = current(now)
+    selected = live or [item for item in selected if item[2] == "archive"
+                       and item[1]["time"] >= now - min(144, item[0]["archiveHours"]) * 3600]
+    boundaries = [stamp for _, rows in guide for row in rows if matches(row["name"], query)
+                  for stamp in (row["time"], row["time_to"]) if stamp > now]
+    return selected, min(boundaries, default=float("inf"))
+
+
 def origin(url):
     try:
+        if not isinstance(url, str):
+            raise ValueError()
         parts = urlsplit(url)
         if (parts.scheme not in ("http", "https") or not parts.hostname or parts.username is not None
-                or parts.fragment or "\\" in url or any(ord(c) <= 32 for c in url)):
+                or parts.fragment or "\\" in url or any(ord(c) <= 32 or ord(c) == 127 for c in url)):
             raise ValueError()
-        return parts.scheme, parts.hostname.lower(), parts.port or (443 if parts.scheme == "https" else 80)
+        port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+        if not 0 < port <= 65535:
+            raise ValueError()
+        return parts.scheme, parts.hostname.lower(), port
     except (ValueError, TypeError):
         raise SearchError("The player returned an invalid archive address") from None
 
 
-def archive_available(url, start):
+def same_origin_opener(expected):
+    class SameOriginRedirect(HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, message, headers, newurl):
+            if origin(newurl) != expected:
+                return None
+            return super().redirect_request(request, fp, code, message, headers, newurl)
+    return build_opener(SameOriginRedirect())
+
+
+def archive_available(url, start, require_hls=False, allow_redirects=False):
     try:
         expected = origin(url)
-        opener = build_opener(NoRedirect())
+        opener = same_origin_opener(expected) if allow_redirects else build_opener(NoRedirect())
         for depth in range(4):
             if origin(url) != expected:
                 return False
             with opener.open(Request(url, headers={"User-Agent": "ottplay-cli/1.0"}), timeout=15) as response:
                 raw = response.read(256 * 1024 + 1)
+                response_url = response.geturl() if allow_redirects else url
             if not raw.startswith(b"#EXTM3U"):
-                return (len(raw) >= 377 and all(raw[i] == 0x47 for i in (0, 188, 376))) or (
+                return ((not require_hls or depth > 0) and len(raw) >= 377 and all(raw[i] == 0x47 for i in (0, 188, 376))) or (
                     depth > 0 and len(raw) >= 16 and raw[4:8] in (b"styp", b"moof"))
             if len(raw) > 256 * 1024:
                 return False
@@ -266,7 +328,7 @@ def archive_available(url, start):
             links = [line for line in lines if not line.startswith("#")]
             if not links or not any(line.startswith(("#EXTINF:", "#EXT-X-STREAM-INF:")) for line in lines):
                 return False
-            url = urljoin(url, links[0])
+            url = urljoin(response_url, links[0])
     except HTTPError as exc:
         exc.close()
     except (OSError, HTTPException, ValueError, SearchError):
@@ -316,47 +378,32 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
 
     if selected is None:
         guide, until = schedules(base, channels, refresh)
-        selected = []
-        now = time.time()
-        current = [result(channel, row, "live") for channel, rows in guide for row in rows
-                   if row["time"] <= now < row["time_to"] and matches(row["name"], query)]
-        for channel, rows in ([] if current else guide):
-            for chain in archive_chains(rows, query, now, channel["archiveHours"]):
-                for index, row in enumerate(chain):
-                    if row["time"] < time.time() - channel["archiveHours"] * 3600:
-                        continue
-                    archive_key = [identity, channel["id"], row["time"]]
-                    verified = cached("archive", archive_key, ARCHIVE_TTL, refresh) is True
-                    if not verified:
-                        params = {"catalog": fresh_receipt(), "id": channel["id"], "start": row["time"],
-                                  "end": row["time_to"], "title": row["name"]}
-                        try:
-                            response = client.call(device, "resolve_archive", params)
-                        except Exception as exc:
-                            if catalog_expired is None or not catalog_expired(exc):
-                                raise
-                            # A catalogue read can return a receipt near expiry.
-                            # Verify the unchanged source before retrying this
-                            # read-only resolution once; never replay playback.
-                            params["catalog"] = fresh_receipt(force=True)
-                            response = client.call(device, "resolve_archive", params)
-                        if not isinstance(response, dict) or response.get("resolved") is not True:
-                            raise SearchError("The player did not resolve the selected archive")
-                        verified = archive_available(response.get("url"), row["time"])
-                        if verified:
-                            remember("archive", archive_key, True)
-                    if verified:
-                        selected.append(result(channel, row, "archive", len(chain) - index))
-                        break
-        # A programme may have started during slow archive probes. Prefer it.
-        now = time.time()
-        live = [result(channel, row, "live") for channel, rows in guide for row in rows
-                if row["time"] <= now < row["time_to"] and matches(row["name"], query)]
-        boundaries = [stamp for _, rows in guide for row in rows if matches(row["name"], query)
-                      for stamp in (row["time"], row["time_to"]) if stamp > now]
-        selected = live or [row for row in selected if row["start"] >= now - row["archive_hours"] * 3600]
-        until = min([until] + boundaries)
-        if selected and not live:
+
+        def verify(channel, row):
+            archive_key = [identity, channel["id"], row["time"]]
+            verified = cached("archive", archive_key, ARCHIVE_TTL, refresh) is True
+            if not verified:
+                params = {"catalog": fresh_receipt(), "id": channel["id"], "start": row["time"],
+                          "end": row["time_to"], "title": row["name"]}
+                try:
+                    response = client.call(device, "resolve_archive", params)
+                except Exception as exc:
+                    if catalog_expired is None or not catalog_expired(exc):
+                        raise
+                    # Retry only an acknowledged expired read, never playback.
+                    params["catalog"] = fresh_receipt(force=True)
+                    response = client.call(device, "resolve_archive", params)
+                if not isinstance(response, dict) or response.get("resolved") is not True:
+                    raise SearchError("The player did not resolve the selected archive")
+                verified = archive_available(response.get("url"), row["time"])
+                if verified:
+                    remember("archive", archive_key, True)
+            return verified
+
+        choices, boundary = select_from_schedules(guide, query, verify)
+        selected = [result(*choice) for choice in choices]
+        until = min(until, boundary)
+        if selected and selected[0]["mode"] == "archive":
             remember("query", key, {"programs": selected, "until": until})
     receipt = fresh_receipt(force=True)
     targets = {}

@@ -12,7 +12,7 @@ playback commands are unchanged.
 
 Install the complete CLI from a source checkout using the
 [installation guide](cli.md#installation-and-connection). The native server
-release archives contain the server, not these Python clients. Keep all four
+release archives contain the server, not these Python clients. Keep all five
 `cli/*.py` files together; Python 3 is the only client dependency. Check the
 installation without contacting a server:
 
@@ -355,7 +355,7 @@ and [tools/error handling](https://modelcontextprotocol.io/specification/2025-11
 ## Troubleshooting
 
 - **`ott diagnostics` cannot import its module:** locate the real `ott.py`
-  behind the command's symlink and reinstall all four sibling Python files from
+  behind the command's symlink and reinstall all five sibling Python files from
   one checkout. The server binary alone does not install the CLI.
 - **`invalid_arguments` or `invalid_input`:** put `--server`, one credential
   option and optional `--timeout` before the command. Check exact identifiers,
