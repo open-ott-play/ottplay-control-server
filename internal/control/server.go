@@ -420,12 +420,23 @@ func (s *Server) poll(w http.ResponseWriter, d *device, now time.Time, ack bool)
 	s.expire(now)
 	d.lastSeen = now
 	commands := make([]json.RawMessage, 0, len(d.queue))
-	requests := make([]json.RawMessage, 0)
-	kept := make([]entry, 0, len(d.queue))
+	// kept retains RPC entries only for legacy delivery. Ack delivery does not
+	// drain the queue, so that slice would be discarded. requests is part of the
+	// ack JSON only; legacy responses are the command array.
+	var requests []json.RawMessage
+	var kept []entry
+	if ack {
+		requests = make([]json.RawMessage, 0)
+	} else {
+		kept = make([]entry, 0, len(d.queue))
+	}
 	for _, e := range d.queue {
 		if e.rpc {
-			requests = append(requests, e.data)
-			kept = append(kept, e)
+			if ack {
+				requests = append(requests, e.data)
+			} else {
+				kept = append(kept, e)
+			}
 			continue
 		}
 		commands = append(commands, e.data)
