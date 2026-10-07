@@ -150,6 +150,7 @@ PLEX_QUEUE_ERRORS = frozenset((
     "Plex playback is unavailable on this player.",
     "Plex queue request timed out.",
     "Plex queue request was cancelled.",
+    "Plex queue request is already in progress.",
     "Player context changed before Plex playback.",
     "Plex playback could not start.",
     "Plex queue is empty.",

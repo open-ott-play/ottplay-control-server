@@ -20,6 +20,7 @@ var plexQueueErrors = map[string]bool{
 	"Plex playback is unavailable on this player.":            true,
 	"Plex queue request timed out.":                           true,
 	"Plex queue request was cancelled.":                       true,
+	"Plex queue request is already in progress.":              true,
 	"Player context changed before Plex playback.":            true,
 	"Plex playback could not start.":                          true,
 	"Plex queue is empty.":                                    true,

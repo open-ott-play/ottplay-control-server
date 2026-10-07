@@ -34,6 +34,7 @@
     "Plex queue is already at its first item.",
     "Plex queue is already at its last item.",
     "Plex queue is empty.",
+    "Plex queue request is already in progress.",
     "Plex queue request timed out.",
     "Plex queue request was cancelled.",
     "Plex server is unreachable or access was denied.",
