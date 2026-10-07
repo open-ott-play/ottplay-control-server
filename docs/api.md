@@ -131,6 +131,76 @@ require an updated controller and player; there is no legacy/input fallback.
 Response retries use the same request ID and do not repeat the step within the
 player session. Do not submit a new request after an uncertain result.
 
+### Ordered Plex queue extension
+
+`plex_queue` uses the administrator-authenticated request lane. Player device
+credentials may receive requests and post their own results but cannot submit
+them; protocol-2 diagnostic operator scopes do not grant queue control. This
+additive RPC does not change the generated legacy command envelope.
+
+```json
+{"action":"plex_queue","params":{"op":"preview","runtime":"page-123","ids":["78777","78776","78775"]}}
+{"action":"plex_queue","params":{"op":"play","runtime":"page-123","ids":["78777","78776","78775"]}}
+{"action":"plex_queue","params":{"op":"status","runtime":"page-123"}}
+{"action":"plex_queue","params":{"op":"next","runtime":"page-123"}}
+{"action":"plex_queue","params":{"op":"previous","runtime":"page-123"}}
+{"action":"plex_queue","params":{"op":"stop","runtime":"page-123"}}
+```
+
+`runtime` must match `^[a-z0-9-]{1,64}$` and the current
+`capabilities.player.runtime`. Only `play` and `preview` accept `ids`: 1–100
+strings matching `^[1-9][0-9]{0,19}$`. Their order and duplicates are preserved.
+Unknown/duplicate fields, numeric JSON IDs, leading zeros, URLs and extra options
+are rejected. The player uses its saved Plex credentials; no URL/token is accepted
+in this request. The existing 16 KiB request limit remains.
+
+Capabilities optionally include
+`plex_queue:{version:1,operations:["play","preview","status","next","previous","stop"],max_items:100}`.
+Absence means the client must not assume support. Updated CLIs discover the
+capability before sending an explicit Plex operation; old `plex setup` behavior
+is unchanged.
+
+Successful queue data contains exactly the required fields below, with optional
+`title` and `error`:
+
+```json
+{"version":1,"runtime":"page-123","active":true,"state":"playing","ids":["78777","78776","78775"],"index":0,"repeat":"none","order":"listed","title":"First film"}
+```
+
+States are `idle`, `preparing`, `playing`, `paused`, `ended`, and `error`.
+`active` means a nonempty retained queue owns navigation, including after an end
+or failure. `index` is zero-based within `ids`; an empty queue has `index:null`
+and `active:false`. `idle` is empty; `ended` retains the final index. `stop`
+returns idle and clears the queue. `play` receipts echo the exact ID sequence and
+index zero; preparation/acceptance must not be presented as decoder confirmation.
+`title` is at most 512 UTF-8 bytes without C0/DEL controls. `error` is a static
+allowlisted message, never a backend response, URL or credential. Queue metadata
+is capped at 16 KiB and validated against the runtime bound when the request was
+enqueued. Result expiry and authenticated read rules are unchanged.
+
+Preview returns `{version:1,runtime,state:"ready"|"error",ids,titles,order:"listed"}`,
+with optional static `error`. Ready `titles` has one title per submitted ID in the
+same order; error `titles` may be empty. Each title has the same 512-byte bound,
+and the total serialized preview response data is at most 128 KiB. Preview checks availability
+without selecting a provider, starting playback or replacing a retained queue.
+Readiness does not promise future network availability or successful decoding.
+
+While a queue is retained, `playback` operations `next_channel` and
+`previous_channel` route to it atomically. Their successful result is
+`{operation,dispatched:true,plex_queue:QUEUE_METADATA}` instead of `channel`.
+The controller rejects a result containing both destinations. At either queue
+boundary the step is rejected without wrapping or falling back to TV. Outside
+the queue, the existing channel behavior remains. Natural end-of-stream advances
+the ordered list and stops after its final item, with no shuffle or repetition.
+
+The player checks request expiry, runtime and context before committing prepared
+playback and retires stale callbacks. CLI timeout does not cancel a request already
+accepted under the server TTL; late execution before that deadline can be uncertain.
+Never automatically reissue a mutation on timeout. Read `plex status` to inspect
+the current queue, and use a new request only after assessing that state.
+
+### Remote screenshot extension
+
 `screenshot` accepts exactly `{runtime:"page-runtime-id"}`, where runtime matches
 `^[a-z0-9-]{1,64}$` and is the identity from `capabilities.player.runtime`.
 The player must verify its current runtime, enabled controller connection and

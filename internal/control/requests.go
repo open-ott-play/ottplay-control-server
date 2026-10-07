@@ -110,6 +110,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = len(params) == 0
 	case "screenshot":
 		ok = validScreenshotRequest(params)
+	case "plex_queue":
+		ok = parsePlexQueueRequest(params) != nil
 	case "lifecycle", "input", "playback":
 		ok = validControlRequest(action, params)
 	case "profile":
@@ -184,6 +186,16 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	e := entry{id: id, data: data, expires: expires, rpc: true}
 	if action == "screenshot" {
 		_ = json.Unmarshal(params["runtime"], &e.screenshotRuntime)
+	}
+	if action == "plex_queue" {
+		e.plexQueue = parsePlexQueueRequest(params)
+	}
+	if action == "playback" {
+		var operation string
+		_ = json.Unmarshal(params["operation"], &operation)
+		if operation == "previous_channel" || operation == "next_channel" {
+			e.playbackOperation = operation
+		}
 	}
 	d.queue = append(d.queue, e)
 	s.bytes += len(data)
@@ -276,15 +288,27 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	// below rechecks expiry and ownership before storing this validated result.
 	s.mu.Lock()
 	screenshotRuntime := ""
+	var plexQueue *plexQueueRequest
+	playbackOperation := ""
 	for _, pending := range d.queue {
 		if pending.rpc && pending.id == id {
 			screenshotRuntime = pending.screenshotRuntime
+			plexQueue = pending.plexQueue
+			playbackOperation = pending.playbackOperation
 			break
 		}
 	}
 	s.mu.Unlock()
 	if screenshotRuntime != "" && status == "ok" && !validScreenshotResult(m["data"], screenshotRuntime) {
 		failure(w, 400, "invalid screenshot result")
+		return
+	}
+	if plexQueue != nil && (len(m["data"]) > maxPlexPreviewResultBytes || (status == "ok" && !validPlexQueueResult(m["data"], plexQueue))) {
+		failure(w, 400, "invalid Plex queue result")
+		return
+	}
+	if playbackOperation != "" && status == "ok" && !validPlexPlaybackResult(m["data"], playbackOperation) {
+		failure(w, 400, "invalid Plex playback result")
 		return
 	}
 	now = s.now()
