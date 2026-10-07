@@ -99,6 +99,17 @@ class DiagnosticsTests(unittest.TestCase):
     def client(self, opener=None, **kwargs):
         return diag.DiagnosticsClient("https://controller.example/ott-control", TOKEN, opener=opener or Opener(), **kwargs)
 
+    def test_all_request_methods_use_the_main_cli_user_agent(self):
+        opener = Opener()
+        client = self.client(opener)
+        client.runtimes("device")
+        client.start("device", "runtime", "consent", 1000, "operation", EPOCH)
+        client.revoke("runtime", EPOCH)
+        self.assertEqual([request.method for request in opener.requests], ["GET", "POST", "DELETE"])
+        for request in opener.requests:
+            with self.subTest(method=request.method):
+                self.assertEqual(request.get_header("User-agent"), "ottplay-cli/1.0")
+
     def test_targeted_routes_and_body(self):
         opener = Opener()
         client = self.client(opener)
