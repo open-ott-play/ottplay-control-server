@@ -89,6 +89,22 @@ ott l vpr "wedding"
 for a new shuffle. `vp` plays matches in catalogue order; `vp --list` lists them
 without changing playback. See [VPortal commands](docs/cli.md#commands).
 
+For an explicit Plex sequence using the player's saved Plex configuration:
+
+```sh
+ott l plex preview 78777 78776 78775  # check availability without starting playback
+ott l plex play 78777 78776 78775     # starts the first item from zero, in this order
+ott l plex queue                     # current item and preparation/playback state
+ott l plex next                      # advance once; no wrap at the last item
+ott l plex stop                      # stop and clear this queue
+```
+
+Plex queues require a CLI, controller and player implementing `plex_queue`.
+They stop after the final item, with no shuffle or repeat. While a queue remains,
+ordinary `next` and `prev` address it; `plex stop` clears it. A preview never
+switches the provider or replaces current playback. See
+[Plex queue commands](docs/cli.md#ordered-plex-queues) for limits and readiness.
+
 ### Load a saved setup
 
 Store named setups in the private `presets` section of

@@ -877,6 +877,70 @@ Settings use the existing save and reload drivers. Parental settings locks and
 platform restrictions still apply; unlock the settings on the player first.
 Other providers currently require their own settings UI.
 
+## Ordered Plex queues
+
+Use the Plex item IDs from the configured Plex library. The player uses its
+saved Plex server and token; the command carries only IDs and a runtime identity.
+Install versions of the CLI, controller and player that advertise `plex_queue`
+in `ott PLAYER caps`. Installing only the CLI does not update the controller or TV.
+Existing `plex setup`, `server`, `token` and `token-file` commands keep their
+configuration meaning.
+
+```sh
+ott l plex preview 78777 78776 78775  # read-only readiness check, in this exact order
+ott l plex play 78777 78776 78775     # replace the queue and start the first film at 0
+ott l plex queue                     # same as plex status; does not start anything
+ott l plex status
+ott l plex next                      # next item, starting at 0
+ott l plex prev                      # previous item, starting at 0
+ott l plex previous                  # long spelling of prev
+ott l plex stop                      # stop playback and clear the queue
+ott --json l plex queue              # bounded metadata, no stream URLs or tokens
+```
+
+`play` and `preview` accept 1–100 positive decimal IDs, each at most 20 digits,
+without signs, leading zeros, titles or URLs. Order and duplicate IDs are
+preserved. Command spelling is case-insensitive. Preview checks the saved
+configuration and every requested item without changing the provider, queue or
+current playback. It reports titles in the submitted order. Readiness does not
+guarantee later network availability or decoder compatibility.
+
+Playback starts at the first item from zero, without shuffle, repeat or resume.
+Natural completion advances through the list and stops after the last item.
+`next` at the last item and `prev` at the first are rejected without wrapping or
+stopping the current item. Ordinary `ott l next` and `ott l prev` use a retained
+Plex queue atomically inside the player, including while preparing or after it
+ends. They do not switch to a TV channel at a queue boundary. `plex stop` clears
+the queue; channel navigation otherwise retains its existing category/wrap rules.
+Queue state is local to the player runtime and is not a saved Plex playlist.
+
+`preparing` means the request was accepted and preparation is in progress, not
+that a decoder is playing. Query `plex status` for `playing`, `paused`, `ended`
+or `error`. `active` means that a nonempty queue still owns navigation, including
+in `ended` or `error`; it does not by itself mean media is playing. The machine
+`index` is zero-based; the human summary shows position 1/N.
+
+The CLI reads capabilities and sends one runtime-bound queue request within the
+same `--timeout` budget. The player rejects stale runtimes and invalidates pending
+preparation on request expiry or context change. The server TTL is independent
+of the CLI wait: a timeout can leave acceptance uncertain and the request may
+still execute before its server deadline. There is no automatic replay. Inspect
+`plex status` before deciding whether to send another command; a missing receipt
+does not prove that playback never started.
+
+### Plex queue troubleshooting
+
+- If the operation is missing or unsupported, update all three components and
+  confirm `plex_queue.operations` in `caps` on the exact target player.
+- If configuration or access is rejected, check the player's saved Plex server
+  and token, then use `plex preview` to verify readiness without interrupting it.
+- If an item is unavailable, check the IDs against that server's library. IDs
+  belong to one Plex server; a title or stream URL is not an ID.
+- If preparation fails or the runtime changes, read `plex status`. Do not repeat
+  an uncertain `play`, `next` or `prev` automatically.
+- Parental access, kiosk policy, network restrictions and decoder availability
+  can still reject playback. A successful preview never unlocks those controls.
+
 ## M3U profiles
 
 M3U has 15 numbered profiles. Select the M3U provider first; these commands
@@ -1245,6 +1309,11 @@ contains the exact key, `accepted: true`, `dispatched: false` and
 Kiosk and parental restrictions still apply.
 
 ### Previous and next channel
+
+When a Plex queue is retained, `prev` and `next` address that queue, without
+wrapping or falling back to TV at its boundaries. This includes preparing,
+ended and error states; clear it with `plex stop`. The channel rules below apply
+when no Plex queue owns navigation. See [ordered Plex queues](#ordered-plex-queues).
 
 ```sh
 ott l prev                 # previous channel on the player registered as l

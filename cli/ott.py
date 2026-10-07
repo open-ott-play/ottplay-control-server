@@ -64,6 +64,10 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME plex server URL           update the saved Plex server address
   ott NAME plex token [TOKEN]        update the Plex token (hidden prompt if omitted)
   ott NAME plex token-file FILE      update the Plex token from a file
+  ott NAME plex preview ID [ID ...]  check the listed Plex items without starting playback
+  ott NAME plex play ID [ID ...]     play IDs in order from the start; stop after the last
+  ott NAME plex queue / status       show the Plex queue without changing it
+  ott NAME plex next / prev / stop   move within or clear the Plex queue (no wrapping)
   ott NAME playlist URL              update the M3U playlist
   ott NAME profiles                  list the active provider’s 15 profiles without URLs
   ott NAME profile N                 select M3U or VPortal profile 1–15
@@ -136,6 +140,24 @@ CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
 PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
 SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
 MAX_SCREENSHOT_BYTES = 1024 * 1024
+PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
+MAX_PLEX_QUEUE_ITEMS = 100
+PLEX_QUEUE_ERRORS = frozenset((
+    "Plex configuration is missing or invalid.",
+    "Plex provider module could not be loaded.",
+    "Plex server is unreachable or access was denied.",
+    "One or more Plex items are unavailable or not playable.",
+    "Plex playback is unavailable on this player.",
+    "Plex queue request timed out.",
+    "Plex queue request was cancelled.",
+    "Player context changed before Plex playback.",
+    "Plex playback could not start.",
+    "Plex queue is empty.",
+    "Plex queue is already at its first item.",
+    "Plex queue is already at its last item.",
+    "Unlock parental access before starting the Plex queue.",
+    "Kiosk mode does not allow a Plex queue.",
+))
 
 
 def command_verb(words):
@@ -789,6 +811,17 @@ def parse_command(words):
             data["settings"] = validate_plex_settings(data["settings"])
         return "provider_settings", data
     if verb == "plex":
+        operation = tail[0].casefold() if tail else ""
+        operation = {"queue": "status", "prev": "previous"}.get(operation, operation)
+        if operation in PLEX_QUEUE_OPERATIONS:
+            ids = tail[1:]
+            if operation in ("play", "preview"):
+                if not plex_queue_ids(ids, 1):
+                    raise Error("Use plex play/preview with 1–100 positive decimal Plex IDs (no leading zeros, URLs or titles)")
+                return "plex_queue", {"op": operation, "ids": ids}
+            if ids:
+                raise Error("Use plex queue/status, next, prev/previous or stop without extra arguments")
+            return "plex_queue", {"op": operation}
         return "provider_settings", {"provider": "plex", "settings": parse_plex_settings(tail)}
     if verb == "playlist":
         if len(tail) != 1:
@@ -1500,6 +1533,111 @@ def screenshot_command(client, device, name, output, timeout):
             os.close(parent_fd)
 
 
+def plex_queue_ids(ids, minimum=0):
+    return (isinstance(ids, list) and minimum <= len(ids) <= MAX_PLEX_QUEUE_ITEMS
+            and all(isinstance(item, str) and re.fullmatch(r"[1-9][0-9]{0,19}", item) for item in ids))
+
+
+def plex_queue_title(value):
+    return epg_text(value, 512, "utf-8") and all(ord(char) >= 32 and ord(char) != 127 for char in value)
+
+
+def plex_queue_metadata(data, runtime=None, params=None):
+    invalid = "The player returned invalid Plex queue metadata. The request may have executed; do not repeat the change blindly."
+    preview = params is not None and params["op"] == "preview"
+    required = ({"version", "runtime", "state", "ids", "titles", "order"} if preview else
+                {"version", "runtime", "active", "state", "ids", "index", "repeat", "order"})
+    optional = {"error"} if preview else {"title", "error"}
+    if (not isinstance(data, dict) or not required <= set(data) or set(data) - required - optional
+            or type(data.get("version")) is not int or data["version"] != 1
+            or not isinstance(data.get("runtime"), str) or not re.fullmatch(r"[a-z0-9-]{1,64}", data["runtime"])
+            or (runtime is not None and data["runtime"] != runtime)
+            or not plex_queue_ids(data.get("ids")) or data.get("order") != "listed"
+            or ("error" in data and (data.get("state") != "error" or not isinstance(data["error"], str)
+                                     or data["error"] not in PLEX_QUEUE_ERRORS))):
+        raise Error(invalid)
+    ids = data["ids"]
+    if params and params["op"] in ("play", "preview") and ids != params["ids"]:
+        raise Error(invalid)
+    if preview:
+        titles = data["titles"]
+        if (data["state"] not in ("ready", "error") or not isinstance(titles, list)
+                or len(titles) not in (0, len(ids)) or (data["state"] == "ready" and len(titles) != len(ids))
+                or not ids or any(not plex_queue_title(title) for title in titles)):
+            raise Error(invalid)
+        return dict(data, ids=list(ids), titles=list(titles))
+    state, index = data["state"], data["index"]
+    if (type(data["active"]) is not bool or data["repeat"] != "none"
+            or (ids and (type(index) is not int or not 0 <= index < len(ids)))
+            or (not ids and index is not None)
+            or ("title" in data and not plex_queue_title(data["title"]))):
+        raise Error(invalid)
+    if state == "idle":
+        valid = not data["active"] and not ids
+    elif state in ("preparing", "playing", "paused"):
+        valid = data["active"] and bool(ids)
+    elif state == "ended":
+        valid = data["active"] and bool(ids) and index == len(ids) - 1
+    elif state == "error":
+        valid = data["active"] == bool(ids)
+    else:
+        valid = False
+    if not valid or (params and ((params["op"] == "play" and index != 0) or (params["op"] == "stop" and state != "idle"))):
+        raise Error(invalid)
+    return dict(data, ids=list(ids))
+
+
+def plex_queue_command(client, device, params, timeout):
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        if params["op"] not in controls.get("plex_queue", {}).get("operations", []):
+            raise Error("Plex queues are not supported by this player/controller; update both and check caps. No queue command was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Plex capability discovery exceeded --timeout; no queue command was sent")
+        client.timeout = remaining
+        runtime = controls["player"]["runtime"]
+        result = client.call(device, "plex_queue", dict(params, runtime=runtime))
+        if time.monotonic() >= deadline:
+            raise Error("Plex queue response exceeded --timeout. Acceptance is uncertain and the request may still execute before its server deadline; do not repeat it blindly. Inspect plex status")
+        result = plex_queue_metadata(result, runtime, params)
+        if result["state"] == "error" and params["op"] != "status":
+            raise Error(result.get("error", "Plex playback could not start.") + " Inspect plex status before another playback request")
+        return result
+    except PlayerRejected as exc:
+        detail = exc.data.get("error") if isinstance(exc.data, dict) else None
+        if not isinstance(detail, str) or detail not in PLEX_QUEUE_ERRORS:
+            detail = "Plex queue request was rejected; check saved Plex settings, the current player runtime and availability."
+        raise Error(detail + " The request was not repeated") from None
+    except PlayerUnsupported:
+        raise Error("Plex queues are not supported by this player/controller; update both and check caps. The request was not repeated") from None
+    except HTTPError as exc:
+        if exc.code == 400:
+            raise Error("This controller does not accept Plex queue requests; update the controller and player. The request was not repeated") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_plex_queue(data, preview=False):
+    if preview:
+        print("Plex preview ready; playback was not started:")
+        for item, title in zip(data["ids"], data["titles"]):
+            print(f"  {item}: {clean(title)}")
+        return
+    state = data["state"]
+    position = "" if data["index"] is None else f" {data['index'] + 1}/{len(data['ids'])} (ID {data['ids'][data['index']]})"
+    title = "" if not data.get("title") else ": " + clean(data["title"])
+    print(f"Plex queue: {state}{position}{title}; listed order, no repeat.")
+    if state == "preparing":
+        print("Accepted and preparing; playback has not been confirmed. Use plex status to check progress.")
+    if data.get("error"):
+        print(data["error"])
+
+
 def capabilities_metadata(data):
     invalid = "The player returned invalid capabilities metadata"
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
@@ -1525,6 +1663,17 @@ def capabilities_metadata(data):
                 or (shot["state"] == "ready" and shot["source"] is None)):
             raise Error(invalid)
         result["screenshot"] = dict(shot)
+    if "plex_queue" in data:
+        queue = data["plex_queue"]
+        operations = queue.get("operations") if isinstance(queue, dict) else None
+        if (not isinstance(queue, dict) or set(queue) != {"version", "operations", "max_items"}
+                or type(queue.get("version")) is not int or queue["version"] != 1
+                or type(queue.get("max_items")) is not int or queue["max_items"] != MAX_PLEX_QUEUE_ITEMS
+                or not isinstance(operations, list) or len(operations) > len(PLEX_QUEUE_OPERATIONS)
+                or any(not isinstance(op, str) or op not in PLEX_QUEUE_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": MAX_PLEX_QUEUE_ITEMS}
     return result
 
 
@@ -1597,7 +1746,11 @@ def print_player_status(data, name):
         print("  " + screenshot_setup_guidance())
     elif shot.get("state") == "unsupported":
         print("  Screenshots are not supported by this player/platform.")
-    if not any(controls[key] for key in ("lifecycle", "playback", "input")) and shot.get("state") != "ready":
+    queue = controls.get("plex_queue", {}).get("operations", [])
+    if queue:
+        print(f"  {prefix} plex " + " / ".join(op + " ID [ID ...]" if op in ("play", "preview") else op for op in queue))
+        print("    Listed order; no repeat. next/prev use the retained Plex queue until plex stop clears it.")
+    if not any(controls[key] for key in ("lifecycle", "playback", "input")) and shot.get("state") != "ready" and not queue:
         print("  No controls are currently advertised by the player.")
 
 
@@ -1614,6 +1767,11 @@ def playback_metadata(data, params):
     if not isinstance(data, dict) or data.get("operation") != params["operation"] or data.get("dispatched") is not True:
         raise Error(invalid)
     result = {"operation": params["operation"], "dispatched": True}
+    if "plex_queue" in data:
+        if params["operation"] not in CHANNEL_STEPS.values() or set(data) != {"operation", "dispatched", "plex_queue"}:
+            raise Error(invalid)
+        result["plex_queue"] = plex_queue_metadata(data["plex_queue"])
+        return result
     if params["operation"] == "step_channel":
         if type(data.get("offset")) is not int or data["offset"] != params["offset"]:
             raise Error(invalid)
@@ -1950,6 +2108,8 @@ def main(argv=None):
         plex_settings = action == "provider_settings" and params.get("provider") == "plex"
         if action == "screenshot":
             data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
+        elif action == "plex_queue":
+            data = plex_queue_command(client, device, params, args.timeout)
         elif action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
         elif action == "play":
@@ -1964,6 +2124,10 @@ def main(argv=None):
             try:
                 data = client.call(device, action, params)
             except (PlayerRejected, PlayerUnsupported) as exc:
+                if action == "playback" and params.get("operation") in CHANNEL_STEPS.values() and isinstance(exc, PlayerRejected):
+                    detail = exc.data.get("error") if isinstance(exc.data, dict) else None
+                    if isinstance(detail, str) and detail in PLEX_QUEUE_ERRORS:
+                        raise Error(detail + " The request was not repeated") from None
                 if action in ("capabilities", "lifecycle", "input", "playback"):
                     reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
                     raise Error(f"The {action} request was {reason}; use an updated player/controller and check capabilities and local restrictions") from None
@@ -2029,6 +2193,8 @@ def main(argv=None):
             print(json.dumps(data, ensure_ascii=False, indent=2))
         elif action == "screenshot":
             print(f"Screenshot saved: {clean(data['path'])} ({data['width']}×{data['height']}; {data['source']}; video: {data['video']})")
+        elif action == "plex_queue":
+            print_plex_queue(data, preview=params["op"] == "preview")
         elif action == "channels" or (action == "play" and "channels" in data):
             for row in data["channels"]:
                 print(f"{row['number']}: {clean(row['name'])}")
@@ -2069,7 +2235,9 @@ def main(argv=None):
         elif action == "input":
             print(f"Input request accepted: {data['key']}; waiting for the acknowledgement to reach the player.")
         elif action == "playback":
-            if "channel" in data:
+            if "plex_queue" in data:
+                print_plex_queue(data["plex_queue"])
+            elif "channel" in data:
                 print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
             else:
                 print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")

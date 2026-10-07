@@ -29,6 +29,8 @@ type entry struct {
 	rpc     bool
 	// Bound at enqueue time; never trust a responding page's runtime identity.
 	screenshotRuntime string
+	plexQueue         *plexQueueRequest
+	playbackOperation string
 }
 type bucket struct {
 	start time.Time
