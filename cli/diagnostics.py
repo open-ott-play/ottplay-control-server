@@ -356,7 +356,8 @@ class DiagnosticsClient:
 
     def _request(self, method, path, payload=None, *, epoch=None, kind, context=None):
         mutation = method != "GET"
-        headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
+        headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json",
+                   "User-Agent": "ottplay-cli/1.0"}
         if epoch is not None:
             headers["X-OTT-Diagnostics-Epoch"] = identifier(epoch)
         body = None
