@@ -54,13 +54,21 @@ jobs:
         env:
           BUILD_TARGET: ${{ matrix.target }}
         run: python3 scripts/build.py "$BUILD_TARGET"
+      - name: Build Android maintenance companion
+        if: matrix.target == 'linux-armv7'
+        run: python3 native/android-agent/build.py
       - name: Run native release binary
         if: matrix.target == 'linux-amd64'
         run: python3 scripts/smoke_binary.py dist/ottplay-control-server-linux-amd64
       - name: Stage exact versioned assets
         env:
           BUILD_TARGET: ${{ matrix.target }}
-        run: python3 scripts/stage_release_assets.py --target "$BUILD_TARGET" --pattern "dist/ottplay-control-server-$BUILD_TARGET*"
+        run: |
+          if [ "$BUILD_TARGET" = linux-armv7 ]; then
+            python3 scripts/stage_release_assets.py --target "$BUILD_TARGET" --pattern "dist/ottplay-control-server-$BUILD_TARGET*" --pattern "dist/ottplay-control-server-android-agent.tar.gz"
+          else
+            python3 scripts/stage_release_assets.py --target "$BUILD_TARGET" --pattern "dist/ottplay-control-server-$BUILD_TARGET*"
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-assets-${{ matrix.target }}

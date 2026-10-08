@@ -493,3 +493,20 @@ Clients should best-effort cancel before discarding a pending flow, replacing it
 or after successfully storing the approved device credential. This frees the
 per-device queue; TTL expiry remains the fallback when cancellation is lost.
 The existing device credential remains valid after its pairing receipt is removed.
+
+## Native Android maintenance (protocol 1)
+
+A native agent must have a separate provisioned device identity/token. Polling the
+same device queue from both the WebView and the agent is unsupported: protocol 1
+does not route requests to runtime instances. `maintenance` accepts exactly
+`{operation: health|logs|recover_video}` or
+`{operation: update, manifest: HTTPS_URL, sha256: HEX_SHA256}`. The latter is only
+an envelope; the agent independently verifies a pinned Ed25519 signature and the
+payload digest before execution. There is no remote shell/JavaScript operation.
+
+`vportal_queue` accepts `{operation: play, ids: [POSITIVE_SAFE_INTEGER,...],
+loop: BOOLEAN}` with 1–100 unique IDs, or `{operation:
+status|next|previous|restart|stop}`. The experimental legacy Android adapter
+supports `loop: true` only. IDs remain in caller order. Capability/policy checks
+and outcome reporting belong to the device; a successful enqueue is not evidence
+of installation or successful playback. Use the dedicated native CLI commands.

@@ -112,6 +112,10 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = validScreenshotRequest(params)
 	case "plex_queue":
 		ok = parsePlexQueueRequest(params) != nil
+	case "maintenance":
+		ok = validMaintenanceRequest(params)
+	case "vportal_queue":
+		ok = validVPortalQueueRequest(params)
 	case "lifecycle", "input", "playback":
 		ok = validControlRequest(action, params)
 	case "profile":
