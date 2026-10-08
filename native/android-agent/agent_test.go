@@ -181,3 +181,12 @@ func TestConfigPermissionsAndOrigins(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyLogResponseIsAnArray(t *testing.T) {
+	a := Agent{}
+	r, effect := a.execute(context.Background(), Request{ID: strings.Repeat("a", 32), Action: "maintenance", Params: json.RawMessage(`{"operation":"logs"}`)})
+	b, e := json.Marshal(r.Data)
+	if e != nil || effect != nil || r.Status != "ok" || !bytes.Contains(b, []byte(`"events":[]`)) {
+		t.Fatal("empty log must serialize as an array")
+	}
+}

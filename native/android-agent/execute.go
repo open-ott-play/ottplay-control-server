@@ -98,7 +98,11 @@ func (a *Agent) execute(ctx context.Context, r Request) (Result, func() error) {
 		case "health":
 			return ok(r.ID, a.health(ctx)), nil
 		case "logs":
-			return ok(r.ID, map[string]any{"version": 1, "events": a.logs}), nil
+			events := a.logs
+			if events == nil {
+				events = []map[string]any{}
+			}
+			return ok(r.ID, map[string]any{"version": 1, "events": events}), nil
 		case "recover_video":
 			a.watchdog.LastAction = time.Now()
 			data, e := a.player(ctx, "recover", nil)
