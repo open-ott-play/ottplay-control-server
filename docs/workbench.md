@@ -78,14 +78,20 @@ runtime, so their `runtime_correlation` is explicitly `unavailable`.
 
 `operation REQUEST_ID` reads one exact 32-character lowercase hexadecimal request
 ID from the current web runtime's bounded operation history. The lookup itself
-gets a different request ID. It never repeats the original effect. History is
-limited to 128 entries and 10 minutes, and is not durable across a page reload.
-An absent receipt is `unknown`, not proof that the operation never ran.
-`accepted` means admission; `invoked` means the handler ran. `handler_completed`
-means the handler returned, including an effect callback run after its ACK; it
-does not establish the effect's outcome. The current journal never emits
-`observed`: that state and its `media_progress`/`runtime_changed` evidence are
-reserved for future independently verified outcomes. Use the separate
+gets a different request ID. It never repeats the original effect. The player
+holds at most 128 request IDs in memory. A retained receipt reports `expired`
+after ten minutes; eviction or reload loses the history. An absent receipt is
+`unknown`, not proof that the operation never ran. Never replay a mutation
+automatically after losing its response.
+
+`accepted` means an after-ACK effect was queued; it does not establish that the
+effect is still pending. A disconnect, server rejection or ACK deadline can
+discard the effect without updating that receipt. `invoked` means the handler
+ran; it can still decline the effect if policy or ownership changed.
+`handler_completed` means the handler returned, including an effect callback run
+after its ACK; it does not establish the effect's outcome. The current journal
+never emits `observed`: that state and its `media_progress`/`runtime_changed`
+evidence are reserved for future independently verified outcomes. Use the separate
 `media-progress` scenario to observe decoder movement; even that does not
 confirm presentation on the physical screen.
 
