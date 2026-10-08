@@ -36,6 +36,7 @@ type Result struct {
 	Data   any    `json:"data"`
 }
 type Entry struct {
+	Action  string `json:"action"`
 	Result  Result `json:"result"`
 	Expires int64  `json:"expires"`
 	State   string `json:"state"`
@@ -175,7 +176,7 @@ func (a *Agent) process(ctx context.Context, r Request, serverTime float64, rece
 		a.deliver(call, r, cached)
 		return
 	}
-	e := Entry{Result: rejected(r.ID, "Execution not confirmed"), Expires: int64(r.Expires) + 2, State: "started"}
+	e := Entry{Action: r.Action, Result: rejected(r.ID, "Execution not confirmed"), Expires: int64(r.Expires) + 2, State: "started"}
 	if a.remember(r.ID, e) != nil {
 		a.event("journal_write_failed")
 		return
@@ -204,6 +205,24 @@ func (a *Agent) process(ctx context.Context, r Request, serverTime float64, rece
 	}
 	a.deliver(call, r, e)
 }
+
+// The server may save a response and lose the HTTP ACK. It then removes the
+// request from polls, so retry prepared receipts independently of redelivery.
+func (a *Agent) flushPending(ctx context.Context, serverTime float64) {
+	for id := range a.effects {
+		e, exists := a.journal[id]
+		if !exists || e.State != "prepared" || float64(e.Expires)-2 <= serverTime {
+			continue
+		}
+		budget := time.Duration((float64(e.Expires) - 2 - serverTime) * float64(time.Second))
+		if budget > 10*time.Second {
+			budget = 10 * time.Second
+		}
+		call, cancel := context.WithTimeout(ctx, budget)
+		a.deliver(call, Request{ID: id, Action: e.Action}, e)
+		cancel()
+	}
+}
 func (a *Agent) run(ctx context.Context) {
 	timer := time.NewTicker(2 * time.Second)
 	defer timer.Stop()
@@ -225,6 +244,7 @@ func (a *Agent) run(ctx context.Context) {
 			a.event("invalid_poll")
 		} else {
 			a.serverTime = poll.ServerTime
+			a.flushPending(ctx, poll.ServerTime)
 			_ = os.Remove(dataDir + "/update.pending")
 			for _, r := range poll.Requests {
 				a.process(ctx, r, poll.ServerTime, started)

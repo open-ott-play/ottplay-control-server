@@ -77,7 +77,7 @@ func TestDeferredACKRetryAndCrash(t *testing.T) {
 		t.Fatal("effect before ACK")
 	}
 	reject = false
-	a.deliver(context.Background(), r, a.journal[r.ID])
+	a.flushPending(context.Background(), float64(time.Now().Unix()))
 	a.deliver(context.Background(), r, a.journal[r.ID])
 	if effects != 1 || calls != 3 {
 		t.Fatal("duplicate or missing effect")
