@@ -282,6 +282,79 @@ class ReportVerifyTest(unittest.TestCase):
         (self.path / "result.json").unlink()
         self.assertEqual(self.invoke()[1]["reason"], "unexpected_report_files")
 
+    def test_retained_handle_stability_does_not_mix_windows_stat_clocks(self):
+        # CPython 3.12 Windows fstat uses ChangeTime; path stat uses birthtime.
+        fields = dict(st_dev=1, st_ino=2, st_mode=0o100600, st_size=50,
+                      st_mtime_ns=300, st_ctime_ns=400)
+        handle_info = SimpleNamespace(**fields)
+        path_info = SimpleNamespace(**dict(fields, st_ctime_ns=100))
+        expected = verify._fingerprint(handle_info)
+        self.assertNotEqual(expected, verify._fingerprint(path_info))
+        with mock.patch.object(verify.os, "fstat", return_value=handle_info) as fstat, \
+                mock.patch.object(verify.os, "stat", return_value=path_info) as path_stat, \
+                mock.patch.object(verify.os, "lstat", return_value=path_info) as lstat:
+            verify._verify_unchanged("result.json", 37, expected, None)
+            fstat.assert_called_once_with(37)
+            path_stat.assert_not_called()
+            lstat.assert_not_called()
+            for field in ("st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"):
+                with self.subTest(field=field):
+                    fstat.return_value = SimpleNamespace(**dict(fields, **{field: fields[field] + 1}))
+                    with self.assertRaises(verify.InvalidReport) as raised:
+                        verify._verify_unchanged("result.json", 37, expected, None)
+                    self.assertEqual(raised.exception.reason, "report_changed")
+            # The POSIX lane still detects a replaced pathname even if its
+            # original open descriptor is unchanged.
+            fstat.return_value = handle_info
+            with self.assertRaises(verify.InvalidReport) as raised:
+                verify._verify_unchanged("result.json", 37, expected, 38)
+            self.assertEqual(raised.exception.reason, "report_changed")
+            path_stat.assert_called_once_with("result.json", dir_fd=38, follow_symlinks=False)
+
+    @unittest.skipUnless(os.name == "nt", "Windows retained-handle sharing contract")
+    def test_windows_handles_block_writes_and_file_or_ancestor_rename(self):
+        self.save()
+        original_check = verify._verify_unchanged
+        checks = []
+
+        def sharing_violation(action, undo):
+            try:
+                action()
+            except OSError as error:
+                self.assertEqual(error.winerror, 32)
+            else:
+                undo()
+                self.fail("Retained report handle allowed a conflicting operation")
+
+        def check(name, fd, expected, directory_fd):
+            self.assertIsNone(directory_fd)
+            if not checks:
+                for filename in ("manifest.json", "result.json"):
+                    target = self.path / filename
+                    moved = self.path / (filename + ".moved")
+                    # Open without truncation so a failing guard cannot corrupt
+                    # the fixture before the test reports its failure.
+                    opened = []
+                    sharing_violation(lambda: opened.append(os.open(target, os.O_WRONLY)),
+                                      lambda: os.close(opened.pop()))
+                    sharing_violation(lambda: target.rename(moved), lambda: moved.rename(target))
+                moved_directory = self.root / "moved-case"
+                sharing_violation(lambda: self.path.rename(moved_directory),
+                                  lambda: moved_directory.rename(self.path))
+            checks.append(name)
+            original_check(name, fd, expected, directory_fd)
+
+        with mock.patch.object(verify, "_verify_unchanged", side_effect=check):
+            raw_manifest, raw_result = verify.read_bundle(str(self.path))
+        verify.verify_manifest(raw_manifest, raw_result)
+        self.assertEqual(checks, ["manifest.json", "result.json"])
+        # ExitStack released every handle on successful completion.
+        fd = os.open(self.path / "result.json", os.O_WRONLY)
+        os.close(fd)
+        moved_directory = self.root / "released-case"
+        self.path.rename(moved_directory)
+        moved_directory.rename(self.path)
+
     @unittest.skipUnless(os.name == "posix", "POSIX no-follow and FIFO contracts")
     def test_symlinks_ancestors_and_fifos_are_rejected_without_blocking(self):
         self.save()

@@ -84,6 +84,19 @@ def _read_fd(fd, limit):
     return b"".join(chunks), _fingerprint(before)
 
 
+def _verify_unchanged(name, fd, expected, directory_fd):
+    if directory_fd is not None:
+        # POSIX permits replacement while open: verify the directory entry too.
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    else:
+        # Windows handles exclude file writes and file/ancestor rename/delete
+        # until this check finishes. Compare the retained handle with itself:
+        # CPython 3.12 path stat reports birthtime as ctime, whereas fstat can
+        # report ChangeTime. Cross-API fingerprints reject unchanged files.
+        info = os.fstat(fd)
+    require(_fingerprint(info) == expected, "report_changed")
+
+
 def _windows_open(path, directory, stack):
     """Hold every ancestor without delete sharing; never follow reparse points."""
     import ctypes
@@ -166,7 +179,7 @@ def read_bundle(directory):
             return names
 
         require(entries() == FILES, "unexpected_report_files")
-        values, fingerprints = {}, {}
+        values, fingerprints, descriptors = {}, {}, {}
         for name, limit in (("manifest.json", MAX_MANIFEST_BYTES), ("result.json", MAX_RESULT_BYTES)):
             if directory_fd is not None:
                 flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
@@ -174,11 +187,11 @@ def read_bundle(directory):
                 stack.callback(os.close, fd)
             else:
                 fd = _windows_open(path / name, False, stack)
+            descriptors[name] = fd
             values[name], fingerprints[name] = _read_fd(fd, limit)
         require(entries() == FILES, "report_changed")
         for name, expected in fingerprints.items():
-            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False) if directory_fd is not None else os.lstat(path / name)
-            require(_fingerprint(info) == expected, "report_changed")
+            _verify_unchanged(name, descriptors[name], expected, directory_fd)
         return values["manifest.json"], values["result.json"]
 
 
