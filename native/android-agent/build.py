@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a static ARMv7 agent and reproducible source/bootstrap bundle."""
+"""Build a static ARMv7 agent and versioned bootstrap bundle."""
 import hashlib
 import json
 import os

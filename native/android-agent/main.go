@@ -127,7 +127,11 @@ func (a *Agent) remember(id string, e Entry) error {
 		}
 	}
 	next[id] = e
-	if err := atomicJSON(a.journalPath, next); err != nil {
+	encoded, err := json.Marshal(next)
+	if err != nil || len(encoded) > 4*1024*1024 {
+		return errors.New("journal byte limit exceeded")
+	}
+	if err := atomicFile(a.journalPath, encoded, 0600); err != nil {
 		return err
 	}
 	a.journal = next

@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(__dirname + '/player.js', 'utf8');
 function fixture() {
-  const calls=[], pending=[], timers=new Map(); let timer=0, reply;
+  const calls=[], pending=[], timers=new Map(); let timer=0, reply, sequence=0;
   const video={currentSrc:'private stream',currentTime:12,duration:100,paused:false,pause(){calls.push('pause')},play(){calls.push('resume')}};
   let selected={source:'vportal:test',index:1,records:[{request:{fid:47677},title:'First'},{request:{fid:44819},title:'Second'},{request:{fid:47674},title:'Third'}]};
   const w={__ottNativeCall:{id:'test'}, __ottActiveProviderDriver:{id:'vportal'},
@@ -19,7 +19,7 @@ function fixture() {
   const context={window:w,document:{getElementById:()=>video},localStorage:{vportalprofiles:'{"active":0,"portals":[{"link":"x"}]}'},
     location:{reload(){calls.push('reload')}},setTimeout(fn){timers.set(++timer,fn);return timer},clearTimeout(id){timers.delete(id)},Date,console};
   const fn=vm.runInNewContext('('+source+')', context);
-  return {w,calls,pending,timers,run(action,params){fn({action,params,id:'test',timeoutMs:20000},r=>reply=r);return reply},reply:()=>reply};
+  return {w,calls,pending,timers,run(action,params){const id='call-'+(++sequence);w.__ottNativeCall={id};fn({action,params,id,timeoutMs:20000},r=>reply=r);return reply},reply:()=>reply};
 }
 test('queue preflights all items, preserves order, and restores strict kiosk',()=>{
  const f=fixture();f.run('vportal_queue',{operation:'play',ids:[47677,44819,47674],loop:true});
@@ -50,4 +50,12 @@ test('native recover cycles surface without seeking or unlocking',()=>{
 });
 test('pause cannot falsely succeed against the legacy kiosk watchdog',()=>{
  const f=fixture();assert.equal(f.run('playback',{operation:'pause'}).ok,false);assert.equal(f.calls.length,0);
+});
+
+test('health polling does not revoke an asynchronous queue restore lease',()=>{
+ const f=fixture();let guard;
+ f.w.__ottMedia.restoreKiosk=(selection,valid)=>{guard=valid;return true};
+ f.run('vportal_queue',{operation:'restart'});assert.equal(guard(),true);
+ f.run('health',{});assert.equal(guard(),true);
+ f.run('playback',{operation:'resume'});assert.equal(guard(),false);
 });

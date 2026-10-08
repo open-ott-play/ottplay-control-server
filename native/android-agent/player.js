@@ -3,7 +3,9 @@ function (request, done) {
     var w = window, media = w.__ottMedia, kiosk = w.__ottKiosk;
     var v = document.getElementById("video"), p = request.params || {};
     var deadline = Date.now() + request.timeoutMs;
-    function active() {return Date.now() < deadline && w.__ottNativeCall && w.__ottNativeCall.id === request.id;}
+    var mutating = request.action !== "health" && !(request.action === "vportal_queue" && p.operation === "status");
+    if(mutating)w.__ottNativeMutation=request.id;
+    function active() {return Date.now() < deadline && (!mutating || w.__ottNativeMutation === request.id);}
     function finish(value) { done({ok: true, data: value}); }
     function fail(message) { done({ok: false, error: message}); }
     function selected() { return media && media.kioskSelection && media.kioskSelection(); }
@@ -15,7 +17,7 @@ function (request, done) {
             video: v && {position: v.currentTime, duration: isFinite(v.duration) ? v.duration : null,
                 paused: v.paused, ended: v.ended, ready: v.readyState, error: v.error ? v.error.code : 0,
                 width: v.videoWidth, height: v.videoHeight, source: hash(v.currentSrc || "")},
-            queue: q && {index:q.index, total:q.records.length, items:q.records.map(function(r){return {id:r.request && r.request.fid,title:r.title};})}};
+            queue: q && {index:q.index, total:q.records.length, items:q.records.map(function(r){return {id:r.request && r.request.fid,title:String(r.title || "").slice(0,256)};})}};
     }
     if (request.action === "health") { finish(snapshot()); return; }
     if (request.action === "recover") {
@@ -41,7 +43,7 @@ function (request, done) {
         if (p.operation === "status") {finish(snapshot().queue || {index:0,total:0,items:[]});return;}
         var old=selected(), source=media.sourceId(), oldPolicy=w.stbGetItem("__ottKioskV1"), locked=kiosk.locked(), strict=!!(kiosk.strict && kiosk.strict()), revision={};
         w.__ottNativeQueueRevision=revision;
-        function contextCurrent(){return w.__ottNativeQueueRevision===revision && media.sourceId()===source;}
+        function contextCurrent(){return w.__ottNativeMutation===request.id && w.__ottNativeQueueRevision===revision && media.sourceId()===source;}
         function current(){return active() && contextCurrent();}
         if (p.operation === "stop") {
             kiosk.request({mode:"off"},function(r){if(r.status!=="ok"){fail("Kiosk release failed");return;}media.cancelAuto();w.stbStop();finish({stopped:true});});return;
@@ -78,7 +80,7 @@ function (request, done) {
             if(!current()){abort("VPortal context changed");return;}
             cancelStart=media.playQueue(rows,"Selected VPortal queue",function(){return current()&&!complete;},function(){
                 if(!current()||complete){abort("VPortal context changed");return;}
-                function accepted(){complete=true;clearTimeout(timer);finish({dispatched:true,loop:true,total:rows.length,items:rows.map(function(r){return {id:r.request.fid,title:r.title};})});}
+                function accepted(){complete=true;clearTimeout(timer);finish({dispatched:true,loop:true,total:rows.length,items:rows.map(function(r){return {id:r.request.fid,title:String(r.title || "").slice(0,256)};})});}
                 kiosk.request({mode:"on",strict:strict},function(r){if(r.status!=="ok"){abort("Kiosk save failed");return;}unlocked=false;accepted();});
             });
         }
@@ -95,7 +97,7 @@ function (request, done) {
                     if(!current()||complete){abort("VPortal context changed");return;}
                     if(!r||r.type!=="stream"||!r.title){abort("VPortal item unavailable");return;}
                     if(w.sPSchannels&&w.parentPIN!=="*"&&!w.parentAccess&&(Number(r.adult)===1||Number(r.agelimit)>=18)){abort("Unlock parental access first");return;}
-                    rows.push({title:String(r.title),request:{cmd:"flick",fid:id},vportalSource:source,adult:r.adult});load();
+                    rows.push({title:String(r.title).slice(0,256),request:{cmd:"flick",fid:id},vportalSource:source,adult:r.adult});load();
                 },error:function(){abort("VPortal item request failed");}});
         }
         load();return;
