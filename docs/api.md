@@ -541,9 +541,9 @@ with a bound inspection envelope in `data`:
     "section":"operation",
     "data":{
       "operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "state":"observed",
+      "state":"invoked",
       "action":"playback",
-      "evidence":{"kind":"media_progress","generation":5,"position":15.5}
+      "evidence":{"kind":"handler_completed","generation":null,"position":null}
     }
   }
 }
@@ -553,12 +553,22 @@ Operation states are `unknown`, `accepted`, `invoked`, `observed`, `rejected`,
 `unsupported`, or `expired`. Evidence kinds are `none`, `handler_completed`,
 `media_progress`, or `runtime_changed`. `action` is a known mutation action or
 `null`; evidence generation and position are numbers or `null`. Position is in
-seconds. `observed` requires `media_progress` or `runtime_changed` evidence;
-`media_progress` requires non-null generation and position. An `unknown`
-observation does not prove the earlier operation never
-executed. A handler result or accepted intent does not prove a visible image or
-a successful device reboot. The player owns the bounded observation journal;
-the server does not manufacture progress states.
+seconds. The current player journal does not emit `observed`; that state and
+its `media_progress`/`runtime_changed` evidence are reserved for future
+independently verified outcomes. The schema requires `observed` to carry one of
+those evidence kinds, and `media_progress` to carry non-null generation and
+position.
+
+`accepted` means an after-ACK effect was queued, not that it is still pending.
+A disconnect, server rejection or ACK deadline can discard the effect without
+updating that receipt. `invoked` means the handler ran; it can still decline the
+effect if policy or ownership changed. `handler_completed` does not establish
+the effect's outcome. Neither stage proves a visible image or successful reboot.
+The player holds at most 128 request IDs in memory. A retained receipt reports
+`expired` after ten minutes; eviction or reload loses the history. An `unknown`
+receipt does not prove the earlier operation never executed. Do not automatically
+replay a mutation after losing its response. The server does not manufacture
+progress states.
 
 Doctor snapshots contain required `version`, `runtime`, `capturedAt`,
 `collectionMs`, `consistent`, `build`, `ui`, `media`, `capabilities`, and `reasons`.
