@@ -1,6 +1,10 @@
 {
   "version_file": "VERSION",
-  "validation_workflows": ["ci.yml", "codeql.yml", "dependency-review.yml"],
+  "validation_workflows": [
+    "ci.yml",
+    "codeql.yml",
+    "dependency-review.yml"
+  ],
   "artifact_pattern": "release-assets*",
   "local_checks": [
     "go vet ./...",
@@ -48,12 +52,13 @@
         "value": "package"
       }
     ],
-    "toolkit_revision": "dc291e8c6635d8a0c5d2cc33a4ffd83d1956625b"
+    "toolkit_revision": "5149aa658bcb97a10779ccf7499d5e9f15162344"
   },
   "change_scope": {
     "documentation_paths": [],
     "required_paths": [],
     "always_validate_workflows": []
   },
-  "nightly_cron": "52 5 * * *"
+  "nightly_cron": "52 5 * * *",
+  "release_notes": "CHANGELOG.md"
 }
