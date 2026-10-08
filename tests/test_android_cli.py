@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -44,7 +45,9 @@ class AndroidCLI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'config.json'
             ott.android_command(c, path, 'web', 'a1', ['bind', 'native'], True)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(path.read_text())['native_devices'], {'web': 'native'})
+            if os.name != 'nt':
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_receipts_do_not_claim_completion_and_errors_are_private(self):
         c = self.client();c.call.return_value = {'operation': 'restart_app', 'accepted': True, 'completion': 'inspect_status', 'secret': 'private'}
