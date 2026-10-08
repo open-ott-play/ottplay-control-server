@@ -145,6 +145,16 @@ func audioEvidence(raw []byte, pid int) map[string]any {
 	return map[string]any{"state": "observed", "scope": "app_process", "tracks": tracks, "audible_verified": false}
 }
 func systemEvidence(ctx context.Context, pid int) map[string]any {
+	// A blocked service must not consume the response deadline or starve native
+	// status when the WebView already spent its own responsiveness budget.
+	budget := 1800 * time.Millisecond
+	if deadline, ok := ctx.Deadline(); ok {
+		if left := time.Until(deadline) - 500*time.Millisecond; left < budget {
+			budget = left
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	surface := unavailableEvidence("app_surface_unavailable")
 	audio := unavailableEvidence("audio_service_unavailable")
 	if pid > 0 {

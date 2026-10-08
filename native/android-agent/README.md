@@ -154,7 +154,8 @@ also reads bounded, fixed `dumpsys` services without changing their state:
 
 Parsers follow AOSP Android 4.4.2 [FrameTracker](https://android.googlesource.com/platform/frameworks/native/+/android-4.4.2_r1/services/surfaceflinger/FrameTracker.cpp)
 and [AudioFlinger track dumps](https://android.googlesource.com/platform/frameworks/av/+/android-4.4.2_r1/services/audioflinger/Tracks.cpp).
-Each service read has a 1.2-second deadline and 256-KiB output limit. No raw dump,
+Each service read has a 1.2-second deadline and 256-KiB output limit; the whole
+system collection is capped at 1.8 seconds and reserves response time. No raw dump,
 other app name, URL, or arbitrary diagnostic text is returned. A process change
 during collection invalidates system evidence. These observations do not change
 watchdog decisions: advancing presentation counters alone cannot identify video.
