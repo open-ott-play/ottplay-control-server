@@ -140,7 +140,13 @@ func (a *Agent) prepareUpdate(ctx context.Context, id, address, digest string) (
 			child, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			out, e := runCommand(child, "/system/bin/pm", "install", "-r", stage)
-			if e != nil || !strings.Contains(string(out), "Success") {
+			success := false
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.TrimSpace(line) == "Success" {
+					success = true
+				}
+			}
+			if e != nil || !success {
 				return errors.New("package installation rejected")
 			}
 			return a.lifecycle("restart_app")

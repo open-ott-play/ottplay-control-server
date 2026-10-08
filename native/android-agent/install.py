@@ -4,7 +4,6 @@ import argparse
 import json
 from pathlib import Path
 import re
-import shlex
 import subprocess
 
 BASE = '/data/local/ott-remote'
@@ -44,6 +43,7 @@ def install(shell, push, config_path, binary_path, boot_path):
     checked('chmod 700 ' + BASE + '/agent.new && chmod 600 ' + BASE + '/config.json.new ' + BASE + '/boot.new')
     # Fail before replacing startup if the kernel cannot execute the new binary.
     checked(BASE + '/agent.new --version > /dev/null')
+    checked(BASE + '/agent.new --check-config ' + BASE + '/config.json.new')
     checked('stop flash_recovery')
     try:
         checked('cp ' + BOOT_PATH + ' ' + BASE + '/boot.previous')

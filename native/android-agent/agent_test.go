@@ -62,7 +62,7 @@ func TestDeferredACKRetryAndCrash(t *testing.T) {
 		if reject {
 			w.WriteHeader(503)
 		} else {
-			w.Write([]byte(`{}`))
+			w.Write([]byte(`{"status":"ok"}`))
 		}
 	}))
 	defer server.Close()

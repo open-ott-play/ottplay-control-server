@@ -106,6 +106,12 @@ func (a *Agent) api(ctx context.Context, path string, value any, out any) error 
 	if out != nil {
 		return json.Unmarshal(b, out)
 	}
+	var ack struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(b, &ack) != nil || ack.Status != "ok" {
+		return errors.New("invalid controller acknowledgement")
+	}
 	return nil
 }
 func (a *Agent) remember(id string, e Entry) error {
@@ -209,12 +215,14 @@ func (a *Agent) process(ctx context.Context, r Request, serverTime float64, rece
 // The server may save a response and lose the HTTP ACK. It then removes the
 // request from polls, so retry prepared receipts independently of redelivery.
 func (a *Agent) flushPending(ctx context.Context, serverTime float64) {
+	started := time.Now()
 	for id := range a.effects {
 		e, exists := a.journal[id]
-		if !exists || e.State != "prepared" || float64(e.Expires)-2 <= serverTime {
+		remaining := float64(e.Expires) - 2 - serverTime - time.Since(started).Seconds()
+		if !exists || e.State != "prepared" || remaining <= 0 {
 			continue
 		}
-		budget := time.Duration((float64(e.Expires) - 2 - serverTime) * float64(time.Second))
+		budget := time.Duration(remaining * float64(time.Second))
 		if budget > 10*time.Second {
 			budget = 10 * time.Second
 		}
@@ -274,7 +282,12 @@ func main() {
 		fmt.Println(version)
 		return
 	}
-	cfg, e := loadConfig(dataDir + "/config.json")
+	configPath := dataDir + "/config.json"
+	checkOnly := len(os.Args) == 3 && os.Args[1] == "--check-config"
+	if checkOnly {
+		configPath = os.Args[2]
+	}
+	cfg, e := loadConfig(configPath)
 	if e != nil {
 		fmt.Fprintln(os.Stderr, "Invalid native configuration")
 		os.Exit(2)
@@ -282,6 +295,9 @@ func main() {
 	if os.Getuid() != 0 || property("ro.product.model") != cfg.Model || property("ro.serialno") != cfg.Serial || property("ro.build.version.sdk") != "19" {
 		fmt.Fprintln(os.Stderr, "Unsupported Android installation")
 		os.Exit(2)
+	}
+	if checkOnly {
+		return
 	}
 	lock, e := os.OpenFile(dataDir+"/agent.lock", os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil || syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
