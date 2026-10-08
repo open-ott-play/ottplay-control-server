@@ -173,7 +173,7 @@ class RegisteredPlayersTest(unittest.TestCase):
                     self.reply({"devices": [{"id": "fixture-device", "pending": 0, "last_seen": None}]})
                 else:
                     receipt = parse_qs(parsed.query)["id"][0]
-                    self.reply({"status": "ok", "data": receipts[receipt]})
+                    self.reply({"id": receipt, "status": "ok", "data": receipts[receipt]})
 
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))

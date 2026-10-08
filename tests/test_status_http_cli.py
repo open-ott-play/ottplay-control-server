@@ -117,7 +117,7 @@ class StatusHttpCliTest(unittest.TestCase):
                     elif receipt['reads'] == 1:
                         self.reply(202, {'status': 'pending'})
                     else:
-                        self.reply(200, {'status': 'ok', 'data': receipt['data']})
+                        self.reply(200, {'id': request_id, 'status': 'ok', 'data': receipt['data']})
 
             with tempfile.TemporaryDirectory() as directory, serve(Controller) as address:
                 credentials = Path(directory) / 'server.json'

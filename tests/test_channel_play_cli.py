@@ -186,7 +186,7 @@ class RejectionContractTest(unittest.TestCase):
     def call(self, status, data):
         client = object.__new__(ott.Client)
         client.timeout = 5
-        client.api = mock.Mock(side_effect=[(202, {'id': 'a' * 32}), (200, {'status': status, 'data': data})])
+        client.api = mock.Mock(side_effect=[(202, {'id': 'a' * 32}), (200, {'id': 'a' * 32, 'status': status, 'data': data})])
         with mock.patch.object(ott.time, 'sleep'):
             return client.call('device', 'play', {'query': 'РЕН'})
 

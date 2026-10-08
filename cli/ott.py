@@ -21,13 +21,14 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
 import zlib
 
-HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMMAND ...]
+HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] PLAYER [COMMAND ...]
   ott resolve --request-stdin         resolve a private playlist search for a local player
   ott diagnostics --help             scoped runtime diagnostics and session control
   ott presets                        list locally configured preset names
@@ -77,6 +78,13 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME profile N name NAME       rename a profile
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME caps                      show runtime identity and supported controls
+  ott NAME doctor [-j]                read web/native identity and diagnostic capabilities
+  ott NAME inspect --view ui,media    observe the interface and media without changing playback
+  ott NAME operation REQUEST_ID      read a web operation receipt without repeating its effect
+  ott NAME bundle --out DIRECTORY    save private, bounded diagnostic evidence
+  ott NAME test list                 list fixed read-only diagnostic scenarios
+  ott NAME test run health --report DIRECTORY
+  ott NAME test run media-progress --duration 5 --report DIRECTORY
   ott NAME screenshot                save one remote screenshot; browser source selection may be needed
   ott NAME shot -o FILE.png           same capture, with an explicit output file
   ott NAME key KEY                   send one supported named input after acknowledgement
@@ -107,6 +115,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME exit / quit / close        exit the app only when the platform supports it
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
+--receipt writes one safe JSON request receipt to stderr per player RPC; stdout is unchanged.
 Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
@@ -149,6 +158,13 @@ CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
 PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
 SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
 MAX_SCREENSHOT_BYTES = 1024 * 1024
+RECEIPT_ACTIONS = frozenset((
+    "status", "capabilities", "screenshot", "inspect", "providers", "profiles",
+    "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
+    "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
+    "playback", "profile", "profile_settings", "restart", "play", "provider",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue",
+))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 100
 PLEX_QUEUE_ERRORS = frozenset((
@@ -192,7 +208,10 @@ class PlayerRejected(Error):
 
 
 class PlayerUnsupported(Error):
-    pass
+    """A completed unsupported response, optionally retaining bound metadata."""
+    def __init__(self, message, data=None):
+        super().__init__(message)
+        self.data = data
 
 
 class TransportError(Error):
@@ -438,6 +457,33 @@ def write_private(path, data, exclusive=False):
             os.unlink(temporary)
 
 
+def decode_response_json(raw):
+    """Reject ambiguous fields and non-finite numbers before projecting receipts."""
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate response field")
+            result[key] = value
+        return result
+
+    def reject_constant(_value):
+        raise ValueError("Non-finite response number")
+
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("Non-finite response number")
+        return number
+
+    return json.loads(raw, object_pairs_hook=unique_fields,
+                      parse_constant=reject_constant, parse_float=finite_float)
+
+
+def print_request_receipt(receipt):
+    print(json.dumps(receipt, ensure_ascii=True, allow_nan=False, separators=(",", ":")), file=sys.stderr, flush=True)
+
+
 class Client:
     def __init__(self, config, timeout=45):
         self.config = config
@@ -505,7 +551,7 @@ class Client:
                         remaining = getattr(response, "length", None)
                         if isinstance(remaining, int) and remaining > 0:
                             raise TransportError("The server closed the connection before sending the complete response")
-                        return response.status, json.loads(body)
+                        return response.status, decode_response_json(body)
                     body.extend(chunk)
                     if len(body) > 2 * 1024 * 1024:
                         raise Error("The server response exceeds the size limit")
@@ -515,7 +561,7 @@ class Client:
             raise HTTPError(code) from None
         except (OSError, http.client.HTTPException) as exc:
             raise TransportError("Server unavailable; check the address and connection") from exc
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
             raise Error("The server returned invalid JSON") from exc
 
     def device(self, name):
@@ -529,18 +575,50 @@ class Client:
         raise Error(f"Unknown player {name!r}. Run ott devices or ott add NAME UUID")
 
     def call(self, device, action, params):
-        query = "?" + urllib.parse.urlencode({"device_id": device})
-        deadline = time.monotonic() + self.timeout
+        """Preserve the legacy data-only API for existing commands."""
+        return self.call_receipt(device, action, params)["data"]
+
+    def call_receipt(self, device, action, params):
+        """Submit once and retain the request identity, including read failures."""
+        request_id = None
+        status = "unknown"
         try:
-            _, queued = self.api("/api/requests" + query, {"action": action, "params": params}, timeout=self.timeout)
-        except Error as exc:
-            # A lost POST response cannot prove whether the mutation was queued.
-            # Replaying it would give a relative-volume command a second ID.
-            if isinstance(exc, HTTPError) and exc.code < 500:
+            query = "?" + urllib.parse.urlencode({"device_id": device})
+            deadline = time.monotonic() + self.timeout
+            try:
+                _, queued = self.api("/api/requests" + query, {"action": action, "params": params}, timeout=self.timeout)
+            except Error as exc:
+                # A lost POST response cannot prove whether the mutation was queued.
+                # Replaying it would give a relative-volume command a second ID.
+                if isinstance(exc, HTTPError) and exc.code < 500:
+                    raise
+                raise Error(str(exc) + ". The request may have been accepted; do not repeat the change blindly.") from exc
+            if not isinstance(queued, dict) or not isinstance(queued.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", queued["id"]):
+                raise Error("The server did not return a request ID. The request may have been accepted; do not repeat the change blindly.")
+            request_id = queued["id"]
+            try:
+                receipt = self._wait_receipt(query, request_id, deadline)
+            except Error as exc:
+                exc.request_id = request_id
+                if isinstance(exc, PlayerRejected):
+                    status = "rejected"
+                elif isinstance(exc, PlayerUnsupported):
+                    status = "unsupported"
                 raise
-            raise Error(str(exc) + ". The request may have been accepted; do not repeat the change blindly.") from exc
-        if not isinstance(queued, dict) or not isinstance(queued.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", queued["id"]):
-            raise Error("The server did not return a request ID. The request may have been accepted; do not repeat the change blindly.")
+            status = "ok"
+            return receipt
+        finally:
+            callback = getattr(self, "on_receipt", None)
+            if callable(callback):
+                metadata = {"action": action if isinstance(action, str) and action in RECEIPT_ACTIONS else "unknown",
+                            "request_id": request_id, "status": status}
+                try:
+                    callback(metadata)
+                except Exception:
+                    # Output failure cannot replay or change a completed operation.
+                    pass
+
+    def _wait_receipt(self, query, request_id, deadline):
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -550,7 +628,7 @@ class Client:
             if remaining <= 0:
                 break
             try:
-                status, result = self.api("/api/requests" + query + "&id=" + queued["id"], timeout=remaining)
+                status, result = self.api("/api/requests" + query + "&id=" + request_id, timeout=remaining)
             except TransportError:
                 continue
             except HTTPError as exc:
@@ -567,7 +645,7 @@ class Client:
                 if not isinstance(result, dict) or result.get("status") != "pending":
                     raise Error("The server returned an invalid pending status. The request may have been executed; do not repeat the change blindly.")
                 continue
-            if status != 200 or not isinstance(result, dict) or result.get("status") not in ("ok", "rejected", "unsupported") or not isinstance(result.get("data"), dict):
+            if status != 200 or not isinstance(result, dict) or result.get("id") != request_id or result.get("status") not in ("ok", "rejected", "unsupported") or not isinstance(result.get("data"), dict):
                 raise Error("The server returned an invalid player response. The request may have been executed; do not repeat the change blindly.")
             if result.get("status") != "ok":
                 data = result["data"]
@@ -578,8 +656,8 @@ class Client:
                 message = clean(data.get("error", "The player rejected the request")) + ("\n" + details if details else "")
                 if result["status"] == "rejected":
                     raise PlayerRejected(message, data)
-                raise PlayerUnsupported(message)
-            return result["data"]
+                raise PlayerUnsupported(message, data)
+            return {"request_id": request_id, "status": "ok", "data": result["data"]}
         raise Error("The player did not respond. Open it, check the address/access code and use a version that supports the CLI. The request may still execute before its TTL expires; do not repeat the change blindly.")
 
 
@@ -1235,7 +1313,7 @@ def load_preset(client, device, name, preset):
             "completed": completed}
 
 
-def preset_command(config, words, timeout, json_output):
+def preset_command(config, words, timeout, json_output, on_receipt=None):
     receipt = {"status": "failed", "stage": "validate", "completed": [], "error": "Invalid preset configuration or command."}
     try:
         _, params = parse_command(words[1:])
@@ -1244,6 +1322,7 @@ def preset_command(config, words, timeout, json_output):
         receipt["stage"] = "connect"
         receipt["error"] = "Could not prepare the player connection."
         client = Client(config, timeout)
+        client.on_receipt = on_receipt
         device = client.device(words[0])
         receipt = load_preset(client, device, name, preset)
     except Error as exc:
@@ -1653,7 +1732,7 @@ def capabilities_metadata(data):
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
         raise Error(invalid)
     player = data.get("player")
-    patterns = {"version": r"[A-Za-z0-9_.-]{1,64}", "platform": r"[a-z0-9_-]{1,32}", "runtime": r"[a-z0-9-]{1,64}"}
+    patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}", "runtime": r"[a-z0-9-]{1,64}"}
     if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
@@ -1684,6 +1763,16 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": MAX_PLEX_QUEUE_ITEMS}
+    if "inspect" in data:
+        inspection = data["inspect"]
+        sections = inspection.get("sections") if isinstance(inspection, dict) else None
+        if (not isinstance(inspection, dict) or set(inspection) != {"version", "sections"}
+                or type(inspection.get("version")) is not int or inspection["version"] != 1
+                or not isinstance(sections, list) or not 1 <= len(sections) <= 3
+                or any(not isinstance(section, str) or section not in ("doctor", "snapshot", "operation") for section in sections)
+                or len(set(sections)) != len(sections)):
+            raise Error(invalid)
+        result["inspect"] = {"version": 1, "sections": list(sections)}
     return result
 
 
@@ -2242,6 +2331,7 @@ def main(argv=None):
     parser.add_argument("-t", "--timeout", type=float, default=45)
     parser.add_argument("-j", "--json", action="store_true")
     parser.add_argument("--refresh", action="store_true", help="Refresh cached EPG history and archive checks")
+    parser.add_argument("--receipt", action="store_true", help="Write safe player RPC receipts to stderr")
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("words", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -2260,12 +2350,22 @@ def main(argv=None):
             return 0
         if (len(args.words) > 1 and args.words[1].casefold() == "load"
                 and args.words[0].casefold() not in ("alias", "add", "approve", "pair", "devices", "discover", "pending")):
-            return preset_command(config, args.words, args.timeout, args.json)
+            return preset_command(config, args.words, args.timeout, args.json,
+                                  print_request_receipt if args.receipt else None)
         client = Client(config, args.timeout)
+        client.on_receipt = print_request_receipt if args.receipt else None
         if management(client, args.config, args.words, json_output=args.json):
             return 0
         device = client.device(args.words[0])
         words = args.words[1:]
+        if words and words[0].casefold() in ("doctor", "inspect", "operation", "bundle", "test"):
+            module_path = Path(__file__).resolve().with_name("workbench.py")
+            if not module_path.is_file():
+                raise Error("Install workbench.py beside ott.py to use the workbench")
+            spec = importlib.util.spec_from_file_location("ott_workbench", module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.run(SimpleNamespace(**globals()), client, device, words, args.timeout, args.json)
         if words and words[0].casefold() == "android":
             data = android_command(client, args.config, device, args.words[0], words[1:], args.json)
             print(json.dumps(data, ensure_ascii=False, indent=2))
