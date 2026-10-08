@@ -10,14 +10,16 @@ function (request, done) {
     function fail(message) { done({ok: false, error: message}); }
     function selected() { return media && media.kioskSelection && media.kioskSelection(); }
     function hash(s) { var h = 2166136261; for (var i=0;i<s.length;i++) h = ((h ^ s.charCodeAt(i)) * 16777619) >>> 0; return h.toString(16); }
-    function snapshot() {
+    function snapshot(includeItems) {
         var q = selected(), state = kiosk && kiosk.snapshot();
+        var queue=q && {index:q.index,total:q.records.length};
+        if(queue && includeItems)queue.items=q.records.map(function(r){return {id:r.request && r.request.fid,title:String(r.title || "").slice(0,256)};});
         return {ready: !!(w.commandChannelsReady && media), provider: w.__ottActiveProviderDriver && w.__ottActiveProviderDriver.id,
             kiosk: state, touch: w.__ottNativeTouchGuardState || "unknown",
             video: v && {position: v.currentTime, duration: isFinite(v.duration) ? v.duration : null,
                 paused: v.paused, ended: v.ended, ready: v.readyState, error: v.error ? v.error.code : 0,
                 width: v.videoWidth, height: v.videoHeight, source: hash(v.currentSrc || "")},
-            queue: q && {index:q.index, total:q.records.length, items:q.records.map(function(r){return {id:r.request && r.request.fid,title:String(r.title || "").slice(0,256)};})}};
+            queue: queue};
     }
     if (request.action === "health") { finish(snapshot()); return; }
     if (request.action === "recover") {
@@ -40,11 +42,11 @@ function (request, done) {
     }
     if (request.action === "vportal_queue") {
         if (!media || !kiosk || !w.__ottActiveProviderDriver || w.__ottActiveProviderDriver.id!=="vportal") {fail("Select and configure VPortal first");return;}
-        if (p.operation === "status") {finish(snapshot().queue || {index:0,total:0,items:[]});return;}
+        if (p.operation === "status") {finish(snapshot(true).queue || {index:0,total:0,items:[]});return;}
         var old=selected(), source=media.sourceId(), oldPolicy=w.stbGetItem("__ottKioskV1"), locked=kiosk.locked(), strict=!!(kiosk.strict && kiosk.strict()), revision={};
         w.__ottNativeQueueRevision=revision;
-        function contextCurrent(){return w.__ottNativeMutation===request.id && w.__ottNativeQueueRevision===revision && media.sourceId()===source;}
-        function current(){return active() && contextCurrent();}
+        var contextCurrent=function(){return w.__ottNativeMutation===request.id && w.__ottNativeQueueRevision===revision && media.sourceId()===source;};
+        var current=function(){return active() && contextCurrent();};
         if (p.operation === "stop") {
             kiosk.request({mode:"off"},function(r){if(r.status!=="ok"){fail("Kiosk release failed");return;}media.cancelAuto();w.stbStop();finish({stopped:true});});return;
         }
@@ -70,21 +72,21 @@ function (request, done) {
         var rows=[], cursor=0, unlocked=false, complete=false;
         var cancelStart=null;
         var timer=setTimeout(function(){abort("VPortal queue preparation timed out");},Math.min(25000,request.timeoutMs));
-        function abort(message) {
+        var abort=function(message) {
             if(complete)return;complete=true;clearTimeout(timer);
             if(cancelStart)cancelStart();
             if(unlocked&&contextCurrent()) {try{w.stbSetItem("__ottKioskV1",oldPolicy);location.reload();}catch(e){}}
             fail(message);
-        }
-        function begin() {
+        };
+        var begin=function() {
             if(!current()){abort("VPortal context changed");return;}
             cancelStart=media.playQueue(rows,"Selected VPortal queue",function(){return current()&&!complete;},function(){
                 if(!current()||complete){abort("VPortal context changed");return;}
                 function accepted(){complete=true;clearTimeout(timer);finish({dispatched:true,loop:true,total:rows.length,items:rows.map(function(r){return {id:r.request.fid,title:String(r.title || "").slice(0,256)};})});}
                 kiosk.request({mode:"on",strict:strict},function(r){if(r.status!=="ok"){abort("Kiosk save failed");return;}unlocked=false;accepted();});
             });
-        }
-        function load() {
+        };
+        var load=function() {
             if(!current()||complete){abort("VPortal context changed");return;}
             if(cursor===p.ids.length) {
                 if(locked)kiosk.request({mode:"off"},function(r){if(!current()){abort("VPortal context changed");return;}if(r.status!=="ok"){abort("Kiosk release failed");return;}unlocked=true;begin();});else begin();return;
@@ -99,7 +101,7 @@ function (request, done) {
                     if(w.sPSchannels&&w.parentPIN!=="*"&&!w.parentAccess&&(Number(r.adult)===1||Number(r.agelimit)>=18)){abort("Unlock parental access first");return;}
                     rows.push({title:String(r.title).slice(0,256),request:{cmd:"flick",fid:id},vportalSource:source,adult:r.adult});load();
                 },error:function(){abort("VPortal item request failed");}});
-        }
+        };
         load();return;
     }
     fail("Unsupported native player operation");

@@ -50,6 +50,7 @@ jobs:
           test -z "$(gofmt -l .)"
           go vet ./...
           go test -race ./...
+          npm ci --ignore-scripts --no-audit --no-fund
           node --test player.test.cjs
           CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o /tmp/ott-android-agent .
       - name: Test terminal CLI

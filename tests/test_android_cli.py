@@ -61,4 +61,24 @@ class AndroidCLI(unittest.TestCase):
             ott.android_command(c, 'unused', 'web', 'a1', ['restart'], True)
         self.assertNotIn('private', str(err.exception))
 
+    def test_existing_series_queue_is_readable_without_relaxing_play_or_log_limits(self):
+        rows = [{'id': i+1, 'title': 'Episode', 'url': 'private'} for i in range(1000)]
+        health = {'version': 1, 'runtime': 'android-test', 'webview_responsive': True,
+                  'player': {'queue': {'index': 0, 'total': len(rows), 'items': rows}}}
+        result = ott.android_metadata(health, 'maintenance', {'operation': 'health'})
+        self.assertEqual(len(result['player']['queue']['items']), 1000)
+        self.assertNotIn('private', json.dumps(result))
+        status = {'operation': 'status', 'index': 0, 'total': len(rows), 'items': rows}
+        self.assertEqual(ott.android_metadata(status, 'vportal_queue', {'operation': 'status'})['total'], 1000)
+        rows.append({'id': 1001, 'title': 'Episode'})
+        with self.assertRaises(ott.Error):
+            ott.android_metadata(health, 'maintenance', {'operation': 'health'})
+        with self.assertRaises(ott.Error):
+            ott.android_metadata({'version': 1, 'events': [{'time': 1, 'event': 'test'}]*101},
+                                 'maintenance', {'operation': 'logs'})
+        c = self.client()
+        with self.assertRaises(ott.Error):
+            ott.android_command(c, 'unused', 'web', 'a1', ['queue', 'play']+[str(i+1) for i in range(101)], True)
+        c.call.assert_not_called()
+
 if __name__ == '__main__':unittest.main()

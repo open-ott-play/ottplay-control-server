@@ -2,7 +2,29 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
+const acorn = require('acorn');
 const source = fs.readFileSync(__dirname + '/player.js', 'utf8');
+function checkKitkatSyntax(source) {
+  const ast=acorn.parse('('+source+')',{ecmaVersion:5});
+  function visit(node,parent,grandparent) {
+    if(!node || typeof node!=='object')return;
+    if(node.type==='FunctionDeclaration') {
+      // Acorn accepts these as an extension even in ES5 strict mode; Chromium 30 does not.
+      assert.ok(parent.type==='Program' || (parent.type==='BlockStatement' &&
+        grandparent && /^(FunctionDeclaration|FunctionExpression)$/.test(grandparent.type) && grandparent.body===parent),
+        'KitKat rejects function declarations inside statement blocks');
+    }
+    for(const value of Object.values(node)) {
+      if(Array.isArray(value))for(const child of value)visit(child,node,parent);
+      else if(value && typeof value==='object')visit(value,node,parent);
+    }
+  }
+  visit(ast,null,null);
+}
+test('embedded adapter uses strict ES5 accepted by Chromium 30',()=>{
+  checkKitkatSyntax(source);
+  assert.throws(()=>checkKitkatSyntax('function(){"use strict";if(true){function nested(){}}}'),/KitKat rejects/);
+});
 function fixture() {
   const calls=[], pending=[], timers=new Map(); let timer=0, reply, sequence=0;
   const video={currentSrc:'private stream',currentTime:12,duration:100,paused:false,pause(){calls.push('pause')},play(){calls.push('resume')}};
@@ -58,4 +80,12 @@ test('health polling does not revoke an asynchronous queue restore lease',()=>{
  f.run('vportal_queue',{operation:'restart'});assert.equal(guard(),true);
  f.run('health',{});assert.equal(guard(),true);
  f.run('playback',{operation:'resume'});assert.equal(guard(),false);
+});
+
+test('frequent health probes omit episode titles while queue status retains them',()=>{
+ const f=fixture();const health=f.run('health',{});
+ assert.equal(health.data.queue.total,3);assert.equal(health.data.queue.items,undefined);
+ const queue=f.run('vportal_queue',{operation:'status'});
+ assert.equal(queue.data.total,3);assert.equal(queue.data.items.length,3);
+ assert.equal(queue.data.items[1].id,44819);
 });
