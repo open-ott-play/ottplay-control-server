@@ -49,6 +49,12 @@ keep previous exports and choose another location after an incomplete export.
 
 ### Security
 
+Go healthcheck and Android maintenance-agent HTTPS requests now reject
+undersized keys throughout verified peer chains, including the trust anchor,
+before sending an HTTP request. Existing trust and hostname checks still apply,
+and resumed connections receive the same key check. Replace affected controller,
+reverse-proxy or CA certificates before upgrading these clients.
+
 The direct HTTPS listener now rejects undersized keys in the supplied leaf,
 intermediate and included root certificates before accepting connections.
 Client certificate verification and HTTP-client trust policies are unchanged.

@@ -26,10 +26,27 @@ verified HTTPS to a loopback health endpoint.
 This check concerns the chain configured on this listener. Connecting clients
 still validate certificate trust, hostname and validity; their trust stores and
 any omitted root are outside this check. It does not introduce client-certificate
-authentication or change the healthcheck/native-agent HTTP clients. When TLS is
+authentication. When TLS is
 terminated by a reverse proxy, the proxy needs its own certificate policy.
 Setting `GODEBUG=fips140=on` alone is not a substitute: the tested Go 1.26.8 server
 accepted its own RSA-1024 certificate with that setting before this check existed.
+
+## Outbound HTTPS certificate policy
+
+The Go healthcheck and the Android maintenance agent retain ordinary certificate
+chain, validity and hostname verification. After that verification succeeds,
+`VerifyConnection` requires at least one complete verified chain whose leaf,
+intermediates and trust anchor all meet the same key minimums: RSA 2048 bits,
+ECDSA 224 bits or a 32-byte Ed25519 key. The check also runs on resumed TLS
+connections. An alternate valid strong chain remains acceptable even when a
+weaker alternate path exists.
+
+Upgrade controller/proxy certificates or trust anchors that use smaller keys
+before updating clients. No custom CA is added by this policy: healthcheck uses
+the system store; the Android agent preserves its existing system-plus-bundled
+roots and custom dialer. HTTP behavior, redirect restrictions and timeouts are
+unchanged. This policy does not govern external browsers, reverse proxies or the
+Python CLI's separate TLS implementation.
 
 ## Cryptographic implementation evidence
 
