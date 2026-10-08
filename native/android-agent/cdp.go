@@ -55,7 +55,17 @@ type socket struct {
 func (s *socket) Close() error {
 	// KitKat retains DevTools ownership unless the WebSocket closes cleanly.
 	_ = s.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
-	_, _ = s.Write([]byte{0x88, 0x82, 0, 0, 0, 0, 3, 232})
+	if _, err := s.Write([]byte{0x88, 0x82, 0, 0, 0, 0, 3, 232}); err == nil {
+		// Wait for the peer to release its single debugger attachment before
+		// opening the next connection. A TCP close immediately after sending
+		// the frame races the next /json request on Chromium 30.
+		_ = s.SetReadDeadline(time.Now().Add(time.Second))
+		for i := 0; i < 8; i++ {
+			if _, err := s.receive(); err != nil {
+				break
+			}
+		}
+	}
 	return s.Conn.Close()
 }
 func (s *socket) send(v any) error {

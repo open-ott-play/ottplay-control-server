@@ -10,14 +10,16 @@ function (request, done) {
     function fail(message) { done({ok: false, error: message}); }
     function selected() { return media && media.kioskSelection && media.kioskSelection(); }
     function hash(s) { var h = 2166136261; for (var i=0;i<s.length;i++) h = ((h ^ s.charCodeAt(i)) * 16777619) >>> 0; return h.toString(16); }
-    function snapshot() {
+    function snapshot(includeItems) {
         var q = selected(), state = kiosk && kiosk.snapshot();
+        var queue=q && {index:q.index,total:q.records.length};
+        if(queue && includeItems)queue.items=q.records.map(function(r){return {id:r.request && r.request.fid,title:String(r.title || "").slice(0,256)};});
         return {ready: !!(w.commandChannelsReady && media), provider: w.__ottActiveProviderDriver && w.__ottActiveProviderDriver.id,
             kiosk: state, touch: w.__ottNativeTouchGuardState || "unknown",
             video: v && {position: v.currentTime, duration: isFinite(v.duration) ? v.duration : null,
                 paused: v.paused, ended: v.ended, ready: v.readyState, error: v.error ? v.error.code : 0,
                 width: v.videoWidth, height: v.videoHeight, source: hash(v.currentSrc || "")},
-            queue: q && {index:q.index, total:q.records.length, items:q.records.map(function(r){return {id:r.request && r.request.fid,title:String(r.title || "").slice(0,256)};})}};
+            queue: queue};
     }
     if (request.action === "health") { finish(snapshot()); return; }
     if (request.action === "recover") {
@@ -40,7 +42,7 @@ function (request, done) {
     }
     if (request.action === "vportal_queue") {
         if (!media || !kiosk || !w.__ottActiveProviderDriver || w.__ottActiveProviderDriver.id!=="vportal") {fail("Select and configure VPortal first");return;}
-        if (p.operation === "status") {finish(snapshot().queue || {index:0,total:0,items:[]});return;}
+        if (p.operation === "status") {finish(snapshot(true).queue || {index:0,total:0,items:[]});return;}
         var old=selected(), source=media.sourceId(), oldPolicy=w.stbGetItem("__ottKioskV1"), locked=kiosk.locked(), strict=!!(kiosk.strict && kiosk.strict()), revision={};
         w.__ottNativeQueueRevision=revision;
         var contextCurrent=function(){return w.__ottNativeMutation===request.id && w.__ottNativeQueueRevision===revision && media.sourceId()===source;};

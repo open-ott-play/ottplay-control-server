@@ -81,3 +81,11 @@ test('health polling does not revoke an asynchronous queue restore lease',()=>{
  f.run('health',{});assert.equal(guard(),true);
  f.run('playback',{operation:'resume'});assert.equal(guard(),false);
 });
+
+test('frequent health probes omit episode titles while queue status retains them',()=>{
+ const f=fixture();const health=f.run('health',{});
+ assert.equal(health.data.queue.total,3);assert.equal(health.data.queue.items,undefined);
+ const queue=f.run('vportal_queue',{operation:'status'});
+ assert.equal(queue.data.total,3);assert.equal(queue.data.items.length,3);
+ assert.equal(queue.data.items[1].id,44819);
+});
