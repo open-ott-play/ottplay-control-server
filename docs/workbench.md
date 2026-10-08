@@ -2,24 +2,43 @@
 
 The workbench collects one player's web observations and, when bound, its separate
 Android maintenance agent. It does not start playback, reload a player, change
-settings, capture the screen, or run arbitrary commands. These commands require
-the source revision containing `cli/workbench.py`; they are not part of stable
-CLI v0.1.0. Keep all seven CLI Python files from the same revision together.
+settings, capture the screen, or run arbitrary commands. Install the
+[reviewed CLI source revision](cli.md#choose-the-cli-source-revision) using the
+macOS/Linux or Windows instructions; stable CLI v0.1.0 does not include these
+commands. Keep all seven CLI Python files from the same revision together.
+
+## Quick start
+
+Use an existing registered player alias (`a1` below) and the same private CLI
+configuration as ordinary controls. If using the direct source invocation,
+replace `ott` with `python3 "$ott_script"` on macOS/Linux or `py -3 $ottScript`
+on Windows. A new setup first needs [configuration and pairing](cli.md#configure-the-administrator-client).
+The player and controller need the inspection protocol for web observations;
+CLI installation alone does not add that support. Native examples additionally
+require a separately installed and bound [Android maintenance agent](../native/android-agent/README.md#bootstrap).
+
+Choose a new output directory for each bundle or test; the parent must already
+exist. These examples leave playback unchanged and can be run individually:
 
 ```sh
-ott a1 doctor
-ott a1 doctor --json
+ott a1 doctor --json                                   # identity, capabilities and readiness
 ott --json a1 inspect --view ui,media
 ott a1 inspect --view media --lane web --json
 ott a1 inspect --lane native --json
-ott a1 operation 0123456789abcdef0123456789abcdef --json
 ott a1 bundle --out ./a1-case
 ott a1 test list
 ott a1 test run health --report ./a1-health
-ott -t 45 a1 test run media-progress --duration 5 --report ./a1-progress --json
+ott -t 45 a1 test run media-progress --lane web --duration 5 --report ./a1-progress --json
 ott -t 45 a1 test run media-progress --lane native --duration 5 --report ./a1-native-progress --json
 ott report verify ./a1-progress --json
 ```
+
+`doctor` and `inspect` explain what could be observed; `health` tests management
+responsiveness; `media-progress` checks an already playing decoder. Neither
+scenario proves a visible picture or audible sound. See [lanes](#observations-and-lanes),
+[scenario verdicts](#fixed-scenarios), [bundle contents and exit codes](#bundles-and-machine-output),
+[offline verification](#verify-saved-evidence-offline) and
+[troubleshooting](#troubleshooting) before interpreting a result.
 
 `-j`/`--json` works before the player name or after a workbench command. Global
 `-t`/`--timeout` and `-c`/`--config` still precede the player name. Commands use
@@ -30,11 +49,21 @@ needed. The workbench does not print those credentials or the server URL.
 inspection sections, alongside its controls. `ott a1 test list` always lists the
 local scenarios; that list does not claim the player supports their observations.
 
+## Request receipts and operation lookup
+
 Use global `--receipt` to obtain a command's request ID without changing its
 ordinary stdout, for example `ott --receipt a1 restart` for a requested player
 restart. Unlike workbench reads, that command changes the player. It emits a JSON line on
 stderr such as `{"action":"restart","request_id":"0123456789abcdef0123456789abcdef","status":"ok"}`.
-Then inspect that ID with `ott a1 operation ID --json`. `ok` records the RPC's
+Then inspect the emitted ID (replace the example below with that exact value):
+
+```sh
+ott a1 operation 0123456789abcdef0123456789abcdef --json
+# For an operation submitted through the independent Android agent:
+ott a1 operation 0123456789abcdef0123456789abcdef --lane native --json
+```
+
+The default lookup lane is web. `ok` records the RPC's
 reply, not a completed restart or playback outcome. If the POST reply is lost,
 the line contains `request_id:null` and `status:"unknown"`; do not repeat the
 command to obtain an ID. Multi-request commands produce multiple receipt lines.
@@ -62,6 +91,9 @@ provisioned `native_devices` binding, the same binding used by
 timeout budget. An offline web page cannot consume the entire native budget.
 An unbound native agent appears as `not_bound`; an invalid or shared binding is
 not used. Native results remain a separate shape, never a fabricated web snapshot.
+Here, `native` specifically means that independent Android agent. A packaged
+Tauri player uses the web inspection lane; installing a native desktop app does
+not create an Android binding or enable `--lane native`.
 
 New players advertise the optional `inspect` capability. If that capability or
 the requested section is absent, the workbench reports `unsupported` without
@@ -213,17 +245,33 @@ decoder progress certifies the physical screen or audible sound.
 
 ## Troubleshooting
 
+- Missing workbench commands or Python modules: follow the
+  [pinned installation/update steps](cli.md#choose-the-cli-source-revision), verify
+  the checkout SHA and use its direct Python invocation. An older `ott` may still
+  be first on PATH; keep all seven modules together.
+- `unsupported`: the player does not advertise the requested inspection section.
+  Check the target UUID/build with ordinary `caps`/`status`, then update the
+  [installation that target actually runs](cli.md#update-the-installation-used-by-the-target-player).
 - `unsupported_controller`: update the controller/player to a revision with the
   read-only inspection protocol. Existing Android maintenance observations can
   still be obtained with `--lane native`.
-- `not_bound`: provision a separate native agent, then use
-  `ott a1 android bind a1-native`. Never share the web player's queue/token.
+- `not_bound`: expected when there is no Android agent. Use `--lane web` for a
+  web/Tauri-only setup. If native observations are needed on the supported Android
+  device, [provision a separate agent](../native/android-agent/README.md#bootstrap),
+  then use `ott a1 android bind a1-native`. Never share the web player's queue/token.
 - `invalid_response`: the device returned an incompatible, oversized or malformed
   snapshot; the raw response is intentionally not copied into a bundle.
 - `media_identity_changed_or_unavailable`: playback changed during collection, or
   the adapter cannot identify its backend handle. Do not infer a frozen screen.
 - `output_exists`: keep the previous evidence and select a new output directory.
 - `insufficient_timeout`: increase `ott -t SECONDS ...` or shorten `--duration`.
+- Offline verification exits `1`: check that the original `manifest.json` and
+  `result.json` are present, unmodified and alone in the export directory. Read
+  [verification requirements](#verify-saved-evidence-offline); do not edit a verdict
+  or regenerate its hash to turn failed evidence into a pass.
+- Scenario exits `2` or `3`: inspect its JSON `verdict`, `reason` and lane statuses.
+  A FAIL or unknown result does not automatically trigger a restart, replay or
+  configuration change; decide what to do from the evidence and existing authorization.
 
 See [CLI installation](cli.md), [scoped diagnostic sessions](diagnostics-cli.md),
 and the [Android maintenance agent](../native/android-agent/README.md).

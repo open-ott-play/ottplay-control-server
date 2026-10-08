@@ -131,6 +131,17 @@ excluded from health/log responses; screenshots may contain visible private data
 
 ## Correlation and evidence
 
+The [workbench quick start](../../docs/workbench.md#quick-start) collects this
+agent's observations with `inspect --lane native`, `bundle`, `test run health`
+and `test run media-progress --lane native`. It requires the
+[reviewed CLI source](../../docs/cli.md#choose-the-cli-source-revision) plus this
+separate native binding; updating the CLI/controller does not install or update
+the agent. Two compatible native health samples can establish decoder progress,
+not physical presentation or audible output. Saved bundles can be
+[verified offline](../../docs/workbench.md#verify-saved-evidence-offline) without
+agent access. Use [operation lookup](../../docs/workbench.md#request-receipts-and-operation-lookup)
+to read a prior request's receipt without replaying it.
+
 Health optionally includes `player.identity`: the web runtime, playback
 `generation`, main backend `handle_id`, and media kind from the installed
 player's existing read-only inspection hook. `available: true` requires a

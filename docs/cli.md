@@ -65,68 +65,213 @@ connection still verifies its certificate and hostname. The
 [security design](security-design.md#python-cli-https-profile) records the tested
 runtime and key-strength checks. Plain HTTP does not provide these protections.
 
+### Choose the CLI source revision
+
+Install CPython 3.12 or newer and Git first. The native server release archives
+contain the Go server, **not** the Python CLI. The examples below install the
+reviewed source revision
+[`c1758f37a829f72b63ae50a979141a96871981d3`](https://github.com/open-ott-play/ottplay-control-server/commit/c1758f37a829f72b63ae50a979141a96871981d3).
+It contains all seven CLI modules, including the local `resolve` command,
+[workbench](workbench.md#quick-start) and offline `report verify`.
+
+This is the **0.1.1 development line**, not a claim that a stable 0.1.1 binary
+release has shipped. Stable CLI v0.1.0 lacks `resolve`, workbench and offline
+verification. A server's `version` output, the repository's `VERSION` file and
+a player's reported version identify different components; none substitutes for
+checking this CLI checkout's commit. Follow the
+[deployment guide](deployment.md) for the controller and the
+[target installation guidance](#update-the-installation-used-by-the-target-player)
+for players. Installing this CLI does not update either component or provision
+an Android agent.
+
 ### Install on macOS or Linux
 
-Install CPython 3.12 or newer and Git first. The native server release archives contain the
-Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
-source archive for that CLI release. The examples below pin stable CLI v0.1.0,
-including signed channel offsets and the Unicode numeric-input validation fix.
-For the complete released set of remote features, use player v1.1.52 or newer;
-the CLI, controller and player must each be updated separately.
-
-For older prerelease installations, `prev`/`previous`/`next` require CLI/controller
-v0.1.0-beta.42 or newer and player frontend v1.1.52-beta.54 or newer. Signed
-offsets (`+15`/`-15`) require CLI/controller v0.1.0-beta.43 or newer and player
-frontend v1.1.52-beta.55 or newer. The target player must also advertise the
-matching operations in `caps.playback`, including `step_channel` for offsets.
-The controller can remain on beta.43 for these channel controls when updating
-the CLI to v0.1.0:
+Use a new revision-specific directory. This block refuses an existing path,
+checks out the exact commit and checks help without reading configuration or
+contacting a controller:
 
 ```sh
-python3 --version
-mkdir -p "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.config/ottplay-control"
-git clone --branch v0.1.0 --depth 1 \
-  https://github.com/open-ott-play/ottplay-control-server.git \
-  "$HOME/.local/share/ottplay-control-server"
-ln -s "$HOME/.local/share/ottplay-control-server/cli/ott.py" "$HOME/.local/bin/ott"
-export PATH="$HOME/.local/bin:$PATH"
-ott --help
-ott diagnostics --help
-chmod 700 "$HOME/.config/ottplay-control"
+(
+  set -eu
+  ott_revision=c1758f37a829f72b63ae50a979141a96871981d3
+  ott_source="$HOME/.local/share/ottplay-control-server-c1758f37"
+  python3 --version
+  mkdir -p "$HOME/.local/share"
+  if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
+    printf '%s\n' "Already exists: $ott_source; inspect it or choose a new directory." >&2
+    exit 1
+  fi
+  git clone --no-checkout https://github.com/open-ott-play/ottplay-control-server.git "$ott_source"
+  git -C "$ott_source" checkout --detach "$ott_revision"
+  test "$(git -C "$ott_source" rev-parse HEAD)" = "$ott_revision"
+  python3 "$ott_source/cli/ott.py" --help
+  python3 "$ott_source/cli/ott.py" diagnostics --help
+  python3 "$ott_source/cli/ott.py" report verify --help
+)
 ```
 
-The local `resolve` command is not included in stable CLI v0.1.0. Until a
-release includes it, use a reviewed source revision containing
-`playlist_search.py` and keep all CLI files from that revision together. The
-read-only [workbench](workbench.md) additionally requires a revision containing
-`workbench.py`; offline `report verify` also needs `report_verify.py` from the
-same revision. Neither is included in stable CLI v0.1.0.
+Run this installation directly, including when an older `ott` is already on PATH:
 
-Keep the checkout after making the symlink; moving or deleting it breaks `ott`.
-Persist the PATH line in your shell's startup file (`~/.zshrc` for interactive
-zsh or the appropriate bash startup file), then open a new terminal. `command -v ott`
-shows which installation is selected. If `ott` already exists, inspect it before
-changing it; the example intentionally does not overwrite an existing command.
-From any checkout you can instead run `python3 /absolute/path/to/cli/ott.py --help`.
-If copying the files out of a source archive, copy all files in `cli/` together and make
-`ott.py` executable with `chmod u+x /absolute/path/to/cli/ott.py` before linking it.
+```sh
+ott_script="$HOME/.local/share/ottplay-control-server-c1758f37/cli/ott.py"
+python3 "$ott_script" --help
+# Once your existing configuration is ready:
+python3 "$ott_script" a1 doctor --json
+```
+
+For a first installation, this optional block adds `ott` only if that path is
+unused; it never replaces an existing launcher, directory or dangling symlink:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
+  printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
+else
+  ln -s "$HOME/.local/share/ottplay-control-server-c1758f37/cli/ott.py" "$HOME/.local/bin/ott"
+fi
+export PATH="$HOME/.local/bin:$PATH"
+command -v ott
+```
+
+Keep the checkout after making the symlink; moving or deleting it breaks that
+launcher. Persist the PATH line in your shell's startup file (`~/.zshrc` for
+interactive zsh or the appropriate bash startup file), then open a new terminal.
+Use `type -a ott` in bash/zsh to detect older aliases, functions or launchers that
+take precedence. In the remaining examples, replace `ott` with
+`python3 "$ott_script"` whenever using the direct invocation. If copying a source
+archive instead, copy all seven files in `cli/` together; a Git checkout is needed
+for the exact `git rev-parse HEAD` verification above.
 
 ### Install on Windows
 
-Use a private source checkout and invoke the script through Python:
+Use PowerShell, Git and CPython 3.12 or newer (`py -3`). This installs the same
+reviewed commit in a new directory without replacing an existing checkout or
+creating/changing a launcher:
 
 ```powershell
+$ottRevision = 'c1758f37a829f72b63ae50a979141a96871981d3'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-c1758f37'
+if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
+    throw "Already exists: $ottSource; inspect it or choose a new directory."
+}
 py -3 --version
-git clone --branch v0.1.0 --depth 1 https://github.com/open-ott-play/ottplay-control-server.git "$env:LOCALAPPDATA\ottplay-control-server"
-py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" --help
-py -3 "$env:LOCALAPPDATA\ottplay-control-server\cli\ott.py" diagnostics --help
+if ($LASTEXITCODE -ne 0) { throw 'Python is unavailable.' }
+git clone --no-checkout https://github.com/open-ott-play/ottplay-control-server.git $ottSource
+if ($LASTEXITCODE -ne 0) { throw 'Clone failed.' }
+git -C $ottSource checkout --detach $ottRevision
+if ($LASTEXITCODE -ne 0) { throw 'Checkout failed.' }
+$ottActualRevision = git -C $ottSource rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $ottActualRevision -ne $ottRevision) {
+    throw 'Unexpected CLI revision.'
+}
+$ottScript = Join-Path $ottSource 'cli\ott.py'
+py -3 $ottScript --help
+py -3 $ottScript diagnostics --help
+py -3 $ottScript report verify --help
 ```
 
-In the remaining examples replace `ott` with that Python invocation. Store
-configuration in a directory protected by NTFS permissions for your account;
-POSIX mode 600 does not establish Windows access control. Files inherit the
-parent directory's ACL. Use `--config C:\private\cli.json` before the player name
-if you choose a location other than the default under your home directory.
+In the remaining examples replace `ott` with `py -3 $ottScript`, for example
+`py -3 $ottScript a1 doctor --json` after configuration. Store configuration in a
+directory protected by NTFS permissions for your account; POSIX mode 600 does
+not establish Windows access control. Files inherit the parent directory's ACL.
+Use `--config C:\private\cli.json` before the player name if you choose a location
+other than the default under your home directory.
+
+### Update, select or roll back the CLI
+
+Keep the existing checkout, launcher and private configuration. Run the relevant
+installation block above to add this revision beside an older installation. If
+the revision-specific directory already exists, inspect its `git status --short`
+and `git rev-parse HEAD`; do not reset it, pull over local changes or mix in
+individual modules. Choose another new directory if needed, updating all paths
+in the example consistently. For a future update, use its reviewed full commit
+and a new directory name in the same procedure.
+
+Select the new CLI by its direct path, preserving the same `--config` path (or
+existing `OTT_CONFIG`/default configuration). The following read-only check uses
+the normal default configuration; put `--config /absolute/path/to/cli.json` or
+`--config C:\private\cli.json` before `a1` if that is how you already run it:
+
+```sh
+ott_script="$HOME/.local/share/ottplay-control-server-c1758f37/cli/ott.py"
+python3 "$ott_script" a1 doctor --json
+```
+
+```powershell
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-c1758f37\cli\ott.py'
+py -3 $ottScript a1 doctor --json
+```
+
+To roll back, set `ott_script`/`$ottScript` to the saved older checkout's
+`cli/ott.py` and use the same Python invocation, or resume the preserved `ott`
+launcher. For example, if the previous installation used the old default path:
+
+```sh
+ott_script="$HOME/.local/share/ottplay-control-server/cli/ott.py"
+python3 "$ott_script" --help
+```
+
+```powershell
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server\cli\ott.py'
+py -3 $ottScript --help
+```
+
+Substitute your actual previous path. Older CLIs may not understand workbench
+commands or newer report formats; retain this reviewed checkout for offline
+verification. These selection steps do not migrate configuration, rotate tokens,
+re-register players or replace your existing `ott` launcher. Complete
+[configuration](#configure-the-administrator-client) only for a new installation;
+for an existing one, continue with the [workbench quick start](workbench.md#quick-start).
+
+#### Persistently switch an existing macOS/Linux `ott` symlink
+
+After checking the new CLI directly, this optional block replaces only the
+`~/.local/bin/ott` symlink. It preserves the previous link as
+`ott.before-c1758f37`, stages the replacement beside it, then switches atomically.
+It refuses a regular launcher file, a directory and occupied staging/backup paths;
+inspect a custom launcher separately. Close other installer/update processes
+before running it. This changes no configuration or running service.
+
+```sh
+python3 - update <<'PYTHON'
+import os
+from pathlib import Path
+import sys
+
+launcher = Path.home() / ".local/bin/ott"
+backup = launcher.with_name("ott.before-c1758f37")
+staged = launcher.with_name("ott.switch-c1758f37")
+reviewed = Path.home() / ".local/share/ottplay-control-server-c1758f37/cli/ott.py"
+if not launcher.is_symlink() or launcher.is_dir():
+    raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
+if os.path.lexists(staged):
+    raise SystemExit("Staging path exists; inspect it first.")
+if sys.argv[1] == "update":
+    if os.path.lexists(backup):
+        raise SystemExit("Backup path exists; inspect it first.")
+    if not reviewed.is_file():
+        raise SystemExit("Install and verify the reviewed checkout first.")
+    target = str(reviewed)
+    os.symlink(os.readlink(launcher), backup)
+elif sys.argv[1] == "rollback":
+    if os.readlink(launcher) != str(reviewed) or not backup.is_symlink() or not backup.is_file():
+        raise SystemExit("Launcher changed or previous target is unavailable; inspect both links.")
+    target = os.readlink(backup)
+else:
+    raise SystemExit("Choose update or rollback.")
+os.symlink(target, staged)
+os.replace(staged, launcher)
+print("Selected:", launcher, "->", os.readlink(launcher))
+PYTHON
+```
+
+To roll back, run the same block with `python3 - rollback` in its first line.
+The backup remains available and the old checkout must still exist. A failed
+switch may leave the backup/staging link for inspection; do not overwrite it
+blindly. After either operation, open a new terminal and check `type -a ott` and
+`ott --help`; an alias, function or earlier PATH entry can still select another
+installation. On Windows, retain the direct `py -3 $ottScript` selection above;
+update a custom launcher only after inspecting how it selects the script.
 
 ### Update the installation used by the target player
 
@@ -154,8 +299,12 @@ the same target UUID; a completed reload should have a new runtime identity.
 ### Configure the administrator client
 
 Start and validate the command server using the [deployment guide](deployment.md).
-The CLI is a one-command process, not another background server. Create
-`~/.config/ottplay-control/cli.json`; this is separate from the server's `config.json`:
+The CLI is a one-command process, not another background server. For a new
+installation, create the private directory (`mkdir -p "$HOME/.config/ottplay-control"`
+and `chmod 700 "$HOME/.config/ottplay-control"` on macOS/Linux), then create
+`~/.config/ottplay-control/cli.json`; this is separate from the server's `config.json`.
+Preserve an existing CLI configuration when updating; the following is a new-file
+example, not a replacement for saved aliases, native bindings, presets or credentials:
 
 ```json
 {
@@ -1567,8 +1716,11 @@ Do not include `ott pair` output, private configuration, provider URLs with
 credentials or operator tokens in a shared report. Useful evidence is the exact
 command with secrets removed, exit code, fixed error message, time, player
 version/platform and whether the problem affects one player or every player.
-For structured capture use the [diagnostics workflow](diagnostics-cli.md), which
-requires separate operator scopes and an enabled player connection.
+For read-only collection with your existing aliases, start with the
+[workbench quick start](workbench.md#quick-start) and its
+[troubleshooting](workbench.md#troubleshooting). For structured capture use the
+[diagnostics workflow](diagnostics-cli.md), which requires separate operator
+scopes and an enabled player connection.
 
 ### `ott: command not found`, wrong installation or missing Python module
 
@@ -1579,6 +1731,10 @@ installation taking precedence. Check the symlink target still exists. Use
 from Python problems. Keep all seven CLI files from the same source version in
 the resolved target directory. A copied `ott.py` alone is not a complete install.
 On Windows use the `py -3 ...` invocation from the installation section.
+Stable CLI v0.1.0 does not provide `doctor`, `inspect`, `operation`, `bundle`,
+`test`, `resolve` or `report verify`; install the
+[reviewed source revision](#choose-the-cli-source-revision), then invoke its
+script directly. Adding only the missing module to an old checkout is unsupported.
 
 ### Configuration cannot be read or the wrong controller is selected
 
@@ -1693,9 +1849,9 @@ for that instance. A timeout means its current version could not be verified;
 increasing the timeout or repeatedly issuing a channel change does not update it.
 
 For `+N`/`-N`, check CLI/controller v0.1.0-beta.43 or newer and player frontend
-v1.1.52-beta.55 or newer; the installation examples use stable CLI v0.1.0 for its
-additional numeric-input validation. The target's `caps.playback` must advertise
-`step_channel`. Support for `previous_channel` or
+v1.1.52-beta.55 or newer; the reviewed CLI source above also includes the
+numeric-input validation added in stable v0.1.0. The target's `caps.playback` must
+advertise `step_channel`. Support for `previous_channel` or
 `next_channel` alone does not imply support for arbitrary offsets. Update the
 installation actually used by that player; reload/restart does not install a
 new embedded native frontend.
