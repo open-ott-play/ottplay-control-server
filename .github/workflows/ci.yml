@@ -33,7 +33,7 @@ jobs:
           python-version: '3.12'
       - name: Require consistent CI action versions
         run: |
-          python3 -m pip install --only-binary=:all: PyYAML==6.0.3
+          python3 -m pip install --require-hashes --only-binary=:all: -r .github/requirements-workflow-contracts.txt
           python3 scripts/workflow_contracts.py --actions-only
       - name: Check generated wire contracts
         run: python3 scripts/generate-wire-contracts.py --check
