@@ -31,6 +31,7 @@ import zlib
 HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] PLAYER [COMMAND ...]
   ott resolve --request-stdin         resolve a private playlist search for a local player
   ott diagnostics --help             scoped runtime diagnostics and session control
+  ott report verify DIRECTORY [-j]   verify and re-evaluate saved evidence offline
   ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
   ott alias NAME UUID                name an existing device
@@ -85,6 +86,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME test list                 list fixed read-only diagnostic scenarios
   ott NAME test run health --report DIRECTORY
   ott NAME test run media-progress --duration 5 --report DIRECTORY
+  ott NAME test run media-progress --lane native --duration 5 --report DIRECTORY
   ott NAME screenshot                save one remote screenshot; browser source selection may be needed
   ott NAME shot -o FILE.png           same capture, with an explicit output file
   ott NAME key KEY                   send one supported named input after acknowledgement
@@ -2231,7 +2233,114 @@ def android_metadata(data, action, params):
         "dispatched": boolean, "position": number, "stopped": boolean,
         "loop": boolean, "title": text, **queue,
     }
+    def require(condition, message=invalid):
+        if not condition:
+            raise Error(message)
+
+    def integer(value, low=0, high=9007199254740991):
+        return type(value) is int and low <= value <= high
+
+    def complete(value, spec, nullable=(), message=invalid):
+        require(isinstance(value, dict) and all(key in value for key in spec), message)
+        result = {}
+        for key, rule in spec.items():
+            if value[key] is None:
+                require(key in nullable, message)
+                result[key] = None
+            else:
+                try:
+                    result[key] = project(value[key], rule)
+                except Error:
+                    raise Error(message) from None
+        return result
+
+    def checked_identity(value):
+        result = complete(value, identity, ("web_runtime", "generation", "handle_id"))
+        require(type(result["version"]) is int and result["version"] == 1
+                and integer(result["captured_at"]))
+        if result["available"]:
+            require(result["consistent"] is True and result["web_runtime"] is not None
+                    and integer(result["generation"]) and integer(result["handle_id"])
+                    and result["captured_at"] > 0 and result["kind"] in ("live", "archive", "vod"))
+        else:
+            require(result["consistent"] is False and result["generation"] is None
+                    and result["handle_id"] is None and result["kind"] == "unknown")
+        return result
+
+    def checked_surface(value):
+        require(isinstance(value, dict))
+        if value.get("state") == "unavailable":
+            result = complete(value, {"state": evidence_state, "reason": evidence_reason})
+            require(result["reason"] in ("no_frame_timestamps", "unsupported_dump", "no_completed_fences",
+                                         "app_surface_unavailable", "process_changed")
+                    and not set(value).intersection(("scope", "period_ns", "latest_present_ns", "completed_frames", "video_verified")))
+            return result
+        result = complete(value, {key: rule for key, rule in system_evidence["surface"].items() if key != "reason"})
+        require(result["state"] == "observed" and "reason" not in value
+                and integer(result["period_ns"], 1, 1000000000)
+                and integer(result["latest_present_ns"], 1, 9007199254740990)
+                and integer(result["completed_frames"], 1))
+        return result
+
+    def checked_audio(value):
+        require(isinstance(value, dict))
+        if value.get("state") == "unavailable":
+            result = complete(value, {"state": evidence_state, "reason": evidence_reason})
+            require(result["reason"] in ("unsupported_dump", "too_many_tracks", "no_matching_audio_track",
+                                         "audio_service_unavailable", "process_changed")
+                    and not set(value).intersection(("scope", "tracks", "audible_verified")))
+            return result
+        result = complete(value, {key: rule for key, rule in system_evidence["audio"].items() if key != "reason"})
+        require(result["state"] == "observed" and "reason" not in value and 1 <= len(result["tracks"]) <= 16)
+        result["tracks"] = [complete(row, system_evidence["audio"]["tracks"][0]) for row in result["tracks"]]
+        require(all(integer(row[key], 0, 4294967295)
+                    for row in result["tracks"] for key in ("session_id", "sample_rate", "server_frames", "underrun_frames")))
+        return result
+
+    def checked_system(value):
+        require(isinstance(value, dict) and "surface" in value and "audio" in value)
+        surface, audio = checked_surface(value["surface"]), checked_audio(value["audio"])
+        changed = {"state": "unavailable", "reason": "process_changed"}
+        # The producer deliberately drops PID/clock claims after a process change.
+        if surface == changed or audio == changed:
+            require(surface == audio == changed and not set(value).intersection(
+                ("app_pid", "captured_uptime_seconds", "physical_display_verified", "physical_audio_verified")))
+            return {"surface": surface, "audio": audio}
+        result = complete(value, {key: rule for key, rule in system_evidence.items() if key not in ("surface", "audio")})
+        require(integer(result["app_pid"], 0, 2147483647) and integer(data.get("app_pid"), 0, 2147483647)
+                and result["app_pid"] == data["app_pid"])
+        require(result["app_pid"] > 0 or surface["state"] == audio["state"] == "unavailable")
+        return {**result, "surface": surface, "audio": audio}
+
+    def checked_receipt(value):
+        message = "Invalid native operation receipt"
+        result = complete(value, {key: rule for key, rule in receipt.items() if key != "boot_id"}, message=message)
+        if "boot_id" in value:
+            require(value["boot_id"] is not None and boot_id(value["boot_id"]), message)
+            result["boot_id"] = value["boot_id"]
+        operations = {
+            "maintenance": ("recover_video", "update"),
+            "lifecycle": ("restart_app", "reload_player", "reboot_device", "wake", "standby"),
+            "playback": ("pause", "resume", "seek"),
+            "vportal_queue": ("play", "next", "previous", "restart", "stop"),
+        }
+        require(result["operation"] in operations[result["action"]]
+                and integer(result["updated_at"], 1)
+                and (result["state"] == "handler_completed") == (result["evidence"] == "handler_completed"), message)
+        # Retention is enforced by the producer's clock. Historical executor
+        # runtime/boot IDs need not match this health response's current process.
+        return result
+
     def project(value, spec):
+        if spec is identity:
+            return checked_identity(value)
+        if spec is decoder:
+            return complete(value, decoder, ("decoded_frames", "dropped_frames", "audio_decoded_bytes",
+                                              "volume", "muted", "presented_frames"))
+        if spec is system_evidence:
+            return checked_system(value)
+        if spec is receipt:
+            return checked_receipt(value)
         if value is None:
             return None
         if isinstance(spec, dict):
@@ -2251,6 +2360,10 @@ def android_metadata(data, action, params):
     if not isinstance(data, dict):
         raise Error(invalid)
     result = project(data, schema)
+    if "operations" in result:
+        history = result["operations"]
+        require(isinstance(history, list) and len(history) <= 64, "Invalid native operation history")
+        require(len({row["request_id"] for row in history}) == len(history), "Ambiguous native operation history")
     op = params.get("operation")
     if action == "maintenance" and op in ("health", "logs"):
         if type(result.get("version")) is not int or result["version"] != 1:
@@ -2283,6 +2396,9 @@ def android_metadata(data, action, params):
 
 
 def native_operation_metadata(data, operation_id):
+    if not isinstance(operation_id, str) or not re.fullmatch(r"[a-f0-9]{32}", operation_id):
+        raise Error("Invalid native operation ID")
+    data = android_metadata(data, "maintenance", {"operation": "health"})
     history = data.get("operations")
     if "operations" in data and not isinstance(history, list):
         raise Error("Invalid native operation history")
@@ -2411,6 +2527,19 @@ def main(argv=None):
         print(HELP)
         return 0
     try:
+        if args.words[0].casefold() == "report":
+            # Saved evidence must remain inspectable without credentials or a
+            # reachable controller. Do not construct a Client on this path.
+            modules = []
+            for name in ("workbench", "report_verify"):
+                path = Path(__file__).resolve().with_name(name + ".py")
+                if not path.is_file():
+                    raise Error("Install all CLI Python files from the same revision to verify reports")
+                spec = importlib.util.spec_from_file_location("ott_" + name, path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                modules.append(module)
+            return modules[1].main(args.words[1:], SimpleNamespace(**globals()), modules[0], args.json)
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
             raise Error("--timeout must be between 1 and 300 seconds")
         config = read_json(args.config)
