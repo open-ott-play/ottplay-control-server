@@ -175,3 +175,44 @@ func assertBinaryHTTPS(t *testing.T, binary, configPath string, fixture serverCe
 	}
 	t.Fatal("accepted certificate did not serve the health endpoint")
 }
+
+func TestValidatedPairSurvivesFileDeletion(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := certificateFixture(t, []crypto.Signer{key})
+	config, err := loadServerTLSConfig(fixture.cert, fixture.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(fixture.cert); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(fixture.key); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{TLSConfig: config, ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})}
+	done := make(chan error, 1)
+	go func() { done <- server.ServeTLS(listener, "", "") }()
+	defer func() { _ = server.Close(); <-done }()
+	roots := x509.NewCertPool()
+	roots.AddCert(fixture.root)
+	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	response, err := client.Get("https://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 {
+		t.Fatal("checked in-memory certificate was not served")
+	}
+}
