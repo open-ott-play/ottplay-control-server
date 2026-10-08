@@ -510,3 +510,96 @@ status|next|previous|restart|stop}`. The experimental legacy Android adapter
 supports `loop: true` only. IDs remain in caller order. Capability/policy checks
 and outcome reporting belong to the device; a successful enqueue is not evidence
 of installation or successful playback. Use the dedicated native CLI commands.
+
+## Read-only player inspection (protocol 1)
+
+`inspect` reuses `/api/requests`, the existing command poll, and
+`/api/responses`; it does not start another poller or a diagnostic capture.
+Discover the page runtime from player capabilities before issuing a request:
+
+```json
+{"action":"inspect","params":{"version":1,"runtime":"page-123","section":"doctor"}}
+```
+
+`section` is `doctor`, `snapshot`, or `operation`. The first two return the same
+bounded player snapshot in version 1. For `operation`, add the required
+`operation_id` of the earlier command; that field is forbidden on the other
+sections. Runtime identifiers are 1–96 ASCII letters, digits, underscores,
+periods, or hyphens. Operation IDs are the existing 32-character lowercase hexadecimal command IDs.
+No other request fields, arbitrary selectors, scripts, or URLs are accepted.
+
+A successful `/api/responses` body has the ordinary `id` and `status:"ok"`,
+with a bound inspection envelope in `data`:
+
+```json
+{
+  "id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "status":"ok",
+  "data":{
+    "version":1,
+    "runtime":"page-123",
+    "section":"operation",
+    "data":{
+      "operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "state":"observed",
+      "action":"playback",
+      "evidence":{"kind":"media_progress","generation":5,"position":15.5}
+    }
+  }
+}
+```
+
+Operation states are `unknown`, `accepted`, `invoked`, `observed`, `rejected`,
+`unsupported`, or `expired`. Evidence kinds are `none`, `handler_completed`,
+`media_progress`, or `runtime_changed`. `action` is a known mutation action or
+`null`; evidence generation and position are numbers or `null`. Position is in
+seconds. `observed` requires `media_progress` or `runtime_changed` evidence;
+`media_progress` requires non-null generation and position. An `unknown`
+observation does not prove the earlier operation never
+executed. A handler result or accepted intent does not prove a visible image or
+a successful device reboot. The player owns the bounded observation journal;
+the server does not manufacture progress states.
+
+Doctor snapshots contain required `version`, `runtime`, `capturedAt`,
+`collectionMs`, `consistent`, `build`, `ui`, `media`, `capabilities`, and `reasons`.
+The inner runtime must also match the request. Build identity contains a bounded
+version token (including SemVer `+` metadata), nullable exact 40-character lowercase source revision and build
+ID, and `embedded`/`partial` identity. UI fields contain document visibility and
+focus, a nullable typed UI owner and revision, at most 8 typed panes with bounded
+rectangles, and a semantic focus category. Media contains a nullable generation,
+typed kind and phase, at most 2 distinct `main`/`pip` lanes, and
+`displayEvidence:"unavailable"`. Lanes contain numeric playback state and video
+visibility/geometry; they contain no media URLs or settings. At most 10 distinct
+capability observations and 16 distinct reason codes are allowed. All nested
+keys and enum values are checked; unavailable scalar observations use explicit
+`null` where the schema allows it. Snapshots cannot claim physical-display
+verification. The canonical player type is `DoctorSnapshot` in
+`src/plugins/remote-doctor.ts` of `ottplay-foss`.
+
+The complete response is limited to 32 KiB and a doctor snapshot to 8 KiB.
+Integer counters/timestamps are 0–9007199254740991; playback seconds are
+0–315576000; collection time is 0–60000 ms. Rectangles use integral CSS pixels:
+coordinates −32768–32768 and dimensions 0–32768. Browser ready/network states use
+their defined numeric ranges. Duplicate keys, unrecognized fields, invalid
+nullable values, and mismatched identities are rejected before dequeueing.
+
+Negative statuses `unsupported` and `rejected` also require the bound envelope:
+
+```json
+{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"unsupported","data":{"version":1,"runtime":"page-123","section":"doctor","error":"unsupported"}}
+```
+
+The only error codes are `invalid_request`, `runtime_mismatch`, `unsupported`,
+and `unavailable`. A naked legacy error or a reply from another page cannot
+close the request. Invalid replies leave it pending until a valid response or
+ordinary expiry. Valid responses retain the ordinary 60-second result TTL.
+An older controller may reject the new action and an older player may not
+answer it; clients must report unsupported/unknown, not pretend inspection
+succeeded.
+
+Runtime matching is an observation fence, not new authorization or routing.
+Existing administrator/device access rules still apply, and a protocol-1 device
+queue still needs exactly one consumer. In particular, keep native maintenance
+agents on their separate provisioned identity; do not share their token with
+the WebView. Inspection neither grants a second local permission nor bypasses
+local playback restrictions.

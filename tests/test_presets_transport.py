@@ -187,7 +187,7 @@ class PresetController:
                           and receipt['result']['status'] == 'ok'):
                         code, body = 503, {'error': ECHO}
                     else:
-                        code, body = 200, receipt['result']
+                        code, body = 200, dict(receipt['result'], id=request_id)
                         fixture.outstanding = None
                     fixture.gets.append((request_id, code))
                 self.reply(code, body)

@@ -16,6 +16,7 @@ const maxResultBytes = 16 * 1024 * 1024
 type requestResult struct {
 	data    json.RawMessage
 	expires time.Time
+	inspect *inspectRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
@@ -110,6 +111,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = len(params) == 0
 	case "screenshot":
 		ok = validScreenshotRequest(params)
+	case "inspect":
+		ok = parseInspectRequest(params) != nil
 	case "plex_queue":
 		ok = parsePlexQueueRequest(params) != nil
 	case "maintenance":
@@ -190,6 +193,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	e := entry{id: id, data: data, expires: expires, rpc: true}
 	if action == "screenshot" {
 		_ = json.Unmarshal(params["runtime"], &e.screenshotRuntime)
+	}
+	if action == "inspect" {
+		e.inspect = parseInspectRequest(params)
 	}
 	if action == "plex_queue" {
 		e.plexQueue = parsePlexQueueRequest(params)
@@ -293,16 +299,29 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	s.mu.Lock()
 	screenshotRuntime := ""
 	var plexQueue *plexQueueRequest
+	var inspect *inspectRequest
 	playbackOperation := ""
 	for _, pending := range d.queue {
 		if pending.rpc && pending.id == id {
 			screenshotRuntime = pending.screenshotRuntime
 			plexQueue = pending.plexQueue
 			playbackOperation = pending.playbackOperation
+			inspect = pending.inspect
 			break
 		}
 	}
+	if inspect == nil {
+		inspect = d.results[id].inspect
+	}
 	s.mu.Unlock()
+	// Both successful and negative inspection replies must belong to the exact
+	// requested page. An older or unrelated queue consumer cannot close the
+	// request with an unbound unsupported response. This is result fencing, not
+	// routing: a protocol-1 device queue still supports only one consumer.
+	if inspect != nil && (len(b) > maxInspectResultBytes || !validInspectResult(m["data"], status, inspect)) {
+		failure(w, 400, "invalid inspect result")
+		return
+	}
 	if screenshotRuntime != "" && status == "ok" && !validScreenshotResult(m["data"], screenshotRuntime) {
 		failure(w, 400, "invalid screenshot result")
 		return
@@ -335,7 +354,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second)}
+		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second), inspect: e.inspect}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])
