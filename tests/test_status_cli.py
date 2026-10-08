@@ -58,6 +58,25 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual(json.loads(out), dict(status, capabilities=caps))
             self.assertNotIn('do-not-print', out)
 
+    def test_default_status_lists_only_negotiated_workbench_sections(self):
+        for sections in (['doctor'], ['snapshot'], ['operation'], ['doctor', 'snapshot', 'operation']):
+            caps = self.capabilities()
+            caps['inspect'] = {'version': 1, 'sections': sections}
+            code, out, err, _ = self.run_cli([], {'ready': True}, caps, alias='Living room')
+            self.assertEqual((code, err), (0, ''))
+            for section, command in [('doctor', 'doctor'), ('snapshot', 'inspect --view ui,media'),
+                                     ('snapshot', 'bundle --out DIR'), ('snapshot', 'test run health --report DIR'),
+                                     ('snapshot', 'test run media-progress --report DIR'), ('operation', 'operation REQUEST_ID')]:
+                self.assertEqual("ott 'Living room' " + command in out, section in sections)
+            self.assertIn("ott --receipt 'Living room' COMMAND", out)
+            self.assertIn("Local diagnostic help: ott 'Living room' test list", out)
+        code, out, err, _ = self.run_cli([], {'ready': True}, self.capabilities())
+        self.assertEqual((code, err), (0, ''))
+        self.assertNotIn('Available diagnostics now', out)
+        self.assertNotIn('ott tv doctor', out)
+        self.assertNotIn('ott tv test run', out)
+        self.assertIn('Local diagnostic help: ott tv test list', out)
+
     def test_optional_failure_keeps_status_and_never_echoes_raw_error(self):
         failures = [ott.PlayerUnsupported('private-token'), ott.PlayerRejected('private-token', {}),
                     ott.Error('private-token'), ott.TransportError('private-token'), ott.HTTPError(401),

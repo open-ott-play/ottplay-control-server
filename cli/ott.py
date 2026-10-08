@@ -1811,11 +1811,13 @@ def status_capabilities(client, device, data, deadline):
 def print_player_status(data, name):
     print(json.dumps({key: value for key, value in data.items()
                       if key not in ("capabilities", "capabilities_error")}, ensure_ascii=False, indent=2))
+    quoted_name = shlex.quote(clean(name))
+    prefix = "ott " + quoted_name
     controls = data["capabilities"]
     if controls is None:
         print("\n" + data["capabilities_error"])
+        print(f"Local diagnostic help: {prefix} test list")
         return
-    prefix = "ott " + shlex.quote(clean(name))
     lifecycle = {
         "reload_player": ("restart", "reload the player"),
         "restart_stream": ("restart stream", "restart the current stream"),
@@ -1851,6 +1853,20 @@ def print_player_status(data, name):
         print("    Listed order; no repeat. next/prev use the retained Plex queue until plex stop clears it.")
     if not any(controls[key] for key in ("lifecycle", "playback", "input")) and shot.get("state") != "ready" and not queue:
         print("  No controls are currently advertised by the player.")
+    sections = controls.get("inspect", {}).get("sections", [])
+    if sections:
+        print("\nAvailable diagnostics now:")
+        if "doctor" in sections:
+            print(f"  {prefix} doctor  — read runtime health and identity")
+        if "snapshot" in sections:
+            print(f"  {prefix} inspect --view ui,media  — read interface and decoder state")
+            print(f"  {prefix} bundle --out DIR  — save diagnostic evidence")
+            print(f"  {prefix} test run health --report DIR  — check observation lanes")
+            print(f"  {prefix} test run media-progress --report DIR  — observe decoder progress")
+        if "operation" in sections:
+            print(f"  {prefix} operation REQUEST_ID  — inspect a recent operation")
+    print(f"Local diagnostic help: {prefix} test list")
+    print(f"Request IDs: ott --receipt {quoted_name} COMMAND  — write RPC receipts to stderr")
 
 
 def deferred_control_metadata(data, action, params):

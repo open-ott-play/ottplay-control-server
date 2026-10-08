@@ -330,7 +330,7 @@ class WorkbenchTest(unittest.TestCase):
         first, second = snapshot(), snapshot(15, 1005000)
         def row(data):
             return [{"lane": "web", "status": "observed", "data": data}]
-        self.assertEqual(wb.progress_verdict(row(first), row(second)), ("pass", "same_media_progress_observed"))
+        self.assertEqual(wb.progress_verdict(row(first), row(second), (5, 5)), ("pass", "same_media_progress_observed"))
         for mutate in (
             lambda data: data.update(runtime="other"),
             lambda data: data.update(consistent=False),
@@ -343,9 +343,45 @@ class WorkbenchTest(unittest.TestCase):
         ):
             changed = copy.deepcopy(second)
             mutate(changed)
-            self.assertEqual(wb.progress_verdict(row(first), row(changed))[0], "unknown")
+            self.assertEqual(wb.progress_verdict(row(first), row(changed), (5, 5))[0], "unknown")
         second["media"]["lanes"][0]["position"] = 10
-        self.assertEqual(wb.progress_verdict(row(first), row(second)), ("fail", "media_did_not_progress"))
+        self.assertEqual(wb.progress_verdict(row(first), row(second), (5, 5)), ("fail", "media_did_not_progress"))
+
+    def test_media_progress_rejects_invalid_clocks_and_backward_seeks(self):
+        def row(data):
+            return [{"lane": "web", "status": "observed", "data": data}]
+        for mutate in (
+            lambda first, last: first.update(capturedAt=0),
+            lambda first, last: first.update(capturedAt=None),
+            lambda first, last: first.update(capturedAt=-1),
+            lambda first, last: first.update(collectionMs=None),
+            lambda first, last: last.update(collectionMs=None),
+            lambda first, last: first["reasons"].append("invalid_sample"),
+            lambda first, last: last["reasons"].append("invalid_sample"),
+            lambda first, last: last.update(capturedAt=1000000 + 3605000),
+            lambda first, last: last["media"]["lanes"][0].update(position=9),
+        ):
+            first, last = snapshot(), snapshot(15, 1005000)
+            mutate(first, last)
+            self.assertEqual(wb.progress_verdict(row(first), row(last), (5, 5))[0], "unknown")
+        for interval in (None, (0, 0), (float("nan"), 5), (5, float("inf")), (5, 4), (-1, 5), (1, 301)):
+            self.assertEqual(wb.progress_verdict(row(snapshot()), row(snapshot(15, 1005000)), interval)[0], "unknown")
+
+    def test_media_progress_runner_uses_host_monotonic_interval(self):
+        for first_capture in (0, 1700000000000):
+            self.client.snapshots = [snapshot(12.5, first_capture), snapshot(80, 1700003605000)]
+            with tempfile.TemporaryDirectory() as temp:
+                code, result, _ = self.execute(["test", "run", "media-progress", "--lane", "web",
+                    "--duration", "5", "--report", str(Path(temp).resolve() / "case"), "--json"])
+            self.assertEqual(code, 3)
+            self.assertEqual(result["verdict"], "unknown")
+            self.assertEqual(result["sample_interval_seconds"], {"min": 5, "max": 5})
+
+    def test_media_progress_allows_clock_quantization_within_collection_windows(self):
+        def row(data):
+            return [{"lane": "web", "status": "observed", "data": data}]
+        self.assertEqual(wb.progress_verdict(row(snapshot()), row(snapshot(15, 1005000)), (4.5, 6)),
+                         ("pass", "same_media_progress_observed"))
 
     def test_read_only_scenario_writes_verifiable_private_report(self):
         with tempfile.TemporaryDirectory() as temp:

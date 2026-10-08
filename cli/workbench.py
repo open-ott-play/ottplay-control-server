@@ -317,12 +317,23 @@ def health_verdict(observations):
     return "fail" if failed else "unknown" if unknown or not checked else "pass"
 
 
-def progress_verdict(before, after):
+def progress_verdict(before, after, sample_interval=None):
     first = next((row for row in before if row["lane"] == "web" and row["status"] == "observed"), None)
     last = next((row for row in after if row["lane"] == "web" and row["status"] == "observed"), None)
     if not first or not last:
         return "unknown", "media_identity_unavailable"
     a, b = first["data"], last["data"]
+    if any("invalid_sample" in value["reasons"]
+           or type(value["capturedAt"]) not in (int, float)
+           or not math.isfinite(value["capturedAt"]) or value["capturedAt"] <= 0
+           or type(value["collectionMs"]) not in (int, float)
+           or not math.isfinite(value["collectionMs"]) or not 0 <= value["collectionMs"] <= 60000
+           for value in (a, b)):
+        return "unknown", "sample_clock_unavailable"
+    if (not isinstance(sample_interval, (tuple, list)) or len(sample_interval) != 2
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in sample_interval)
+            or not 0 <= sample_interval[0] <= sample_interval[1] <= 300 or sample_interval[1] == 0):
+        return "unknown", "host_sample_interval_unavailable"
     if (not a["consistent"] or not b["consistent"] or a["runtime"] != b["runtime"]
             or a["media"]["generation"] is None or a["media"]["generation"] != b["media"]["generation"]):
         return "unknown", "media_identity_changed_or_unavailable"
@@ -334,6 +345,11 @@ def progress_verdict(before, after):
     if (b["capturedAt"] <= a["capturedAt"] or a["media"]["kind"] != b["media"]["kind"]
             or a["media"]["kind"] in ("none", "unknown")):
         return "unknown", "observation_changed_or_stale"
+    elapsed = (b["capturedAt"] - a["capturedAt"]) / 1000
+    # Device wall clocks can jump. Compare them with the host's monotonic
+    # collection windows, allowing one second for coarse device clocks.
+    if not sample_interval[0] - 1 <= elapsed <= sample_interval[1] + 1:
+        return "unknown", "sample_clock_discontinuity"
     if la["phase"] != "playing" or lb["phase"] != "playing":
         return "unknown", "media_not_continuously_playing"
     if (la["video"]["paused"] is not False or lb["video"]["paused"] is not False
@@ -343,10 +359,11 @@ def progress_verdict(before, after):
             or la["video"]["readyState"] < 2 or lb["video"]["readyState"] < 2):
         return "unknown", "decoder_state_unavailable"
     delta = lb["position"] - la["position"]
-    elapsed = (b["capturedAt"] - a["capturedAt"]) / 1000
-    if delta <= 0:
+    if delta < 0:
+        return "unknown", "position_discontinuity"
+    if delta == 0:
         return "fail", "media_did_not_progress"
-    if delta > elapsed * 4 + 1:
+    if delta > sample_interval[1] * 4 + 1:
         return "unknown", "position_discontinuity"
     return "pass", "same_media_progress_observed"
 
@@ -470,13 +487,19 @@ def run(api, client, device, words, timeout, json_output=False):
                 # Reserve both sampling windows plus the requested observation gap.
                 final_deadline = bench.deadline
                 bench.deadline = time.monotonic() + (timeout - args.duration) / 2
+                first_started = time.monotonic()
                 before = bench.observe(args.lane)
+                first_finished = time.monotonic()
                 bench.deadline = final_deadline
                 time.sleep(min(args.duration, max(0, bench.deadline - time.monotonic())))
+                second_started = time.monotonic()
                 after = bench.observe(args.lane)
-                verdict, reason = progress_verdict(before, after)
+                second_finished = time.monotonic()
+                sample_interval = (second_started - first_finished, second_finished - first_started)
+                verdict, reason = progress_verdict(before, after, sample_interval)
                 result.update(scenario=args.scenario, verdict=verdict, reason=reason,
                               duration_seconds=args.duration, observations=before, final_observations=after,
+                              sample_interval_seconds={"min": sample_interval[0], "max": sample_interval[1]},
                               evidence_level="decoder_progress_only")
             else:
                 observations = bench.observe(args.lane, "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",

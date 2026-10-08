@@ -24,6 +24,10 @@ ott -t 45 a1 test run media-progress --duration 5 --report ./a1-progress --json
 the existing CLI connection, aliases and credentials; no second registration is
 needed. The workbench does not print those credentials or the server URL.
 
+`ott a1` lists diagnostic commands supported by the connected player's advertised
+inspection sections, alongside its controls. `ott a1 test list` always lists the
+local scenarios; that list does not claim the player supports their observations.
+
 Use global `--receipt` to obtain a command's request ID without changing its
 ordinary stdout, for example `ott --receipt a1 restart` for a requested player
 restart. Unlike workbench reads, that command changes the player. It emits a JSON line on
@@ -103,8 +107,14 @@ The global timeout must leave time for both collections. PASS requires the same
 web runtime, non-null media generation, main backend handle and media kind, fresh
 consistent samples, a playing/ready decoder, and advancing position without a
 large discontinuity. A changed identity, missing observation or paused media is
-`unknown`, not a claimed stall. A stable playing decoder whose position does not
-advance fails the scenario. Native counters alone cannot pass this test.
+`unknown`, not a claimed stall. Capture clocks must be positive, collection times
+known, and samples free of `invalid_sample`. Device clock intervals must agree
+with the host's monotonic collection windows, with one second of tolerance for
+coarse clocks. The host interval also bounds plausible position movement, so a
+forward clock jump cannot turn a large seek into a pass. Reports include those
+host interval bounds in `sample_interval_seconds`. A backward position jump is
+`unknown`; a stable playing decoder with unchanged position fails the scenario.
+Native counters alone cannot pass this test.
 
 The scenario only observes. It does not prevent user input or reserve a device;
 it cannot exclude every seek or transient action between its two samples. Its
