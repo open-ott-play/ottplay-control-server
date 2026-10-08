@@ -2213,6 +2213,7 @@ def android_metadata(data, action, params):
         "version": number, "agent_version": token, "runtime": runtime, "boot_id": boot_id, "app_pid": number,
         "uptime_seconds": number, "battery_percent": number, "watchdog_suspended": boolean,
         "watchdog_attempts": number, "webview_responsive": boolean, "system_evidence": system_evidence,
+        "operation_history_reset": boolean,
         "last_operation": {**receipt, "operation": token, "state": token}, "operations": [receipt],
         "events": [{"time": number, "event": token, "runtime": runtime, "boot_id": boot_id}],
         "player": {

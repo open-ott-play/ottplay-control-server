@@ -90,3 +90,23 @@ func TestReceiptWriteFailureNeverInvokesDeferredEffect(t *testing.T) {
 		t.Fatal("effect ran without durable receipt")
 	}
 }
+
+func TestDamagedDiagnosticHistoryDoesNotDisableMaintenanceOrEraseJournal(t *testing.T) {
+	a := &Agent{runtime: "new", journalPath: filepath.Join(t.TempDir(), "journal.json"), journal: map[string]Entry{"existing": {State: "completed"}}}
+	bad := []byte(`[{"request_id":"partially decoded"},`)
+	if err := os.WriteFile(a.operationsPath(), bad, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.restoreOperations()
+	if !a.historyReset || len(a.operations) != 0 || a.journal["existing"].State != "completed" {
+		t.Fatal("history failure damaged maintenance state")
+	}
+	saved, err := os.ReadFile(a.operationsPath() + ".invalid")
+	if err != nil || string(saved) != string(bad) {
+		t.Fatal("damaged history not preserved")
+	}
+	r := Request{ID: strings.Repeat("d", 32), Action: "lifecycle", Params: json.RawMessage(`{"operation":"reload_player"}`)}
+	if err = a.recordOperation(r, "started"); err != nil {
+		t.Fatal("new operations disabled", err)
+	}
+}

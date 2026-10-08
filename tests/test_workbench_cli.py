@@ -751,6 +751,10 @@ class NativeCorrelation(unittest.TestCase):
         self.assertNotIn(SECRET, json.dumps(result))
         raw["events"][0]["runtime"] = "different"
         self.assertNotEqual(wb.native_metadata(ott, raw, "logs", "native-new")["runtime_correlation"], "matched")
+        raw["events"][0].pop("runtime")
+        self.assertEqual(wb.native_metadata(ott, raw, "logs", "native-new")["runtime_correlation"], "unavailable")
+        raw.pop("runtime")
+        self.assertEqual(wb.native_metadata(ott, raw, "logs", "native-new")["runtime_correlation"], "unavailable")
 
 if __name__ == "__main__":
     unittest.main()

@@ -249,6 +249,7 @@ func (a *Agent) health(ctx context.Context) map[string]any {
 	h := map[string]any{"version": 1, "agent_version": version, "runtime": a.runtime, "boot_id": a.bootID, "app_pid": pid, "uptime_seconds": numericFile("/proc/uptime"), "battery_percent": numericFile("/sys/class/power_supply/battery/capacity"), "watchdog_suspended": a.suspended, "watchdog_attempts": a.watchdog.Attempts, "last_operation": a.lastOperation}
 	history := a.operationHistory()
 	h["operations"] = history
+	h["operation_history_reset"] = a.historyReset
 	if len(history) > 0 {
 		h["last_operation"] = history[len(history)-1]
 	}

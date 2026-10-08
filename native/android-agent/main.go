@@ -56,6 +56,7 @@ type Agent struct {
 	suspended     bool
 	lastOperation map[string]any
 	operations    []OperationReceipt
+	historyReset  bool
 }
 
 func newHTTPClient() *http.Client {
@@ -358,10 +359,7 @@ func main() {
 		os.Exit(2)
 	}
 	a := &Agent{cfg: cfg, client: newHTTPClient(), runtime: "android-" + randomID(), bootID: readBootID(), journal: journal, journalPath: dataDir + "/journal.json", effects: map[string]func() error{}, cdp: &CDP{Origin: cfg.Origin}}
-	if a.loadOperations() != nil {
-		fmt.Fprintln(os.Stderr, "Invalid operation history")
-		os.Exit(2)
-	}
+	a.restoreOperations()
 	b, _ := os.ReadFile(dataDir + "/suspended.json")
 	_ = json.Unmarshal(b, &a.suspended)
 	// Any staged operation from the old process lost its execution closure.

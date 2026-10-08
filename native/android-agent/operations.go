@@ -55,6 +55,17 @@ func (a *Agent) loadOperations() error {
 	}
 	return nil
 }
+func (a *Agent) restoreOperations() {
+	if a.loadOperations() == nil {
+		return
+	}
+	// Diagnostic metadata is not the execution journal. Its failure must not
+	// disable independent maintenance or erase the duplicate-delivery guard.
+	_ = os.Rename(a.operationsPath(), a.operationsPath()+".invalid")
+	a.operations = nil
+	a.historyReset = true
+	a.event("operation_history_reset")
+}
 func (a *Agent) recordOperation(r Request, state string) error {
 	op := mutationOperation(r)
 	// Deferred delivery retries retain action/operation in the existing receipt.

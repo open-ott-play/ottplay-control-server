@@ -171,6 +171,9 @@ contract are unchanged, so no controller rollout is needed.
 
 `accepted` means an effect was prepared. `handler_completed` means its handler
 returned successfully, **not** that playback recovered or a reboot completed.
+A damaged diagnostic history is moved aside to one private `.invalid` file;
+maintenance stays available, the separate execution journal is preserved, and
+`operation_history_reset` reports the loss.
 An unfinished claim after an agent restart is `unknown`, with its original
 executor runtime retained. A reboot or agent exec may therefore be unknown even
 if it succeeded; use the independent OS boot marker, agent version, web runtime
