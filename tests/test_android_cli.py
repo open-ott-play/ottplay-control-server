@@ -1,3 +1,6 @@
+import contextlib
+import copy
+import io
 import importlib.util
 import json
 import os
@@ -80,5 +83,53 @@ class AndroidCLI(unittest.TestCase):
         with self.assertRaises(ott.Error):
             ott.android_command(c, 'unused', 'web', 'a1', ['queue', 'play']+[str(i+1) for i in range(101)], True)
         c.call.assert_not_called()
+
+class NativeEvidenceCLI(unittest.TestCase):
+    def test_operation_lookup_only_reads_native_health(self):
+        c = AndroidCLI().client()
+        key = 'a' * 32
+        c.call.return_value = {'version': 1, 'runtime': 'new', 'webview_responsive': True,
+            'operations': [{'request_id': key, 'state': 'handler_completed', 'action': 'lifecycle',
+                'operation': 'reload_player', 'runtime': 'old', 'updated_at': 123, 'evidence': 'handler_completed', 'url': 'private'}]}
+        result = ott.android_command(c, 'unused', 'web', 'a1', ['operation', key], True)
+        c.call.assert_called_once_with('native', 'maintenance', {'operation': 'health'})
+        self.assertEqual(result['receipt']['runtime'], 'old')
+        self.assertFalse(result['effect_observed'])
+        self.assertNotIn('private', json.dumps(result))
+        c.call.return_value.pop('operations')
+        self.assertEqual(ott.android_command(c, 'unused', 'web', 'a1', ['operation', key], True)['state'], 'unknown')
+
+    def test_operation_entrypoint_validates_complete_receipt_and_never_replays(self):
+        key = 'a' * 32
+        complete = {'request_id': key, 'state': 'handler_completed', 'action': 'lifecycle',
+                    'operation': 'reload_player', 'runtime': 'old', 'updated_at': 123, 'evidence': 'handler_completed'}
+        cases = [(complete, 0)]
+        for field in ('action', 'operation', 'runtime', 'updated_at', 'state', 'evidence'):
+            bad = copy.deepcopy(complete);bad.pop(field);cases.append((bad, 1))
+            bad = copy.deepcopy(complete);bad[field] = None;cases.append((bad, 1))
+        for receipt, expected in cases:
+            with self.subTest(receipt=receipt):
+                c = AndroidCLI().client();c.device.side_effect = lambda _: 'web'
+                c.call.return_value = {'version': 1, 'runtime': 'new', 'webview_responsive': True, 'operations': [receipt]}
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.object(ott, 'Client', return_value=c), mock.patch.object(ott, 'read_json', return_value=c.config), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = ott.main(['--json', 'a1', 'android', 'operation', key])
+                self.assertEqual(code, expected)
+                c.call.assert_called_once_with('native', 'maintenance', {'operation': 'health'})
+                if expected == 0:
+                    result = json.loads(out.getvalue())
+                    self.assertEqual(result['receipt'], complete)
+                    self.assertEqual(result['state'], 'handler_completed')
+                    self.assertFalse(result['effect_observed'])
+                    self.assertEqual(err.getvalue(), '')
+                else:
+                    self.assertEqual(out.getvalue(), '')
+                    self.assertIn('Invalid native operation receipt', err.getvalue())
+
+    def test_system_evidence_rejects_invented_physical_success(self):
+        raw = {'version': 1, 'runtime': 'native', 'webview_responsive': True,
+               'system_evidence': {'physical_display_verified': True}}
+        with self.assertRaises(ott.Error):
+            ott.android_metadata(raw, 'maintenance', {'operation': 'health'})
 
 if __name__ == '__main__':unittest.main()

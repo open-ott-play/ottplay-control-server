@@ -97,6 +97,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME reboot [device]           reboot the device OS only when supported
   ott NAME android bind NATIVE       bind a separately provisioned native device alias
   ott NAME android status / logs     inspect Android independently of the web player
+  ott NAME android operation ID      read a durable native receipt without replay
   ott NAME android recover           reattach stalled video, keeping its queue/position
   ott NAME android restart / reboot  restart the Android app / reboot the tablet
   ott NAME android screenshot [-o FILE.png]  capture the Android display
@@ -2180,16 +2181,43 @@ def android_metadata(data, action, params):
     boolean = lambda v: type(v) is bool
     text = lambda v: isinstance(v, str) and len(v) <= 1024
     token = lambda v: isinstance(v, str) and re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", v)
+    runtime = lambda v: isinstance(v, str) and re.fullmatch(r"[a-zA-Z0-9_.-]{1,96}", v)
+    boot_id = lambda v: v == "" or isinstance(v, str) and re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", v)
+    identity = {"version": number, "available": boolean, "web_runtime": runtime,
+                "generation": number, "handle_id": number, "captured_at": number,
+                "consistent": boolean, "kind": lambda v: v in ("live", "archive", "vod", "unknown")}
+    evidence_state = lambda v: v in ("observed", "unavailable")
+    evidence_reason = lambda v: v in ("no_frame_timestamps", "unsupported_dump", "no_completed_fences", "too_many_tracks", "no_matching_audio_track", "app_surface_unavailable", "audio_service_unavailable", "process_changed")
+    system_evidence = {
+        "app_pid": number, "captured_uptime_seconds": number,
+        "physical_display_verified": lambda v: v is False, "physical_audio_verified": lambda v: v is False,
+        "surface": {"state": evidence_state, "reason": evidence_reason,
+                    "scope": lambda v: v == "app_surface", "period_ns": number,
+                    "latest_present_ns": number, "completed_frames": number, "video_verified": lambda v: v is False},
+        "audio": {"state": evidence_state, "reason": evidence_reason, "scope": lambda v: v == "app_process",
+                  "audible_verified": lambda v: v is False,
+                  "tracks": [{"session_id": number, "sample_rate": number, "server_frames": number,
+                              "underrun_frames": number, "active": boolean}]}}
+    decoder = {"source": lambda v: v == "html_video", "decoded_frames": number, "dropped_frames": number,
+               "audio_decoded_bytes": number, "volume": lambda v: number(v) and v <= 1,
+               "muted": boolean, "presented_frames": lambda v: v is None, "audible_verified": lambda v: v is False}
     item = {"id": number, "title": text}
     queue = {"index": number, "total": number, "items": [item]}
+    receipt = {"request_id": lambda v: isinstance(v, str) and re.fullmatch(r"[a-f0-9]{32}", v),
+               "action": lambda v: v in ("lifecycle", "maintenance", "playback", "vportal_queue"),
+               "operation": lambda v: v in ("restart_app", "reload_player", "reboot_device", "wake", "standby", "recover_video", "update", "pause", "resume", "seek", "play", "next", "previous", "restart", "stop"),
+               "runtime": runtime, "boot_id": boot_id,
+               "state": lambda v: v in ("started", "accepted", "claimed", "handler_completed", "failed", "rejected", "unknown"),
+               "updated_at": number, "evidence": lambda v: v in ("none", "handler_completed")}
     schema = {
-        "version": number, "agent_version": token, "runtime": token, "app_pid": number,
+        "version": number, "agent_version": token, "runtime": runtime, "boot_id": boot_id, "app_pid": number,
         "uptime_seconds": number, "battery_percent": number, "watchdog_suspended": boolean,
-        "watchdog_attempts": number, "webview_responsive": boolean,
-        "last_operation": {"request_id": token, "operation": token, "state": token},
-        "events": [{"time": number, "event": token}],
+        "watchdog_attempts": number, "webview_responsive": boolean, "system_evidence": system_evidence,
+        "operation_history_reset": boolean,
+        "last_operation": {**receipt, "operation": token, "state": token}, "operations": [receipt],
+        "events": [{"time": number, "event": token, "runtime": runtime, "boot_id": boot_id}],
         "player": {
-            "ready": boolean, "provider": token, "touch": token,
+            "ready": boolean, "provider": token, "touch": token, "identity": identity, "decoder": decoder,
             "kiosk": {"enabled": boolean, "state": token, "health": token,
                       "provider": token, "strict": boolean, "retries": number,
                       "retry_seconds": number, "startup_grace_seconds": number,
@@ -2254,6 +2282,27 @@ def android_metadata(data, action, params):
     return result
 
 
+def native_operation_metadata(data, operation_id):
+    history = data.get("operations")
+    if "operations" in data and not isinstance(history, list):
+        raise Error("Invalid native operation history")
+    rows = [row for row in (history or []) if isinstance(row, dict) and row.get("request_id") == operation_id]
+    if len(rows) > 1:
+        raise Error("Ambiguous native operation history")
+    receipt = rows[0] if rows else {"request_id": operation_id, "state": "unknown", "evidence": "none"}
+    if rows:
+        # The generic legacy projector permits omitted/null optional fields.
+        # A matching durable receipt requires a complete executor and operation.
+        required = ("action", "operation", "runtime", "updated_at", "state", "evidence")
+        if (any(receipt.get(key) is None for key in required)
+                or type(receipt["updated_at"]) is not int or receipt["updated_at"] <= 0
+                or (receipt["state"] == "handler_completed") != (receipt["evidence"] == "handler_completed")):
+            raise Error("Invalid native operation receipt")
+    return {"version": 1, "runtime": data["runtime"], "operation_id": operation_id,
+            "state": receipt["state"], "receipt": receipt,
+            "history_available": isinstance(history, list), "effect_observed": False}
+
+
 def android_command(client, config_path, device, name, words, json_output):
     """The native token has its own queue; never race the WebView consumer."""
     bindings = client.config.get("native_devices", {})
@@ -2280,7 +2329,11 @@ def android_command(client, config_path, device, name, words, json_output):
         if tail and (len(tail) != 2 or tail[0] not in ("-o", "--output")):
             raise Error("Use android screenshot [-o FILE.png]")
         return screenshot_command(client, native, name, tail[1] if tail else None, client.timeout)
-    if op in ("status", "doctor", "logs", "recover") and not tail:
+    operation_id = None
+    if op == "operation" and len(tail) == 1 and re.fullmatch(r"[a-f0-9]{32}", tail[0]):
+        operation_id = tail[0]
+        action, params = "maintenance", {"operation": "health"}
+    elif op in ("status", "doctor", "logs", "recover") and not tail:
         action, params = "maintenance", {"operation": {"status": "health", "doctor": "health", "recover": "recover_video"}.get(op, op)}
     elif op in ("restart", "reload", "reboot", "wake", "standby") and not tail:
         action, params = "lifecycle", {"operation": {"restart": "restart_app", "reload": "reload_player", "reboot": "reboot_device"}.get(op, op)}
@@ -2325,7 +2378,10 @@ def android_command(client, config_path, device, name, words, json_output):
         data = client.call(native, action, params)
     except (PlayerRejected, PlayerUnsupported):
         raise Error("Native operation rejected or unsupported; inspect android status before retrying. Pause requires kiosk off") from None
-    return android_metadata(data, action, params)
+    result = android_metadata(data, action, params)
+    if operation_id is not None:
+        return native_operation_metadata(result, operation_id)
+    return result
 
 
 def main(argv=None):

@@ -10,12 +10,35 @@ function (request, done) {
     function fail(message) { done({ok: false, error: message}); }
     function selected() { return media && media.kioskSelection && media.kioskSelection(); }
     function hash(s) { var h = 2166136261; for (var i=0;i<s.length;i++) h = ((h ^ s.charCodeAt(i)) * 16777619) >>> 0; return h.toString(16); }
+    function identity() {
+        var result={version:1,available:false,web_runtime:null,generation:null,handle_id:null,kind:"unknown",captured_at:Date.now(),consistent:false};
+        try {
+            var hook=w.__ottRemoteInspect, s=hook && hook.snapshot(), main=null;
+            if(!s || s.version!==1 || typeof s.runtime!=="string" || !/^[A-Za-z0-9_.-]{1,96}$/.test(s.runtime))return result;
+            result.web_runtime=s.runtime;
+            if(!s.consistent || !s.media || !Array.isArray(s.media.lanes))return result;
+            s.media.lanes.forEach(function(lane){if(lane.lane==="main")main=lane;});
+            var integer=function(n){return typeof n==="number" && isFinite(n) && n>=0 && n<=9007199254740991 && n%1===0;};
+            if(!main || !integer(main.handleId) || !integer(s.media.generation) || ["live","archive","vod"].indexOf(s.media.kind)<0)return result;
+            result.generation=s.media.generation;result.handle_id=main.handleId;result.kind=s.media.kind;
+            result.consistent=true;result.available=true;
+        } catch(e) {}
+        return result;
+    }
+    function counter(value) {return typeof value==="number" && isFinite(value) && value>=0 && value<=9007199254740991 ? value : null;}
+    function decoderEvidence() {
+        return {source:"html_video",decoded_frames:v ? counter(v.webkitDecodedFrameCount) : null,
+            dropped_frames:v ? counter(v.webkitDroppedFrameCount) : null,
+            audio_decoded_bytes:v ? counter(v.webkitAudioDecodedByteCount) : null,
+            volume:v ? counter(v.volume) : null,muted:v ? !!v.muted : null,
+            presented_frames:null,audible_verified:false};
+    }
     function snapshot(includeItems) {
         var q = selected(), state = kiosk && kiosk.snapshot();
         var queue=q && {index:q.index,total:q.records.length};
         if(queue && includeItems)queue.items=q.records.map(function(r){return {id:r.request && r.request.fid,title:String(r.title || "").slice(0,256)};});
         return {ready: !!(w.commandChannelsReady && media), provider: w.__ottActiveProviderDriver && w.__ottActiveProviderDriver.id,
-            kiosk: state, touch: w.__ottNativeTouchGuardState || "unknown",
+            kiosk: state, touch: w.__ottNativeTouchGuardState || "unknown", identity:identity(), decoder:decoderEvidence(),
             video: v && {position: v.currentTime, duration: isFinite(v.duration) ? v.duration : null,
                 paused: v.paused, ended: v.ended, ready: v.readyState, error: v.error ? v.error.code : 0,
                 width: v.videoWidth, height: v.videoHeight, source: hash(v.currentSrc || "")},

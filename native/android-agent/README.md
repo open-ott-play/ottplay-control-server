@@ -41,6 +41,8 @@ start `flash_recovery`. Remove the native directory only after stopping it.
 ```
 ott a1 android status
 ott a1 android logs
+ott a1 android operation 0123456789abcdef0123456789abcdef
+ott a1 operation 0123456789abcdef0123456789abcdef --lane native --json
 ott a1 android screenshot -o a1.png
 ott a1 android recover
 ott a1 android restart
@@ -126,3 +128,56 @@ hostname and certificate verification and does not change system DNS settings.
 The player adapter uses strict ES5 syntax, including Chromium 30's rejection of
 function declarations inside statement blocks. Source URLs, tokens, and profile contents are
 excluded from health/log responses; screenshots may contain visible private data.
+
+## Correlation and evidence
+
+Health optionally includes `player.identity`: the web runtime, playback
+`generation`, main backend `handle_id`, and media kind from the installed
+player's existing read-only inspection hook. `available: true` requires a
+consistent snapshot with all three identity fields. Older web builds and absent
+handles remain unavailable; no URL hash is substituted for shared identity.
+A native process runtime and the kernel's `/proc/sys/kernel/random/boot_id` are
+reported separately. Event rows carry their native runtime and OS boot marker;
+the workbench compares log runtime with the preceding health response.
+
+`player.decoder` reports supported HTML video decoded-frame, dropped-frame and
+audio-byte counters, volume and mute. Missing counters remain null. The agent
+also reads bounded, fixed `dumpsys` services without changing their state:
+
+- `system_evidence.surface`: completed presentation fences only for the exact
+  package Activity layer. This is **app-surface** evidence; a hardware video
+  overlay may be separate. It never proves the video or physical screen.
+- `system_evidence.audio`: active AudioFlinger tracks whose client PID matches
+  this app, with session IDs, server-frame and underrun counters. Media played
+  through a different process, unrecognized vendor formats, and missing tracks
+  remain unavailable. Tracks and byte counters never prove audible output.
+
+Parsers follow AOSP Android 4.4.2 [FrameTracker](https://android.googlesource.com/platform/frameworks/native/+/android-4.4.2_r1/services/surfaceflinger/FrameTracker.cpp)
+and [AudioFlinger track dumps](https://android.googlesource.com/platform/frameworks/av/+/android-4.4.2_r1/services/audioflinger/Tracks.cpp).
+Each service read has a 1.2-second deadline and 256-KiB output limit; the whole
+system collection is capped at 1.8 seconds and reserves response time. No raw dump,
+other app name, URL, or arbitrary diagnostic text is returned. A process change
+during collection invalidates system evidence. These observations do not change
+watchdog decisions: advancing presentation counters alone cannot identify video.
+The target firmware still requires live acceptance of these optional adapters.
+
+## Durable operation history
+
+Alongside the short-lived duplicate-delivery journal, `operations.json` retains
+up to 64 metadata-only mutation receipts for 24 hours. It is atomically written
+and synced before invoking effects. Receipt lookup only reads health; it never
+requeues an operation. The existing separate native binding and V1 request
+contract are unchanged, so no controller rollout is needed.
+
+`accepted` means an effect was prepared. `handler_completed` means its handler
+returned successfully, **not** that playback recovered or a reboot completed.
+A damaged diagnostic history is moved aside to one private `.invalid` file;
+maintenance stays available, the separate execution journal is preserved, and
+`operation_history_reset` reports the loss.
+An unfinished claim after an agent restart is `unknown`, with its original
+executor runtime retained. A reboot or agent exec may therefore be unknown even
+if it succeeded; use the independent OS boot marker, agent version, web runtime
+and playback evidence to establish the outcome. A page reload does not remove
+native receipts. Old agents without this history return `history_available:
+false` and an unknown result. The existing web-only operation history remains
+independent and may still be lost on web reload.

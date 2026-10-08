@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -102,7 +103,7 @@ func (a *Agent) execute(ctx context.Context, r Request) (Result, func() error) {
 			if events == nil {
 				events = []map[string]any{}
 			}
-			return ok(r.ID, map[string]any{"version": 1, "events": events}), nil
+			return ok(r.ID, map[string]any{"version": 1, "runtime": a.runtime, "boot_id": a.bootID, "events": events}), nil
 		case "recover_video":
 			a.watchdog.LastAction = time.Now()
 			data, e := a.player(ctx, "recover", nil)
@@ -235,15 +236,33 @@ func numericFile(path string) float64 {
 	n, _ := strconv.ParseFloat(fields[0], 64)
 	return n
 }
+func readBootID() string {
+	b, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	s := strings.TrimSpace(string(b))
+	if !regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`).MatchString(s) {
+		return ""
+	}
+	return s
+}
 func (a *Agent) health(ctx context.Context) map[string]any {
 	pid, _ := appPID()
-	h := map[string]any{"version": 1, "agent_version": version, "runtime": a.runtime, "app_pid": pid, "uptime_seconds": numericFile("/proc/uptime"), "battery_percent": numericFile("/sys/class/power_supply/battery/capacity"), "watchdog_suspended": a.suspended, "watchdog_attempts": a.watchdog.Attempts, "last_operation": a.lastOperation}
+	h := map[string]any{"version": 1, "agent_version": version, "runtime": a.runtime, "boot_id": a.bootID, "app_pid": pid, "uptime_seconds": numericFile("/proc/uptime"), "battery_percent": numericFile("/sys/class/power_supply/battery/capacity"), "watchdog_suspended": a.suspended, "watchdog_attempts": a.watchdog.Attempts, "last_operation": a.lastOperation}
+	history := a.operationHistory()
+	h["operations"] = history
+	h["operation_history_reset"] = a.historyReset
+	if len(history) > 0 {
+		h["last_operation"] = history[len(history)-1]
+	}
 	child, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	p, e := a.player(child, "health", nil)
 	h["webview_responsive"] = e == nil
 	if e == nil {
 		h["player"] = p
+	}
+	h["system_evidence"] = systemEvidence(ctx, pid)
+	if after, _ := appPID(); after != pid {
+		h["system_evidence"] = map[string]any{"surface": unavailableEvidence("process_changed"), "audio": unavailableEvidence("process_changed")}
 	}
 	return h
 }

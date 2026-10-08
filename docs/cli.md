@@ -1753,3 +1753,11 @@ are unavailable until that installation and binding have succeeded. A published
 server/CLI does not install the agent. Native restart/capture work independently
 of the WebView; queue/playback commands need a responsive trusted player page.
 See [installation, acceptance and signed updates](../native/android-agent/README.md).
+
+### Native operation lookup
+
+For an updated Android agent, use `ott a1 android operation REQUEST_ID` or
+`ott a1 operation REQUEST_ID --lane native --json`. These read the durable native
+receipt without repeating the operation. `handler_completed` confirms handler
+return only; `unknown` must not trigger automatic replay. See
+[native evidence and retention](../native/android-agent/README.md#durable-operation-history).

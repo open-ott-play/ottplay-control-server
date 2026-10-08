@@ -444,10 +444,45 @@ class WorkbenchTest(unittest.TestCase):
                     wb.write_report(path / "link" / "escape", {})
                 self.assertFalse((path / "escape").exists())
 
+    def test_native_operation_uses_durable_history_without_replaying(self):
+        key = "b" * 32
+        self.client.native["operations"] = [{"request_id": key, "action": "lifecycle", "operation": "reload_player",
+            "state": "handler_completed", "runtime": "android-old", "updated_at": 123, "evidence": "handler_completed"}]
+        code, result, _ = self.execute(["operation", key, "--lane", "native", "-j"])
+        self.assertEqual(code, 0)
+        self.assertEqual(result["operation_state"], "handler_completed")
+        self.assertEqual(result["observations"][0]["data"]["receipt"]["runtime"], "android-old")
+        self.assertFalse(result["observations"][0]["data"]["effect_observed"])
+        self.assertEqual([row[:3] for row in self.client.calls], [("native", "maintenance", {"operation": "health"})])
+
+    def test_native_operation_entrypoint_rejects_incomplete_receipt(self):
+        key = "c" * 32
+        complete = {"request_id": key, "state": "handler_completed", "action": "lifecycle",
+                    "operation": "reload_player", "runtime": "old", "updated_at": 123, "evidence": "handler_completed"}
+        for missing in (None, "action", "operation", "runtime", "updated_at"):
+            self.client.calls = []
+            row = copy.deepcopy(complete)
+            if missing: row.pop(missing)
+            self.client.native["operations"] = [row]
+            out = io.StringIO()
+            with mock.patch.object(ott, "Client", return_value=self.client), mock.patch.object(ott, "read_json", return_value={}), contextlib.redirect_stdout(out):
+                code = ott.main(["-t", "20", "a1", "operation", key, "--lane", "native", "--json"])
+            result = json.loads(out.getvalue())
+            self.assertEqual([call[:3] for call in self.client.calls], [("native", "maintenance", {"operation": "health"})])
+            self.assertEqual(code, 3 if missing else 0)
+            if missing:
+                self.assertEqual(result["observations"][0]["reason"], "invalid_response")
+                self.assertNotIn("operation_state", result)
+                self.assertNotIn("handler_completed", out.getvalue())
+            else:
+                self.assertEqual(result["operation_state"], "handler_completed")
+                self.assertEqual(result["observations"][0]["data"]["receipt"], complete)
+                self.assertFalse(result["observations"][0]["data"]["effect_observed"])
+
     def test_invalid_arguments_are_json_and_issue_no_requests(self):
         for words in (["test", "run", "health", "-j"], ["test", "run", "shell", "-j"],
                       ["inspect", "--view", "private", "-j"], ["doctor", "--eval", SECRET, "-j"],
-                      ["operation", "A" * 32, "-j"], ["operation", "a" * 32, "--lane", "native", "-j"],
+                      ["operation", "A" * 32, "-j"], ["operation", "a" * 32, "--lane", "auto", "-j"],
                       ["test", "run", "media-progress", "--duration", "NaN", "--report", "unused", "-j"]):
             code, result, text = self.execute(words)
             self.assertEqual(code, 1)
@@ -694,6 +729,32 @@ class ResponseJSONTest(unittest.TestCase):
         self.assertIs(type(result["integer"]), int)
         self.assertIs(type(result["bool"]), bool)
 
+
+
+class NativeCorrelation(unittest.TestCase):
+    def test_shared_identity_is_optional_and_consistent(self):
+        raw = native()
+        self.assertFalse(wb.native_metadata(ott, raw, "health")["media_identity_available"])
+        raw["player"]["identity"] = {"version": 1, "available": True, "web_runtime": "web-one",
+            "generation": 3, "handle_id": 9, "kind": "vod", "captured_at": 100, "consistent": True}
+        self.assertTrue(wb.native_metadata(ott, raw, "health")["media_identity_available"])
+        for key, value in (("handle_id", None), ("consistent", False), ("captured_at", 0), ("version", True)):
+            changed = copy.deepcopy(raw);changed["player"]["identity"][key] = value
+            with self.assertRaises(wb.InvalidData):wb.native_metadata(ott, changed, "health")
+
+    def test_log_runtime_mismatch_cannot_be_called_correlated(self):
+        raw = {"version": 1, "runtime": "native-new", "events": [
+            {"time": 1, "event": "poll_failed", "runtime": "native-new", "secret": SECRET}]}
+        self.assertEqual(wb.native_metadata(ott, raw, "logs", "native-new")["runtime_correlation"], "matched")
+        result = wb.native_metadata(ott, raw, "logs", "native-old")
+        self.assertEqual(result["runtime_correlation"], "mismatch")
+        self.assertNotIn(SECRET, json.dumps(result))
+        raw["events"][0]["runtime"] = "different"
+        self.assertNotEqual(wb.native_metadata(ott, raw, "logs", "native-new")["runtime_correlation"], "matched")
+        raw["events"][0].pop("runtime")
+        self.assertEqual(wb.native_metadata(ott, raw, "logs", "native-new")["runtime_correlation"], "unavailable")
+        raw.pop("runtime")
+        self.assertEqual(wb.native_metadata(ott, raw, "logs", "native-new")["runtime_correlation"], "unavailable")
 
 if __name__ == "__main__":
     unittest.main()
