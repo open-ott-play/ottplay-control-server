@@ -20,7 +20,7 @@ PANES = OWNERS + ["pin", "launch", "osd"]
 REASONS = "producer_unavailable producer_failed invalid_sample state_changed_during_snapshot build_identity_partial document_hidden document_unfocused owned_overlay_open video_element_missing video_css_hidden video_zero_rect decoder_not_ready decoder_paused decoder_ended decoder_error physical_display_unverified".split()
 CAPABILITIES = "screenshot diagnostics input restart_stream reload_player restart_app exit_app reboot_device standby wake".split()
 CAP_REASONS = "ready not_implemented producer_unavailable remote_disconnected source_selection_required busy no_active_media current_state_unsupported policy_restricted".split()
-NATIVE_EVENTS = frozenset("result_ack_failed effect_claim_failed effect_failed journal_write_failed result_write_failed poll_failed invalid_poll watchdog_recover watchdog_restart_app".split())
+NATIVE_EVENTS = frozenset("result_ack_failed effect_claim_failed effect_failed receipt_write_failed journal_write_failed result_write_failed poll_failed invalid_poll watchdog_recover watchdog_restart_app".split())
 
 
 class InvalidData(Exception):
@@ -159,7 +159,7 @@ def operation_metadata(raw, runtime, operation_id):
     return result
 
 
-def native_metadata(api, raw, operation):
+def native_metadata(api, raw, operation, expected_runtime=None):
     try:
         data = api.android_metadata(raw, "maintenance", {"operation": operation})
     except api.Error:
@@ -170,13 +170,15 @@ def native_metadata(api, raw, operation):
         for row in data["events"]:
             check(isinstance(row, dict) and isinstance(row.get("event"), str))
             number()(row.get("time"))
-        return {"version": 1, "events": [{"time": row["time"], "event": row["event"]}
+        correlated = (isinstance(data.get("runtime"), str) and data["runtime"] == expected_runtime
+                      and all(row.get("runtime") == expected_runtime for row in data["events"]))
+        return {"version": 1, "events": [{key: row[key] for key in ("time", "event", "runtime", "boot_id") if key in row}
                 for row in data["events"] if row.get("event") in NATIVE_EVENTS and "time" in row],
                 "unknown_events_omitted": sum(row.get("event") not in NATIVE_EVENTS for row in data["events"]),
-                "runtime_correlation": "unavailable"}
+                "runtime_correlation": "matched" if correlated else "mismatch" if data.get("runtime") and expected_runtime else "unavailable"}
     # Do not export provider titles, URLs, arbitrary event text or queue contents.
-    result = {key: data[key] for key in ("version", "agent_version", "runtime", "app_pid", "uptime_seconds",
-              "battery_percent", "watchdog_suspended", "watchdog_attempts", "webview_responsive") if key in data}
+    result = {key: data[key] for key in ("version", "agent_version", "runtime", "boot_id", "app_pid", "uptime_seconds",
+              "battery_percent", "watchdog_suspended", "watchdog_attempts", "webview_responsive", "system_evidence") if key in data}
     player = data.get("player")
     if isinstance(player, dict):
         result["player"] = {}
@@ -184,7 +186,20 @@ def native_metadata(api, raw, operation):
             result["player"]["ready"] = player["ready"]
         if isinstance(player.get("video"), dict):
             result["player"]["video"] = {key: value for key, value in player["video"].items() if key != "source"}
+    if isinstance(player, dict) and isinstance(player.get("decoder"), dict):
+        result["player"]["decoder"] = player["decoder"]
     result["media_identity_available"] = False
+    identity = player.get("identity") if isinstance(player, dict) else None
+    if identity is not None:
+        check(type(identity.get("version")) is int and identity["version"] == 1 and type(identity.get("available")) is bool)
+        if identity["available"]:
+            check(identity.get("consistent") is True and isinstance(identity.get("web_runtime"), str)
+                  and identity.get("kind") in ("live", "archive", "vod"))
+            number(integral=True)(identity.get("generation"))
+            number(integral=True)(identity.get("handle_id"))
+            number(1)(identity.get("captured_at"))
+        result["player"]["identity"] = identity
+        result["media_identity_available"] = identity["available"]
     result["physical_display_verified"] = False
     return result
 
@@ -262,11 +277,13 @@ class Workbench:
         receipts = observation["requests"]
         try:
             if lane == "native":
-                if section == "operation":
-                    raise ObservationError("unsupported")
                 target = self.native_target()
                 raw = self.request(target, "maintenance", {"operation": "health"}, deadline, receipts)
-                data = native_metadata(self.api, raw, "health")
+                if section == "operation":
+                    checked = self.api.android_metadata(raw, "maintenance", {"operation": "health"})
+                    data = self.api.native_operation_metadata(checked, operation_id)
+                else:
+                    data = native_metadata(self.api, raw, "health")
             else:
                 raw = self.request(self.device, "capabilities", {}, deadline, receipts)
                 caps = self.api.capabilities_metadata(raw)
@@ -279,11 +296,11 @@ class Workbench:
                 raw = self.request(self.device, "inspect", params, deadline, receipts)
                 data = (operation_metadata(raw, caps["player"]["runtime"], operation_id) if section == "operation"
                         else snapshot_metadata(raw, caps["player"]["runtime"], section))
-            observation.update(status="observed", data=data, runtime=data["runtime"] if section != "operation" else caps["player"]["runtime"])
+            observation.update(status="observed", data=data, runtime=data["runtime"] if lane == "native" or section != "operation" else caps["player"]["runtime"])
             if logs and lane == "native":
                 try:
                     raw = self.request(target, "maintenance", {"operation": "logs"}, deadline, receipts)
-                    observation["logs"] = native_metadata(self.api, raw, "logs")
+                    observation["logs"] = native_metadata(self.api, raw, "logs", data["runtime"])
                 except (self.api.Error, ObservationError, InvalidData, ValueError, TypeError, KeyError, OverflowError, RecursionError) as exc:
                     observation["logs_error"] = self.reason(exc)
         except (self.api.Error, ObservationError, InvalidData, ValueError, TypeError, KeyError, OverflowError, RecursionError) as exc:
@@ -450,7 +467,7 @@ def arguments(words, json_output):
         parser.add_argument("--duration", type=float, default=5)
         parser.add_argument("--report")
     parsed = parser.parse_args(words[1:])
-    if command == "operation" and (not REQUEST.fullmatch(parsed.operation_id) or parsed.lane != "web"):
+    if command == "operation" and (not REQUEST.fullmatch(parsed.operation_id) or parsed.lane not in ("web", "native")):
         raise ObservationError("invalid_arguments")
     if command == "inspect":
         views = parsed.view.split(",")

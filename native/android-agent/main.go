@@ -46,6 +46,7 @@ type Agent struct {
 	cfg           Config
 	client        *http.Client
 	runtime       string
+	bootID        string
 	journal       map[string]Entry
 	journalPath   string
 	effects       map[string]func() error
@@ -54,6 +55,7 @@ type Agent struct {
 	watchdog      Watchdog
 	suspended     bool
 	lastOperation map[string]any
+	operations    []OperationReceipt
 }
 
 func newHTTPClient() *http.Client {
@@ -65,7 +67,7 @@ func newHTTPClient() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: androidDialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, VerifyConnection: verifyPeerCertificates}, ResponseHeaderTimeout: 6 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects disabled") }}
 }
 func (a *Agent) event(kind string) {
-	a.logs = append(a.logs, map[string]any{"time": time.Now().Unix(), "event": kind})
+	a.logs = append(a.logs, map[string]any{"time": time.Now().Unix(), "event": kind, "runtime": a.runtime, "boot_id": a.bootID})
 	if len(a.logs) > 50 {
 		a.logs = a.logs[len(a.logs)-50:]
 	}
@@ -161,6 +163,10 @@ func (a *Agent) deliver(ctx context.Context, r Request, e Entry) {
 		return
 	}
 	delete(a.effects, r.ID)
+	if a.recordOperation(r, "claimed") != nil {
+		a.event("receipt_write_failed")
+		return
+	}
 	a.lastOperation = map[string]any{"request_id": r.ID, "operation": r.Action, "state": "executing"}
 	if effect() != nil {
 		e.State = "failed"
@@ -169,6 +175,13 @@ func (a *Agent) deliver(ctx context.Context, r Request, e Entry) {
 		e.State = "completed"
 	}
 	a.lastOperation["state"] = e.State
+	state := "handler_completed"
+	if e.State == "failed" {
+		state = "failed"
+	}
+	if a.recordOperation(r, state) != nil {
+		a.event("receipt_write_failed")
+	}
 	_ = a.remember(r.ID, e)
 }
 func (a *Agent) process(ctx context.Context, r Request, serverTime float64, received time.Time) {
@@ -191,7 +204,29 @@ func (a *Agent) process(ctx context.Context, r Request, serverTime float64, rece
 		a.event("journal_write_failed")
 		return
 	}
+	if a.recordOperation(r, "started") != nil {
+		a.event("receipt_write_failed")
+		e.Result = rejected(r.ID, "Cannot persist operation receipt; effect was not invoked")
+		e.State = "completed"
+		if a.remember(r.ID, e) == nil {
+			a.deliver(call, r, e)
+		}
+		return
+	}
 	result, effect := a.execute(call, r)
+	receiptState := "handler_completed"
+	if result.Status != "ok" {
+		receiptState = "rejected"
+	}
+	if effect != nil {
+		receiptState = "accepted"
+	}
+	if a.recordOperation(r, receiptState) != nil {
+		a.event("receipt_write_failed")
+		_ = os.Remove(dataDir + "/update-" + r.ID + ".apk")
+		result = rejected(r.ID, "Operation receipt not saved; inspect status before retrying")
+		effect = nil
+	}
 	if r.Action == "screenshot" {
 		e.Result = rejected(r.ID, "Capture already attempted; image is not retained on disk")
 		e.State = "completed"
@@ -322,7 +357,11 @@ func main() {
 	} else if !os.IsNotExist(e) {
 		os.Exit(2)
 	}
-	a := &Agent{cfg: cfg, client: newHTTPClient(), runtime: "android-" + randomID(), journal: journal, journalPath: dataDir + "/journal.json", effects: map[string]func() error{}, cdp: &CDP{Origin: cfg.Origin}}
+	a := &Agent{cfg: cfg, client: newHTTPClient(), runtime: "android-" + randomID(), bootID: readBootID(), journal: journal, journalPath: dataDir + "/journal.json", effects: map[string]func() error{}, cdp: &CDP{Origin: cfg.Origin}}
+	if a.loadOperations() != nil {
+		fmt.Fprintln(os.Stderr, "Invalid operation history")
+		os.Exit(2)
+	}
 	b, _ := os.ReadFile(dataDir + "/suspended.json")
 	_ = json.Unmarshal(b, &a.suspended)
 	// Any staged operation from the old process lost its execution closure.

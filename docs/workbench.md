@@ -70,11 +70,15 @@ There is no automatic retry of the POST or fallback to a repair. Successful and
 negative inspection responses must match the requested runtime and section;
 malformed or mismatched envelopes are `invalid_response`.
 
-The native agent currently exposes video counters but no matching web media
-generation/handle. Its output therefore says `media_identity_available: false`.
-Native free-text titles, queue contents, source strings and unknown event codes
-are not exported. Native logs cannot currently be bound to the preceding health
-runtime, so their `runtime_correlation` is explicitly `unavailable`.
+Updated native agents expose the same web runtime, media generation and main
+handle as the web inspection hook when that hook provides a consistent identity.
+`media_identity_available` stays false for older builds or missing handles.
+Native event runtime is compared with the preceding native health runtime:
+`runtime_correlation` is `matched`, `mismatch`, or `unavailable`. This correlates
+native observations, not every historical event with the current web media.
+Free-text titles, queue contents, source strings and unknown event codes are not
+exported. Optional decoder counters and scoped Android surface/audio evidence
+remain separate from physical display or audible-output verification.
 
 `operation REQUEST_ID` reads one exact 32-character lowercase hexadecimal request
 ID from the current web runtime's bounded operation history. The lookup itself
@@ -97,8 +101,13 @@ confirm presentation on the physical screen.
 
 The runtime in an inspection response fences that response. It does not make
 legacy protocol-1 mutations exclusively routed to that runtime, nor establish a
-new authoritative device binding. Native operation history remains available only
-through the native agent's existing status/log interface.
+new authoritative device binding. `operation ID --lane native` reads the updated native agent's durable history
+through health, without replaying the command. Up to 64 metadata-only receipts
+are retained for 24 hours across web reloads and agent restarts. They retain the
+original executor runtime. `handler_completed` is handler return, never proof
+of the physical result; an interrupted claim is `unknown`. Older agents return
+unknown with `history_available: false`. The default operation lane remains web.
+See the [native agent](../native/android-agent/README.md) for exact evidence limits.
 
 ## Fixed scenarios
 

@@ -4,6 +4,13 @@
 
 ### Changes
 
+- Android native diagnostics now expose shared web media identity when available,
+  native runtime/OS boot markers, and bounded app-surface/audio evidence.
+  A private 64-entry, 24-hour operation history survives reloads and agent
+  restarts; `android operation ID` reads receipts without replaying effects.
+  Physical display/audio and successful recovery are not inferred from counters
+  or handler completion. Existing separate native binding and V1 requests remain.
+
 - Direct HTTPS validates all supplied certificate keys before listening and
   serves the checked key pair without reloading it from disk.
 - The 0.1.1 development line adds bounded remote screenshot requests, strict

@@ -89,3 +89,25 @@ test('frequent health probes omit episode titles while queue status retains them
  assert.equal(queue.data.total,3);assert.equal(queue.data.items.length,3);
  assert.equal(queue.data.items[1].id,44819);
 });
+
+test('native identity uses the same web runtime, generation and main handle',()=>{
+ const f=fixture();
+ f.w.__ottRemoteInspect={snapshot:()=>({version:1,runtime:'web-1',consistent:true,media:{generation:7,kind:'vod',lanes:[{lane:'main',handleId:12}]}})};
+ const id=f.run('health',{}).data.identity;
+ assert.equal(id.available,true);assert.equal(id.web_runtime,'web-1');assert.equal(id.generation,7);assert.equal(id.handle_id,12);
+ assert.equal(f.calls.length,0);
+ f.w.__ottRemoteInspect.snapshot=()=>({version:1,runtime:'web-2',consistent:false});
+ const next=f.run('health',{}).data.identity;
+ assert.equal(next.available,false);assert.equal(next.web_runtime,'web-2');assert.equal(next.handle_id,null);
+});
+test('old or failing web builds never invent shared media identity',()=>{
+ const f=fixture();assert.equal(f.run('health',{}).data.identity.available,false);
+ f.w.__ottRemoteInspect={snapshot(){throw new Error('private URL')}};
+ assert.equal(f.run('health',{}).data.identity.available,false);
+ assert.ok(!JSON.stringify(f.reply()).includes('private URL'));
+});
+
+test('legacy decoder counters never claim presented frames or audible sound',()=>{
+ const f=fixture();const d=f.run('health',{}).data.decoder;
+ assert.equal(d.decoded_frames,null);assert.equal(d.presented_frames,null);assert.equal(d.audible_verified,false);
+});
