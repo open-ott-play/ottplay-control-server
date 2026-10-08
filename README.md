@@ -199,3 +199,9 @@ This server follows the command API of the optional `local_proxy.py` example in 
 ## License
 
 MIT. Vendored release-tooling attribution is recorded in `NOTICE` and `LICENSES/`.
+
+## Project maintenance
+
+See [contribution and test requirements](CONTRIBUTING.md), the
+[security reporting policy](SECURITY.md), [security design](docs/security-design.md),
+and the [OpenSSF evidence and remaining criteria](docs/openssf-evidence.md).
