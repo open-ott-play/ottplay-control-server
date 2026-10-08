@@ -338,7 +338,80 @@ def health_verdict(observations):
     return "fail" if failed else "unknown" if unknown or not checked else "pass"
 
 
+def native_progress_verdict(before, after, sample_interval=None):
+    """Observe one native WebView's decoder; surface/audio counters are not proof."""
+    if (len(before) != 1 or len(after) != 1
+            or any(row.get("lane") != "native" or row.get("status") != "observed"
+                   for row in (before[0], after[0]))):
+        return "unknown", "media_identity_unavailable"
+    schema = {
+        "version": number(1, 1, True), "runtime": token, "boot_id": token,
+        "app_pid": number(1, 2147483647, True), "uptime_seconds": number(0.001),
+        "webview_responsive": boolean, "media_identity_available": boolean,
+        "system_evidence": {"app_pid": number(1, 2147483647, True),
+                            "captured_uptime_seconds": number(0.001)},
+        "player": {
+            "ready": boolean,
+            "identity": {"version": number(1, 1, True), "available": boolean,
+                         "consistent": boolean, "web_runtime": token,
+                         "generation": number(integral=True), "handle_id": number(integral=True),
+                         "kind": enum(["live", "archive", "vod"]),
+                         "captured_at": number(1, SAFE_INTEGER, True)},
+            "decoder": {"source": enum(["html_video"])},
+            "video": {"position": number(0, 315576000), "paused": boolean, "ended": boolean,
+                      "ready": number(0, 4, True), "error": number(0, 4, True),
+                      "width": number(1, 32768, True), "height": number(1, 32768, True)},
+        },
+    }
+    try:
+        a, b = [project(row.get("data"), schema) for row in (before[0], after[0])]
+        for value in (a, b):
+            check(re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", value["boot_id"]))
+    except InvalidData:
+        # Old agents and incomplete health replies remain useful to inspect,
+        # but cannot establish continuity for this scenario.
+        return "unknown", "media_identity_unavailable"
+    if (not isinstance(sample_interval, (tuple, list)) or len(sample_interval) != 2
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in sample_interval)
+            or not 0 <= sample_interval[0] <= sample_interval[1] <= 300 or sample_interval[1] == 0):
+        return "unknown", "host_sample_interval_unavailable"
+    ia, ib = a["player"]["identity"], b["player"]["identity"]
+    if (any(a[key] != b[key] for key in ("runtime", "boot_id", "app_pid"))
+            or any(ia[key] != ib[key] for key in ("web_runtime", "generation", "handle_id", "kind"))
+            or any(not value["media_identity_available"] or not value["player"]["identity"]["available"]
+                   or not value["player"]["identity"]["consistent"]
+                   or value["system_evidence"]["app_pid"] != value["app_pid"] for value in (a, b))):
+        return "unknown", "media_identity_changed_or_unavailable"
+    elapsed = (ib["captured_at"] - ia["captured_at"]) / 1000
+    uptime_elapsed = b["uptime_seconds"] - a["uptime_seconds"]
+    collected_elapsed = (b["system_evidence"]["captured_uptime_seconds"]
+                         - a["system_evidence"]["captured_uptime_seconds"])
+    if elapsed <= 0 or uptime_elapsed <= 0 or collected_elapsed <= 0:
+        return "unknown", "observation_changed_or_stale"
+    if (any(not sample_interval[0] - 1 <= delta <= sample_interval[1] + 1
+            for delta in (elapsed, uptime_elapsed, collected_elapsed))
+            or any(not 0 <= value["system_evidence"]["captured_uptime_seconds"] - value["uptime_seconds"]
+                   <= sample_interval[1] + 1 for value in (a, b))):
+        return "unknown", "sample_clock_discontinuity"
+    if any(not value["webview_responsive"] or not value["player"]["ready"] for value in (a, b)):
+        return "unknown", "decoder_state_unavailable"
+    va, vb = a["player"]["video"], b["player"]["video"]
+    if any(value["paused"] or value["ended"] or value["ready"] < 2 or value["error"] != 0 for value in (va, vb)):
+        return "unknown", "media_not_continuously_playing"
+    delta = vb["position"] - va["position"]
+    if delta < 0 or delta > sample_interval[1] * 4 + 1:
+        return "unknown", "position_discontinuity"
+    if delta == 0:
+        return "fail", "media_did_not_progress"
+    return "pass", "same_native_media_progress_observed"
+
+
 def progress_verdict(before, after, sample_interval=None):
+    # Only an explicitly selected native lane has this shape. Auto retains web
+    # authority even when its web observation fails and native health succeeds.
+    if (len(before) == 1 and len(after) == 1
+            and before[0].get("lane") == "native" and after[0].get("lane") == "native"):
+        return native_progress_verdict(before, after, sample_interval)
     first = next((row for row in before if row["lane"] == "web" and row["status"] == "observed"), None)
     last = next((row for row in after if row["lane"] == "web" and row["status"] == "observed"), None)
     if not first or not last:
@@ -490,7 +563,7 @@ def run(api, client, device, words, timeout, json_output=False):
     command = words[0].casefold()
     json_output = json_output or any(word in ("-j", "--json") for word in words[1:])
     result = {"version": 1, "command": command, "device_id": device, "started_at": now(),
-              "read_only": True, "physical_display_verified": False}
+              "read_only": True, "physical_display_verified": False, "evaluator": "workbench-v2"}
     try:
         args = arguments([command, *words[1:]], json_output)
         json_output = args.json
@@ -499,7 +572,8 @@ def run(api, client, device, words, timeout, json_output=False):
         if command == "test" and args.action == "list":
             result.update(verdict="observed", scenarios=[
                 {"name": "health", "read_only": True, "checks": "management observations; native WebView responsiveness"},
-                {"name": "media-progress", "read_only": True, "checks": "same web runtime, generation and main handle progress"}])
+                {"name": "media-progress", "read_only": True,
+                 "checks": "same media identity and decoder position; web by default, explicit --lane native supported"}])
         else:
             bench = Workbench(api, client, device, timeout)
             if command == "test" and args.scenario == "media-progress":
@@ -552,7 +626,8 @@ def run(api, client, device, words, timeout, json_output=False):
         result.update(verdict="error", reason=reason, completed_at=now())
     raw = encoded(result)
     if len(raw) > MAX_REPORT_BYTES:
-        result = {"version": 1, "verdict": "error", "reason": "report_too_large", "read_only": True}
+        result = {"version": 1, "verdict": "error", "reason": "report_too_large", "read_only": True,
+                  "physical_display_verified": False, "evaluator": "workbench-v2"}
     if json_output:
         print(encoded(result).decode("utf-8"), end="")
     else:

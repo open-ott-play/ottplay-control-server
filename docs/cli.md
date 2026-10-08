@@ -1,8 +1,8 @@
 # Control players from the terminal
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
-Keep all six files together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py` and `workbench.py`. Python 3.12 is the version used by CI. Commands take a short
+Keep all seven files together: `ott.py`, `programme_search.py`, `playlist_search.py`,
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py` and `report_verify.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -24,6 +24,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
 - [Read-only doctor, inspect, bundles and test scenarios](workbench.md)
+- [Verify saved reports offline](workbench.md#verify-saved-evidence-offline)
 - [Troubleshooting](#troubleshooting)
 
 ## Installation and connection
@@ -98,7 +99,8 @@ The local `resolve` command is not included in stable CLI v0.1.0. Until a
 release includes it, use a reviewed source revision containing
 `playlist_search.py` and keep all CLI files from that revision together. The
 read-only [workbench](workbench.md) additionally requires a revision containing
-`workbench.py`; it is not included in stable CLI v0.1.0.
+`workbench.py`; offline `report verify` also needs `report_verify.py` from the
+same revision. Neither is included in stable CLI v0.1.0.
 
 Keep the checkout after making the symlink; moving or deleting it breaks `ott`.
 Persist the PATH line in your shell's startup file (`~/.zshrc` for interactive
@@ -1574,7 +1576,7 @@ Add `~/.local/bin` to the current shell's PATH and its startup file, then reopen
 the terminal. Inspect `command -v ott` (or `type -a ott` in bash/zsh) for an older
 installation taking precedence. Check the symlink target still exists. Use
 `python3 /absolute/path/to/cli/ott.py --help` to separate PATH/executable problems
-from Python problems. Keep all six CLI files from the same source version in
+from Python problems. Keep all seven CLI files from the same source version in
 the resolved target directory. A copied `ott.py` alone is not a complete install.
 On Windows use the `py -3 ...` invocation from the installation section.
 

@@ -4,7 +4,7 @@ The workbench collects one player's web observations and, when bound, its separa
 Android maintenance agent. It does not start playback, reload a player, change
 settings, capture the screen, or run arbitrary commands. These commands require
 the source revision containing `cli/workbench.py`; they are not part of stable
-CLI v0.1.0. Keep all six CLI Python files from the same revision together.
+CLI v0.1.0. Keep all seven CLI Python files from the same revision together.
 
 ```sh
 ott a1 doctor
@@ -17,6 +17,8 @@ ott a1 bundle --out ./a1-case
 ott a1 test list
 ott a1 test run health --report ./a1-health
 ott -t 45 a1 test run media-progress --duration 5 --report ./a1-progress --json
+ott -t 45 a1 test run media-progress --lane native --duration 5 --report ./a1-native-progress --json
+ott report verify ./a1-progress --json
 ```
 
 `-j`/`--json` works before the player name or after a workbench command. Global
@@ -131,11 +133,21 @@ host interval bounds in `sample_interval_seconds`. A backward position jump is
 `unknown`; a stable playing decoder with unchanged position fails the scenario.
 Native counters alone cannot pass this test.
 
+`--lane native` uses the Android agent's two health observations instead. PASS
+requires the same agent runtime, boot ID, app PID, web runtime, media generation,
+main handle and media kind. Both samples must report a responsive WebView, ready
+player and playing decoder, with advancing position. Device capture and uptime
+intervals must agree with the host's monotonic collection windows. Missing
+identity or a process restart is `unknown`; increasing frame counters alone is
+insufficient. Older agents without this evidence remain supported for inspection
+but cannot pass this scenario. `--lane auto` continues to evaluate web progress;
+it does not silently substitute a native result when web evidence is missing.
+
 The scenario only observes. It does not prevent user input or reserve a device;
 it cannot exclude every seek or transient action between its two samples. Its
 evidence level is `decoder_progress_only`. Visibility, sound, hardware surfaces
 and the physical display require additional evidence. `physical_display_verified`
-is always false in this first workbench version.
+remains false for these observations.
 
 There are no custom scripts, arbitrary predicates, eval, shell actions or automatic
 restoration in this runner. Mutating scenarios and exclusive device leases require
@@ -143,7 +155,7 @@ the later operation/ownership protocol.
 
 ## Bundles and machine output
 
-Every JSON result contains a version, command, device ID, times, verdict,
+Every live collection result contains a version, command, device ID, times, verdict,
 `read_only`, observation lanes, request IDs when available, and hashes of the local
 CLI/workbench files. A request receipt means its response was received; it does
 not prove decoder recovery or a completed reboot. Missing replies remain unknown.
@@ -165,6 +177,39 @@ Exit codes: `0` = observations collected or scenario PASS; `1` = invalid command
 or export failure; `2` = scenario FAIL; `3` = unavailable/insufficient evidence.
 For `doctor`, `inspect`, and `bundle`, exit 0 can include an unavailable lane:
 check each observation's `status` and `reason`. JSON is the authoritative result.
+
+## Verify saved evidence offline
+
+```sh
+ott report verify ./a1-progress
+ott report verify ./a1-native-progress --json
+ott --json report verify ./a1-case
+```
+
+Verification works without CLI configuration, credentials, a controller or a
+running player. It reads only the selected directory's `manifest.json` and
+`result.json`; keep other files outside that export directory. It rejects
+incomplete exports, extra files, size or hash mismatches, symlinks,
+special files, duplicate JSON keys and unsupported report formats. It never
+executes commands found in a report, contacts a device or repeats an operation.
+On Windows, use a local drive path; UNC shares and device paths are rejected.
+
+For `health` and `media-progress`, it validates the saved observations and
+recomputes the result using the supported evaluator. A recorded PASS is not
+accepted when the observations disagree. Exit codes retain their meaning:
+`0` for a valid collection or PASS, `2` for FAIL, `3` for insufficient evidence,
+and `1` for an invalid export or inconsistent result. Read the JSON verdict as
+well as the integrity field; intact files can still contain invalid evidence.
+
+New reports identify their evaluator as `workbench-v2`. Reports without that
+field use the supported legacy web evaluator; old native-only progress reports
+are not reinterpreted as passing native tests. Unknown evaluators are rejected.
+Keep all seven CLI Python files together when updating.
+
+A matching SHA-256 proves that the files agree with their manifest. It does not
+prove their origin: anyone who can change both can recalculate the hash. The
+result therefore reports `authenticated: false`. Neither verification nor
+decoder progress certifies the physical screen or audible sound.
 
 ## Troubleshooting
 

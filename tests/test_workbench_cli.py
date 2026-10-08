@@ -62,6 +62,28 @@ def native():
                        "video": {"position": 20, "paused": False, "source": SECRET}}, "private": SECRET}
 
 
+def native_playing(position=10, captured=1000000, uptime=60):
+    data = native()
+    data.update(boot_id="12345678-1234-1234-1234-123456789abc", uptime_seconds=uptime,
+                system_evidence={"app_pid": 123, "captured_uptime_seconds": uptime + 0.1,
+                    "physical_display_verified": False, "physical_audio_verified": False,
+                    "surface": {"state": "unavailable", "reason": "app_surface_unavailable"},
+                    "audio": {"state": "unavailable", "reason": "audio_service_unavailable"}})
+    data["player"].update(
+        identity={"version": 1, "available": True, "consistent": True, "web_runtime": RUNTIME,
+                  "generation": 7, "handle_id": 9, "kind": "vod", "captured_at": captured},
+        decoder={"source": "html_video", "decoded_frames": None, "dropped_frames": None,
+                 "audio_decoded_bytes": None, "volume": 1, "muted": False,
+                 "presented_frames": None, "audible_verified": False},
+        video={"position": position, "duration": 600, "paused": False, "ended": False,
+               "ready": 4, "error": 0, "width": 600, "height": 480, "source": SECRET})
+    return data
+
+
+def native_observation(data):
+    return {"lane": "native", "status": "observed", "data": wb.native_metadata(ott, data, "health")}
+
+
 class Clock:
     def __init__(self):
         self.value = 1000
@@ -83,6 +105,7 @@ class Client:
         self.inspect_failure = None
         self.inspect_envelope = None
         self.native = native()
+        self.native_snapshots = []
         self.failure = None
         self.consume_web_timeout = False
 
@@ -110,7 +133,7 @@ class Client:
             if self.inspect_envelope is not None:
                 data = copy.deepcopy(self.inspect_envelope)
         elif action == "maintenance" and params == {"operation": "health"}:
-            data = copy.deepcopy(self.native)
+            data = copy.deepcopy(self.native_snapshots.pop(0) if self.native_snapshots else self.native)
         elif action == "maintenance" and params == {"operation": "logs"}:
             data = {"version": 1, "events": [{"time": 1, "event": "poll_failed"}, {"time": 2, "event": SECRET}]}
         else:
@@ -134,6 +157,7 @@ class WorkbenchTest(unittest.TestCase):
         code, result, text = self.execute(["doctor", "--json"])
         self.assertEqual(code, 0)
         self.assertEqual(result["verdict"], "observed")
+        self.assertEqual(result["evaluator"], "workbench-v2")
         self.assertTrue(result["read_only"])
         self.assertFalse(result["physical_display_verified"])
         self.assertNotIn(SECRET, text)
@@ -407,6 +431,120 @@ class WorkbenchTest(unittest.TestCase):
             code, result, _ = self.execute(["test", "run", "media-progress", "--lane", "native", "--report", str(path), "-j"])
             self.assertEqual(code, 3)
             self.assertEqual(result["reason"], "media_identity_unavailable")
+
+    def test_native_progress_requires_position_not_system_or_decoder_counters(self):
+        before = [native_observation(native_playing())]
+        after = [native_observation(native_playing(15, 1005000, 65))]
+        self.assertEqual(wb.progress_verdict(before, after, (5, 5)),
+                         ("pass", "same_native_media_progress_observed"))
+        after[0]["data"]["player"]["video"]["position"] = 10
+        after[0]["data"]["player"]["decoder"]["decoded_frames"] = 1000
+        self.assertEqual(wb.progress_verdict(before, after, (5, 5)),
+                         ("fail", "media_did_not_progress"))
+        for position in (9, 80):
+            after[0]["data"]["player"]["video"]["position"] = position
+            self.assertEqual(wb.progress_verdict(before, after, (5, 5)),
+                             ("unknown", "position_discontinuity"))
+
+    def test_native_progress_rejects_partial_and_restarted_identity(self):
+        before = [native_observation(native_playing())]
+        complete = native_observation(native_playing(15, 1005000, 65))
+        for path in (("runtime",), ("boot_id",), ("app_pid",), ("uptime_seconds",),
+                     ("system_evidence",), ("system_evidence", "app_pid"),
+                     ("system_evidence", "captured_uptime_seconds"),
+                     ("player", "identity"), ("player", "identity", "web_runtime"),
+                     ("player", "identity", "generation"), ("player", "identity", "handle_id"),
+                     ("player", "identity", "captured_at"), ("player", "decoder"),
+                     ("player", "video", "position")):
+            for missing in (False, True):
+                row = copy.deepcopy(complete)
+                parent = row["data"]
+                for key in path[:-1]: parent = parent[key]
+                if missing: parent.pop(path[-1])
+                else: parent[path[-1]] = None
+                with self.subTest(path=path, missing=missing):
+                    self.assertEqual(wb.progress_verdict(before, [row], (5, 5))[0], "unknown")
+        for mutate in (
+            lambda d: d.update(runtime="new-agent"),
+            lambda d: d.update(boot_id="abcdef12-1234-1234-1234-123456789abc"),
+            lambda d: d.update(app_pid=456),
+            lambda d: d["system_evidence"].update(app_pid=456),
+            lambda d: d["player"]["identity"].update(web_runtime="new-webview"),
+            lambda d: d["player"]["identity"].update(generation=8),
+            lambda d: d["player"]["identity"].update(handle_id=10),
+            lambda d: d["player"]["identity"].update(kind="live"),
+            lambda d: d["player"]["identity"].update(available=False),
+            lambda d: d["player"]["identity"].update(consistent=False),
+            lambda d: d.update(media_identity_available=False),
+            lambda d: d.update(system_evidence={"surface": {"state": "unavailable", "reason": "process_changed"}}),
+        ):
+            row = copy.deepcopy(complete)
+            mutate(row["data"])
+            self.assertEqual(wb.progress_verdict(before, [row], (5, 5))[0], "unknown")
+
+    def test_native_progress_rejects_stale_clocks_and_partial_decoder(self):
+        before = [native_observation(native_playing())]
+        complete = native_observation(native_playing(15, 1005000, 65))
+        for mutate in (
+            lambda d: d["player"]["identity"].update(captured_at=0),
+            lambda d: d["player"]["identity"].update(captured_at=1000000),
+            lambda d: d["player"]["identity"].update(captured_at=999000),
+            lambda d: d["player"]["identity"].update(captured_at=4605000),
+            lambda d: d.update(uptime_seconds=0),
+            lambda d: d.update(uptime_seconds=60),
+            lambda d: d.update(uptime_seconds=3665),
+            lambda d: d["system_evidence"].update(captured_uptime_seconds=64),
+            lambda d: d["system_evidence"].update(captured_uptime_seconds=3665),
+            lambda d: d["player"]["video"].update(paused=True),
+            lambda d: d["player"]["video"].update(ended=True),
+            lambda d: d["player"]["video"].update(ready=1),
+            lambda d: d["player"]["video"].update(error=3),
+            lambda d: d["player"]["video"].update(width=0),
+            lambda d: d["player"]["video"].update(position=True),
+            lambda d: d["player"]["video"].update(position=float("nan")),
+            lambda d: d["player"].update(ready=False),
+            lambda d: d.update(webview_responsive=False),
+        ):
+            row = copy.deepcopy(complete)
+            mutate(row["data"])
+            self.assertEqual(wb.progress_verdict(before, [row], (5, 5))[0], "unknown")
+        for interval in (None, (0, 0), (float("nan"), 5), (5, float("inf")), (5, 4), (-1, 5), (1, 301)):
+            self.assertEqual(wb.progress_verdict(before, [complete], interval)[0], "unknown")
+        self.assertEqual(wb.progress_verdict(before, [complete], (4.5, 6))[0], "pass")
+
+    def test_auto_progress_keeps_web_authority_when_native_advances(self):
+        before = [native_observation(native_playing())]
+        after = [native_observation(native_playing(15, 1005000, 65))]
+        unavailable = {"lane": "web", "status": "unknown", "reason": "unavailable"}
+        self.assertEqual(wb.progress_verdict([unavailable, *before], [unavailable, *after], (5, 5)),
+                         ("unknown", "media_identity_unavailable"))
+        web_first = {"lane": "web", "status": "observed", "data": snapshot()}
+        web_last = {"lane": "web", "status": "observed", "data": snapshot(10, 1005000)}
+        self.assertEqual(wb.progress_verdict([web_first, *before], [web_last, *after], (5, 5)),
+                         ("fail", "media_did_not_progress"))
+
+    def test_native_progress_runner_uses_only_health_and_writes_bounded_evidence(self):
+        for position, expected in ((15, 0), (10, 2)):
+            self.client.calls.clear()
+            captured = int(self.clock.value * 1000)
+            self.client.native_snapshots = [native_playing(10, captured, 60),
+                                           native_playing(position, captured + 5000, 65)]
+            with tempfile.TemporaryDirectory() as temp:
+                path = Path(temp).resolve() / "native-progress"
+                code, result, text = self.execute(["test", "run", "media-progress", "--lane", "native",
+                    "--duration", "5", "--report", str(path), "-j"])
+                self.assertEqual(code, expected)
+                self.assertEqual(result["evidence_level"], "decoder_progress_only")
+                self.assertEqual(result["evaluator"], "workbench-v2")
+                self.assertEqual(result["sample_interval_seconds"], {"min": 5, "max": 5})
+                self.assertFalse(result["physical_display_verified"])
+                self.assertTrue(result["read_only"])
+                self.assertNotIn(SECRET, text)
+                saved = (path / "result.json").read_bytes()
+                manifest = json.loads((path / "manifest.json").read_text())
+                self.assertEqual(manifest["files"][0]["sha256"], hashlib.sha256(saved).hexdigest())
+            self.assertEqual([row[:3] for row in self.client.calls],
+                [("native", "maintenance", {"operation": "health"})] * 2)
 
     def test_health_does_not_hide_an_unresponsive_webview(self):
         self.client.native["webview_responsive"] = False

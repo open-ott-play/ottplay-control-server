@@ -49,7 +49,7 @@ Both server and player must include the request/response extension.
 
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
-cover macOS/Linux and Windows, Python/PATH setup and all six required CLI files.
+cover macOS/Linux and Windows, Python/PATH setup and all seven required CLI files.
 Local launchers can use the read-only [playlist resolver](docs/cli.md#local-playlist-resolver)
 to search channels, current programmes and playable archives without a controller.
 Once installed and configured:
@@ -67,6 +67,8 @@ ott a1 restart             # reload the player
 ott a1 restart stream      # restart only the current stream
 ott a1 screenshot          # save a PNG; browser builds need a selected capture source
 ott a1 shot -o screen.png  # short alias; never overwrites an existing file
+ott a1 test run media-progress --report ./a1-progress
+ott report verify ./a1-progress --json  # re-evaluate saved evidence offline
 ```
 
 `a1` is an example alias for a registered player, not a computer hostname. See
