@@ -428,7 +428,7 @@ ott diagnostics --help
 ```
 
 The existing symlink follows the checkout. For a copied installation replace all
-five sibling Python files together from one version. Keep `cli.json`, presets
+six sibling Python files together from one version. Keep `cli.json`, presets
 and server credentials outside the checkout; updating CLI files does not update
 or restart the command server, native apps or players already open in a browser.
 After updating a hosted player, reload it and inspect `ott PLAYER caps`.
@@ -1538,7 +1538,7 @@ Add `~/.local/bin` to the current shell's PATH and its startup file, then reopen
 the terminal. Inspect `command -v ott` (or `type -a ott` in bash/zsh) for an older
 installation taking precedence. Check the symlink target still exists. Use
 `python3 /absolute/path/to/cli/ott.py --help` to separate PATH/executable problems
-from Python problems. Keep all five CLI files from the same source version in
+from Python problems. Keep all six CLI files from the same source version in
 the resolved target directory. A copied `ott.py` alone is not a complete install.
 On Windows use the `py -3 ...` invocation from the installation section.
 
