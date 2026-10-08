@@ -23,6 +23,9 @@
 - Release notes accept optional closing hashes in Markdown headings while
   continuing to reject duplicate version sections.
 
+- The localhost HTTPS diagnostics test fixture explicitly requires TLS 1.2 or
+  newer while retaining certificate and redirect validation coverage.
+
 ### Upgrade
 
 Retain server configuration, private CLI presets and pairing credentials. Update
