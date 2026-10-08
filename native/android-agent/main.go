@@ -259,6 +259,10 @@ func (a *Agent) run(ctx context.Context) {
 			a.flushPending(ctx, poll.ServerTime)
 			_ = os.Remove(dataDir + "/update.pending")
 			for _, r := range poll.Requests {
+				// Keep unloading operations ordered until their ACK is settled.
+				if len(a.effects) > 0 {
+					break
+				}
 				a.process(ctx, r, poll.ServerTime, started)
 			}
 		}
