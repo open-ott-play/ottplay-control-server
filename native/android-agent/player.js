@@ -43,8 +43,8 @@ function (request, done) {
         if (p.operation === "status") {finish(snapshot().queue || {index:0,total:0,items:[]});return;}
         var old=selected(), source=media.sourceId(), oldPolicy=w.stbGetItem("__ottKioskV1"), locked=kiosk.locked(), strict=!!(kiosk.strict && kiosk.strict()), revision={};
         w.__ottNativeQueueRevision=revision;
-        function contextCurrent(){return w.__ottNativeMutation===request.id && w.__ottNativeQueueRevision===revision && media.sourceId()===source;}
-        function current(){return active() && contextCurrent();}
+        var contextCurrent=function(){return w.__ottNativeMutation===request.id && w.__ottNativeQueueRevision===revision && media.sourceId()===source;};
+        var current=function(){return active() && contextCurrent();};
         if (p.operation === "stop") {
             kiosk.request({mode:"off"},function(r){if(r.status!=="ok"){fail("Kiosk release failed");return;}media.cancelAuto();w.stbStop();finish({stopped:true});});return;
         }
@@ -70,21 +70,21 @@ function (request, done) {
         var rows=[], cursor=0, unlocked=false, complete=false;
         var cancelStart=null;
         var timer=setTimeout(function(){abort("VPortal queue preparation timed out");},Math.min(25000,request.timeoutMs));
-        function abort(message) {
+        var abort=function(message) {
             if(complete)return;complete=true;clearTimeout(timer);
             if(cancelStart)cancelStart();
             if(unlocked&&contextCurrent()) {try{w.stbSetItem("__ottKioskV1",oldPolicy);location.reload();}catch(e){}}
             fail(message);
-        }
-        function begin() {
+        };
+        var begin=function() {
             if(!current()){abort("VPortal context changed");return;}
             cancelStart=media.playQueue(rows,"Selected VPortal queue",function(){return current()&&!complete;},function(){
                 if(!current()||complete){abort("VPortal context changed");return;}
                 function accepted(){complete=true;clearTimeout(timer);finish({dispatched:true,loop:true,total:rows.length,items:rows.map(function(r){return {id:r.request.fid,title:String(r.title || "").slice(0,256)};})});}
                 kiosk.request({mode:"on",strict:strict},function(r){if(r.status!=="ok"){abort("Kiosk save failed");return;}unlocked=false;accepted();});
             });
-        }
-        function load() {
+        };
+        var load=function() {
             if(!current()||complete){abort("VPortal context changed");return;}
             if(cursor===p.ids.length) {
                 if(locked)kiosk.request({mode:"off"},function(r){if(!current()){abort("VPortal context changed");return;}if(r.status!=="ok"){abort("Kiosk release failed");return;}unlocked=true;begin();});else begin();return;
@@ -99,7 +99,7 @@ function (request, done) {
                     if(w.sPSchannels&&w.parentPIN!=="*"&&!w.parentAccess&&(Number(r.adult)===1||Number(r.agelimit)>=18)){abort("Unlock parental access first");return;}
                     rows.push({title:String(r.title).slice(0,256),request:{cmd:"flick",fid:id},vportalSource:source,adult:r.adult});load();
                 },error:function(){abort("VPortal item request failed");}});
-        }
+        };
         load();return;
     }
     fail("Unsupported native player operation");

@@ -114,10 +114,15 @@ that hangs without exiting. APK updates preserve app data using `pm install -r`.
 ```
 go vet ./...
 go test -race ./...
+npm ci --ignore-scripts --no-audit --no-fund
 node --test player.test.cjs
 ```
 
 The local CDP transport validates the configured origin and top frame, uses only
 fixed embedded operations and closes the WebSocket gracefully for old Chromium.
-The player adapter uses ES5 syntax. Source URLs, tokens, and profile contents are
+The HTTP transport reads KitKat's current `net.dns1`–`net.dns4` properties for each
+new connection because the firmware has no `/etc/resolv.conf`. It preserves TLS
+hostname and certificate verification and does not change system DNS settings.
+The player adapter uses strict ES5 syntax, including Chromium 30's rejection of
+function declarations inside statement blocks. Source URLs, tokens, and profile contents are
 excluded from health/log responses; screenshots may contain visible private data.

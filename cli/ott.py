@@ -2106,7 +2106,10 @@ def android_metadata(data, action, params):
                 raise Error(invalid)
             return {key: project(value[key], rule) for key, rule in spec.items() if key in value}
         if isinstance(spec, list):
-            if not isinstance(value, list) or len(value) > 100:
+            # The web player can retain a whole series (up to 1,000 rows).
+            # The 100-ID native play limit does not limit reading that queue.
+            limit = 1000 if spec is queue["items"] else 100
+            if not isinstance(value, list) or len(value) > limit:
                 raise Error(invalid)
             return [project(row, spec[0]) for row in value]
         if not spec(value):

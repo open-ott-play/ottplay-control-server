@@ -1,0 +1,6 @@
+{
+  "name": "ottplay-android-agent-checks",
+  "private": true,
+  "scripts": {"test": "node --test player.test.cjs"},
+  "devDependencies": {"acorn": "8.18.0"}
+}
