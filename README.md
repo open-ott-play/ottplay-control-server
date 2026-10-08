@@ -21,6 +21,11 @@ The default address is `0.0.0.0:8081` (all IPv4 interfaces, including LAN). Conn
 
 HTTP is supported for older TV browsers on a trusted LAN. Use HTTPS when the connection crosses an untrusted network: `serve --config config.json --tls-cert server.crt --tls-key server.key`, or terminate TLS at a reverse proxy. HTTPS player pages cannot connect to a plain HTTP server in a browser. Native applications also retain their operating system transport policy; this setting does not relax it.
 
+Direct HTTPS validates the supplied certificate chain before opening the listener:
+RSA keys must be at least 2048 bits, ECDSA keys at least 224 bits, or Ed25519.
+Replace an undersized certificate before upgrading. See the
+[TLS certificate policy and its scope](docs/security-design.md#direct-https-certificate-policy).
+
 ## Connect the player
 
 Use a player release that includes the command-server connection feature. Open **Settings → Remote control** and enter:
