@@ -43,6 +43,15 @@ jobs:
           go vet ./...
       - name: Run race detector
         run: go test -race -count=1 ./...
+      - name: Test Android maintenance agent
+        if: runner.os != 'Windows'
+        run: |
+          cd native/android-agent
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test -race ./...
+          node --test player.test.cjs
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o /tmp/ott-android-agent .
       - name: Test terminal CLI
         run: python3 -m unittest discover -s tests -v
       - name: Scan reachable Go vulnerabilities

@@ -87,6 +87,15 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] PLAYER [COMM
   ott NAME restart app               relaunch a supported native app
   ott NAME reload                    reload the player after acknowledgement
   ott NAME reboot [device]           reboot the device OS only when supported
+  ott NAME android bind NATIVE       bind a separately provisioned native device alias
+  ott NAME android status / logs     inspect Android independently of the web player
+  ott NAME android recover           reattach stalled video, keeping its queue/position
+  ott NAME android restart / reboot  restart the Android app / reboot the tablet
+  ott NAME android screenshot [-o FILE.png]  capture the Android display
+  ott NAME android pause / resume / seek SECONDS  control native-owned playback
+  ott NAME android queue play ID...  play an exact VPortal queue and loop it
+  ott NAME android queue status / next / prev / restart / stop
+  ott NAME android update HTTPS_URL SHA256  install a signed update manifest
   ott NAME standby / wake            enter or leave player standby
   ott NAME kiosk [status]            show kiosk policy and playback health
   ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal video/episode queue
@@ -2058,6 +2067,159 @@ See docs/cli.md for the request and result contract.
     return 0
 
 
+
+def android_metadata(data, action, params):
+    """Project public agent metadata; never print arbitrary diagnostics/URLs."""
+    invalid = "Invalid native receipt; inspect android status and do not repeat blindly"
+    number = lambda v: type(v) in (int, float) and math.isfinite(v) and 0 <= v <= 9007199254740991
+    boolean = lambda v: type(v) is bool
+    text = lambda v: isinstance(v, str) and len(v) <= 1024
+    token = lambda v: isinstance(v, str) and re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", v)
+    item = {"id": number, "title": text}
+    queue = {"index": number, "total": number, "items": [item]}
+    schema = {
+        "version": number, "agent_version": token, "runtime": token, "app_pid": number,
+        "uptime_seconds": number, "battery_percent": number, "watchdog_suspended": boolean,
+        "watchdog_attempts": number, "webview_responsive": boolean,
+        "last_operation": {"request_id": token, "operation": token, "state": token},
+        "events": [{"time": number, "event": token}],
+        "player": {
+            "ready": boolean, "provider": token, "touch": token,
+            "kiosk": {"enabled": boolean, "state": token, "health": token,
+                      "provider": token, "strict": boolean, "retries": number,
+                      "retry_seconds": number, "startup_grace_seconds": number,
+                      "media": {"index": number, "total": number, "title": text},
+                      "channel": {"id": text, "name": text}},
+            "video": {"position": number, "duration": number, "paused": boolean,
+                      "ended": boolean, "ready": number, "error": number,
+                      "width": number, "height": number, "source": token},
+            "queue": queue},
+        "operation": token, "accepted": boolean, "completion": token,
+        "dispatched": boolean, "position": number, "stopped": boolean,
+        "loop": boolean, "title": text, **queue,
+    }
+    def project(value, spec):
+        if value is None:
+            return None
+        if isinstance(spec, dict):
+            if not isinstance(value, dict):
+                raise Error(invalid)
+            return {key: project(value[key], rule) for key, rule in spec.items() if key in value}
+        if isinstance(spec, list):
+            if not isinstance(value, list) or len(value) > 100:
+                raise Error(invalid)
+            return [project(row, spec[0]) for row in value]
+        if not spec(value):
+            raise Error(invalid)
+        return clean(value) if isinstance(value, str) else value
+    if not isinstance(data, dict):
+        raise Error(invalid)
+    result = project(data, schema)
+    op = params.get("operation")
+    if action == "maintenance" and op in ("health", "logs"):
+        if type(result.get("version")) is not int or result["version"] != 1:
+            raise Error(invalid)
+        if op == "health" and (not isinstance(result.get("runtime"), str) or
+                               type(result.get("webview_responsive")) is not bool):
+            raise Error(invalid)
+        if op == "logs" and not isinstance(result.get("events"), list):
+            raise Error(invalid)
+    elif result.get("operation") != op:
+        raise Error(invalid)
+    elif action == "lifecycle" or op == "update":
+        if result.get("accepted") is not True or result.get("completion") != "inspect_status":
+            raise Error(invalid)
+    elif action == "vportal_queue" and op == "status":
+        if type(result.get("total")) is not int or not isinstance(result.get("items"), list) or result["total"] != len(result["items"]):
+            raise Error(invalid)
+    elif action == "vportal_queue" and op == "play":
+        items = result.get("items")
+        if (result.get("dispatched") is not True or result.get("loop") is not True or
+                type(result.get("total")) is not int or result["total"] != len(params["ids"]) or
+                not isinstance(items, list) or [row.get("id") for row in items] != params["ids"]):
+            raise Error(invalid)
+    elif op == "stop":
+        if result.get("stopped") is not True:
+            raise Error(invalid)
+    elif result.get("dispatched") is not True:
+        raise Error(invalid)
+    return result
+
+
+def android_command(client, config_path, device, name, words, json_output):
+    """The native token has its own queue; never race the WebView consumer."""
+    bindings = client.config.get("native_devices", {})
+    if not isinstance(bindings, dict):
+        raise Error("native_devices must map player IDs to native device IDs")
+    if words[:1] == ["bind"]:
+        if len(words) != 2:
+            raise Error("Use android bind NATIVE_ALIAS")
+        native = client.device(words[1])
+        if (native == device or native in bindings or device in bindings.values() or any(
+                parent != device and target == native for parent, target in bindings.items()) or not any(
+                row.get("id") == native for row in client.credentials.get("devices", []))):
+            raise Error("Use a separate native device queue, bound to only one player")
+        client.config.setdefault("native_devices", {})[device] = native
+        write_private(config_path, client.config)
+        return {"bound": True, "player": device, "native_device": native}
+    native = bindings.get(device)
+    if not isinstance(native, str) or native == device or not any(
+            row.get("id") == native for row in client.credentials.get("devices", [])):
+        raise Error("No native agent is bound. Provision it once, then use android bind NATIVE_ALIAS")
+    op = words[0] if words else "status"
+    tail = words[1:]
+    if op == "screenshot":
+        if tail and (len(tail) != 2 or tail[0] not in ("-o", "--output")):
+            raise Error("Use android screenshot [-o FILE.png]")
+        return screenshot_command(client, native, name, tail[1] if tail else None, client.timeout)
+    if op in ("status", "doctor", "logs", "recover") and not tail:
+        action, params = "maintenance", {"operation": {"status": "health", "doctor": "health", "recover": "recover_video"}.get(op, op)}
+    elif op in ("restart", "reload", "reboot", "wake", "standby") and not tail:
+        action, params = "lifecycle", {"operation": {"restart": "restart_app", "reload": "reload_player", "reboot": "reboot_device"}.get(op, op)}
+    elif op in ("pause", "resume") and not tail:
+        action, params = "playback", {"operation": op}
+    elif op == "seek" and len(tail) == 1:
+        try:
+            position = float(tail[0])
+        except ValueError:
+            raise Error("Seek position must be a nonnegative number") from None
+        if not math.isfinite(position) or not 0 <= position <= 9007199254740991:
+            raise Error("Seek position must be a nonnegative finite number")
+        action, params = "playback", {"operation": "seek", "position": position}
+    elif op == "queue":
+        sub = tail[0] if tail else "status"
+        sub = {"prev": "previous"}.get(sub, sub)
+        if sub == "play" and len(tail) > 1:
+            ids = tail[1:]
+            loop = True
+            if not 1 <= len(ids) <= 100 or any(not re.fullmatch(r"[1-9][0-9]{0,15}", v) or int(v) > 9007199254740991 for v in ids):
+                raise Error("Use queue play with 1–100 positive VPortal IDs")
+            ids = [int(v) for v in ids]
+            if len(set(ids)) != len(ids):
+                raise Error("VPortal queue IDs must be unique")
+            action, params = "vportal_queue", {"operation": "play", "ids": ids, "loop": loop}
+        elif sub in ("status", "next", "previous", "restart", "stop") and len(tail) <= 1:
+            action, params = "vportal_queue", {"operation": sub}
+        else:
+            raise Error("Use queue play ID..., status, next, prev, restart or stop")
+    elif op == "update" and len(tail) == 2:
+        try:
+            u = urllib.parse.urlsplit(tail[0])
+            valid_host = u.hostname and (u.port is None or 0 < u.port < 65536)
+        except ValueError:
+            raise Error("Invalid HTTPS manifest URL") from None
+        if len(tail[0]) > 2048 or any(ord(c) < 33 for c in tail[0]) or not valid_host or u.scheme != "https" or not u.hostname or u.username or u.password or u.fragment or not re.fullmatch(r"[0-9a-f]{64}", tail[1]):
+            raise Error("Use update HTTPS_MANIFEST_URL SHA256; the native agent also verifies its signature")
+        action, params = "maintenance", {"operation": "update", "manifest": tail[0], "sha256": tail[1]}
+    else:
+        raise Error("Unknown android command; see ott --help")
+    try:
+        data = client.call(native, action, params)
+    except (PlayerRejected, PlayerUnsupported):
+        raise Error("Native operation rejected or unsupported; inspect android status before retrying. Pause requires kiosk off") from None
+    return android_metadata(data, action, params)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "resolve":
@@ -2101,6 +2263,10 @@ def main(argv=None):
             return 0
         device = client.device(args.words[0])
         words = args.words[1:]
+        if words and words[0].casefold() == "android":
+            data = android_command(client, args.config, device, args.words[0], words[1:], args.json)
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+            return 0
         action, params = parse_command(words)
         status_overview = action == "status" and command_verb(words) != "v"
         status_deadline = time.monotonic() + args.timeout if status_overview else None

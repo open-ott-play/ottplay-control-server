@@ -1,0 +1,10 @@
+{
+  "server": "https://control.example.test/ott-control",
+  "token": "REPLACE_WITH_SEPARATELY_PROVISIONED_DEVICE_TOKEN",
+  "device": "dev_tablet_native",
+  "parent_device": "dev_tablet_web",
+  "origin": "https://player.example.test",
+  "update_public_key": "REPLACE_WITH_BASE64_ED25519_PUBLIC_KEY",
+  "model": "Q1001L4B2",
+  "serial": "REPLACE_WITH_EXACT_HARDWARE_SERIAL"
+}

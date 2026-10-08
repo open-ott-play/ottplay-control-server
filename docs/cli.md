@@ -1693,3 +1693,17 @@ operator changed the configuration, reconcile those changes before retrying;
 deleting the journal or adding a second credential can lose the recovery path.
 Check context, namespace, Secret, Deployment and Pod events. Connect the player
 only after registration finishes successfully.
+
+### Independent Android agent
+
+`ott NAME android bind NATIVE_ALIAS` binds a separately provisioned native-agent
+queue. Do not reuse a WebView device token. `android status`, `logs`, `screenshot`,
+`recover`, `restart`, `reload` and `reboot` then use that independent channel.
+`android queue play ID...` starts the exact VPortal IDs in a looping kiosk;
+`queue status|next|prev|restart|stop` manages it. `queue stop` exits kiosk.
+
+The experimental API 19 agent requires one-time root USB installation; commands
+are unavailable until that installation and binding have succeeded. A published
+server/CLI does not install the agent. Native restart/capture work independently
+of the WebView; queue/playback commands need a responsive trusted player page.
+See [installation, acceptance and signed updates](../native/android-agent/README.md).
