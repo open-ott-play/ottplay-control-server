@@ -1,6 +1,7 @@
 """Offline report verification: real writers, hostile files, no player access."""
 import contextlib
 import copy
+import errno
 import hashlib
 import importlib.util
 import io
@@ -321,7 +322,10 @@ class ReportVerifyTest(unittest.TestCase):
             try:
                 action()
             except OSError as error:
-                self.assertEqual(error.winerror, 32)
+                # os.open goes through the CRT, which can expose EACCES
+                # without a winerror; rename uses the Win32 error mapping.
+                self.assertEqual(error.errno, errno.EACCES)
+                self.assertIn(getattr(error, "winerror", None), (None, 5, 32))
             else:
                 undo()
                 self.fail("Retained report handle allowed a conflicting operation")
@@ -349,8 +353,17 @@ class ReportVerifyTest(unittest.TestCase):
         verify.verify_manifest(raw_manifest, raw_result)
         self.assertEqual(checks, ["manifest.json", "result.json"])
         # ExitStack released every handle on successful completion.
-        fd = os.open(self.path / "result.json", os.O_WRONLY)
-        os.close(fd)
+        for filename in ("manifest.json", "result.json"):
+            target = self.path / filename
+            first_byte = target.read_bytes()[:1]
+            fd = os.open(target, os.O_WRONLY | os.O_BINARY)
+            try:
+                self.assertEqual(os.write(fd, first_byte), 1)
+            finally:
+                os.close(fd)
+            moved = self.path / (filename + ".moved")
+            target.rename(moved)
+            moved.rename(target)
         moved_directory = self.root / "released-case"
         self.path.rename(moved_directory)
         moved_directory.rename(self.path)
