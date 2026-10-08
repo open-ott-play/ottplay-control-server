@@ -1,6 +1,6 @@
 # Control players from the terminal
 
-The CLI uses Python 3 and its standard library; no `pip install` is needed.
+The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all six files together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py` and `workbench.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
@@ -28,9 +28,45 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 
 ## Installation and connection
 
+### Check the Python and TLS runtime
+
+The supported HTTPS profile uses the standard CPython/OpenSSL defaults with
+OpenSSL security level 2 or higher, TLS 1.2 or higher, certificate verification
+and hostname checking. The CLI does not lower these defaults. Older Python
+versions, alternative Python implementations and vendor-modified TLS defaults
+are outside this verified profile. Keep the Python/OpenSSL installation updated;
+do not lower its security level to connect to a server with an undersized key.
+
+Run this with the same interpreter that will run the CLI. On Windows, replace
+`python3` with `py -3`. It prints the runtime profile and exits unsuccessfully if
+the required settings are absent:
+
+```sh
+python3 -c 'import platform, ssl, sys
+context = ssl.create_default_context()
+print(platform.python_implementation(), platform.python_version())
+print(ssl.OPENSSL_VERSION)
+print("security_level=", context.security_level,
+      "minimum_tls=", context.minimum_version.name,
+      "verify_mode=", context.verify_mode.name,
+      "check_hostname=", context.check_hostname)
+supported = (platform.python_implementation() == "CPython"
+             and sys.version_info >= (3, 12)
+             and context.security_level >= 2
+             and context.minimum_version >= ssl.TLSVersion.TLSv1_2
+             and context.verify_mode == ssl.CERT_REQUIRED
+             and context.check_hostname)
+raise SystemExit(0 if supported else 1)'
+```
+
+This checks the local defaults, not a remote server's identity. Each HTTPS
+connection still verifies its certificate and hostname. The
+[security design](security-design.md#python-cli-https-profile) records the tested
+runtime and key-strength checks. Plain HTTP does not provide these protections.
+
 ### Install on macOS or Linux
 
-Install Python 3 and Git first. The native server release archives contain the
+Install CPython 3.12 or newer and Git first. The native server release archives contain the
 Go server, **not** the Python CLI. Obtain the CLI from a source checkout or the
 source archive for that CLI release. The examples below pin stable CLI v0.1.0,
 including signed channel offsets and the Unicode numeric-input validation fix.

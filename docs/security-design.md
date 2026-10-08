@@ -48,6 +48,25 @@ roots and custom dialer. HTTP behavior, redirect restrictions and timeouts are
 unchanged. This policy does not govern external browsers, reverse proxies or the
 Python CLI's separate TLS implementation.
 
+## Python CLI HTTPS profile
+
+The supported CLI runtime is CPython 3.12 or newer with standard OpenSSL defaults
+at security level 2 or higher. Its `urllib` HTTPS handlers use the default
+verified context; the CLI does not substitute an unverified context or reduce
+the security level. Python documents the TLS 1.2 minimum and rejection of
+RSA/DH keys below 2048 bits and ECC keys below 224 bits in these
+[SSL context defaults](https://docs.python.org/3.12/library/ssl.html#ssl.SSLContext).
+
+A local verification used CPython 3.12.14 with OpenSSL 3.5.8 and security level 2.
+The actual controller, EPG and diagnostics openers each accepted a synthetic
+RSA-2048 certificate chain and rejected RSA-1024 keys in the leaf, intermediate
+or trusted root before any HTTP request or authorization header reached the
+loopback server. This evidence applies to that runtime profile, not every
+Python build or external reverse proxy. Older runtimes and vendor overrides
+were not verified. Use the [runtime check](cli.md#check-the-python-and-tls-runtime)
+with the interpreter that launches the CLI; retain ordinary CA and hostname
+verification and replace weak server keys instead of weakening local defaults.
+
 ## Cryptographic implementation evidence
 
 Server credentials, pairing secrets and request identifiers are generated with
