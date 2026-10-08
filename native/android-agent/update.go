@@ -125,8 +125,11 @@ func (a *Agent) prepareUpdate(ctx context.Context, id, address, digest string) (
 			return nil, errors.New("expected ARM ELF")
 		}
 	}
-	if u.Kind == "apk" && !bytes.HasPrefix(payload, []byte("PK\x03\x04")) {
-		return nil, errors.New("expected APK archive")
+	if u.Kind == "apk" {
+		pkg, err := apkPackage(payload)
+		if err != nil || pkg != packageName {
+			return nil, errors.New("wrong APK package")
+		}
 	}
 	// A unique, root-private stage prevents a subsequent request from replacing
 	// bytes already approved by this request while its ACK is retried.
