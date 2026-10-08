@@ -62,7 +62,7 @@ func newHTTPClient() *http.Client {
 		roots = x509.NewCertPool()
 	}
 	roots.AppendCertsFromPEM(rootsPEM)
-	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: androidDialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, ResponseHeaderTimeout: 6 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects disabled") }}
+	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: androidDialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, VerifyConnection: verifyPeerCertificates}, ResponseHeaderTimeout: 6 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects disabled") }}
 }
 func (a *Agent) event(kind string) {
 	a.logs = append(a.logs, map[string]any{"time": time.Now().Unix(), "event": kind})

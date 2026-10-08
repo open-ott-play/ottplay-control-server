@@ -83,7 +83,9 @@ func run(args []string, out, errOut io.Writer) int {
 			fmt.Fprintln(errOut, "Invalid healthcheck URL.")
 			return 2
 		}
-		client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+		transport := newHealthcheckTransport()
+		defer transport.CloseIdleConnections()
+		client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 		resp, err := client.Get(probe)
 		if err != nil {
 			fmt.Fprintln(errOut, "Healthcheck failed.")
