@@ -50,6 +50,10 @@ Both server and player must include the request/response extension.
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
 cover macOS/Linux and Windows, Python/PATH setup and all seven required CLI files.
+They pin a reviewed 0.1.1 development source commit with workbench and offline
+verification; stable CLI v0.1.0 and native server archives do not include those
+commands. [Update or roll back the CLI](docs/cli.md#update-select-or-roll-back-the-cli)
+without replacing an existing checkout, launcher or private configuration.
 Local launchers can use the read-only [playlist resolver](docs/cli.md#local-playlist-resolver)
 to search channels, current programmes and playable archives without a controller.
 Once installed and configured:
@@ -179,6 +183,15 @@ On Android websites, system exit protection requires separate app pinning with
 a PIN; see [kiosk mode](docs/cli.md#kiosk-mode).
 
 ## Remote diagnostics
+
+Start with the [read-only workbench quick start](docs/workbench.md#quick-start)
+for `doctor`, UI/media `inspect`, operation receipt lookup, evidence bundles,
+`health`, web/native `media-progress` and offline `report verify`. It uses the
+existing administrator CLI configuration and player aliases. The native lane is
+for the separately provisioned Android maintenance agent; Tauri players use web
+inspection. Reports distinguish decoder progress from physical screen/sound
+verification. See [workbench troubleshooting](docs/workbench.md#troubleshooting)
+for missing capabilities, unavailable lanes and incomplete evidence.
 
 Optional [protocol 2 diagnostics](docs/remote-diagnostics.md) provides explicitly
 enabled, per-runtime sessions with separate scoped operator credentials and
