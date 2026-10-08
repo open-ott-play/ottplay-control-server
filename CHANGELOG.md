@@ -4,6 +4,8 @@
 
 ### Changes
 
+- Direct HTTPS validates all supplied certificate keys before listening and
+  serves the checked key pair without reloading it from disk.
 - The 0.1.1 development line adds bounded remote screenshot requests, strict
   kiosk controls, shared playlist/EPG resolution and ordered Plex queues with
   a read-only preview. The separate Android maintenance agent supports native
@@ -28,6 +30,11 @@
 
 ### Upgrade
 
+If using `--tls-cert` and `--tls-key`, replace any certificate chain containing
+RSA keys below 2048 bits or ECDSA keys below 224 bits before upgrading. Ed25519 is
+also supported; other key types are rejected. A reverse proxy still needs its
+own TLS policy.
+
 Retain server configuration, private CLI presets and pairing credentials. Update
 the player alongside the controller when adopting new remote commands; capability
 checks still determine which commands a device supports. Queues remain ephemeral
@@ -41,6 +48,10 @@ observations remain a distinct lane. Evidence exports require a new directory;
 keep previous exports and choose another location after an incomplete export.
 
 ### Security
+
+The direct HTTPS listener now rejects undersized keys in the supplied leaf,
+intermediate and included root certificates before accepting connections.
+Client certificate verification and HTTP-client trust policies are unchanged.
 
 Keep the controller behind the documented HTTPS/authentication boundary and treat
 screenshots, diagnostic responses and saved provider tokens as private data.

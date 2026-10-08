@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -118,18 +117,24 @@ func run(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	tlsConfig, err := loadServerTLSConfig(cert, key)
+	if err != nil {
+		fmt.Fprintln(errOut, "Invalid TLS certificate or key.")
+		return 1
+	}
 	h, err := control.New(c)
 	if err != nil {
 		fmt.Fprintln(errOut, "Cannot initialize server.")
 		return 1
 	}
-	server := &http.Server{Addr: c.Listen, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ErrorLog: log.New(io.Discard, "", 0)}
+	server := &http.Server{Addr: c.Listen, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192, TLSConfig: tlsConfig, ErrorLog: log.New(io.Discard, "", 0)}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, 1)
 	go func() {
 		if cert != "" {
-			done <- server.ListenAndServeTLS(cert, key)
+			// Serve the exact key pair checked before binding, without reloading files.
+			done <- server.ListenAndServeTLS("", "")
 		} else {
 			done <- server.ListenAndServe()
 		}
