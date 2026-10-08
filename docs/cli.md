@@ -1,8 +1,8 @@
 # Control players from the terminal
 
 The CLI uses Python 3 and its standard library; no `pip install` is needed.
-Keep all five files together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py` and `diagnostics_mcp.py`. Python 3.12 is the version used by CI. Commands take a short
+Keep all six files together: `ott.py`, `programme_search.py`, `playlist_search.py`,
+`diagnostics.py`, `diagnostics_mcp.py` and `workbench.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -23,6 +23,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
+- [Read-only doctor, inspect, bundles and test scenarios](workbench.md)
 - [Troubleshooting](#troubleshooting)
 
 ## Installation and connection
@@ -59,7 +60,9 @@ chmod 700 "$HOME/.config/ottplay-control"
 
 The local `resolve` command is not included in stable CLI v0.1.0. Until a
 release includes it, use a reviewed source revision containing
-`playlist_search.py` and keep all five CLI files from that revision together.
+`playlist_search.py` and keep all CLI files from that revision together. The
+read-only [workbench](workbench.md) additionally requires a revision containing
+`workbench.py`; it is not included in stable CLI v0.1.0.
 
 Keep the checkout after making the symlink; moving or deleting it breaks `ott`.
 Persist the PATH line in your shell's startup file (`~/.zshrc` for interactive
@@ -67,7 +70,7 @@ zsh or the appropriate bash startup file), then open a new terminal. `command -v
 shows which installation is selected. If `ott` already exists, inspect it before
 changing it; the example intentionally does not overwrite an existing command.
 From any checkout you can instead run `python3 /absolute/path/to/cli/ott.py --help`.
-If copying the files out of a source archive, copy all five together and make
+If copying the files out of a source archive, copy all files in `cli/` together and make
 `ott.py` executable with `chmod u+x /absolute/path/to/cli/ott.py` before linking it.
 
 ### Install on Windows
@@ -356,6 +359,7 @@ ott -c /private/cli.json tv
 ott --config /private/cli.json --timeout 60 --json tv status
 ott -t 60 -j tv channels
 ott --refresh tv p --list "Кино"
+ott --receipt tv restart
 ```
 
 - `-c FILE` / `--config FILE`: configuration path; otherwise `OTT_CONFIG`, then
@@ -368,6 +372,12 @@ ott --refresh tv p --list "Кино"
   still print text, even with this option; `pair` includes the private device token.
 - `--refresh`: bypass EPG history/search and archive-probe caches on the
   configured central EPG path. It does not reload the player or playlist.
+- `--receipt`: write one safe JSON line to stderr for every completed or failed
+  player RPC, preserving the command's normal stdout. Each line contains only
+  `action`, `request_id`, and `status` (`ok`, `rejected`, `unsupported`, or
+  `unknown`). A lost submit reply has `request_id:null` and `status:"unknown"`;
+  the CLI does not resend the POST. Multi-step commands emit one line per RPC.
+  Existing human-readable stderr diagnostics may accompany these JSON lines.
 - `-h` / `--help`: display the command summary.
 
 `--list` / `-l` is different: it follows `p`, `vp` or `vpr` before the title.
@@ -418,7 +428,7 @@ ott diagnostics --help
 ```
 
 The existing symlink follows the checkout. For a copied installation replace all
-five sibling Python files together from one version. Keep `cli.json`, presets
+six sibling Python files together from one version. Keep `cli.json`, presets
 and server credentials outside the checkout; updating CLI files does not update
 or restart the command server, native apps or players already open in a browser.
 After updating a hosted player, reload it and inspect `ott PLAYER caps`.
@@ -1528,7 +1538,7 @@ Add `~/.local/bin` to the current shell's PATH and its startup file, then reopen
 the terminal. Inspect `command -v ott` (or `type -a ott` in bash/zsh) for an older
 installation taking precedence. Check the symlink target still exists. Use
 `python3 /absolute/path/to/cli/ott.py --help` to separate PATH/executable problems
-from Python problems. Keep all five CLI files from the same source version in
+from Python problems. Keep all six CLI files from the same source version in
 the resolved target directory. A copied `ott.py` alone is not a complete install.
 On Windows use the `py -3 ...` invocation from the installation section.
 

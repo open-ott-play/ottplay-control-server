@@ -235,7 +235,7 @@ class CliTest(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(body)
             def do_GET(self):
-                body = json.dumps({'status': 'ok', 'data': {'volume': 35}}).encode()
+                body = json.dumps({'id': 'a' * 32, 'status': 'ok', 'data': {'volume': 35}}).encode()
                 self.send_response(200)
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
@@ -288,7 +288,7 @@ class CliTest(unittest.TestCase):
                 self.wfile.write(body)
             def do_GET(self):
                 reads.append(self.path)
-                body = json.dumps({'status': 'ok', 'data': {'volume': 35}}).encode()
+                body = json.dumps({'id': 'a' * 32, 'status': 'ok', 'data': {'volume': 35}}).encode()
                 self.send_response(200)
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
@@ -474,7 +474,7 @@ class ReadbackTest(unittest.TestCase):
         self.client.api = mock.Mock(side_effect=[
             (202, {'id': 'a' * 32}), ott.TransportError('lost readback'),
             ott.HTTPError(502), ott.HTTPError(503), ott.HTTPError(504),
-            (200, {'status': 'ok', 'data': {'volume': 40}})])
+            (200, {'id': 'a' * 32, 'status': 'ok', 'data': {'volume': 40}})])
         self.assertEqual(self.client.call('tv', 'command', {'volume_step': 5}), {'volume': 40})
         calls = self.client.api.call_args_list
         self.assertEqual(len(calls[0].args), 2)

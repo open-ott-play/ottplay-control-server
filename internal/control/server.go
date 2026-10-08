@@ -31,6 +31,7 @@ type entry struct {
 	screenshotRuntime string
 	plexQueue         *plexQueueRequest
 	playbackOperation string
+	inspect           *inspectRequest
 }
 type bucket struct {
 	start time.Time
