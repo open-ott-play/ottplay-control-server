@@ -453,7 +453,31 @@ class WorkbenchTest(unittest.TestCase):
         self.assertEqual(result["operation_state"], "handler_completed")
         self.assertEqual(result["observations"][0]["data"]["receipt"]["runtime"], "android-old")
         self.assertFalse(result["observations"][0]["data"]["effect_observed"])
-        self.assertEqual([row[1] for row in self.client.calls], ["maintenance"])
+        self.assertEqual([row[:3] for row in self.client.calls], [("native", "maintenance", {"operation": "health"})])
+
+    def test_native_operation_entrypoint_rejects_incomplete_receipt(self):
+        key = "c" * 32
+        complete = {"request_id": key, "state": "handler_completed", "action": "lifecycle",
+                    "operation": "reload_player", "runtime": "old", "updated_at": 123, "evidence": "handler_completed"}
+        for missing in (None, "action", "operation", "runtime", "updated_at"):
+            self.client.calls = []
+            row = copy.deepcopy(complete)
+            if missing: row.pop(missing)
+            self.client.native["operations"] = [row]
+            out = io.StringIO()
+            with mock.patch.object(ott, "Client", return_value=self.client), mock.patch.object(ott, "read_json", return_value={}), contextlib.redirect_stdout(out):
+                code = ott.main(["-t", "20", "a1", "operation", key, "--lane", "native", "--json"])
+            result = json.loads(out.getvalue())
+            self.assertEqual([call[:3] for call in self.client.calls], [("native", "maintenance", {"operation": "health"})])
+            self.assertEqual(code, 3 if missing else 0)
+            if missing:
+                self.assertEqual(result["observations"][0]["reason"], "invalid_response")
+                self.assertNotIn("operation_state", result)
+                self.assertNotIn("handler_completed", out.getvalue())
+            else:
+                self.assertEqual(result["operation_state"], "handler_completed")
+                self.assertEqual(result["observations"][0]["data"]["receipt"], complete)
+                self.assertFalse(result["observations"][0]["data"]["effect_observed"])
 
     def test_invalid_arguments_are_json_and_issue_no_requests(self):
         for words in (["test", "run", "health", "-j"], ["test", "run", "shell", "-j"],

@@ -280,8 +280,11 @@ class Workbench:
                 target = self.native_target()
                 raw = self.request(target, "maintenance", {"operation": "health"}, deadline, receipts)
                 if section == "operation":
-                    checked = self.api.android_metadata(raw, "maintenance", {"operation": "health"})
-                    data = self.api.native_operation_metadata(checked, operation_id)
+                    try:
+                        checked = self.api.android_metadata(raw, "maintenance", {"operation": "health"})
+                        data = self.api.native_operation_metadata(checked, operation_id)
+                    except self.api.Error:
+                        raise InvalidData() from None
                 else:
                     data = native_metadata(self.api, raw, "health")
             else:

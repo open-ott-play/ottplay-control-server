@@ -2283,17 +2283,24 @@ def android_metadata(data, action, params):
 
 def native_operation_metadata(data, operation_id):
     history = data.get("operations")
-    if history is not None and not isinstance(history, list):
+    if "operations" in data and not isinstance(history, list):
         raise Error("Invalid native operation history")
     rows = [row for row in (history or []) if isinstance(row, dict) and row.get("request_id") == operation_id]
     if len(rows) > 1:
         raise Error("Ambiguous native operation history")
     receipt = rows[0] if rows else {"request_id": operation_id, "state": "unknown", "evidence": "none"}
-    if receipt.get("state") is None or receipt.get("evidence") is None:
-        raise Error("Invalid native operation receipt")
+    if rows:
+        # The generic legacy projector permits omitted/null optional fields.
+        # A matching durable receipt requires a complete executor and operation.
+        required = ("action", "operation", "runtime", "updated_at", "state", "evidence")
+        if (any(receipt.get(key) is None for key in required)
+                or type(receipt["updated_at"]) is not int or receipt["updated_at"] <= 0
+                or (receipt["state"] == "handler_completed") != (receipt["evidence"] == "handler_completed")):
+            raise Error("Invalid native operation receipt")
     return {"version": 1, "runtime": data["runtime"], "operation_id": operation_id,
             "state": receipt["state"], "receipt": receipt,
-            "history_available": isinstance(data.get("operations"), list), "effect_observed": False}
+            "history_available": isinstance(history, list), "effect_observed": False}
+
 
 def android_command(client, config_path, device, name, words, json_output):
     """The native token has its own queue; never race the WebView consumer."""
