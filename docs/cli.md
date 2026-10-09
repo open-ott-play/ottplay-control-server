@@ -1742,11 +1742,30 @@ and VOD. Ordinary remote playback/provider/profile mutations and exit commands
 are rejected as well. Read queries, volume/mute, notifications and explicit remote
 restarts remain available. Only the `kiosk` request changes this policy.
 
-Use `ott tv kiosk on --strict [CHANNEL]` to allow only a short tap or the Info key
-to display a read-only video footer for five seconds. Local pause, seeking,
-volume/mute, menus, player exit, swipes, long presses and multi-touch are blocked.
-Repeated taps do not expand details. Stopping the current diagnostic capture remains
-available locally; it does not disconnect the remote controller. Remote volume/mute and recovery are unchanged.
+Use `ott tv kiosk on --strict [CHANNEL]` to let a short tap or the Info key display
+the video footer for five seconds. Updated core players allow tapping or dragging
+the footer timeline to seek within the current VPortal/Plex episode, while the
+queue and strict lock remain in place. This requires a known finite duration;
+older players and channel kiosks retain a read-only footer. The CLI receipt
+confirms the strict policy, not support for local timeline seeking.
+
+For example, with a saved Plex profile and the Plex provider selected:
+
+```sh
+ott f10 plex play 78777 78776 78775
+ott f10 kiosk on --strict
+# On the player: tap to show the footer, then tap or drag its timeline.
+ott f10 kiosk off           # release the lock before replacing the queue
+```
+
+The seek gesture is cancelled if the episode, source, player or kiosk policy
+changes, or if the gesture becomes a vertical swipe or uses multiple fingers.
+Seeking stops at least one second before the end; normal playback can still
+advance to the next episode afterwards. Local pause, keyboard/remote seeking,
+volume/mute, menus and player exit remain blocked. Swipes and long presses outside
+the timeline are blocked, and repeated taps do not expand details. Stopping the
+current diagnostic capture remains available locally; it does not disconnect
+the remote controller. Remote volume/mute and recovery are unchanged.
 
 With an existing lock, `kiosk on --strict` upgrades it without changing the target;
 with no TV lock it waits for the first UI selection. `kiosk set CHANNEL` preserves
