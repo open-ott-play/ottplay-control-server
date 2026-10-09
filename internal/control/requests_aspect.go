@@ -30,14 +30,20 @@ func parseAspectRequest(params map[string]json.RawMessage) *aspectRequest {
 	return nil
 }
 
-func validAspectResult(raw json.RawMessage, expected *aspectRequest) bool {
-	if expected == nil {
+func validAspectResult(raw json.RawMessage, status string, expected *aspectRequest) bool {
+	if expected == nil || (status != "ok" && status != "rejected" && status != "unsupported") {
 		return false
 	}
 	fields, err := decodeObject(raw)
 	keys := []string{"version", "runtime", "operation", "mode", "saved_mode", "persisted"}
 	if expected.Operation == "set" {
 		keys = []string{"version", "runtime", "operation", "mode", "accepted", "dispatched", "effect"}
+	}
+	if status != "ok" {
+		keys = []string{"version", "runtime", "operation", "error"}
+		if expected.Operation == "set" {
+			keys = append(keys, "mode")
+		}
 	}
 	if err != nil || len(fields) != len(keys) {
 		return false
@@ -59,9 +65,20 @@ func validAspectResult(raw json.RawMessage, expected *aspectRequest) bool {
 		Accepted   *bool   `json:"accepted"`
 		Dispatched *bool   `json:"dispatched"`
 		Effect     string  `json:"effect"`
+		Error      string  `json:"error"`
 	}
 	if json.Unmarshal(raw, &v) != nil || v.Version != 1 || v.Runtime != expected.Runtime ||
-		v.Operation != expected.Operation || (v.Mode != "fit" && v.Mode != "fill") {
+		v.Operation != expected.Operation {
+		return false
+	}
+	if status != "ok" {
+		switch v.Error {
+		case "invalid_request", "runtime_mismatch", "restricted", "unsupported", "unavailable":
+			return expected.Operation == "get" || (expected.Operation == "set" && v.Mode == expected.Mode)
+		}
+		return false
+	}
+	if v.Mode != "fit" && v.Mode != "fill" {
 		return false
 	}
 	switch expected.Operation {

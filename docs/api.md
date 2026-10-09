@@ -184,9 +184,9 @@ Successful `set` acceptance data is exactly:
 
 The response echoes the bound runtime and requested mode. It does not claim
 that the setting has already been applied or saved. The controller validates
-the exact successful response shape, runtime, operation, mode and persistence
-consistency before acknowledgement, including response retries. The player applies the
-change once, only after the existing successful response acknowledgement,
+response shape and request binding before acknowledgement, including response
+retries. Successful reads must also have consistent persistence fields. The
+player applies the change once, only after the existing successful response acknowledgement,
 and rechecks expiry, runtime/connection generation, media target, screen owner
 and kiosk/PIN/protected-input policy first. Expired or invalidated callbacks
 must be discarded; replaying a cached result must not recreate the effect.
@@ -194,6 +194,20 @@ Use a new read request to confirm mode and persistence. Timeouts and rejected
 or malformed results do not authorize automatic resubmission of a set request.
 The web operation journal can report `action: "aspect"` for set requests;
 handler completion is not evidence of saved settings or visible output.
+
+Negative `rejected` or `unsupported` responses are bound to the same request too.
+Their data has exactly these fields (`mode` is present only for a set):
+
+```json
+{"version":1,"runtime":"page-123-abcd","operation":"get","error":"unavailable"}
+{"version":1,"runtime":"page-123-abcd","operation":"set","mode":"fill","error":"restricted"}
+```
+
+`error` is one of `invalid_request`, `runtime_mismatch`, `restricted`,
+`unsupported` or `unavailable`. Runtime, operation and set mode must match the
+queued request. Generic or mismatched negative responses are rejected without
+removing it, so an older page cannot close another runtime's request by replying
+that aspect control is unsupported.
 
 These requests use the same authentication, device ownership, bounded queue,
 TTL and result limits as the other typed actions. They do not grant native

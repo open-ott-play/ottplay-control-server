@@ -335,9 +335,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid inspect result")
 		return
 	}
-	// A deferred aspect effect must only receive a successful acknowledgement
-	// for the requested runtime, operation and mode, including response retries.
-	if aspect != nil && status == "ok" && !validAspectResult(m["data"], aspect) {
+	// Every aspect response belongs to the requested runtime and operation.
+	// An unbound or stale negative response must not consume another page's work.
+	if aspect != nil && !validAspectResult(m["data"], status, aspect) {
 		failure(w, 400, "invalid aspect result")
 		return
 	}

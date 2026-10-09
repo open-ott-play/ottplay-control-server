@@ -122,13 +122,21 @@ func TestAspectGetResultPersistenceIsDerivedFromSavedMode(t *testing.T) {
 	}
 }
 
-func TestAspectNegativeResultKeepsGenericSchemaAndRequestContext(t *testing.T) {
+func aspectNegativeResultFixture(operation string) map[string]any {
+	data := map[string]any{"version": 1, "runtime": "page-123", "operation": operation, "error": "unsupported"}
+	if operation == "set" {
+		data["mode"] = "fill"
+	}
+	return data
+}
+
+func TestAspectNegativeResultKeepsRequestContext(t *testing.T) {
 	for _, operation := range []string{"get", "set"} {
 		for _, status := range []string{"rejected", "unsupported"} {
 			t.Run(operation+"/"+status, func(t *testing.T) {
 				s := newTestServer(t)
 				id := rpcID(t, s, aspectRequestFixture(operation))
-				body := screenshotEnvelope(id, status, map[string]any{"error": "unsupported"})
+				body := screenshotEnvelope(id, status, aspectNegativeResultFixture(operation))
 				expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
 				expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
 				data := aspectResultFixture(operation)

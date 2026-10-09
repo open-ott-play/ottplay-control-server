@@ -1535,8 +1535,9 @@ with that reserved name.
 
 The CLI first reads `caps.aspect`, checks the requested operation and mode, and
 binds the request to that page's runtime. Both steps share one `--timeout`
-budget. A missing/unsupported capability or a read-only capability rejects the
-change before any aspect mutation is sent. It never substitutes keypresses or
+budget. The controller checks that success and rejection responses belong to
+the same runtime and operation. A missing/unsupported capability or a read-only
+capability rejects the change before any aspect mutation is sent. It never substitutes keypresses or
 cycles through modes. The older pinned workbench installation example in this
 guide predates aspect support: install a source revision or release whose
 `ott --help` lists `aspect`, and update both the controller and the target player.

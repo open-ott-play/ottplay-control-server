@@ -127,7 +127,12 @@ func TestAspectRequestsKeepAuthenticationAndAcknowledgementBoundaries(t *testing
 			if strings.Contains(poll.Body.String(), id) {
 				t.Fatal("aspect request leaked to another device")
 			}
-			body := `{"id":"` + id + `","status":"rejected","data":{"error":"protected_ui"}}`
+			var negative map[string]any
+			if err := json.Unmarshal([]byte(params), &negative); err != nil {
+				t.Fatal(err)
+			}
+			negative["version"], negative["error"] = 1, "restricted"
+			body := screenshotEnvelope(id, "rejected", negative)
 			expect(t, request(s, "POST", "/api/responses", adminToken, body, nil), 403)
 			expect(t, request(s, "POST", "/api/responses", secondToken, body, nil), 404)
 			expect(t, request(s, "POST", "/api/responses?device_id=second", firstToken, body, nil), 403)
@@ -147,14 +152,14 @@ func TestAspectRequestsKeepAuthenticationAndAcknowledgementBoundaries(t *testing
 }
 
 func TestAspectRequestsExpireWithoutReplaying(t *testing.T) {
-	for _, operation := range []string{`"get"`, `"set","mode":"fill"`} {
+	for _, operation := range []string{"get", "set"} {
 		t.Run(operation, func(t *testing.T) {
 			s := newTestServer(t)
 			now := time.Unix(1_700_000_000, 0)
 			s.now = func() time.Time { return now }
-			id := rpcID(t, s, `{"action":"aspect","params":{"operation":`+operation+`,"runtime":"page-123"}}`)
+			id := rpcID(t, s, aspectRequestFixture(operation))
 			now = now.Add(s.ttl + time.Second)
-			expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"unsupported","data":{}}`, nil), 404)
+			expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, "unsupported", aspectNegativeResultFixture(operation)), nil), 404)
 			expect(t, request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil), 404)
 			if len(s.devices[0].queue) != 0 || s.bytes != 0 || s.resultBytes != 0 {
 				t.Fatal("expired aspect request or response remained stored")
