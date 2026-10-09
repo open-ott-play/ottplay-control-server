@@ -16,6 +16,7 @@ MAX_MANIFEST_BYTES = 4 * 1024
 MAX_JSON_DEPTH = 32
 FILES = frozenset(("manifest.json", "result.json"))
 POLICY = "workbench-v2"
+DEBUG_POLICY = "workbench-v3"
 LEGACY_POLICY = "legacy-web-v1"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 ERROR_REASONS = frozenset((
@@ -235,10 +236,11 @@ def _logs(value, api, workbench, runtime):
     api.android_metadata({"version": 1, "events": events}, "maintenance", {"operation": "logs"})
 
 
-def _observations(rows, api, workbench, bundle, ids):
+def _observations(rows, api, workbench, bundle, ids, section="snapshot"):
     require(isinstance(rows, list) and 1 <= len(rows) <= 2)
     require(all(isinstance(row, dict) for row in rows))
     require([row.get("lane") for row in rows] in (["web"], ["native"], ["web", "native"]))
+    require(section != "debug" or [row["lane"] for row in rows] == ["web"])
     result = []
     for raw in rows:
         lane, status = raw["lane"], raw.get("status")
@@ -268,11 +270,12 @@ def _observations(rows, api, workbench, bundle, ids):
             runtime = workbench.token(raw["runtime"])
             if lane == "web":
                 require(caps is not None and caps["player"]["runtime"] == runtime
-                        and "snapshot" in caps.get("inspect", {}).get("sections", []))
+                        and ("debug" in caps if section == "debug" else "snapshot" in caps.get("inspect", {}).get("sections", [])))
                 require([item["action"] for item in requests] == ["capabilities", "inspect"]
                         and all(item["status"] == "ok" for item in requests))
-                data = workbench.snapshot_metadata({"version": 1, "runtime": runtime, "section": "snapshot", "data": raw.get("data")},
-                                                   runtime, "snapshot")
+                envelope = {"version": 1, "runtime": runtime, "section": section, "data": raw.get("data")}
+                data = (workbench.debug_metadata(envelope, runtime) if section == "debug"
+                        else workbench.snapshot_metadata(envelope, runtime, "snapshot"))
                 require("logs" not in raw and "logs_error" not in raw)
             else:
                 require(requests and requests[0]["status"] == "ok" and (bundle or len(requests) == 1))
@@ -296,7 +299,7 @@ def _observations(rows, api, workbench, bundle, ids):
 def evaluate_report(report, api, workbench):
     require(isinstance(report, dict) and type(report.get("version")) is int and report["version"] == 1)
     policy = report.get("evaluator", LEGACY_POLICY)
-    require("evaluator" not in report or policy == POLICY, "unsupported_evaluator")
+    require("evaluator" not in report or policy in (POLICY, DEBUG_POLICY), "unsupported_evaluator")
     require(report.get("command") in ("bundle", "test") and report.get("read_only") is True
             and report.get("physical_display_verified") is False)
     require(isinstance(report.get("device_id"), str)
@@ -309,6 +312,15 @@ def evaluate_report(report, api, workbench):
     bundle = report["command"] == "bundle"
     ids = set()
     before = _observations(report.get("observations"), api, workbench, bundle, ids)
+    if policy == DEBUG_POLICY:
+        require(bundle and "debug_observations" in report)
+        debug = report["debug_observations"]
+        if [row["lane"] for row in before] == ["native"]:
+            require(debug == [])
+        else:
+            _observations(debug, api, workbench, True, ids, "debug")
+    else:
+        require("debug_observations" not in report)
     if bundle:
         require("scenario" not in report and "reason" not in report and "final_observations" not in report)
         kind = "bundle"
@@ -367,7 +379,7 @@ def main(argv, api, workbench, json_output=False):
         report = _json(raw)
         if isinstance(report, dict):
             marker = report.get("evaluator", LEGACY_POLICY)
-            if marker in (POLICY, LEGACY_POLICY) and isinstance(marker, str):
+            if marker in (POLICY, DEBUG_POLICY, LEGACY_POLICY) and isinstance(marker, str):
                 result["evaluation_policy"] = marker
         result.update(evaluate_report(report, api, workbench), valid=True)
     except SystemExit as exc:

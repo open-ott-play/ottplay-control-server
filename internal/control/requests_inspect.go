@@ -94,7 +94,7 @@ func inspectArray(raw json.RawMessage, maximum int) ([]json.RawMessage, bool) {
 
 func parseInspectRequest(params map[string]json.RawMessage) *inspectRequest {
 	runtime, ok := inspectToken(params["runtime"], 96)
-	if !ok || !inspectNumber(params["version"], 1, 1, true, false) || !inspectEnum(params["section"], "doctor", "snapshot", "operation") {
+	if !ok || !inspectNumber(params["version"], 1, 1, true, false) || !inspectEnum(params["section"], "doctor", "snapshot", "operation", "debug") {
 		return nil
 	}
 	section, _ := inspectString(params["section"], 32)
@@ -133,6 +133,9 @@ func validInspectResult(raw json.RawMessage, status string, expected *inspectReq
 	}
 	if expected.Section == "operation" {
 		return validInspectOperation(m["data"], expected.OperationID)
+	}
+	if expected.Section == "debug" {
+		return validDebugSnapshot(m["data"], expected.Runtime)
 	}
 	return validDoctorSnapshot(m["data"], expected.Runtime)
 }

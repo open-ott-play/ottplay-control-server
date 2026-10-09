@@ -23,7 +23,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
-- [Read-only doctor, inspect, bundles and test scenarios](workbench.md)
+- [Read-only doctor, inspect, debug, bundles and test scenarios](workbench.md)
 - [Verify saved reports offline](workbench.md#verify-saved-evidence-offline)
 - [Troubleshooting](#troubleshooting)
 

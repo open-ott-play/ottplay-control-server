@@ -60,6 +60,7 @@ type device struct {
 }
 
 type Server struct {
+	started                time.Time
 	diagnostics            *diagnosticsState
 	mu                     sync.Mutex
 	admin                  [32]byte
@@ -84,7 +85,7 @@ func New(c config.Config) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	s := &Server{admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now}
+	s := &Server{started: time.Now(), admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now}
 	var err error
 	s.diagnostics, err = newDiagnostics(c)
 	if err != nil {
@@ -263,7 +264,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if path == "/api/pairings/approve" {
 			methods = "POST"
 		}
-	case "/healthz", "/readyz", "/api/devices", wire.LegacyPollPath:
+	case "/healthz", "/readyz", "/api/devices", "/api/debug", wire.LegacyPollPath:
 		methods = "GET"
 	case wire.CommandPath:
 		methods = "GET,POST"
@@ -318,7 +319,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := path == "/api/devices" || path == "/api/requests" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
+	requiresAdmin := path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
 	if requiresAdmin != admin {
 		failure(w, 403, "credential role is not allowed")
 		return
@@ -338,6 +339,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/devices" {
 		s.list(w, r, now)
+		return
+	}
+	if path == "/api/debug" {
+		s.debug(w, r, now)
 		return
 	}
 	if path == "/api/requests" || path == "/api/responses" {
