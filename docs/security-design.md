@@ -28,7 +28,7 @@ still validate certificate trust, hostname and validity; their trust stores and
 any omitted root are outside this check. It does not introduce client-certificate
 authentication. When TLS is
 terminated by a reverse proxy, the proxy needs its own certificate policy.
-Setting `GODEBUG=fips140=on` alone is not a substitute: the tested Go 1.26.8 server
+Setting `GODEBUG=fips140=on` alone is not a substitute: the tested Go 1.26.9 server
 accepted its own RSA-1024 certificate with that setting before this check existed.
 
 ## Outbound HTTPS certificate policy

@@ -115,6 +115,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parseInspectRequest(params) != nil
 	case "plex_queue":
 		ok = parsePlexQueueRequest(params) != nil
+	case "app_update":
+		ok = validAppUpdateRequest(params)
 	case "maintenance":
 		ok = validMaintenanceRequest(params)
 	case "vportal_queue":

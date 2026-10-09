@@ -1919,3 +1919,30 @@ For an updated Android agent, use `ott a1 android operation REQUEST_ID` or
 receipt without repeating the operation. `handler_completed` confirms handler
 return only; `unknown` must not trigger automatic replay. See
 [native evidence and retention](../native/android-agent/README.md#durable-operation-history).
+
+## Capacitor APK updates over Wi-Fi
+
+A Capacitor player with the `AppUpdate` plugin supports the normal player queue:
+
+```sh
+ott f10 update status
+ott f10 update prepare HTTPS_APK_URL SHA256
+ott f10 update status
+ott f10 update install SHA256
+```
+
+Use the signed APK and its exact SHA-256 from the same `ottplay-foss` release.
+Wait for `ready` before sending `install`. The player requires a newer version,
+matching application ID and matching installed signing certificate. No native
+agent binding or USB cable is required after the first compatible APK is installed.
+
+Turn kiosk off and unlock protected settings first. `install` is acknowledged
+before the OS installer opens. Android may ask for installation permission and
+confirmation on the device; this is not a silent root installation. If status is
+`awaiting_permission`, grant permission on the tablet, then send `install` again.
+An accepted request does not prove installation: check `update status` after the
+player reconnects and confirm its installed version. Downloads and errors expose
+only bounded metadata, not URLs, tokens or APK contents.
+
+The existing `android update` command is separate: it addresses a provisioned
+native/root agent and continues to use its signed manifest protocol.
