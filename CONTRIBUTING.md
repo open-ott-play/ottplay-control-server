@@ -22,7 +22,7 @@ python3 -m unittest discover -s .github/release-tests
 python3 scripts/check_deployment.py
 ```
 
-Use Go 1.26.8 and Python 3.12 as documented in docs/development.md. Native builds, container smoke, deployment contracts and release receipts are distinct checks. Queue acknowledgement is not durable exactly-once delivery.
+Use Go 1.26.9 and Python 3.12 as documented in docs/development.md. Native builds, container smoke, deployment contracts and release receipts are distinct checks. Queue acknowledgement is not durable exactly-once delivery.
 
 The [CI workflow](.github/workflows/ci.yml) is the authoritative list of required jobs.
 Use isolated test data and temporary outputs. Never run a device write, unlock,
