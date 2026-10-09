@@ -184,9 +184,11 @@ resolves media URLs again for recovery. Use `kiosk off` to choose another title
 or change profiles, then `kiosk on` to lock it. The kiosk receipt shows the title
 and episode count; provider requests and stream URLs stay on the player.
 
-Use `ott a1 kiosk on --strict` for child-facing playback: local taps only show
-the read-only video footer, and local player controls are blocked. An existing
-lock keeps its target. Release it with `ott a1 kiosk off` from the controller.
+Use `ott a1 kiosk on --strict` for child-facing playback: a local tap shows the
+video footer. Updated core players allow tapping or dragging its timeline to
+seek within the current VPortal/Plex episode; other local controls remain locked.
+Older players and channel kiosks retain a read-only footer. An existing lock
+keeps its target. Release it with `ott a1 kiosk off` from the controller.
 On Android websites, system exit protection requires separate app pinning with
 a PIN; see [kiosk mode](docs/cli.md#kiosk-mode).
 

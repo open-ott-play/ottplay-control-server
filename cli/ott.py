@@ -116,7 +116,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME standby / wake            enter or leave player standby
   ott NAME kiosk [status]            show kiosk policy and playback health
   ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal/Plex video queue
-  ott NAME kiosk on --strict [CHANNEL]  allow only the read-only video info footer locally
+  ott NAME kiosk on --strict [CHANNEL]  lock local controls; media-footer seeking needs a supported player
   ott NAME kiosk set CHANNEL         replace by number or first name match
   ott NAME kiosk off                 release the kiosk lock
   ott NAME random [FROM TO]          play a random channel
@@ -2893,7 +2893,7 @@ def main(argv=None):
                 print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")
         elif action == "kiosk":
             if data.get("strict"):
-                print("Strict kiosk: local controls locked; only the read-only video info footer is available.")
+                print("Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.")
             if data["state"] == "off":
                 print("Kiosk mode disabled.")
             elif data["state"] == "waiting":

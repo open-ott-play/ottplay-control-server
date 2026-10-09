@@ -4,6 +4,9 @@
 
 ### Changes
 
+- Update strict-kiosk help and examples for local timeline seeking within a
+  VPortal/Plex episode on supported players; older players keep a read-only footer.
+
 - Add explicit `aspect` readback and `aspect fit|fill` controls, including the
   full names `Fit to screen` and `Fill screen`. The CLI checks support before
   sending runtime-bound requests and reports saved-setting readback;
