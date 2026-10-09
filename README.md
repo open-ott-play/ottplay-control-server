@@ -225,3 +225,5 @@ MIT. Vendored release-tooling attribution is recorded in `NOTICE` and `LICENSES/
 See [contribution and test requirements](CONTRIBUTING.md), the
 [security reporting policy](SECURITY.md), [security design](docs/security-design.md),
 and the [OpenSSF evidence and remaining criteria](docs/openssf-evidence.md).
+
+Plex queues accept up to 500 IDs on current players. Use `ott f10 plex play --shuffle ID...` to shuffle once, then `ott f10 kiosk on --strict` while the Plex provider is selected to loop and lock that queue. `ott f10 kiosk off` releases the lock. Older players retain their advertised queue limit.

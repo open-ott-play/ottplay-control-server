@@ -6,9 +6,9 @@ import (
 	"regexp"
 )
 
-const maxPlexQueueItems = 100
+const maxPlexQueueItems = 500
 const maxPlexQueueResultBytes = 16 * 1024
-const maxPlexPreviewResultBytes = 128 * 1024
+const maxPlexPreviewResultBytes = 1024 * 1024
 
 var plexQueueIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 
@@ -104,7 +104,7 @@ func validPlexQueueResult(raw json.RawMessage, request *plexQueueRequest) bool {
 	var active *bool
 	if !profileInteger(m["version"], 1, 1) || json.Unmarshal(m["runtime"], &runtime) != nil || !screenshotRuntimePattern.MatchString(runtime) ||
 		json.Unmarshal(m["active"], &active) != nil || active == nil || json.Unmarshal(m["state"], &state) != nil ||
-		json.Unmarshal(m["repeat"], &repeat) != nil || repeat != "none" || json.Unmarshal(m["order"], &order) != nil || order != "listed" {
+		json.Unmarshal(m["repeat"], &repeat) != nil || (repeat != "none" && repeat != "all") || json.Unmarshal(m["order"], &order) != nil || order != "listed" {
 		return false
 	}
 	ids, valid := plexQueueIDs(m["ids"], 0)

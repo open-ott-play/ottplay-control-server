@@ -77,7 +77,7 @@ class PlexQueueTest(unittest.TestCase):
 
     def test_invalid_ids_and_syntax_send_nothing(self):
         invalid = [[], ['0'], ['01'], ['-1'], ['+1'], ['1.0'], ['1e3'], ['１２'], ['1' * 21],
-                   ['https://private/' + SECRET], ['Film title'], ['1'] * 101]
+                   ['https://private/' + SECRET], ['Film title'], ['1'] * 501]
         for ids in invalid:
             for verb in ['play', 'preview']:
                 code, out, err, calls = self.run_cli(['plex', verb] + ids, [])
@@ -87,6 +87,23 @@ class PlexQueueTest(unittest.TestCase):
             self.assertEqual(self.run_cli(words, [])[3], [])
         self.assertEqual(ott.parse_command(['plex', 'play', '1', '1'])[1]['ids'], ['1', '1'])
         self.assertEqual(len(ott.parse_command(['plex', 'play'] + ['9' * 20] * 100)[1]['ids']), 100)
+
+    def test_large_queue_honors_advertised_limit_and_shuffle_keeps_every_item(self):
+        ids = [str(i + 1) for i in range(265)]
+        new = caps(); new['plex_queue']['max_items'] = 500
+        action, params = ott.parse_command(['plex', 'play', '--shuffle'] + ids)
+        self.assertEqual(action, 'plex_queue')
+        self.assertCountEqual(params['ids'], ids)
+        with mock.patch.object(ott.secrets.SystemRandom, 'shuffle', side_effect=lambda value: value.reverse()):
+            self.assertEqual(ott.parse_command(['plex', 'play', '--shuffle'] + ids)[1]['ids'], ids[::-1])
+        code, out, err, calls = self.run_cli(['plex', 'play'] + ids, [caps()])
+        self.assertEqual((code, len(calls)), (1, 1))
+        self.assertIn('at most 100', err)
+        result = {**queue(), "ids": ids}
+        code, out, err, calls = self.run_cli(['plex', 'play'] + ids, [new, result])
+        self.assertEqual((code, len(calls)), (0, 2), err)
+        result['repeat'] = 'all'
+        self.assertEqual(ott.plex_queue_metadata(result)['repeat'], 'all')
 
     def test_unsupported_player_and_malformed_caps_never_mutate(self):
         old = caps(); old.pop('plex_queue')
@@ -101,10 +118,10 @@ class PlexQueueTest(unittest.TestCase):
     def test_invalid_or_stale_receipts_never_claim_success_or_replay(self):
         mutations = [lambda v: v.update(runtime='other-page'), lambda v: v.update(ids=list(reversed(IDS))),
                      lambda v: v.update(index=1), lambda v: v.update(index=True), lambda v: v.update(active=1),
-                     lambda v: v.update(repeat='all'), lambda v: v.update(order='random'),
+                     lambda v: v.update(repeat='invalid'), lambda v: v.update(order='random'),
                      lambda v: v.update(url='https://private/' + SECRET), lambda v: v.update(error=SECRET),
                      lambda v: v.update(title='x' * 513), lambda v: v.update(title='bad\ntext'),
-                     lambda v: v.update(ids=['1'] * 101), lambda v: v.pop('index')]
+                     lambda v: v.update(ids=['1'] * 501), lambda v: v.pop('index')]
         for mutate in mutations:
             value = queue(); mutate(value)
             code, out, err, calls = self.run_cli(['plex', 'play'] + IDS, [caps(), value], True)

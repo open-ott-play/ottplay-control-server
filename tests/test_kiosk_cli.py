@@ -31,6 +31,7 @@ class KioskTest(unittest.TestCase):
     def test_vportal_receipt_is_metadata_only(self):
         data={'enabled':True,'state':'locked','channel':None,'provider':'vportal','retry_seconds':10,'retries':0,'health':'starting',
               'media':{'title':'Episode','index':0,'total':2,'request':{'private':'secret'}}}
+        self.assertEqual(ott.kiosk_metadata({**data,'provider':'plex'},'on')['provider'], 'plex')
         result=ott.kiosk_metadata(data,'on')
         self.assertEqual(result['media'],{'title':'Episode','index':0,'total':2})
         for patch in [{'provider':'m3u'},{'channel':{'id':'a','name':'Channel'}},{'media':{'title':'Episode','index':2,'total':2}}]:

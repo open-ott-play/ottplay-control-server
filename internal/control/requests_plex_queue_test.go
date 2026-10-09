@@ -57,7 +57,7 @@ func TestPlexQueueRequestValidation(t *testing.T) {
 		`{"op":"prev","runtime":"page-123"}`, `{"op":"status","runtime":"page_123"}`,
 		`{"op":"status","runtime":"page-123","op":"stop"}`, `{"op":"preview","runtime":"page-123","ids":["1e3"]}`,
 		`{"op":"play","runtime":"page-123","ids":["` + strings.Repeat("1", 21) + `"]}`,
-		`{"op":"play","runtime":"page-123","ids":[` + strings.Repeat(`"1",`, 100) + `"1"]}`,
+		`{"op":"play","runtime":"page-123","ids":[` + strings.Repeat(`"1",`, maxPlexQueueItems) + `"1"]}`,
 	} {
 		s := newTestServer(t)
 		expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, `{"action":"plex_queue","params":`+params+`}`, nil), 400)
@@ -116,7 +116,7 @@ func TestPlexQueueRejectsStaleUnsafeOrInconsistentReceipts(t *testing.T) {
 		func(v map[string]any) { v["version"] = nil },
 		func(v map[string]any) { v["url"] = "https://private/secret" },
 		func(v map[string]any) { v["error"] = "private error containing token" },
-		func(v map[string]any) { v["repeat"] = "all" },
+		func(v map[string]any) { v["repeat"] = "invalid" },
 		func(v map[string]any) { v["title"] = strings.Repeat("x", 513) },
 		func(v map[string]any) { v["title"] = "bad\ncontrol" },
 		func(v map[string]any) { delete(v, "index") },
@@ -137,8 +137,8 @@ func TestPlexQueueRejectsStaleUnsafeOrInconsistentReceipts(t *testing.T) {
 }
 
 func TestPlexPreviewBoundAndGenericPlaybackVariant(t *testing.T) {
-	ids := make([]string, 100)
-	titles := make([]string, 100)
+	ids := make([]string, maxPlexQueueItems)
+	titles := make([]string, maxPlexQueueItems)
 	for i := range ids {
 		ids[i] = "1"
 		titles[i] = strings.Repeat("\"\\", 256)
