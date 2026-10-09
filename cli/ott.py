@@ -68,6 +68,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME plex token-file FILE      update the Plex token from a file
   ott NAME plex preview ID [ID ...]  check the listed Plex items without starting playback
   ott NAME plex play ID [ID ...]     play IDs in order from the start; stop after the last
+  ott NAME plex play --shuffle ID...  shuffle all IDs once; kiosk on repeats that order
   ott NAME plex queue / status       show the Plex queue without changing it
   ott NAME plex next / prev / stop   move within or clear the Plex queue (no wrapping)
   ott NAME playlist URL              update the M3U playlist
@@ -112,7 +113,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME android update HTTPS_URL SHA256  install a signed update manifest
   ott NAME standby / wake            enter or leave player standby
   ott NAME kiosk [status]            show kiosk policy and playback health
-  ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal video/episode queue
+  ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal/Plex video queue
   ott NAME kiosk on --strict [CHANNEL]  allow only the read-only video info footer locally
   ott NAME kiosk set CHANNEL         replace by number or first name match
   ott NAME kiosk off                 release the kiosk lock
@@ -172,7 +173,7 @@ RECEIPT_ACTIONS = frozenset((
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
-MAX_PLEX_QUEUE_ITEMS = 100
+MAX_PLEX_QUEUE_ITEMS = 500
 PLEX_QUEUE_ERRORS = frozenset((
     "Plex configuration is missing or invalid.",
     "Plex provider module could not be loaded.",
@@ -949,9 +950,14 @@ def parse_command(words):
         operation = {"queue": "status", "prev": "previous"}.get(operation, operation)
         if operation in PLEX_QUEUE_OPERATIONS:
             ids = tail[1:]
+            shuffle = operation == "play" and ids[:1] == ["--shuffle"]
+            if shuffle:
+                ids = ids[1:]
             if operation in ("play", "preview"):
                 if not plex_queue_ids(ids, 1):
-                    raise Error("Use plex play/preview with 1–100 positive decimal Plex IDs (no leading zeros, URLs or titles)")
+                    raise Error("Use plex play/preview with 1–500 positive decimal Plex IDs (no leading zeros, URLs or titles)")
+                if shuffle:
+                    secrets.SystemRandom().shuffle(ids)
                 return "plex_queue", {"op": operation, "ids": ids}
             if ids:
                 raise Error("Use plex queue/status, next, prev/previous or stop without extra arguments")
@@ -1407,7 +1413,7 @@ def kiosk_metadata(data, mode, require_strict=False):
     channel = data.get("channel")
     media = data.get("media")
     if media is not None:
-        if (data["state"] != "locked" or data.get("provider") != "vportal" or channel is not None
+        if (data["state"] != "locked" or data.get("provider") not in ("vportal", "plex") or channel is not None
                 or not isinstance(media, dict) or not epg_text(media.get("title"), 65536, "utf-8")
                 or type(media.get("total")) is not int or not 1 <= media["total"] <= 1000
                 or type(media.get("index")) is not int or not 0 <= media["index"] < media["total"]):
@@ -1702,7 +1708,7 @@ def plex_queue_metadata(data, runtime=None, params=None):
             raise Error(invalid)
         return dict(data, ids=list(ids), titles=list(titles))
     state, index = data["state"], data["index"]
-    if (type(data["active"]) is not bool or data["repeat"] != "none"
+    if (type(data["active"]) is not bool or data["repeat"] not in ("none", "all")
             or (ids and (type(index) is not int or not 0 <= index < len(ids)))
             or (not ids and index is not None)
             or ("title" in data and not plex_queue_title(data["title"]))):
@@ -1730,6 +1736,8 @@ def plex_queue_command(client, device, params, timeout):
         controls = capabilities_metadata(client.call(device, "capabilities", {}))
         if params["op"] not in controls.get("plex_queue", {}).get("operations", []):
             raise Error("Plex queues are not supported by this player/controller; update both and check caps. No queue command was sent")
+        if len(params.get("ids", [])) > controls["plex_queue"]["max_items"]:
+            raise Error("This player supports at most " + str(controls["plex_queue"]["max_items"]) + " Plex items; update it. No queue command was sent")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Plex capability discovery exceeded --timeout; no queue command was sent")
@@ -1766,7 +1774,7 @@ def print_plex_queue(data, preview=False):
     state = data["state"]
     position = "" if data["index"] is None else f" {data['index'] + 1}/{len(data['ids'])} (ID {data['ids'][data['index']]})"
     title = "" if not data.get("title") else ": " + clean(data["title"])
-    print(f"Plex queue: {state}{position}{title}; listed order, no repeat.")
+    print(f"Plex queue: {state}{position}{title}; listed order, repeat={data['repeat']}.")
     if state == "preparing":
         print("Accepted and preparing; playback has not been confirmed. Use plex status to check progress.")
     if data.get("error"):
@@ -1810,12 +1818,12 @@ def capabilities_metadata(data):
         operations = queue.get("operations") if isinstance(queue, dict) else None
         if (not isinstance(queue, dict) or set(queue) != {"version", "operations", "max_items"}
                 or type(queue.get("version")) is not int or queue["version"] != 1
-                or type(queue.get("max_items")) is not int or queue["max_items"] != MAX_PLEX_QUEUE_ITEMS
+                or type(queue.get("max_items")) is not int or not 1 <= queue["max_items"] <= MAX_PLEX_QUEUE_ITEMS
                 or not isinstance(operations, list) or len(operations) > len(PLEX_QUEUE_OPERATIONS)
                 or any(not isinstance(op, str) or op not in PLEX_QUEUE_OPERATIONS for op in operations)
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
-        result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": MAX_PLEX_QUEUE_ITEMS}
+        result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": queue["max_items"]}
     if "inspect" in data:
         inspection = data["inspect"]
         sections = inspection.get("sections") if isinstance(inspection, dict) else None
