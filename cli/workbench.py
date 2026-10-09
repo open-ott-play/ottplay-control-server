@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import time
 
-COMMANDS = frozenset(("doctor", "inspect", "operation", "bundle", "test"))
+COMMANDS = frozenset(("doctor", "inspect", "operation", "bundle", "test", "debug", "dbg"))
 SAFE_INTEGER = 9007199254740991
 MAX_REPORT_BYTES = 256 * 1024
 TOKEN = re.compile(r"[A-Za-z0-9_.-]{1,96}\Z")
@@ -94,6 +94,60 @@ def project(value, rule):
     return rule(value)
 
 
+def exact(value, rule):
+    check(isinstance(value, dict) and set(value) == set(rule))
+    return project(value, rule)
+
+
+DEBUG_NUMBERS = "uptimeMs loopSamples loopDelayMs loopMaxDelayMs loopLongDelays jsHeapUsedBytes jsHeapTotalBytes jsHeapLimitBytes hardwareConcurrency deviceMemoryGiB errorCount rejectionCount controlPendingRequests controlPendingResponses controlConsecutiveFailures".split()
+DEBUG_BOOLS = "online focused visible secureContext controlActive".split()
+MEDIA_NUMBERS = "positionSeconds durationSeconds bufferAheadSeconds videoWidth videoHeight totalFrames decodedFrames droppedFrames corruptedFrames readyState networkState mediaErrorCode volume".split()
+MEDIA_BOOLS = "paused ended muted seeking".split()
+NATIVE_NUMBERS = "uptimeMs systemUptimeMs residentBytes pssBytes footprintBytes heapUsedBytes heapLimitBytes systemAvailableBytes systemTotalBytes thermalState logicalProcessors nativeHlsSessions nativeHlsBytes nativeHlsErrors epgChannels epgProgrammes epgMappings epgShifts requestsTotal requestsActive requestsFailed".split()
+NATIVE_BOOLS = "lowMemory foreground lowPower".split()
+DEBUG_EVENTS = "started resumed suspended visible hidden online offline focus blur error unhandled_rejection loop_delay media_error media_waiting media_stalled media_playing media_ended".split()
+
+
+def debug_metrics(numbers, bools, limits=None):
+    def validate(value):
+        check(isinstance(value, dict) and all(key in numbers or key in bools for key in value))
+        return {key: (boolean(item) if key in bools else number(high=(limits or {}).get(key, SAFE_INTEGER))(item))
+                for key, item in value.items()}
+    return validate
+
+
+def debug_native(value):
+    check(isinstance(value, dict) and set(value) == {"state", "data"})
+    state = enum("available unsupported unavailable timeout invalid".split())(value["state"])
+    if state != "available":
+        check(value["data"] is None)
+        return {"state": state, "data": None}
+    return {"state": state, "data": exact(value["data"], {
+        "version": number(1, 1, True), "platform": enum("android ios tauri server".split()),
+        "appVersion": nullable(version_label), "osVersion": nullable(version_label),
+        "webviewVersion": nullable(version_label), "metrics": debug_metrics(NATIVE_NUMBERS, NATIVE_BOOLS)})}
+
+
+def debug_metadata(raw, runtime):
+    result = exact(inspection_data(raw, runtime, "debug"), {
+        "version": number(1, 1, True), "runtime": token, "capturedAt": number(integral=True),
+        "platform": enum("browser webos capacitor-android capacitor-ios tauri unknown".split()),
+        "metrics": debug_metrics(DEBUG_NUMBERS, DEBUG_BOOLS),
+        "media": array(lambda value: exact(value, {
+            "lane": enum(["main", "pip"]), "generation": nullable(number(integral=True)),
+            "handleId": nullable(number(integral=True)),
+            "metrics": debug_metrics(MEDIA_NUMBERS, MEDIA_BOOLS, {"volume": 1, "readyState": 4, "networkState": 3, "mediaErrorCode": 4})}), 2),
+        "events": array(lambda value: exact(value, {
+            "sequence": number(1, SAFE_INTEGER, True), "elapsedMs": number(), "code": enum(DEBUG_EVENTS)}), 32),
+        "eventsDropped": number(integral=True), "native": debug_native,
+    })
+    check(result["runtime"] == runtime)
+    check(len({row["lane"] for row in result["media"]}) == len(result["media"]))
+    sequence = [row["sequence"] for row in result["events"]]
+    check(all(a < b for a, b in zip(sequence, sequence[1:])))
+    return result
+
+
 RECT = {"x": number(-32768, 32768, True), "y": number(-32768, 32768, True),
         "width": number(0, 32768, True), "height": number(0, 32768, True)}
 VIDEO = {"exists": boolean, "cssVisible": nullable(boolean), "rect": nullable(RECT),
@@ -132,7 +186,7 @@ def inspection_data(raw, runtime, section):
         raise ObservationError(reason)
     data = raw.get("data")
     # Measure the wire-shaped object, including unknown fields, before projection.
-    check(len(json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) <= 8192)
+    check(len(json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) <= (16384 if section == "debug" else 8192))
     return data
 
 
@@ -292,13 +346,15 @@ class Workbench:
                 raw = self.request(self.device, "capabilities", {}, deadline, receipts)
                 caps = self.api.capabilities_metadata(raw)
                 observation["capabilities"] = caps
-                if "inspect" not in caps or section not in caps["inspect"]["sections"]:
+                supported = "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", [])
+                if not supported:
                     raise ObservationError("unsupported")
                 params = {"version": 1, "runtime": caps["player"]["runtime"], "section": section}
                 if section == "operation":
                     params["operation_id"] = operation_id
                 raw = self.request(self.device, "inspect", params, deadline, receipts)
-                data = (operation_metadata(raw, caps["player"]["runtime"], operation_id) if section == "operation"
+                data = (debug_metadata(raw, caps["player"]["runtime"]) if section == "debug"
+                        else operation_metadata(raw, caps["player"]["runtime"], operation_id) if section == "operation"
                         else snapshot_metadata(raw, caps["player"]["runtime"], section))
             observation.update(status="observed", data=data, runtime=data["runtime"] if lane == "native" or section != "operation" else caps["player"]["runtime"])
             if logs and lane == "native":
@@ -531,6 +587,8 @@ def arguments(words, json_output):
     parser.add_argument("-j", "--json", action="store_true", default=json_output)
     parser.add_argument("--lane", choices=("auto", "web", "native"), default="auto")
     command = words[0]
+    if command == "debug":
+        parser.set_defaults(lane="web")
     if command == "inspect":
         parser.add_argument("--view", default="ui,media")
     elif command == "operation":
@@ -544,6 +602,8 @@ def arguments(words, json_output):
         parser.add_argument("--duration", type=float, default=5)
         parser.add_argument("--report")
     parsed = parser.parse_args(words[1:])
+    if command == "debug" and parsed.lane != "web":
+        raise ObservationError("invalid_arguments")
     if command == "operation" and (not REQUEST.fullmatch(parsed.operation_id) or parsed.lane not in ("web", "native")):
         raise ObservationError("invalid_arguments")
     if command == "inspect":
@@ -561,6 +621,7 @@ def arguments(words, json_output):
 def run(api, client, device, words, timeout, json_output=False):
     """CLI entry point with bounded, machine-readable failures and no mutations."""
     command = words[0].casefold()
+    command = "debug" if command == "dbg" else command
     json_output = json_output or any(word in ("-j", "--json") for word in words[1:])
     result = {"version": 1, "command": command, "device_id": device, "started_at": now(),
               "read_only": True, "physical_display_verified": False, "evaluator": "workbench-v2"}
@@ -576,6 +637,8 @@ def run(api, client, device, words, timeout, json_output=False):
                  "checks": "same media identity and decoder position; web by default, explicit --lane native supported"}])
         else:
             bench = Workbench(api, client, device, timeout)
+            if command == "bundle":
+                result["evaluator"] = "workbench-v3"
             if command == "test" and args.scenario == "media-progress":
                 if timeout <= args.duration + 1:
                     raise ObservationError("insufficient_timeout")
@@ -597,8 +660,14 @@ def run(api, client, device, words, timeout, json_output=False):
                               sample_interval_seconds={"min": sample_interval[0], "max": sample_interval[1]},
                               evidence_level="decoder_progress_only")
             else:
-                observations = bench.observe(args.lane, "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
+                final_deadline = bench.deadline
+                if command == "bundle" and args.lane != "native":
+                    bench.deadline = time.monotonic() + max(0, final_deadline - time.monotonic()) * 0.75
+                observations = bench.observe(args.lane, "debug" if command == "debug" else "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
                                              logs=command == "bundle", operation_id=args.operation_id if command == "operation" else None)
+                bench.deadline = final_deadline
+                if command == "bundle":
+                    result["debug_observations"] = bench.observe("web", "debug") if args.lane != "native" else []
                 verdict = "observed" if any(row["status"] == "observed" for row in observations) else "unknown"
                 if command == "operation":
                     result["operation_id"] = args.operation_id
@@ -641,6 +710,6 @@ def run(api, client, device, words, timeout, json_output=False):
                 print("  " + row["name"] + " — " + row["checks"])
         if result.get("report_directory"):
             print("Report: " + result["report_directory"])
-        if command in ("doctor", "inspect", "operation"):
+        if command in ("doctor", "inspect", "operation", "debug"):
             print(encoded(result).decode("utf-8"), end="")
     return {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]

@@ -44,6 +44,33 @@ Plain GET without `delivery=ack` retains the legacy array response and removes d
 
 `GET /healthz` and `GET /readyz` require no token and expose only process readiness. They do not probe a TV or provider. `ottplay-control-server healthcheck --url http://127.0.0.1:8081/readyz` supplies the container probe without a shell or curl.
 
+## Controller debug snapshot
+
+`GET /api/debug` uses the existing administrator token, origin rules and rate
+limits. It accepts no query parameters, returns `Cache-Control: no-store`, and
+does not send commands to players. `ott server debug [-j]` reads this endpoint.
+The exact version-1 response shape is:
+
+```json
+{
+  "version": 1, "sampledAt": 1791264000000, "consistent": false,
+  "process": {"uptimeMs": 1000, "goroutines": 8, "heapAllocBytes": 1048576, "heapSysBytes": 4194304},
+  "control": {"devices": 2, "queues": 1, "pending": 1, "queueBytes": 100, "resultEntries": 0,
+    "resultBytes": 0, "commandTtlMs": 60000, "maxPendingPerDevice": 50},
+  "diagnostics": {"configured": false, "runtimes": 0, "sessions": 0, "repairs": 0,
+    "eventBytes": 0, "reservedStops": 0, "controlSlotsUsed": 0, "controlSlotsCapacity": 64,
+    "eventSlotsUsed": 0, "eventSlotsCapacity": 16}
+}
+```
+
+Numeric values are nonnegative safe integers; `sampledAt` is epoch milliseconds.
+`uptimeMs` is the age of this server instance. `queues` counts nonempty device
+queues. Sections are independently sampled, so `consistent` is always false.
+Counts describe stored entries, which can include expired entries awaiting
+ordinary cleanup. Reading does not expire entries or alter queue/diagnostic
+state; normal request authentication and rate accounting still apply. No device
+IDs, credentials, request payloads or environment variables are returned.
+
 ## Limits and origins
 
 - 1–64 configured devices, each with a distinct 32–256 character URL-safe token; the administrator token must also be distinct.
@@ -604,7 +631,7 @@ Discover the page runtime from player capabilities before issuing a request:
 {"action":"inspect","params":{"version":1,"runtime":"page-123","section":"doctor"}}
 ```
 
-`section` is `doctor`, `snapshot`, or `operation`. The first two return the same
+`section` is `doctor`, `snapshot`, `operation`, or `debug`. The first two return the same
 bounded player snapshot in version 1. For `operation`, add the required
 `operation_id` of the earlier command; that field is forbidden on the other
 sections. Runtime identifiers are 1–96 ASCII letters, digits, underscores,
@@ -696,3 +723,61 @@ queue still needs exactly one consumer. In particular, keep native maintenance
 agents on their separate provisioned identity; do not share their token with
 the WebView. Inspection neither grants a second local permission nor bypasses
 local playback restrictions.
+
+### Runtime debug section
+
+Discover support using the separate `debug:{"version":1}` field of the
+capabilities result (`controls.debug` in player status). Existing
+`inspect.sections` stays `doctor`/`snapshot`/`operation` for compatibility with
+earlier CLIs. Only send the following request when debug support is advertised:
+
+```json
+{"action":"inspect","params":{"version":1,"runtime":"page-123","section":"debug"}}
+```
+
+The existing success/negative envelopes and runtime binding apply. A debug
+`data` object is limited to 16 KiB; the full inspection envelope remains limited
+to 32 KiB. The exact data keys are `version` (integer 1), `runtime`, `capturedAt`
+(epoch milliseconds), `platform`, `metrics`, `media`, `events`, `eventsDropped`,
+and `native`. Platform is `browser`, `webos`, `capacitor-android`,
+`capacitor-ios`, `tauri`, or `unknown`. Missing metrics mean unavailable; null
+is not a metric value. Unknown fields and metric names are rejected.
+
+- Browser numeric metrics: `uptimeMs`, `loopSamples`, `loopDelayMs`,
+  `loopMaxDelayMs`, `loopLongDelays`, `jsHeapUsedBytes`, `jsHeapTotalBytes`,
+  `jsHeapLimitBytes`, `hardwareConcurrency`, `deviceMemoryGiB`, `errorCount`,
+  `rejectionCount`, `controlPendingRequests`, `controlPendingResponses`,
+  `controlConsecutiveFailures`. Boolean metrics: `online`, `focused`, `visible`,
+  `secureContext`, `controlActive`.
+- `media` has at most two objects, with exact keys `lane` (`main` or `pip`,
+  unique), `generation` and `handleId` (nullable safe integers), and `metrics`.
+  Numeric metrics: `positionSeconds`, `durationSeconds`, `bufferAheadSeconds`,
+  `videoWidth`, `videoHeight`, `totalFrames`, `decodedFrames`, `droppedFrames`,
+  `corruptedFrames`, `readyState`, `networkState`, `mediaErrorCode`, `volume`.
+  Boolean metrics: `paused`, `ended`, `muted`, `seeking`. `totalFrames` and
+  `decodedFrames` are distinct measurements.
+- `events` contains at most 32 exact `{sequence,elapsedMs,code}` objects.
+  Sequences are strictly increasing safe integers starting at 1; elapsed times
+  are nonnegative finite offsets within this collector lifetime. `eventsDropped`
+  is a nonnegative safe integer. Event codes are `started`, `resumed`,
+  `suspended`, `visible`, `hidden`, `online`, `offline`, `focus`, `blur`, `error`,
+  `unhandled_rejection`, `loop_delay`, `media_error`, `media_waiting`,
+  `media_stalled`, `media_playing`, or `media_ended`.
+- `native` has exact keys `state` and `data`. State is `available`, `unsupported`,
+  `unavailable`, `timeout`, or `invalid`; data is nonnull exactly when available.
+  Producer keys are `version` (1), `platform` (`android`, `ios`, `tauri`, `server`),
+  `appVersion`, `osVersion`, `webviewVersion`, and `metrics`. Versions are null
+  or 1–64 ASCII letters/digits/underscores/periods/plus/hyphens.
+- Native numeric metrics: `uptimeMs`, `systemUptimeMs`, `residentBytes`,
+  `pssBytes`, `footprintBytes`, `heapUsedBytes`, `heapLimitBytes`,
+  `systemAvailableBytes`, `systemTotalBytes`, `thermalState`, `logicalProcessors`,
+  `nativeHlsSessions`, `nativeHlsBytes`, `nativeHlsErrors`, `epgChannels`,
+  `epgProgrammes`, `epgMappings`, `epgShifts`, `requestsTotal`, `requestsActive`,
+  `requestsFailed`. Boolean metrics: `lowMemory`, `foreground`, `lowPower`.
+
+All numeric metrics are finite, nonnegative and at most 9007199254740991.
+`volume` is at most 1, `readyState` and `mediaErrorCode` at most 4, and
+`networkState` at most 3. Native `uptimeMs` measures producer age;
+`systemUptimeMs` measures OS uptime. PSS, physical footprint and RSS are separate
+fields and cannot be compared as the same measurement. A snapshot contains no
+raw logs, error messages, URLs, filenames, stack traces, keys or DOM content.

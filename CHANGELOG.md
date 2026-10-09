@@ -4,6 +4,14 @@
 
 ### Changes
 
+- Add read-only `debug`/`dbg` player snapshots with bounded runtime, media,
+  lifecycle and native metrics, using a separate capability compatible with
+  existing inspection clients. Bundles retain two files and verify debug
+  observations under `workbench-v3`; legacy reports remain verifiable.
+- Add administrator-only `GET /api/debug` and `ott server debug` for independently
+  sampled process, stored queue/result and diagnostics-service counters. Reads
+  do not expire queued state or expose device IDs and payloads.
+
 - Update strict-kiosk help and examples for local timeline seeking within a
   VPortal/Plex episode on supported players; older players keep a read-only footer.
 

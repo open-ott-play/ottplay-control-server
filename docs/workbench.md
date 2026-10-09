@@ -22,6 +22,7 @@ exist. These examples leave playback unchanged and can be run individually:
 
 ```sh
 ott a1 doctor --json                                   # identity, capabilities and readiness
+ott a1 debug --json                                    # runtime, events and native metrics; alias dbg
 ott --json a1 inspect --view ui,media
 ott a1 inspect --view media --lane web --json
 ott a1 inspect --lane native --json
@@ -31,9 +32,10 @@ ott a1 test run health --report ./a1-health
 ott -t 45 a1 test run media-progress --lane web --duration 5 --report ./a1-progress --json
 ott -t 45 a1 test run media-progress --lane native --duration 5 --report ./a1-native-progress --json
 ott report verify ./a1-progress --json
+ott server debug --json                                # controller process and stored queue counts
 ```
 
-`doctor` and `inspect` explain what could be observed; `health` tests management
+`doctor`, `inspect` and `debug` explain what could be observed; `health` tests management
 responsiveness; `media-progress` checks an already playing decoder. Neither
 scenario proves a visible picture or audible sound. See [lanes](#observations-and-lanes),
 [scenario verdicts](#fixed-scenarios), [bundle contents and exit codes](#bundles-and-machine-output),
@@ -48,6 +50,52 @@ needed. The workbench does not print those credentials or the server URL.
 `ott a1` lists diagnostic commands supported by the connected player's advertised
 inspection sections, alongside its controls. `ott a1 test list` always lists the
 local scenarios; that list does not claim the player supports their observations.
+
+## Runtime debug snapshots
+
+`ott a1 debug` (alias `dbg`) reads the player's bounded runtime snapshot. It
+collects event-loop delay, available browser memory counters, connectivity and
+focus, command backlog/failure counters, media counters, and a bounded ring of
+typed lifecycle/error events. Missing metrics mean unavailable, never zero.
+Events have sequence numbers and elapsed times, without messages, URLs, stack
+traces, filenames, DOM content or console text. The command does not enable a HUD,
+start a capture, change playback, or probe a media source.
+
+The snapshot can include a native producer for Capacitor Android/iOS or Tauri.
+Its explicit state is `available`, `unsupported`, `unavailable`, `timeout`, or
+`invalid`; only `available` carries data. Android PSS, iOS physical footprint and
+process RSS are different metrics. Tauri process memory excludes its separate
+WebView processes. Native `uptimeMs` is the producer's age, not a claim about
+process creation time. Native package versions are separate from the loaded JS
+build identity in `doctor`.
+
+`debug` defaults to `--lane web` and supports only that lane: the native producer
+is read through the running player, not the independent Android maintenance
+agent. Use existing `doctor --lane native` or `android status` for that agent.
+If the player JS or its command channel is blocked, `debug` can also time out;
+successful inspection does not establish that a physical display is working.
+
+Support is advertised separately as `controls.debug: {"version":1}`. The existing
+`inspect.sections` list remains unchanged so earlier CLIs keep accepting player
+capabilities. The new CLI sends no debug request to a player without the
+capability. An older controller reports `unsupported_controller`, without retry
+or a fallback to playback commands. `ott a1 play debug` still searches that title.
+
+Bundles use evaluator `workbench-v3` and keep exactly `manifest.json` and
+`result.json`. The latter contains separate `debug_observations`; a native-only
+bundle has an empty array. The ordinary observations retain three quarters of
+the total timeout and debug gets the remaining time. Each snapshot keeps its own
+runtime and request receipts; snapshots are not assumed simultaneous. Debug data
+does not promote the bundle verdict or prove an operation's effect. The current
+verifier accepts legacy, `workbench-v2`, and `workbench-v3` reports; old verifiers
+explicitly reject the new evaluator instead of silently skipping debug evidence.
+
+`ott server debug` is a single administrator read of the controller's own
+process, queue, result-storage and diagnostics-service counters. Sections are
+sampled independently (`consistent:false`). Stored counts may include expired
+entries until normal request handling cleans them up; this read does not expire
+or mutate them. It contains no device IDs, tokens, queued payloads or server URL.
+See the [API schema](api.md#controller-debug-snapshot).
 
 ## Request receipts and operation lookup
 
@@ -233,8 +281,9 @@ accepted when the observations disagree. Exit codes retain their meaning:
 and `1` for an invalid export or inconsistent result. Read the JSON verdict as
 well as the integrity field; intact files can still contain invalid evidence.
 
-New reports identify their evaluator as `workbench-v2`. Reports without that
-field use the supported legacy web evaluator; old native-only progress reports
+New bundle reports identify their evaluator as `workbench-v3`; test reports use
+`workbench-v2`. Both are supported. Reports without that field use the supported
+legacy web evaluator; old native-only progress reports
 are not reinterpreted as passing native tests. Unknown evaluators are rejected.
 Keep all seven CLI Python files together when updating.
 

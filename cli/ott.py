@@ -83,9 +83,11 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME caps                      show runtime identity and supported controls
   ott NAME doctor [-j]                read web/native identity and diagnostic capabilities
+  ott NAME debug [-j]                 read bounded runtime/native diagnostics (alias: dbg)
   ott NAME inspect --view ui,media    observe the interface and media without changing playback
   ott NAME operation REQUEST_ID      read a web operation receipt without repeating its effect
   ott NAME bundle --out DIRECTORY    save private, bounded diagnostic evidence
+  ott server debug [-j]               read controller process and queue counters
   ott NAME test list                 list fixed read-only diagnostic scenarios
   ott NAME test run health --report DIRECTORY
   ott NAME test run media-progress --duration 5 --report DIRECTORY
@@ -1934,6 +1936,12 @@ def capabilities_metadata(data):
                 or len(set(sections)) != len(sections)):
             raise Error(invalid)
         result["inspect"] = {"version": 1, "sections": list(sections)}
+    if "debug" in data:
+        debug = data["debug"]
+        if (not isinstance(debug, dict) or set(debug) != {"version"}
+                or type(debug.get("version")) is not int or debug["version"] != 1):
+            raise Error(invalid)
+        result["debug"] = {"version": 1}
     return result
 
 
@@ -2021,8 +2029,10 @@ def print_player_status(data, name):
             and shot.get("state") != "ready" and not queue and not aspect.get("operations")):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
-    if sections:
+    if sections or "debug" in controls:
         print("\nAvailable diagnostics now:")
+        if "debug" in controls:
+            print(f"  {prefix} debug  — read bounded runtime and native diagnostics")
         if "doctor" in sections:
             print(f"  {prefix} doctor  — read runtime health and identity")
         if "snapshot" in sections:
@@ -2168,8 +2178,48 @@ def provision_kubernetes(client, config_path, name, device):
         raise Error(f"Device addition is incomplete. Retry ott add {name} {device}; the saved access code will be reused. Do not delete pending-add.json before reconciliation.") from exc
 
 
+def server_debug_metadata(data):
+    invalid = "The controller returned invalid debug metadata"
+    schema = {
+        "process": "uptimeMs goroutines heapAllocBytes heapSysBytes".split(),
+        "control": "devices queues pending queueBytes resultEntries resultBytes commandTtlMs maxPendingPerDevice".split(),
+        "diagnostics": "runtimes sessions repairs eventBytes reservedStops controlSlotsUsed controlSlotsCapacity eventSlotsUsed eventSlotsCapacity".split(),
+    }
+    integer = lambda value: type(value) is int and 0 <= value <= 9007199254740991
+    if (not isinstance(data, dict) or set(data) != {"version", "sampledAt", "consistent", *schema}
+            or type(data.get("version")) is not int or data["version"] != 1
+            or not integer(data.get("sampledAt")) or data.get("consistent") is not False):
+        raise Error(invalid)
+    for name, keys in schema.items():
+        row = data[name]
+        if (not isinstance(row, dict) or set(row) != set(keys) | ({"configured"} if name == "diagnostics" else set())
+                or any(not integer(row[key]) for key in keys)):
+            raise Error(invalid)
+    diagnostic = data["diagnostics"]
+    if (type(diagnostic["configured"]) is not bool
+            or diagnostic["controlSlotsUsed"] > diagnostic["controlSlotsCapacity"]
+            or diagnostic["eventSlotsUsed"] > diagnostic["eventSlotsCapacity"]):
+        raise Error(invalid)
+    return data
+
+
 def management(client, config_path, words, json_output=False):
     verb = words[0].casefold()
+    if verb == "server":
+        tail = [word for word in words[1:] if word not in ("-j", "--json")]
+        if len(tail) != 1 or tail[0].casefold() != "debug":
+            raise Error("Use ott server debug [-j]")
+        try:
+            status, raw = client.api("/api/debug")
+        except HTTPError as exc:
+            if exc.code == 404:
+                raise Error("This controller does not support server debug") from None
+            raise
+        if status != 200:
+            raise Error("The controller returned invalid debug metadata")
+        data = server_debug_metadata(raw)
+        print(json.dumps(data, ensure_ascii=True, allow_nan=False, indent=2))
+        return True
     if verb == "discover" and len(words) == 1:
         _, data = client.api("/api/discovery")
         if json_output:
@@ -2723,7 +2773,7 @@ def main(argv=None):
             return 0
         device = client.device(args.words[0])
         words = args.words[1:]
-        if words and words[0].casefold() in ("doctor", "inspect", "operation", "bundle", "test"):
+        if words and words[0].casefold() in ("doctor", "inspect", "operation", "bundle", "test", "debug", "dbg"):
             module_path = Path(__file__).resolve().with_name("workbench.py")
             if not module_path.is_file():
                 raise Error("Install workbench.py beside ott.py to use the workbench")
