@@ -131,6 +131,75 @@ require an updated controller and player; there is no legacy/input fallback.
 Response retries use the same request ID and do not repeat the step within the
 player session. Do not submit a new request after an uncertain result.
 
+### Explicit aspect-ratio extension
+
+The typed `aspect` action reads or explicitly selects a supported picture mode.
+It does not change the legacy command envelope or the `input` key named
+`aspect`. All requests require the page runtime from `capabilities.player.runtime`,
+matching `^[a-z0-9-]{1,64}$`:
+
+```json
+{"action":"aspect","params":{"operation":"get","runtime":"page-123-abcd"}}
+{"action":"aspect","params":{"operation":"set","runtime":"page-123-abcd","mode":"fill"}}
+```
+
+These are exact shapes. `get` has no mode; `set` requires exactly `fit` or `fill`.
+Unknown, duplicate, null, numeric or extra fields are rejected. The full mode
+names accepted by the CLI are aliases only and are not valid wire values.
+`fit` means contain (preserve the whole picture); `fill` means cover (preserve
+proportions and crop edges). There is no stretch, toggle or arbitrary-ratio mode.
+
+Supporting players add this optional capability:
+
+```json
+{"aspect":{"version":1,"operations":["get","set"],"modes":["fit","fill"]}}
+```
+
+Operations and modes are distinct allowlisted arrays; subsets are permitted.
+An unavailable engine may omit `aspect` or return both arrays empty. Either both
+arrays are empty or both are nonempty. A locked player can advertise only
+`operations:["get"]` with its supported modes. Clients must check the requested
+operation and mode before submission and must not fall back to key events.
+The capability does not guarantee that the runtime, media target or local
+policy will remain unchanged until execution.
+
+Successful `get` response data is exactly:
+
+```json
+{"version":1,"runtime":"page-123-abcd","operation":"get","mode":"fill","saved_mode":"fill","persisted":true}
+```
+
+`mode` is `fit` or `fill`; `saved_mode` is one of those modes or `null` when no
+explicit persistent value can be read. `persisted` is a JSON boolean equal to
+`saved_mode != null && saved_mode == mode`. Memory-only storage fallbacks must
+not masquerade as persistent readback. The existing player scope is retained:
+current live channel or shared VOD/media setting, not a global override for
+every channel. Unknown legacy engine modes are not reported as Fit or Fill.
+
+Successful `set` acceptance data is exactly:
+
+```json
+{"version":1,"runtime":"page-123-abcd","operation":"set","mode":"fill","accepted":true,"dispatched":false,"effect":"aspect-after-ack"}
+```
+
+The response echoes the bound runtime and requested mode. It does not claim
+that the setting has already been applied or saved. The controller validates
+the exact successful response shape, runtime, operation, mode and persistence
+consistency before acknowledgement, including response retries. The player applies the
+change once, only after the existing successful response acknowledgement,
+and rechecks expiry, runtime/connection generation, media target, screen owner
+and kiosk/PIN/protected-input policy first. Expired or invalidated callbacks
+must be discarded; replaying a cached result must not recreate the effect.
+Use a new read request to confirm mode and persistence. Timeouts and rejected
+or malformed results do not authorize automatic resubmission of a set request.
+The web operation journal can report `action: "aspect"` for set requests;
+handler completion is not evidence of saved settings or visible output.
+
+These requests use the same authentication, device ownership, bounded queue,
+TTL and result limits as the other typed actions. They do not grant native
+device privileges or bypass local controls. See the
+[CLI examples](cli.md#aspect-ratio-fit-and-fill).
+
 ### Ordered Plex queue extension
 
 `plex_queue` uses the administrator-authenticated request lane. Player device

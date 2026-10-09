@@ -67,6 +67,9 @@ ott a1 next                # next channel, wrapping at the end of the category
 ott a1 channels "РЕН"       # list channel-name matches without playing
 ott a1 "РЕН ТВ HD"          # search and play a matching channel
 ott a1 volume 35            # vol/v are equivalent command aliases
+ott a1 aspect               # current Fit/Fill mode and saved-setting readback
+ott a1 aspect fill          # fill the screen proportionally, cropping the edges
+ott a1 aspect "Fit to screen" # full mode name; preserve the whole picture
 ott a1 restart             # reload the player
 ott a1 restart stream      # restart only the current stream
 ott a1 screenshot          # save a PNG; browser builds need a selected capture source
@@ -80,6 +83,11 @@ ott report verify ./a1-progress --json  # re-evaluate saved evidence offline
 [all commands with examples](docs/cli.md#commands),
 [disconnecting and revoking access](docs/cli.md#disconnect-deregister-or-revoke-a-player),
 and [troubleshooting](docs/cli.md#troubleshooting).
+
+[Aspect commands](docs/cli.md#aspect-ratio-fit-and-fill) require an updated CLI,
+controller and a player advertising the `aspect` capability. A change is applied
+after acknowledgement; read `aspect` again to confirm the mode and whether it
+was saved. Fill crops proportionally rather than stretching the picture.
 
 Remote [screenshots](docs/cli.md#remote-screenshots) require an updated CLI,
 controller and a player with a supported capture adapter. Enabling the player's

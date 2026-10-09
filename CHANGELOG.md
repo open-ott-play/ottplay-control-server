@@ -4,6 +4,13 @@
 
 ### Changes
 
+- Add explicit `aspect` readback and `aspect fit|fill` controls, including the
+  full names `Fit to screen` and `Fill screen`. The CLI checks support before
+  sending runtime-bound requests and reports saved-setting readback;
+  Fill preserves proportions and crops the edges. The existing `key aspect`
+  input remains separate. Changes execute only after acknowledgement and
+  remain subject to player kiosk, PIN and protected-input restrictions.
+
 - Android native diagnostics now expose shared web media identity when available,
   native runtime/OS boot markers, and bounded app-surface/audio evidence.
   A private 64-entry, 24-hour operation history survives reloads and agent
@@ -36,6 +43,12 @@
   newer while retaining certificate and redirect validation coverage.
 
 ### Upgrade
+
+Aspect commands require a matching updated CLI, controller and player. An older
+player without the capability receives no aspect mutation. The player's existing
+storage scope remains authoritative: the current live channel, or the shared
+media setting for VOD. Read `aspect` after a change; an accepted request does not
+by itself confirm application or persistent storage.
 
 If using `--tls-cert` and `--tls-key`, replace any certificate chain containing
 RSA keys below 2048 bits or ECDSA keys below 224 bits before upgrading. Ed25519 is
