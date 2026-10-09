@@ -17,6 +17,7 @@ type requestResult struct {
 	data    json.RawMessage
 	expires time.Time
 	inspect *inspectRequest
+	aspect  *aspectRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
@@ -111,6 +112,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = len(params) == 0
 	case "screenshot":
 		ok = validScreenshotRequest(params)
+	case "aspect":
+		ok = parseAspectRequest(params) != nil
 	case "inspect":
 		ok = parseInspectRequest(params) != nil
 	case "plex_queue":
@@ -198,6 +201,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "inspect" {
 		e.inspect = parseInspectRequest(params)
+	}
+	if action == "aspect" {
+		e.aspect = parseAspectRequest(params)
 	}
 	if action == "plex_queue" {
 		e.plexQueue = parsePlexQueueRequest(params)
@@ -302,6 +308,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	screenshotRuntime := ""
 	var plexQueue *plexQueueRequest
 	var inspect *inspectRequest
+	var aspect *aspectRequest
 	playbackOperation := ""
 	for _, pending := range d.queue {
 		if pending.rpc && pending.id == id {
@@ -309,11 +316,15 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			plexQueue = pending.plexQueue
 			playbackOperation = pending.playbackOperation
 			inspect = pending.inspect
+			aspect = pending.aspect
 			break
 		}
 	}
 	if inspect == nil {
 		inspect = d.results[id].inspect
+	}
+	if aspect == nil {
+		aspect = d.results[id].aspect
 	}
 	s.mu.Unlock()
 	// Both successful and negative inspection replies must belong to the exact
@@ -322,6 +333,12 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	// routing: a protocol-1 device queue still supports only one consumer.
 	if inspect != nil && (len(b) > maxInspectResultBytes || !validInspectResult(m["data"], status, inspect)) {
 		failure(w, 400, "invalid inspect result")
+		return
+	}
+	// Every aspect response belongs to the requested runtime and operation.
+	// An unbound or stale negative response must not consume another page's work.
+	if aspect != nil && !validAspectResult(m["data"], status, aspect) {
+		failure(w, 400, "invalid aspect result")
 		return
 	}
 	if screenshotRuntime != "" && status == "ok" && !validScreenshotResult(m["data"], screenshotRuntime) {
@@ -356,7 +373,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second), inspect: e.inspect}
+		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

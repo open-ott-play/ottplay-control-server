@@ -149,7 +149,7 @@ def operation_metadata(raw, runtime, operation_id):
     result = project(inspection_data(raw, runtime, "operation"), {
         "operation_id": enum([operation_id]),
         "state": enum("unknown accepted invoked observed rejected unsupported expired".split()),
-        "action": nullable(enum("command play provider profile profile_settings provider_settings kiosk restart lifecycle input playback play_catalog play_archive_catalog vportal vportal_search vportal_random plex_queue vportal_queue maintenance".split())),
+        "action": nullable(enum("command play provider profile profile_settings provider_settings kiosk restart lifecycle input playback aspect play_catalog play_archive_catalog vportal vportal_search vportal_random plex_queue vportal_queue maintenance".split())),
         "evidence": {"kind": enum("none handler_completed media_progress runtime_changed".split()),
                      "generation": nullable(number(integral=True)), "position": nullable(number(0, 315576000))},
     })

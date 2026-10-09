@@ -344,6 +344,41 @@ class WorkbenchTest(unittest.TestCase):
         with self.assertRaises(wb.InvalidData):
             wb.operation_metadata(raw, RUNTIME, "b" * 32)
 
+    def test_aspect_operation_receipt_is_read_without_replaying_its_effect(self):
+        operation_id = "a" * 32
+        for state, evidence in [("accepted", "none"), ("invoked", "handler_completed")]:
+            client = Client(self.clock)
+            data = {"operation_id": operation_id, "state": state, "action": "aspect",
+                    "evidence": {"kind": evidence, "generation": None, "position": None}}
+            client.inspect_envelope = {"version": 1, "runtime": RUNTIME, "section": "operation",
+                                       "data": dict(data, private=SECRET)}
+            code, result, text = self.execute(["operation", operation_id, "--json"], client)
+            self.assertEqual(code, 0)
+            self.assertEqual(result["operation_state"], state)
+            self.assertNotEqual(result["operation_state"], "observed")
+            self.assertEqual(result["observations"][0]["data"], data)
+            self.assertNotIn(SECRET, text)
+            self.assertEqual([(row[0], row[1], row[2]) for row in client.calls], [
+                ("web", "capabilities", {}),
+                ("web", "inspect", {"version": 1, "runtime": RUNTIME, "section": "operation",
+                                    "operation_id": operation_id})])
+
+    def test_aspect_handler_completion_does_not_establish_an_observed_effect(self):
+        operation_id = "a" * 32
+        for evidence in ["none", "handler_completed"]:
+            client = Client(self.clock)
+            raw = {"version": 1, "runtime": RUNTIME, "section": "operation", "data": {
+                "operation_id": operation_id, "state": "observed", "action": "aspect",
+                "evidence": {"kind": evidence, "generation": 1, "position": 2}}}
+            with self.assertRaises(wb.InvalidData):
+                wb.operation_metadata(raw, RUNTIME, operation_id)
+            client.inspect_envelope = raw
+            code, result, _ = self.execute(["operation", operation_id, "--json"], client)
+            self.assertEqual((code, result["verdict"]), (3, "unknown"))
+            self.assertEqual(result["observations"][0]["status"], "unknown")
+            self.assertNotIn("operation_state", result)
+            self.assertEqual([row[1] for row in client.calls], ["capabilities", "inspect"])
+
     def test_server_negative_envelope_does_not_become_a_snapshot(self):
         for reason in ("invalid_request", "runtime_mismatch", "unsupported", "unavailable"):
             with self.assertRaises(wb.ObservationError) as caught:

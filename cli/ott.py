@@ -58,6 +58,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME v                         show volume
   ott NAME v 35                      set volume to 35%
   ott NAME v +5 / v -5               increase / decrease volume
+  ott NAME aspect                    show current and saved aspect modes
+  ott NAME aspect fit / fill         request Fit to screen / Fill screen
   ott NAME providers                 list providers (zero-based indices)
   ott NAME provider m3u              select a provider by ID, index or name
   ott NAME provider-config FILE      update active provider settings from JSON
@@ -126,7 +128,8 @@ Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
-provider/prov; providers/provs; capabilities/caps; input/key; prev/previous; screenshot/shot.
+provider/prov; providers/provs; capabilities/caps; input/key; prev/previous; screenshot/shot;
+aspect/aspect-ratio. Aspect modes also accept "Fit to screen" and "Fill screen".
 Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
 Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
@@ -143,6 +146,7 @@ COMMAND_ALIASES = {
     "prov": "provider", "provs": "providers",
     "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
     "previous": "prev", "shot": "screenshot",
+    "aspect-ratio": "aspect",
 }
 PROFILE_FIELD_ALIASES = {
     "url": "playlist", "playlist": "playlist",
@@ -163,6 +167,8 @@ INPUT_ALIASES = {
 CHANNEL_STEPS = {"prev": "previous_channel", "next": "next_channel"}
 CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
 PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
+ASPECT_OPERATIONS = frozenset(("get", "set"))
+ASPECT_MODES = {"fit": "Fit to screen", "fill": "Fill screen"}
 SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
 MAX_SCREENSHOT_BYTES = 1024 * 1024
 RECEIPT_ACTIONS = frozenset((
@@ -170,7 +176,7 @@ RECEIPT_ACTIONS = frozenset((
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "restart", "play", "provider",
-    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "aspect",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -876,6 +882,14 @@ def parse_command(words):
         if tail:
             raise Error("Use capabilities or caps without arguments")
         return "capabilities", {}
+    if verb == "aspect":
+        value = text.casefold()
+        if not tail or value in ("get", "status"):
+            return "aspect", {"operation": "get"}
+        mode = {"fit to screen": "fit", "fill screen": "fill"}.get(value, value)
+        if mode not in ASPECT_MODES:
+            raise Error('Use aspect [get|status|fit|fill]; modes also accept "Fit to screen" or "Fill screen"')
+        return "aspect", {"operation": "set", "mode": mode}
     if verb in ("reload", "reboot", "exit", "standby", "wake"):
         if tail and not (verb in ("reload", "reboot") and len(tail) == 1 and
                          tail[0].casefold() == ("player" if verb == "reload" else "device")):
@@ -1781,6 +1795,78 @@ def print_plex_queue(data, preview=False):
         print(data["error"])
 
 
+def aspect_metadata(data, runtime, params):
+    mutating = params["operation"] == "set"
+    invalid = ("The player did not confirm the aspect request. It may have executed; do not repeat the change blindly. Read aspect to check the current mode."
+               if mutating else "The player returned invalid aspect metadata; read aspect again to check the current mode")
+    fields = {"version", "runtime", "operation", "mode"}
+    fields.update(("accepted", "dispatched", "effect") if mutating else ("saved_mode", "persisted"))
+    if (not isinstance(data, dict) or set(data) != fields
+            or type(data.get("version")) is not int or data["version"] != 1
+            or data.get("runtime") != runtime or data.get("operation") != params["operation"]
+            or not isinstance(data.get("mode"), str) or data["mode"] not in ASPECT_MODES):
+        raise Error(invalid)
+    if mutating:
+        if (data["mode"] != params["mode"] or data["accepted"] is not True
+                or data["dispatched"] is not False or data["effect"] != "aspect-after-ack"):
+            raise Error(invalid)
+    else:
+        saved = data["saved_mode"]
+        if ((saved is not None and (not isinstance(saved, str) or saved not in ASPECT_MODES))
+                or type(data["persisted"]) is not bool
+                or data["persisted"] != (saved is not None and saved == data["mode"])):
+            raise Error(invalid)
+    return dict(data)
+
+
+def aspect_command(client, device, params, timeout):
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    sent = False
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        aspect = controls.get("aspect", {})
+        if (params["operation"] not in aspect.get("operations", [])
+                or (params["operation"] == "set" and params["mode"] not in aspect.get("modes", []))):
+            raise Error("The requested aspect control is not supported by this player/controller; update both and check caps. No aspect command was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Aspect capability discovery exceeded --timeout; no aspect command was sent")
+        client.timeout = remaining
+        runtime = controls["player"]["runtime"]
+        sent = True
+        result = client.call(device, "aspect", dict(params, runtime=runtime))
+        if time.monotonic() >= deadline:
+            if params["operation"] == "set":
+                raise Error("Aspect response exceeded --timeout. Acceptance is uncertain and the request may still execute before its server deadline; do not repeat it blindly. Read aspect to check the current mode")
+            raise Error("Aspect response exceeded --timeout; read aspect again to check the current mode")
+        return aspect_metadata(result, runtime, params)
+    except (PlayerRejected, PlayerUnsupported) as exc:
+        reason = "not supported by this player/controller" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+        outcome = "The request was not repeated" if sent else "No aspect command was sent"
+        raise Error(f"Aspect ratio control was {reason}; check caps, the current runtime and local restrictions. {outcome}") from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            outcome = "The request was not repeated" if sent else "No aspect command was sent"
+            raise Error(f"This controller does not accept aspect control requests; update the controller and player. {outcome}") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_aspect(data, name):
+    mode = data["mode"]
+    label = f"{ASPECT_MODES[mode]} ({mode})"
+    if data["operation"] == "set":
+        print(f"Aspect ratio request accepted: {label}; waiting for the acknowledgement to reach the player.")
+        print(f"Application and persistence are not yet confirmed. Run ott {shlex.quote(clean(name))} aspect to check the current and saved modes.")
+    else:
+        print(f"Aspect ratio: {label}.")
+        saved = data["saved_mode"]
+        print("Saved mode: " + (f"{ASPECT_MODES[saved]} ({saved})." if saved is not None else "unavailable."))
+
+
 def capabilities_metadata(data):
     invalid = "The player returned invalid capabilities metadata"
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
@@ -1797,6 +1883,20 @@ def capabilities_metadata(data):
                 any(not isinstance(value, str) or value not in allowed for value in values) or len(set(values)) != len(values)):
             raise Error(invalid)
         result[key] = list(values)
+    if "aspect" in data:
+        aspect = data["aspect"]
+        if (not isinstance(aspect, dict) or set(aspect) != {"version", "operations", "modes"}
+                or type(aspect.get("version")) is not int or aspect["version"] != 1):
+            raise Error(invalid)
+        for key, allowed in (("operations", ASPECT_OPERATIONS), ("modes", ASPECT_MODES)):
+            values = aspect[key]
+            if (not isinstance(values, list) or len(values) > len(allowed)
+                    or any(not isinstance(value, str) or value not in allowed for value in values)
+                    or len(set(values)) != len(values)):
+                raise Error(invalid)
+        if bool(aspect["operations"]) != bool(aspect["modes"]):
+            raise Error(invalid)
+        result["aspect"] = {"version": 1, "operations": list(aspect["operations"]), "modes": list(aspect["modes"])}
     if data.get("app_update") is not None:
         update = data["app_update"]
         if (not isinstance(update, dict) or set(update) != {"version", "operations"}
@@ -1912,7 +2012,13 @@ def print_player_status(data, name):
     if queue:
         print(f"  {prefix} plex " + " / ".join(op + " ID [ID ...]" if op in ("play", "preview") else op for op in queue))
         print("    Listed order; no repeat. next/prev use the retained Plex queue until plex stop clears it.")
-    if not any(controls[key] for key in ("lifecycle", "playback", "input")) and shot.get("state") != "ready" and not queue:
+    aspect = controls.get("aspect", {})
+    if "get" in aspect.get("operations", []):
+        print(f"  {prefix} aspect  — show current and saved aspect modes")
+    if "set" in aspect.get("operations", []):
+        print(f"  {prefix} aspect " + " / ".join(aspect["modes"]) + "  — request an aspect mode")
+    if (not any(controls[key] for key in ("lifecycle", "playback", "input"))
+            and shot.get("state") != "ready" and not queue and not aspect.get("operations")):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections:
@@ -2639,6 +2745,8 @@ def main(argv=None):
             data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
         elif action == "plex_queue":
             data = plex_queue_command(client, device, params, args.timeout)
+        elif action == "aspect":
+            data = aspect_command(client, device, params, args.timeout)
         elif action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
         elif action == "play":
@@ -2735,6 +2843,8 @@ def main(argv=None):
             print(f"Screenshot saved: {clean(data['path'])} ({data['width']}×{data['height']}; {data['source']}; video: {data['video']})")
         elif action == "plex_queue":
             print_plex_queue(data, preview=params["op"] == "preview")
+        elif action == "aspect":
+            print_aspect(data, args.words[0])
         elif action == "channels" or (action == "play" and "channels" in data):
             for row in data["channels"]:
                 print(f"{row['number']}: {clean(row['name'])}")

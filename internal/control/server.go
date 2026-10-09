@@ -32,6 +32,7 @@ type entry struct {
 	plexQueue         *plexQueueRequest
 	playbackOperation string
 	inspect           *inspectRequest
+	aspect            *aspectRequest
 }
 type bucket struct {
 	start time.Time

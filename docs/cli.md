@@ -665,6 +665,10 @@ ott tv input channel_up     # supported input, subject to local UI restrictions
 ott tv pause                # pause supported archive/VOD playback
 ott tv resume
 ott tv seek 90.5            # absolute position in seconds; supported VOD only
+ott tv aspect               # current Fit/Fill mode and saved-setting readback
+ott tv aspect fit           # show the complete picture, with bars if needed
+ott tv aspect fill          # proportional crop to fill the screen
+ott tv aspect "Fill screen" # full mode name, case-insensitive
 ott tv restart             # reload the player page after acknowledgement
 ott tv restart stream      # restart only the current stream
 ott tv reload               # reload the player page after acknowledgement
@@ -692,6 +696,7 @@ Global flags before `PLAYER` also have standard short forms:
 - `profile` / `prof`, and `profiles` / `profs`
 - `provider` / `prov`, and `providers` / `provs`
 - `capabilities` / `caps`, `input` / `key`, and `screenshot` / `shot`
+- `aspect` / `aspect-ratio`
 - `exit` / `quit` / `close`
 
 Aliases are case-insensitive exact tokens. They are not prefix completion:
@@ -1504,6 +1509,90 @@ The CLI does not accept numeric keycodes or arbitrary scripts. An input receipt
 contains the exact key, `accepted: true`, `dispatched: false` and
 `effect: "input-after-ack"`; it does not prove that the visible UI changed.
 Kiosk and parental restrictions still apply.
+
+### Aspect ratio: Fit and Fill
+
+Use `aspect` to read the current picture mode and its saved-setting state:
+
+```sh
+ott f10 aspect                 # read only; does not cycle the mode
+ott f10 aspect get             # same read operation
+ott f10 aspect status          # same read operation
+ott f10 aspect fit             # Fit to screen: whole picture, bars if needed
+ott f10 aspect fill            # Fill screen: preserve proportions, crop edges
+ott f10 aspect "Fit to screen" # full name, case-insensitive
+ott f10 aspect Fill screen     # full name also works as separate words
+ott --json f10 aspect          # mode, saved_mode and persisted
+ott --receipt f10 aspect fill  # retain the capability and set-request IDs
+```
+
+`aspect-ratio` is the full command alias. `f10` is an example registered-player
+alias. `fit` uses contain; `fill` uses
+cover. Fill never stretches the image. These explicit modes are separate from
+`key aspect`, which retains the player's ordinary aspect-button behavior.
+Only the documented names are accepted; use `play aspect` to search a channel
+with that reserved name.
+
+The CLI first reads `caps.aspect`, checks the requested operation and mode, and
+binds the request to that page's runtime. Both steps share one `--timeout`
+budget. The controller checks that success and rejection responses belong to
+the same runtime and operation. A missing/unsupported capability or a read-only
+capability rejects the change before any aspect mutation is sent. It never substitutes keypresses or
+cycles through modes. The older pinned workbench installation example in this
+guide predates aspect support: install a source revision or release whose
+`ott --help` lists `aspect`, and update both the controller and the target player.
+
+A successful read has this shape:
+
+```json
+{
+  "version": 1,
+  "runtime": "page-123-abcd",
+  "operation": "get",
+  "mode": "fill",
+  "saved_mode": "fill",
+  "persisted": true
+}
+```
+
+`mode` is the current setting. `saved_mode` comes from persistent-storage
+readback; `null` means no explicit saved mode was found or storage could not be
+read. `persisted` is true only when a non-null saved mode matches the current
+mode. A setting retained only in memory is not reported as persistent.
+
+A set result reports `accepted: true`, `dispatched: false` and
+`effect: "aspect-after-ack"`. It confirms acceptance, not application or saving.
+Read `ott f10 aspect` again after the change to check both. The player rechecks
+its runtime, media target and local access policy before applying an acknowledged
+change. A navigation, reload, PIN prompt or kiosk transition can invalidate it.
+On timeout or a malformed response the CLI does not resend the mutation; read
+the current state before deciding whether to issue a new request.
+
+To inspect a set request without repeating it, take the `request_id` from the
+`aspect` line emitted by `--receipt` and run:
+
+```sh
+ott f10 operation REQUEST_ID --lane web --json
+ott f10 aspect
+```
+
+Replace `REQUEST_ID` with that actual ID. The operation journal records aspect
+sets, not reads. `accepted` or `invoked` with `handler_completed` evidence does
+not prove the picture changed or the mode was saved; use the aspect readback
+for current and persistent settings. An expired/missing journal entry is not
+permission to replay a set.
+
+Persistence follows the player's existing scope: a live channel keeps its own
+setting, while VOD uses the shared media setting for subsequent media. Changing
+one live channel does not override every channel. A saved setting is reused by
+that scope after restart. Pixel output and physical-display presentation are not
+proved by the readback.
+
+Kiosk, parental locks and protected input continue to restrict changes. A
+compatible player can advertise `get` alone while locked, allowing inspection
+without granting `set`. If support is missing, check the player and controller
+versions and the active playback engine. If `persisted` is false, check storage
+availability on the player instead of repeatedly sending `fill`.
 
 ### Previous and next channel
 
