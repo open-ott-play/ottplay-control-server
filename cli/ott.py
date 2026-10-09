@@ -106,6 +106,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME android pause / resume / seek SECONDS  control native-owned playback
   ott NAME android queue play ID...  play an exact VPortal queue and loop it
   ott NAME android queue status / next / prev / restart / stop
+  ott NAME update status             inspect Capacitor APK update progress
+  ott NAME update prepare HTTPS_APK_URL SHA256  download and verify a newer APK
+  ott NAME update install SHA256     open the Android installer after ACK
   ott NAME android update HTTPS_URL SHA256  install a signed update manifest
   ott NAME standby / wake            enter or leave player standby
   ott NAME kiosk [status]            show kiosk policy and playback health
@@ -744,6 +747,44 @@ def select_programme(programs):
     return (secrets.choice(programs) if len(programs) > 1 else programs[0]) if programs else None
 
 
+def parse_app_update(words):
+    op = words[0] if words else "status"
+    if op == "status" and len(words) <= 1:
+        return {"operation": "status"}
+    if op == "install" and len(words) == 2 and re.fullmatch(r"[a-f0-9]{64}", words[1]):
+        return {"operation": op, "sha256": words[1]}
+    if op == "prepare" and len(words) == 3 and re.fullmatch(r"[a-f0-9]{64}", words[2]):
+        try:
+            url = urllib.parse.urlsplit(words[1])
+            valid = (len(words[1]) <= 2048 and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 or c == "\\" for c in words[1])
+                     and url.scheme == "https" and url.hostname and url.username is None and url.password is None
+                     and not url.fragment and (url.port is None or 0 < url.port <= 65535))
+        except ValueError:
+            valid = False
+        if valid:
+            return {"operation": op, "url": words[1], "sha256": words[2]}
+    raise Error("Use update status, update prepare HTTPS_APK_URL SHA256, or update install SHA256")
+
+
+def app_update_metadata(data, params):
+    invalid = "Invalid Capacitor update result; inspect update status before retrying"
+    if not isinstance(data, dict):
+        raise Error(invalid)
+    if params["operation"] == "install":
+        if data.get("accepted") is not True or data.get("operation") != "install":
+            raise Error(invalid)
+        return {"accepted": True, "operation": "install"}
+    phases = ("idle", "downloading", "ready", "awaiting_permission", "installing", "awaiting_confirmation", "installed", "failed")
+    if (type(data.get("version")) is not int or data["version"] != 1 or data.get("phase") not in phases
+            or not isinstance(data.get("sha256"), str) or not re.fullmatch(r"(?:[a-f0-9]{64})?", data["sha256"])
+            or any(type(data.get(key)) is not int or not 0 <= data[key] <= 2100000000 for key in ("installed_code", "target_code"))
+            or any(not isinstance(data.get(key), str) or not re.fullmatch(r"[A-Za-z0-9_.+\-]{0,64}", data[key]) for key in ("installed_version", "target_version", "error"))
+            or type(data.get("can_request_installs")) is not bool or data.get("user_confirmation_required") is not True):
+        raise Error(invalid)
+    keys = ("version", "phase", "sha256", "installed_version", "installed_code", "target_version", "target_code", "error", "can_request_installs", "user_confirmation_required")
+    return {key: data[key] for key in keys}
+
+
 def parse_command(words):
     if not words:
         return "status", {}
@@ -759,6 +800,8 @@ def parse_command(words):
             raise Error("Channel offset must be nonzero and between -9007199254740991 and +9007199254740991")
         offset = int(digits) * (-1 if verb[0] == "-" else 1)
         return "playback", {"operation": "step_channel", "offset": offset}
+    if verb == "update":
+        return "app_update", parse_app_update(tail)
     if verb == "kiosk":
         mode = tail[0].casefold() if tail else "status"
         values = tail[1:]
@@ -1746,6 +1789,13 @@ def capabilities_metadata(data):
                 any(not isinstance(value, str) or value not in allowed for value in values) or len(set(values)) != len(values)):
             raise Error(invalid)
         result[key] = list(values)
+    if data.get("app_update") is not None:
+        update = data["app_update"]
+        if (not isinstance(update, dict) or set(update) != {"version", "operations"}
+                or type(update.get("version")) is not int or update["version"] != 1
+                or update.get("operations") != ["status", "prepare", "install"]):
+            raise Error(invalid)
+        result["app_update"] = {"version": 1, "operations": list(update["operations"])}
     if "screenshot" in data:
         shot = data["screenshot"]
         if (not isinstance(shot, dict) or set(shot) != {"state", "source"}
@@ -2613,6 +2663,8 @@ def main(argv=None):
             data = vportal_metadata(data, action != "vportal_search", action == "vportal_random")
         elif action in ("profiles", "profile", "profile_settings"):
             data = profile_metadata(data, action, params)
+        elif action == "app_update":
+            data = app_update_metadata(data, params)
         elif action == "restart":
             data = restart_metadata(data, params["target"])
         elif action == "kiosk":
@@ -2662,6 +2714,15 @@ def main(argv=None):
                       "No current programmes match the search.", file=sys.stderr)
         if args.json:
             print(json.dumps(data, ensure_ascii=False, indent=2))
+        elif action == "app_update":
+            if params["operation"] == "install":
+                print("Installer request accepted. Android may require confirmation on the device; use update status to check completion.")
+            else:
+                print("Update: " + data["phase"] + "; installed " + data["installed_version"] + "; target " + (data["target_version"] or "none"))
+                if data["error"]:
+                    print("Reason: " + data["error"])
+                if not data["can_request_installs"]:
+                    print("Android requires permission to install updates from this app.")
         elif action == "screenshot":
             print(f"Screenshot saved: {clean(data['path'])} ({data['width']}×{data['height']}; {data['source']}; video: {data['video']})")
         elif action == "plex_queue":
