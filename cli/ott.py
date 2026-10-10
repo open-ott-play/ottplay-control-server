@@ -2811,6 +2811,9 @@ def main(argv=None):
             try:
                 data = client.call(device, action, params)
             except (PlayerRejected, PlayerUnsupported) as exc:
+                if action == "restart" and params.get("target") == "stream" and isinstance(exc.data, dict):
+                    if exc.data.get("reason") == "no_restartable_stream" or exc.data.get("error") == "There is no owned, restartable stream.":
+                        raise Error("No stream is ready to restart. Wait for playback to load, or use 'ott <player> restart' to reload the player. The request was not repeated.") from None
                 if action == "playback" and params.get("operation") in CHANNEL_STEPS.values() and isinstance(exc, PlayerRejected):
                     detail = exc.data.get("error") if isinstance(exc.data, dict) else None
                     if isinstance(detail, str) and detail in PLEX_QUEUE_ERRORS:

@@ -4,6 +4,10 @@
 
 ### Changes
 
+- Explain when `restart stream` has no current stream to restart, including
+  responses from older players. Keep unsupported-player errors distinct, omit
+  arbitrary player error text, and never retry or reload automatically.
+
 - Add read-only `debug`/`dbg` player snapshots with bounded runtime, media,
   lifecycle and native metrics, using a separate capability compatible with
   existing inspection clients. Bundles retain two files and verify debug

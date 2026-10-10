@@ -267,6 +267,25 @@ class ProfileOutputTest(unittest.TestCase):
                 status, output, _, calls = self.run_command(['restart', target], data, True)
                 self.assertEqual((status, output, len(calls)), (1, '', 1))
 
+    def test_restart_unready_stream_is_distinct_from_unsupported_player(self):
+        for response in [
+            ott.PlayerRejected('private', {'reason': 'no_restartable_stream', 'error': 'private'}),
+            ott.PlayerUnsupported('private', {'error': 'There is no owned, restartable stream.'}),
+        ]:
+            for json_output in [False, True]:
+                status, output, errors, calls = self.run_command(['restart', 'stream'], response, json_output)
+                self.assertEqual((status, output, len(calls)), (1, '', 1))
+                self.assertIn('No stream is ready to restart', errors)
+                self.assertIn("ott <player> restart", errors)
+                self.assertNotIn('private', errors)
+                self.assertNotIn('unsupported', errors)
+        for words in [['restart', 'stream'], ['restart', 'player']]:
+            response = ott.PlayerUnsupported('private', {'reason': 'unknown', 'error': 'private'})
+            status, output, errors, calls = self.run_command(words, response, False)
+            self.assertEqual((status, output, len(calls)), (1, '', 1))
+            self.assertIn('unsupported by this player', errors)
+            self.assertNotIn('private', errors)
+
 
 if __name__ == '__main__':
     unittest.main()
