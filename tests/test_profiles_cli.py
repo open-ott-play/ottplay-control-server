@@ -267,6 +267,25 @@ class ProfileOutputTest(unittest.TestCase):
                 status, output, _, calls = self.run_command(['restart', target], data, True)
                 self.assertEqual((status, output, len(calls)), (1, '', 1))
 
+    def test_restart_unready_stream_is_distinct_from_unsupported_player(self):
+        for response in [
+            ott.PlayerRejected('private', {'reason': 'no_restartable_stream', 'error': 'private'}),
+            ott.PlayerUnsupported('private', {'error': 'There is no owned, restartable stream.'}),
+        ]:
+            for json_output in [False, True]:
+                status, output, errors, calls = self.run_command(['restart', 'stream'], response, json_output)
+                self.assertEqual((status, output), (1, ''))
+                self.assertEqual(calls, [mock.call('dev_tv', 'restart', {'target': 'stream'})])
+                self.assertEqual(errors, "Error: No stream is ready to restart. Wait for playback to load, or use 'ott <player> restart' to reload the player. The request was not repeated.\n")
+        for words in [['restart', 'stream'], ['restart', 'player']]:
+            response = ott.PlayerUnsupported('private', {'reason': 'unknown', 'error': 'private'})
+            status, output, errors, calls = self.run_command(words, response, False)
+            self.assertEqual((status, output), (1, ''))
+            self.assertEqual(calls, [mock.call('dev_tv', 'restart', {'target': words[1]})])
+            expected = ("Stream restart is unavailable in the current playback state or player version. Wait for loading to finish, check capabilities, or use 'ott <player> restart' to reload the player."
+                        if words[1] == 'stream' else "The restart request was unsupported by this player; check its settings on the player")
+            self.assertEqual(errors, 'Error: ' + expected + '\n')
+
 
 if __name__ == '__main__':
     unittest.main()
