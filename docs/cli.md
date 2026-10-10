@@ -71,12 +71,11 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 reviewed source revision
-[`c1758f37a829f72b63ae50a979141a96871981d3`](https://github.com/open-ott-play/ottplay-control-server/commit/c1758f37a829f72b63ae50a979141a96871981d3).
+[`e26070274259975efbfb7a6ceb7cdc101c23c7a1`](https://github.com/open-ott-play/ottplay-control-server/commit/e26070274259975efbfb7a6ceb7cdc101c23c7a1).
 It contains all seven CLI modules, including the local `resolve` command,
-[workbench](workbench.md#quick-start) and offline `report verify`.
-That older pinned revision does not include the Plex library commands below.
-For those commands, install a reviewed revision containing `plex_library` and
-update the controller and player too; confirm support with `ott PLAYER caps`.
+[workbench](workbench.md#quick-start), offline `report verify`, and Plex library
+commands. Update the controller and player too; confirm support with
+`ott PLAYER caps`.
 
 This is the **0.1.1 development line**, not a claim that a stable 0.1.1 binary
 release has shipped. Stable CLI v0.1.0 lacks `resolve`, workbench and offline
@@ -97,8 +96,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_revision=c1758f37a829f72b63ae50a979141a96871981d3
-  ott_source="$HOME/.local/share/ottplay-control-server-c1758f37"
+  ott_revision=e26070274259975efbfb7a6ceb7cdc101c23c7a1
+  ott_source="$HOME/.local/share/ottplay-control-server-e2607027"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -117,7 +116,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-c1758f37/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-e2607027/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -131,7 +130,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-c1758f37/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-e2607027/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -153,8 +152,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRevision = 'c1758f37a829f72b63ae50a979141a96871981d3'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-c1758f37'
+$ottRevision = 'e26070274259975efbfb7a6ceb7cdc101c23c7a1'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e2607027'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -197,12 +196,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-c1758f37/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-e2607027/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-c1758f37\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e2607027\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -231,7 +230,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-c1758f37`, stages the replacement beside it, then switches atomically.
+`ott.before-e2607027`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -243,9 +242,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-c1758f37")
-staged = launcher.with_name("ott.switch-c1758f37")
-reviewed = Path.home() / ".local/share/ottplay-control-server-c1758f37/cli/ott.py"
+backup = launcher.with_name("ott.before-e2607027")
+staged = launcher.with_name("ott.switch-e2607027")
+reviewed = Path.home() / ".local/share/ottplay-control-server-e2607027/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -1119,8 +1118,8 @@ separate requests and can produce different orders; to reuse a preview's exact
 order, pass its `queue.ids` to the existing `plex play ID...` command.
 
 Install a feature-bearing CLI, controller and player advertising `plex_library`.
-The older pinned CLI installation example above predates this extension, and
-support for `plex_queue` alone is insufficient. `ott l` lists these commands
+The pinned CLI installation example above includes this extension; support
+for `plex_queue` alone on the target player is insufficient. `ott l` lists these commands
 when the connected player supports them. The CLI checks capabilities and sends
 one runtime-bound library request within a single `--timeout` budget. It never
 falls back to another Plex server, channel search or repeated playback request.
@@ -1602,9 +1601,8 @@ binds the request to that page's runtime. Both steps share one `--timeout`
 budget. The controller checks that success and rejection responses belong to
 the same runtime and operation. A missing/unsupported capability or a read-only
 capability rejects the change before any aspect mutation is sent. It never substitutes keypresses or
-cycles through modes. The older pinned workbench installation example in this
-guide predates aspect support: install a source revision or release whose
-`ott --help` lists `aspect`, and update both the controller and the target player.
+cycles through modes. The pinned CLI installation example in this guide includes
+aspect support. Update both the controller and the target player too.
 
 A successful read has this shape:
 
