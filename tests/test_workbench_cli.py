@@ -379,6 +379,21 @@ class WorkbenchTest(unittest.TestCase):
             self.assertNotIn("operation_state", result)
             self.assertEqual([row[1] for row in client.calls], ["capabilities", "inspect"])
 
+    def test_plex_library_receipt_is_read_without_replay_or_observed_claim(self):
+        operation_id = 'a' * 32
+        client = Client(self.clock)
+        data = {'operation_id': operation_id, 'state': 'invoked', 'action': 'plex_library',
+                'evidence': {'kind': 'handler_completed', 'generation': None, 'position': None}}
+        raw = {'version': 1, 'runtime': RUNTIME, 'section': 'operation', 'data': data}
+        client.inspect_envelope = raw
+        code, result, _ = self.execute(['operation', operation_id, '--json'], client)
+        self.assertEqual((code, result['operation_state']), (0, 'invoked'))
+        self.assertEqual(result['observations'][0]['data'], data)
+        self.assertEqual([row[1] for row in client.calls], ['capabilities', 'inspect'])
+        data['state'] = 'observed'
+        with self.assertRaises(wb.InvalidData):
+            wb.operation_metadata(raw, RUNTIME, operation_id)
+
     def test_server_negative_envelope_does_not_become_a_snapshot(self):
         for reason in ("invalid_request", "runtime_mismatch", "unsupported", "unavailable"):
             with self.assertRaises(wb.ObservationError) as caught:

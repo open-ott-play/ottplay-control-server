@@ -71,6 +71,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME plex preview ID [ID ...]  check the listed Plex items without starting playback
   ott NAME plex play ID [ID ...]     play IDs in order from the start; stop after the last
   ott NAME plex play --shuffle ID...  shuffle all IDs once; kiosk on repeats that order
+  ott NAME plex libraries            list movie/show libraries from the player's Plex server
+  ott NAME plex shuffle NAME         play an entire Plex library in a new shuffled order
+  ott NAME plex library [--shuffle] [--preview] NAME  play or preview a library (or id:16)
   ott NAME plex queue / status       show the Plex queue without changing it
   ott NAME plex next / prev / stop   move within or clear the Plex queue (no wrapping)
   ott NAME playlist URL              update the M3U playlist
@@ -178,7 +181,7 @@ RECEIPT_ACTIONS = frozenset((
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "restart", "play", "provider",
-    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "aspect",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "aspect",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -199,6 +202,15 @@ PLEX_QUEUE_ERRORS = frozenset((
     "Unlock parental access before starting the Plex queue.",
     "Kiosk mode does not allow a Plex queue.",
 ))
+PLEX_LIBRARY_OPERATIONS = frozenset(("list", "preview", "play"))
+PLEX_LIBRARY_ERRORS = {
+    "ambiguous_library": "Several Plex libraries match. Use plex libraries, then select id:NUMBER.",
+    "library_not_found": "No Plex library matches. Use plex libraries to see available names.",
+    "unsupported_library": "This Plex library is not a movie or show library.",
+    "too_many_libraries": "The Plex server has more than 1000 libraries; the result is incomplete.",
+    "too_many_items": "The Plex library exceeds the 500-item queue limit; no partial queue was started.",
+    "incomplete_library": "The complete Plex library could not be verified; no partial queue was started.",
+}
 
 
 def command_verb(words):
@@ -963,6 +975,8 @@ def parse_command(words):
         return "provider_settings", data
     if verb == "plex":
         operation = tail[0].casefold() if tail else ""
+        if operation in ("libraries", "library", "shuffle"):
+            return "plex_library", parse_plex_library(tail)
         operation = {"queue": "status", "prev": "previous"}.get(operation, operation)
         if operation in PLEX_QUEUE_OPERATIONS:
             ids = tail[1:]
@@ -1690,6 +1704,155 @@ def screenshot_command(client, device, name, output, timeout):
             os.close(parent_fd)
 
 
+def parse_plex_library(words):
+    operation = words[0].casefold()
+    if operation == "libraries":
+        if len(words) != 1:
+            raise Error("Use plex libraries without arguments")
+        return {"op": "list"}
+    params = {"op": "play", "shuffle": operation == "shuffle"}
+    title = []
+    flags = set()
+    options = True
+    for word in words[1:]:
+        flag = word.casefold()
+        if options and flag == "--":
+            options = False
+        elif options and flag in ("--shuffle", "--preview"):
+            if flag in flags or (flag == "--shuffle" and operation == "shuffle"):
+                raise Error("Do not repeat Plex library options")
+            flags.add(flag)
+            if flag == "--shuffle":
+                params["shuffle"] = True
+            else:
+                params["op"] = "preview"
+        elif options and word.startswith("-"):
+            raise Error("Use plex library [--shuffle] [--preview] NAME or id:NUMBER")
+        else:
+            title.append(word)
+    query = " ".join(title).strip()
+    if query.casefold().startswith("id:"):
+        value = query[3:]
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", value):
+            raise Error("Use id:NUMBER with a positive decimal Plex library ID (at most 20 digits)")
+        params["library_id"] = value
+    elif not plex_library_text(query, 256):
+        raise Error("A Plex library name must contain 1–256 UTF-8 bytes without control characters")
+    else:
+        params["query"] = query
+    return params
+
+
+def plex_library_text(value, maximum):
+    return (epg_text(value, maximum, "utf-8") and bool(value.strip())
+            and all(ord(char) >= 32 and ord(char) != 127 for char in value))
+
+
+def plex_library_metadata(data, runtime, params, max_items=MAX_PLEX_QUEUE_ITEMS):
+    invalid = "The player returned invalid Plex library metadata. Acceptance may be uncertain; inspect plex status before another playback request."
+    try:
+        if len(json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) > 1024 * 1024:
+            raise Error(invalid)
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise Error(invalid) from None
+    base = {"version", "runtime", "op", "state"}
+    if (not isinstance(data, dict) or not base <= set(data)
+            or type(data["version"]) is not int or data["version"] != 1
+            or data["runtime"] != runtime or data["op"] != params["op"]):
+        raise Error(invalid)
+    if data["state"] == "error":
+        problem = data.get("error")
+        if (set(data) != base | {"error"} or not isinstance(problem, str)
+                or (problem not in PLEX_LIBRARY_ERRORS and problem not in PLEX_QUEUE_ERRORS)):
+            raise Error(invalid)
+        return dict(data)
+    if data["state"] != "ready":
+        raise Error(invalid)
+
+    def library(row):
+        if (not isinstance(row, dict) or set(row) != {"id", "title", "type"}
+                or not isinstance(row["id"], str) or not re.fullmatch(r"[1-9][0-9]{0,19}", row["id"])
+                or not plex_library_text(row["title"], 160) or row["type"] not in ("movie", "show")):
+            raise Error(invalid)
+        return dict(row)
+
+    if params["op"] == "list":
+        rows = data.get("libraries")
+        if set(data) != base | {"libraries"} or not isinstance(rows, list) or len(rows) > 1000:
+            raise Error(invalid)
+        rows = [library(row) for row in rows]
+        if len({row["id"] for row in rows}) != len(rows):
+            raise Error(invalid)
+        return dict(data, libraries=rows)
+    if (set(data) != base | {"library", "shuffled", "queue"} or type(data["shuffled"]) is not bool
+            or data["shuffled"] != params.get("shuffle", False)):
+        raise Error(invalid)
+    row = library(data["library"])
+    if "library_id" in params and row["id"] != params["library_id"]:
+        raise Error(invalid)
+    queue_data = data["queue"]
+    if (not isinstance(queue_data, dict) or not plex_queue_ids(queue_data.get("ids"), 1)
+            or len(queue_data["ids"]) > max_items or queue_data.get("state") == "error"):
+        raise Error(invalid)
+    queue_data = plex_queue_metadata(queue_data, runtime, {"op": params["op"], "ids": queue_data["ids"]})
+    return dict(data, library=row, queue=queue_data)
+
+
+def plex_library_command(client, device, params, timeout):
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    runtime = None
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        capability = controls.get("plex_library", {})
+        if params["op"] not in capability.get("operations", []):
+            raise Error("Plex library commands require an updated player and controller advertising plex_library. No library command was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Plex capability discovery exceeded --timeout; no library command was sent")
+        client.timeout = remaining
+        runtime = controls["player"]["runtime"]
+        result = client.call(device, "plex_library", dict(params, runtime=runtime))
+        if time.monotonic() >= deadline:
+            raise Error("Plex library response exceeded --timeout. Acceptance is uncertain; inspect plex status before another playback request. The request was not repeated")
+        result = plex_library_metadata(result, runtime, params, capability["max_items"])
+        if result["state"] == "error":
+            raise Error(PLEX_LIBRARY_ERRORS.get(result["error"], result["error"]) + " The request was not repeated")
+        return result
+    except PlayerRejected as exc:
+        detail = "Plex library request was rejected; check the saved Plex settings and current player runtime."
+        if runtime is not None:
+            try:
+                rejected = plex_library_metadata(exc.data, runtime, params)
+                if rejected["state"] == "error":
+                    detail = PLEX_LIBRARY_ERRORS.get(rejected["error"], rejected["error"])
+            except Error:
+                pass
+        raise Error(detail + " The request was not repeated") from None
+    except PlayerUnsupported:
+        raise Error("Plex library commands require an updated player and controller advertising plex_library. The request was not repeated") from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("This controller does not accept Plex library requests; update it and the player. The request was not repeated") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_plex_library(data):
+    if data["op"] == "list":
+        if not data["libraries"]:
+            print("No movie or show libraries are available on the player's Plex server.")
+        for row in data["libraries"]:
+            print(f"id:{row['id']}  {clean(row['title'])} ({row['type']})")
+    else:
+        row = data["library"]
+        print(f"Plex library: {clean(row['title'])} (id:{row['id']}); "
+              + ("shuffled once." if data["shuffled"] else "library order."))
+        print_plex_queue(data["queue"], preview=data["op"] == "preview")
+
+
 def plex_queue_ids(ids, minimum=0):
     return (isinstance(ids, list) and minimum <= len(ids) <= MAX_PLEX_QUEUE_ITEMS
             and all(isinstance(item, str) and re.fullmatch(r"[1-9][0-9]{0,19}", item) for item in ids))
@@ -1926,6 +2089,17 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": queue["max_items"]}
+    if "plex_library" in data:
+        library = data["plex_library"]
+        operations = library.get("operations") if isinstance(library, dict) else None
+        if (not isinstance(library, dict) or set(library) != {"version", "operations", "max_items"}
+                or type(library.get("version")) is not int or library["version"] != 1
+                or type(library.get("max_items")) is not int or not 1 <= library["max_items"] <= MAX_PLEX_QUEUE_ITEMS
+                or not isinstance(operations, list) or len(operations) > len(PLEX_LIBRARY_OPERATIONS)
+                or any(not isinstance(op, str) or op not in PLEX_LIBRARY_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["plex_library"] = {"version": 1, "operations": list(operations), "max_items": library["max_items"]}
     if "inspect" in data:
         inspection = data["inspect"]
         sections = inspection.get("sections") if isinstance(inspection, dict) else None
@@ -2019,14 +2193,21 @@ def print_player_status(data, name):
     queue = controls.get("plex_queue", {}).get("operations", [])
     if queue:
         print(f"  {prefix} plex " + " / ".join(op + " ID [ID ...]" if op in ("play", "preview") else op for op in queue))
-        print("    Listed order; no repeat. next/prev use the retained Plex queue until plex stop clears it.")
+        print("    next/prev use the retained Plex queue until plex stop clears it; kiosk can repeat its order.")
+    libraries = controls.get("plex_library", {}).get("operations", [])
+    if "list" in libraries:
+        print(f"  {prefix} plex libraries  — list movie/show libraries on the player's Plex server")
+    if "play" in libraries:
+        print(f'  {prefix} plex shuffle "NAME" / plex library "NAME"  — play a whole library (or id:NUMBER)')
+    if "preview" in libraries:
+        print(f'  {prefix} plex library --preview "NAME"  — check a whole library without playing')
     aspect = controls.get("aspect", {})
     if "get" in aspect.get("operations", []):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
     if "set" in aspect.get("operations", []):
         print(f"  {prefix} aspect " + " / ".join(aspect["modes"]) + "  — request an aspect mode")
     if (not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not aspect.get("operations")):
+            and shot.get("state") != "ready" and not queue and not libraries and not aspect.get("operations")):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:
@@ -2795,6 +2976,8 @@ def main(argv=None):
             data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
         elif action == "plex_queue":
             data = plex_queue_command(client, device, params, args.timeout)
+        elif action == "plex_library":
+            data = plex_library_command(client, device, params, args.timeout)
         elif action == "aspect":
             data = aspect_command(client, device, params, args.timeout)
         elif action == "programs" and "epg" in config:
@@ -2898,6 +3081,8 @@ def main(argv=None):
             print(f"Screenshot saved: {clean(data['path'])} ({data['width']}×{data['height']}; {data['source']}; video: {data['video']})")
         elif action == "plex_queue":
             print_plex_queue(data, preview=params["op"] == "preview")
+        elif action == "plex_library":
+            print_plex_library(data)
         elif action == "aspect":
             print_aspect(data, args.words[0])
         elif action == "channels" or (action == "play" and "channels" in data):

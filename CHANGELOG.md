@@ -4,6 +4,13 @@
 
 ### Changes
 
+- Add `plex libraries`, `plex library [--shuffle] [--preview] NAME` and
+  `plex shuffle NAME`. The player resolves a complete movie/show library using
+  its own saved Plex connection, then reuses the existing queue. Explicit
+  `id:NUMBER` selection avoids ambiguous names. Capability checks, bounded
+  results and runtime-bound errors preserve older queue commands and prevent
+  partial or automatically repeated playback requests.
+
 - Explain when `restart stream` has no current stream to restart, including
   responses from older players. Keep unsupported-player errors distinct, omit
   arbitrary player error text, and never retry or reload automatically.
@@ -59,6 +66,11 @@
 
 ### Upgrade
 
+Plex library commands require a CLI, controller and player implementing the new
+`plex_library` capability. Existing `plex_queue` support alone is insufficient;
+an unsupported player receives no library command. Local presets and saved
+credentials are unchanged. Existing parental, kiosk and repeat policies apply.
+
 Aspect commands require a matching updated CLI, controller and player. An older
 player without the capability receives no aspect mutation. The player's existing
 storage scope remains authoritative: the current live channel, or the shared
@@ -76,7 +88,7 @@ checks still determine which commands a device supports. Queues remain ephemeral
 and single-replica. Test the chosen binary/container and target player before
 replacing a running installation; this change does not deploy it.
 
-Keep all six CLI Python files from the same revision together. The workbench
+Keep all seven CLI Python files from the same revision together. The workbench
 commands are not part of stable CLI v0.1.0 and require a player advertising the
 corresponding inspection capabilities. Separately bound Android maintenance
 observations remain a distinct lane. Evidence exports require a new directory;

@@ -258,14 +258,15 @@ additive RPC does not change the generated legacy command envelope.
 ```
 
 `runtime` must match `^[a-z0-9-]{1,64}$` and the current
-`capabilities.player.runtime`. Only `play` and `preview` accept `ids`: 1–100
+`capabilities.player.runtime`. Only `play` and `preview` accept `ids`: 1–500
 strings matching `^[1-9][0-9]{0,19}$`. Their order and duplicates are preserved.
 Unknown/duplicate fields, numeric JSON IDs, leading zeros, URLs and extra options
 are rejected. The player uses its saved Plex credentials; no URL/token is accepted
 in this request. The existing 16 KiB request limit remains.
 
 Capabilities optionally include
-`plex_queue:{version:1,operations:["play","preview","status","next","previous","stop"],max_items:100}`.
+`plex_queue:{version:1,operations:["play","preview","status","next","previous","stop"],max_items:500}`.
+Clients also accept smaller advertised limits and reject oversized requests.
 Absence means the client must not assume support. Updated CLIs discover the
 capability before sending an explicit Plex operation; old `plex setup` behavior
 is unchanged.
@@ -291,7 +292,7 @@ enqueued. Result expiry and authenticated read rules are unchanged.
 Preview returns `{version:1,runtime,state:"ready"|"error",ids,titles,order:"listed"}`,
 with optional static `error`. Ready `titles` has one title per submitted ID in the
 same order; error `titles` may be empty. Each title has the same 512-byte bound,
-and the total serialized preview response data is at most 128 KiB. Preview checks availability
+and the total serialized preview response data is at most 1 MiB. Preview checks availability
 without selecting a provider, starting playback or replacing a retained queue.
 Readiness does not promise future network availability or successful decoding.
 
@@ -301,13 +302,78 @@ While a queue is retained, `playback` operations `next_channel` and
 The controller rejects a result containing both destinations. At either queue
 boundary the step is rejected without wrapping or falling back to TV. Outside
 the queue, the existing channel behavior remains. Natural end-of-stream advances
-the ordered list and stops after its final item, with no shuffle or repetition.
+the ordered list and stops after its final item unless existing kiosk policy
+repeats it. Shuffle is represented by the submitted ID order, not a queue option.
 
 The player checks request expiry, runtime and context before committing prepared
 playback and retires stale callbacks. CLI timeout does not cancel a request already
 accepted under the server TTL; late execution before that deadline can be uncertain.
 Never automatically reissue a mutation on timeout. Read `plex status` to inspect
 the current queue, and use a new request only after assessing that state.
+
+### Plex library extension
+
+`plex_library` is a separate administrator-authenticated RPC. It resolves library
+sections using the player's saved Plex credentials and reuses its existing queue
+implementation. It accepts no URL, token, preset or filesystem path. It neither
+changes the legacy command contract nor extends the `plex_queue` request schema.
+
+```json
+{"plex_library":{"version":1,"operations":["list","preview","play"],"max_items":500}}
+{"action":"plex_library","params":{"runtime":"page-123","op":"list"}}
+{"action":"plex_library","params":{"runtime":"page-123","op":"preview","query":"Три кота"}}
+{"action":"plex_library","params":{"runtime":"page-123","op":"play","library_id":"16","shuffle":true}}
+```
+
+The optional capability has exactly `version`, `operations` and `max_items`.
+Operations are a distinct subset of `list`, `preview`, `play`; an absent
+capability or missing operation is unsupported. `max_items` is an integer from
+1 to 500. The runtime format and ownership rules are the same as `plex_queue`.
+`list` accepts only `runtime` and `op`. `preview`/`play` require exactly one of
+`query` (nonblank, at most 256 UTF-8 bytes without C0/DEL controls) or `library_id`
+(a string matching `^[1-9][0-9]{0,19}$`). Optional `shuffle` is a boolean,
+default false. Unknown or duplicate fields and malformed UTF-16 escapes fail.
+
+The player prefers an exact case-insensitive library-title match, then a unique
+substring match; an ambiguous match fails. Only `movie` and `show` sections are
+eligible. Discovery limits the complete section inventory to 1000, including
+unsupported types, and includes complete pagination before committing playback;
+show sections resolve episodes. It does not recursively search filesystem folders
+or treat a series inside another section as a library. Discovery and queue
+preparation share request ownership, saved-configuration checks and expiry.
+
+Every response, including rejected/unsupported replies, is bound to the requested
+runtime and operation. Exact successful list data is:
+
+```json
+{"version":1,"runtime":"page-123","op":"list","state":"ready","libraries":[{"id":"16","title":"Три кота","type":"show"}]}
+```
+
+`libraries` contains 0–1000 rows with unique IDs. A row has exactly `id`, `title`
+and `type`; title is nonblank, sanitized single-line text of at most 160 UTF-8
+bytes and type is `movie` or `show`. Ready preview/play data has exactly the same
+four base fields plus `library` (one row), `shuffled` (the requested boolean)
+and `queue` (the existing preview or play result, respectively). An explicit
+`library_id` must match the selected library; the nested queue must have the same
+runtime, 1–500 IDs, and play begins at index zero. `queue.state:error` is not a
+successful library result. `ready` describes the library operation; a nested
+queue in `preparing` is not confirmation that a decoder is playing.
+
+Error data has exactly `version`, `runtime`, `op`, `state:"error"` and `error`.
+Allowed errors are `ambiguous_library`, `library_not_found`, `unsupported_library`,
+`too_many_libraries`, `too_many_items`, `incomplete_library`, plus the existing
+bounded Plex queue error messages. Errors never contain backend text, credentials
+or partial library data. Ready data is accepted only with envelope `status:"ok"`.
+Serialized data is limited to 1 MiB, allowing full lists and escaped titles;
+the existing 2 MiB response-envelope bound remains. Repeated responses remain
+runtime/operation-bound after the first result is stored.
+
+The CLI never retries an uncertain mutation or substitutes a local preset lookup.
+Play retains parental/kiosk checks and existing repeat behavior. A new shuffle
+changes the order once; it does not change repeat policy or reshuffle each loop.
+Only play is journaled as `action:"plex_library"`; list/preview are read-only.
+Handler completion alone does not prove an observed playback effect. See the
+shared [contract fixtures](../contracts/plex-library-v1.json).
 
 ### Remote screenshot extension
 
