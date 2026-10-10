@@ -116,13 +116,20 @@ ott l plex play 78777 78776 78775     # starts the first item from zero, in this
 ott l plex queue                     # current item and preparation/playback state
 ott l plex next                      # advance once; no wrap at the last item
 ott l plex stop                      # stop and clear this queue
+ott l plex libraries                 # list libraries (requires plex_library support)
+ott l plex shuffle "Три кота"         # shuffle one complete library, up to 500 items
+ott l plex library --preview id:16    # read-only check of an explicit library
 ```
 
 Plex queues require a CLI, controller and player implementing `plex_queue`.
-They stop after the final item, with no shuffle or repeat. While a queue remains,
+`plex play --shuffle ID...` shuffles supplied IDs once. Queues stop after the
+final item unless existing kiosk policy repeats them. While a queue remains,
 ordinary `next` and `prev` address it; `plex stop` clears it. A preview never
 switches the provider or replaces current playback. See
 [Plex queue commands](docs/cli.md#ordered-plex-queues) for limits and readiness.
+Library lookup additionally requires an updated player and controller advertising
+`plex_library`; it uses the player's saved Plex connection and rejects ambiguous
+or incomplete selections. See [Plex libraries by name](docs/cli.md#plex-libraries-by-name).
 
 ### Load a saved setup
 

@@ -30,6 +30,7 @@ type entry struct {
 	// Bound at enqueue time; never trust a responding page's runtime identity.
 	screenshotRuntime string
 	plexQueue         *plexQueueRequest
+	plexLibrary       *plexLibraryRequest
 	playbackOperation string
 	inspect           *inspectRequest
 	aspect            *aspectRequest

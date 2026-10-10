@@ -21,6 +21,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
+- [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
 - [Read-only doctor, inspect, debug, bundles and test scenarios](workbench.md)
@@ -73,6 +74,9 @@ reviewed source revision
 [`c1758f37a829f72b63ae50a979141a96871981d3`](https://github.com/open-ott-play/ottplay-control-server/commit/c1758f37a829f72b63ae50a979141a96871981d3).
 It contains all seven CLI modules, including the local `resolve` command,
 [workbench](workbench.md#quick-start) and offline `report verify`.
+That older pinned revision does not include the Plex library commands below.
+For those commands, install a reviewed revision containing `plex_library` and
+update the controller and player too; confirm support with `ott PLAYER caps`.
 
 This is the **0.1.1 development line**, not a claim that a stable 0.1.1 binary
 release has shipped. Stable CLI v0.1.0 lacks `resolve`, workbench and offline
@@ -615,7 +619,7 @@ ott diagnostics --help
 ```
 
 The existing symlink follows the checkout. For a copied installation replace all
-six sibling Python files together from one version. Keep `cli.json`, presets
+seven sibling Python files together from one version. Keep `cli.json`, presets
 and server credentials outside the checkout; updating CLI files does not update
 or restart the command server, native apps or players already open in a browser.
 After updating a hosted player, reload it and inspect `ott PLAYER caps`.
@@ -1079,6 +1083,55 @@ Settings use the existing save and reload drivers. Parental settings locks and
 platform restrictions still apply; unlock the settings on the player first.
 Other providers currently require their own settings UI.
 
+## Plex libraries by name
+
+Play a whole movie or show library using the player's saved Plex connection:
+
+```sh
+ott l plex libraries                         # list library IDs, names and types
+ott l plex shuffle "Три кота"                 # shuffle the entire library once
+ott l plex library "Три кота"                 # play in library order
+ott l plex library --preview "Три кота"       # check without changing playback
+ott l plex library --shuffle --preview id:16  # preview one new shuffled order
+ott l plex library --shuffle id:16            # explicit library ID, new shuffle
+```
+
+`plex shuffle NAME` is short for `plex library --shuffle NAME`. Command tokens
+and options are case-insensitive. The player first matches an exact library
+title ignoring case, then a unique title substring. Ambiguous matches fail;
+use `plex libraries` and `id:NUMBER` to choose explicitly. Bare numbers remain
+title queries here; `id:16` identifies a library, while `plex play 16` identifies
+one media item. Use `--` before a title beginning with a hyphen.
+
+These commands select Plex **libraries** (movie or show sections), not a series
+inside another library or a filesystem folder. For example, a dedicated
+“Три кота” library is independent from a series with that title in “TV Shows”.
+Show libraries include their episodes. Lookup happens on the player using its
+own saved Plex server and token; local CLI presets are not used or applied.
+
+The player collects the complete library before preparing a queue. Discovery
+supports servers with up to 1000 library sections and lists only movie/show
+libraries. Up to 500 items can be queued, subject to
+the advertised limit. A missing, ambiguous, oversized or incomplete library
+fails without starting a partial queue. The selected library and generated ID
+order are returned in `--json` output. A shuffled preview and a later play are
+separate requests and can produce different orders; to reuse a preview's exact
+order, pass its `queue.ids` to the existing `plex play ID...` command.
+
+Install a feature-bearing CLI, controller and player advertising `plex_library`.
+The older pinned CLI installation example above predates this extension, and
+support for `plex_queue` alone is insufficient. `ott l` lists these commands
+when the connected player supports them. The CLI checks capabilities and sends
+one runtime-bound library request within a single `--timeout` budget. It never
+falls back to another Plex server, channel search or repeated playback request.
+If acceptance is uncertain, inspect `plex status` before deciding to play again.
+
+Preview does not replace current playback. Play reuses the existing Plex queue,
+including parental and kiosk checks. It does not unlock controls, enable repeat
+or change saved settings. `preparing` confirms acceptance and preparation, not
+decoder playback. Existing kiosk policy determines whether the queue repeats;
+shuffle changes the order once, not on each loop.
+
 ## Ordered Plex queues
 
 Use the Plex item IDs from the configured Plex library. The player uses its
@@ -1091,6 +1144,7 @@ configuration meaning.
 ```sh
 ott l plex preview 78777 78776 78775  # read-only readiness check, in this exact order
 ott l plex play 78777 78776 78775     # replace the queue and start the first film at 0
+ott l plex play --shuffle 78777 78776 78775 # shuffle the supplied IDs once
 ott l plex queue                     # same as plex status; does not start anything
 ott l plex status
 ott l plex next                      # next item, starting at 0
@@ -1100,15 +1154,18 @@ ott l plex stop                      # stop playback and clear the queue
 ott --json l plex queue              # bounded metadata, no stream URLs or tokens
 ```
 
-`play` and `preview` accept 1–100 positive decimal IDs, each at most 20 digits,
+`play` and `preview` accept 1–500 positive decimal IDs, each at most 20 digits,
 without signs, leading zeros, titles or URLs. Order and duplicate IDs are
 preserved. Command spelling is case-insensitive. Preview checks the saved
 configuration and every requested item without changing the provider, queue or
 current playback. It reports titles in the submitted order. Readiness does not
 guarantee later network availability or decoder compatibility.
 
-Playback starts at the first item from zero, without shuffle, repeat or resume.
-Natural completion advances through the list and stops after the last item.
+Playback starts at the first item from zero. `play --shuffle` shuffles all
+supplied IDs once in the CLI; ordinary `play` preserves the supplied order.
+Natural completion advances through the list and stops after the last item
+unless existing kiosk policy repeats it. Older players can advertise a lower
+item limit; the CLI rejects oversized requests before sending a queue command.
 `next` at the last item and `prev` at the first are rejected without wrapping or
 stopping the current item. Ordinary `ott l next` and `ott l prev` use a retained
 Plex queue atomically inside the player, including while preparing or after it
@@ -1131,6 +1188,13 @@ still execute before its server deadline. There is no automatic replay. Inspect
 does not prove that playback never started.
 
 ### Plex queue troubleshooting
+
+- For a missing or ambiguous library, use `plex libraries`, then `plex library
+  --preview id:NUMBER`. A series title inside a library is not a library name.
+- An incomplete or oversized library is not truncated. Check that the library
+  is stable and within the item limit; use an explicit smaller ID queue when needed.
+- `plex_library` requires newer support than `plex_queue`. Updating only the
+  Python CLI cannot add library lookup to a TV that does not advertise it.
 
 - If the operation is missing or unsupported, update all three components and
   confirm `plex_queue.operations` in `caps` on the exact target player.

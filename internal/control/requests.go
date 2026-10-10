@@ -14,10 +14,11 @@ const maxResponseBytes = 2 * 1024 * 1024
 const maxResultBytes = 16 * 1024 * 1024
 
 type requestResult struct {
-	data    json.RawMessage
-	expires time.Time
-	inspect *inspectRequest
-	aspect  *aspectRequest
+	data        json.RawMessage
+	expires     time.Time
+	inspect     *inspectRequest
+	aspect      *aspectRequest
+	plexLibrary *plexLibraryRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
@@ -118,6 +119,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parseInspectRequest(params) != nil
 	case "plex_queue":
 		ok = parsePlexQueueRequest(params) != nil
+	case "plex_library":
+		ok = parsePlexLibraryRequest(params) != nil
 	case "app_update":
 		ok = validAppUpdateRequest(params)
 	case "maintenance":
@@ -207,6 +210,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "plex_queue" {
 		e.plexQueue = parsePlexQueueRequest(params)
+	}
+	if action == "plex_library" {
+		e.plexLibrary = parsePlexLibraryRequest(params)
 	}
 	if action == "playback" {
 		var operation string
@@ -307,6 +313,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	s.mu.Lock()
 	screenshotRuntime := ""
 	var plexQueue *plexQueueRequest
+	var plexLibrary *plexLibraryRequest
 	var inspect *inspectRequest
 	var aspect *aspectRequest
 	playbackOperation := ""
@@ -314,6 +321,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if pending.rpc && pending.id == id {
 			screenshotRuntime = pending.screenshotRuntime
 			plexQueue = pending.plexQueue
+			plexLibrary = pending.plexLibrary
 			playbackOperation = pending.playbackOperation
 			inspect = pending.inspect
 			aspect = pending.aspect
@@ -325,6 +333,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if aspect == nil {
 		aspect = d.results[id].aspect
+	}
+	if plexLibrary == nil {
+		plexLibrary = d.results[id].plexLibrary
 	}
 	s.mu.Unlock()
 	// Both successful and negative inspection replies must belong to the exact
@@ -347,6 +358,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if plexQueue != nil && (len(m["data"]) > maxPlexPreviewResultBytes || (status == "ok" && !validPlexQueueResult(m["data"], plexQueue))) {
 		failure(w, 400, "invalid Plex queue result")
+		return
+	}
+	if plexLibrary != nil && !validPlexLibraryResult(m["data"], status, plexLibrary) {
+		failure(w, 400, "invalid Plex library result")
 		return
 	}
 	if playbackOperation != "" && status == "ok" && !validPlexPlaybackResult(m["data"], playbackOperation) {
@@ -373,7 +388,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect}
+		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])
