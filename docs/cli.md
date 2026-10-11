@@ -554,7 +554,10 @@ ott --receipt tv restart
 
 - `-c FILE` / `--config FILE`: configuration path; otherwise `OTT_CONFIG`, then
   `~/.config/ottplay-control/cli.json`.
-- `-t SECONDS` / `--timeout SECONDS`: finite value from 1 to 300; default 45.
+- `-t SECONDS` / `--timeout SECONDS`: how long the CLI waits for a response, in
+  seconds; finite value from 1 to 300, default 45. For example, `-t 45` explicitly
+  selects the default response timeout, not a 45-second playback limit or delay
+  before playback starts. Put it before `PLAYER` or the management verb.
   Multi-step searches/setups can take longer than one request budget; see their
   sections below. Increasing it does not extend a command's server-side TTL.
 - `-j` / `--json`: machine-readable results for player commands and for
@@ -1094,6 +1097,25 @@ ott l plex library --preview "Три кота"       # check without changing pl
 ott l plex library --shuffle --preview id:16  # preview one new shuffled order
 ott l plex library --shuffle id:16            # explicit library ID, new shuffle
 ```
+
+Large libraries with hundreds of episodes can take longer than a short 10–15
+second timeout to collect. The CLI already defaults to 45 seconds, so the
+explicit option below is optional:
+
+```sh
+ott -t 45 l plex library --shuffle --preview "Три кота"  # check without changing playback
+ott -t 45 l plex shuffle "Три кота"                     # start a new shuffled queue
+```
+
+`-t 45` means **wait up to 45 seconds for the command response**; it neither
+limits video playback to 45 seconds nor adds a 45-second delay. It is equivalent
+to `--timeout 45` and must precede the player alias (`l` here). For these library
+commands, capability discovery and the library request share that one budget;
+the player collects the library before preparing the queue. The required time
+depends on the library, server and network, so 45 seconds is not a guarantee.
+If a playback request times out, inspect `ott l plex status` before retrying:
+the request may already have been accepted. A new `plex shuffle` invocation
+creates a new order and starts a new queue.
 
 `plex shuffle NAME` is short for `plex library --shuffle NAME`. Command tokens
 and options are case-insensitive. The player first matches an exact library
