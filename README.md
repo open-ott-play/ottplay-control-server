@@ -121,6 +121,14 @@ ott l plex shuffle "Три кота"         # shuffle one complete library, up 
 ott l plex library --preview id:16    # read-only check of an explicit library
 ```
 
+The CLI waits up to 45 seconds by default. Writing
+`ott -t 45 l plex shuffle "Три кота"` makes that same response timeout explicit;
+it does not limit how long the videos play. Large Plex libraries can take longer
+than a short 10–15 second timeout to collect. Put `-t SECONDS` (or
+`--timeout SECONDS`) before the player alias. See
+[Plex library timeouts](docs/cli.md#plex-libraries-by-name) for preview examples
+and what to do if a playback request times out.
+
 Plex queues require a CLI, controller and player implementing `plex_queue`.
 `plex play --shuffle ID...` shuffles supplied IDs once. Queues stop after the
 final item unless existing kiosk policy repeats them. While a queue remains,
