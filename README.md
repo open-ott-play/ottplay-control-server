@@ -1,5 +1,7 @@
 # OTT-play Control Server
 
+[![Fuzzing: RC only](https://img.shields.io/badge/Fuzzing-RC%20only-blue)](docs/fuzzing.md)
+
 A small self-hosted server that delivers remote commands to OTT-play players. Players make outbound HTTP requests, so a TV does not need to expose a listening port. Each player has its own queue and access token; a separate administrator token submits commands.
 
 The server runs as a single portable Go executable, with a pinned DNS library for optional service discovery. Release packages cover Linux amd64, arm64 and ARMv7; macOS Intel and Apple Silicon; and Windows amd64 and arm64. Container images support Linux amd64 and arm64. Kubernetes and k3s use the included Helm chart.
@@ -269,3 +271,10 @@ See [contribution and test requirements](CONTRIBUTING.md), the
 and the [OpenSSF evidence and remaining criteria](docs/openssf-evidence.md).
 
 Plex queues accept up to 500 IDs on current players. Use `ott f10 plex play --shuffle ID...` to shuffle once, then `ott f10 kiosk on --strict` while the Plex provider is selected to loop and lock that queue. `ott f10 kiosk off` releases the lock. Older players retain their advertised queue limit.
+
+## Release-candidate fuzzing
+
+Public release candidates run bounded native fuzzing of the input boundaries
+described in the [fuzzing guide](docs/fuzzing.md). Mutation campaigns do not run on
+PRs, betas or nightlies. The guide covers scope, budgets, evidence and regression
+reproduction.

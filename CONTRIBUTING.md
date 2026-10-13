@@ -47,3 +47,9 @@ The workflow validator installs PyYAML from
 `--only-binary=:all:`. When updating the version, review its PyPI release and
 replace the SHA-256 wheel list for all supported Python/platform builds; do not
 remove hash verification. Run `scripts/workflow_contracts.py` with the new lock.
+
+## Fuzz regression tests
+
+See [the fuzzing guide](docs/fuzzing.md) for target scope and local commands. Keep
+new seeds synthetic, preserve minimized regressions with fixes, and keep mutation
+campaigns restricted to public release candidates.

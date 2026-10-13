@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "language": "go",
+  "go-version-file": "go.mod",
+  "setup": [
+    [
+      "go",
+      "mod",
+      "download"
+    ],
+    [
+      "go",
+      "-C",
+      "native/android-agent",
+      "mod",
+      "download"
+    ],
+    [
+      "go",
+      "test",
+      "-c",
+      "-fuzz=Fuzz",
+      "-o",
+      "/dev/null",
+      "./internal/control"
+    ],
+    [
+      "go",
+      "-C",
+      "native/android-agent",
+      "test",
+      "-c",
+      "-fuzz=Fuzz",
+      "-o",
+      "/dev/null",
+      "."
+    ]
+  ],
+  "targets": [
+    {
+      "name": "inspection-result-binding",
+      "engine": "go",
+      "command": [
+        "go",
+        "test",
+        "./internal/control",
+        "-run=^$",
+        "-fuzz=^FuzzInspectResultBinding$"
+      ],
+      "seconds": 60,
+      "cwd": "."
+    },
+    {
+      "name": "android-manifest",
+      "engine": "go",
+      "command": [
+        "go",
+        "test",
+        ".",
+        "-run=^$",
+        "-fuzz=^FuzzBinaryManifest$"
+      ],
+      "seconds": 60,
+      "cwd": "native/android-agent"
+    },
+    {
+      "name": "native-parameters",
+      "engine": "go",
+      "command": [
+        "go",
+        "test",
+        ".",
+        "-run=^$",
+        "-fuzz=^FuzzNativeParameters$"
+      ],
+      "seconds": 60,
+      "cwd": "native/android-agent"
+    }
+  ]
+}
