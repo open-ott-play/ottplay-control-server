@@ -105,6 +105,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME pause / resume            pause or resume supported archive/VOD playback
   ott NAME seek SECONDS              seek supported VOD to an absolute position (0–9007199254740991)
   ott NAME restart                   reload the player after acknowledgement
+  ott NAME restart player            explicit form of restart
   ott NAME restart stream            restart only the current stream
   ott NAME restart app               relaunch a supported native app
   ott NAME reload                    reload the player after acknowledgement
@@ -123,6 +124,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME update install SHA256     open the Android installer after ACK
   ott NAME android update HTTPS_URL SHA256  install a signed update manifest
   ott NAME standby / wake            enter or leave player standby
+  ott NAME stop / start              stop streaming / leave standby and start configured playback
   ott NAME kiosk [status]            show kiosk policy and playback health
   ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal/Plex video queue
   ott NAME kiosk on --strict [CHANNEL]  lock local controls; media-footer seeking needs a supported player
@@ -138,7 +140,8 @@ Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
 provider/prov; providers/provs; capabilities/caps; input/key; prev/previous; screenshot/shot;
-fav/favs/favorite/favorites/favourite/favourites; aspect/aspect-ratio. Aspect modes also accept "Fit to screen" and "Fill screen".
+fav/favs/favorite/favorites/favourite/favourites; aspect/aspect-ratio; stop/standby; start/wake.
+Aspect modes also accept "Fit to screen" and "Fill screen".
 Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
 Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
@@ -155,6 +158,7 @@ COMMAND_ALIASES = {
     "prov": "provider", "provs": "providers",
     "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
     "previous": "prev", "shot": "screenshot",
+    "stop": "standby", "start": "wake",
     "aspect-ratio": "aspect",
     "fav": "favorites", "favs": "favorites", "favorite": "favorites",
     "favourite": "favorites", "favourites": "favorites",
@@ -2352,11 +2356,11 @@ def print_player_status(data, name):
         print(f"Local diagnostic help: {prefix} test list")
         return
     lifecycle = {
-        "reload_player": ("restart", "reload the player"),
-        "restart_stream": ("restart stream", "restart the current stream"),
+        "reload_player": ("restart", "reload the player (alias: restart player)"),
+        "restart_stream": ("restart stream", "restart only the current stream (alias: restart s)"),
         "restart_app": ("restart app", "relaunch the native app"),
-        "standby": ("standby", "enter standby"),
-        "wake": ("wake", "leave standby"),
+        "standby": ("stop", "stop playback and enter standby; stay connected (alias: standby)"),
+        "wake": ("start", "leave standby and start configured playback (alias: wake)"),
         "exit_app": ("exit", "exit the app"),
         "reboot_device": ("reboot", "reboot the device OS"),
     }
@@ -3343,7 +3347,11 @@ def main(argv=None):
             print("Stream restart requested." if data["target"] == "stream" else
                   "Player reload accepted; waiting for the acknowledgement to reach the player.")
         elif action == "lifecycle":
-            print(f"Lifecycle request accepted: {data['operation']}; waiting for the acknowledgement to reach the player.")
+            if data["operation"] in ("standby", "wake"):
+                label = "Stop" if data["operation"] == "standby" else "Start"
+                print(f"{label} request accepted ({data['operation']}); waiting for the acknowledgement to reach the player.")
+            else:
+                print(f"Lifecycle request accepted: {data['operation']}; waiting for the acknowledgement to reach the player.")
         elif action == "input":
             print(f"Input request accepted: {data['key']}; waiting for the acknowledgement to reach the player.")
         elif action == "playback":

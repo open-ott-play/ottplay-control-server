@@ -677,11 +677,14 @@ ott tv aspect fit           # show the complete picture, with bars if needed
 ott tv aspect fill          # proportional crop to fill the screen
 ott tv aspect "Fill screen" # full mode name, case-insensitive
 ott tv restart             # reload the player page after acknowledgement
+ott tv restart player      # explicit equivalent of restart
 ott tv restart stream      # restart only the current stream
 ott tv reload               # reload the player page after acknowledgement
 ott tv restart app          # relaunch a supported native app
 ott tv standby              # enter player standby
 ott tv wake                 # leave player standby
+ott tv stop                 # standby: stop playback while remaining connected
+ott tv start                # wake: start according to the player's startup settings
 ott tv exit                 # exit a supported app; no standby fallback
 ott tv reboot device        # reboot the device OS only if advertised/supported
 ott --json tv s             # machine-readable output
@@ -1551,6 +1554,34 @@ new acknowledged lifecycle API. `restart app`, `restart application` and
 an operating-system reboot, never a page reload. `exit`, `quit` and `close`
 request app exit, never standby. `standby` and `wake` are separate player-state
 operations; `wake` cannot contact an offline or powered-off player.
+
+### Stop playback while keeping the player online
+
+For a player that stays on all day:
+
+```sh
+ott d1 stop             # stop playback and enter standby (same as standby)
+ott d1 start            # leave standby (same as wake)
+ott d1 1                # select channel 1 after starting
+ott d1 restart stream   # reopen the current stream when one is active
+ott d1 restart          # reload the entire player; restart player is equivalent
+```
+
+`stop` and `start` use the existing acknowledged standby/wake operations.
+They do not shut down the device or disconnect remote control. `pause`/`resume`
+remain separate VOD controls; pausing can keep downloading buffered video.
+`start` follows the player's startup settings, so it does not promise to resume
+the same VOD at the saved position. Standby is an in-memory state: reloading the
+player can start playback again. Command polling and other background services
+can still use the network while playback is stopped.
+
+Use a current player: older builds can leave PiP or list-preview playback running
+when entering standby, or complete pending Plex preparation afterward. Updated
+players cancel that work and stop both media lanes. Kiosk and settings locks
+still apply; `ott d1` lists stop/start only when standby/wake are advertised.
+An accepted response is not a claim that teardown or startup already completed.
+To play channels literally named `stop` or `start`, use `ott d1 play stop` or
+`ott d1 play start`.
 
 Lifecycle availability is platform-specific. The player must advertise and
 implement the operation; an unavailable native exit, relaunch or OS reboot

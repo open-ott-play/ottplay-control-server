@@ -4,6 +4,12 @@
 
 ### Changes
 
+- Add `stop` / `start` aliases for acknowledged standby / wake. Status shows
+  these controls when supported and distinguishes full-player `restart` from
+  `restart stream`, including explicit and short aliases. Stop keeps remote
+  control online; start follows the player's startup settings. Kiosk/settings
+  restrictions and uncertain-response handling are unchanged.
+
 - Show provider selection in the status command's available controls, including
   `provider m3u` / `prov m3u` and provider listing. M3U and VPortal status also
   show numbered profile commands, including when the catalog has no channels.

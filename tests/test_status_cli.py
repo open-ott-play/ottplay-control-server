@@ -39,8 +39,11 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual((code, err), (0, ''))
             self.assertIn('"ready": true', out)
             self.assertIn('ott tv restart  — reload the player', out)
-            self.assertIn('ott tv standby', out)
-            self.assertIn('ott tv wake', out)
+            self.assertIn('ott tv stop', out)
+            self.assertIn('alias: standby', out)
+            self.assertIn('ott tv start', out)
+            self.assertIn('alias: wake', out)
+            self.assertIn('alias: restart player', out)
             self.assertIn('ott tv key KEY  — up, ok', out)
             for unsupported in ('restart stream', 'restart app', 'reboot', 'exit', 'seek', '+N', '-N'):
                 self.assertNotIn(unsupported, out)
@@ -158,6 +161,8 @@ class StatusCliTest(unittest.TestCase):
         code, out, _, _ = self.run_cli([], {'ready': True}, caps)
         self.assertEqual(code, 0)
         self.assertIn('No controls are currently advertised', out)
+        self.assertNotIn('ott tv stop', out)
+        self.assertNotIn('ott tv start', out)
         caps.update(lifecycle=['restart_stream', 'restart_app', 'exit_app', 'reboot_device'],
                     playback=['pause', 'resume', 'seek', 'previous_channel', 'next_channel', 'step_channel'])
         code, out, _, _ = self.run_cli([], {'ready': True}, caps, alias='Living room')
@@ -167,6 +172,7 @@ class StatusCliTest(unittest.TestCase):
         self.assertNotIn('next_channel', out)
         self.assertNotIn('step_channel', out)
         self.assertNotIn("ott 'Living room' restart  — reload", out)
+        self.assertIn('restart only the current stream (alias: restart s)', out)
 
     def test_status_failure_never_submits_capabilities_request(self):
         code, _, _, client = self.run_cli([], ott.Error('offline'), self.capabilities())
