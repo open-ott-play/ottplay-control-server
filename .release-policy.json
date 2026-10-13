@@ -52,7 +52,7 @@
         "value": "package"
       }
     ],
-    "toolkit_revision": "35d84867c34262567801c44a0e4ec9aa5159326e"
+    "toolkit_revision": "4b65e15e476f3f7b0ba71150266a71ef9a21fe19"
   },
   "change_scope": {
     "documentation_paths": [],
@@ -62,8 +62,8 @@
   "nightly_cron": "52 5 * * *",
   "release_notes": "CHANGELOG.md",
   "fuzzing": {
-    "toolkit_ref": "35d84867c34262567801c44a0e4ec9aa5159326e"
+    "toolkit_ref": "4b65e15e476f3f7b0ba71150266a71ef9a21fe19"
   },
-  "toolkit_revision": "35d84867c34262567801c44a0e4ec9aa5159326e",
+  "toolkit_revision": "4b65e15e476f3f7b0ba71150266a71ef9a21fe19",
   "single_entry_ci": true
 }
