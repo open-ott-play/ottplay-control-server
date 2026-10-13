@@ -4,6 +4,13 @@
 
 ### Changes
 
+- Add `fav add [NAME]`, `fav`, `fav play ID_OR_NAME` and `fav remove ID_OR_NAME`
+  with long favorite/favourite aliases. The target player captures its current
+  item and profile, stores a durable reference and restores that profile before
+  resolving playback. The controller validates bounded, runtime-bound metadata;
+  the CLI requires the optional `favorites` capability and never repeats an
+  uncertain request. Existing provider, kiosk and parental checks still apply.
+
 - Add `plex libraries`, `plex library [--shuffle] [--preview] NAME` and
   `plex shuffle NAME`. The player resolves a complete movie/show library using
   its own saved Plex connection, then reuses the existing queue. Explicit
@@ -65,6 +72,10 @@
   newer while retaining certificate and redirect validation coverage.
 
 ### Upgrade
+
+Current-item favorites require a matching CLI, controller and player advertising
+`favorites`. Entries remain in the target player's persistent storage and are
+not transferred by a controller upgrade or shared between device installations.
 
 Plex library commands require a CLI, controller and player implementing the new
 `plex_library` capability. Existing `plex_queue` support alone is insufficient;

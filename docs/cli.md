@@ -21,6 +21,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
+- [Favorites across profiles](#favorites-across-profiles)
 - [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
@@ -71,7 +72,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 reviewed source revision
-[`e26070274259975efbfb7a6ceb7cdc101c23c7a1`](https://github.com/open-ott-play/ottplay-control-server/commit/e26070274259975efbfb7a6ceb7cdc101c23c7a1).
+[`d8188b24d615db6e8132f28da69d82b315c6ba36`](https://github.com/open-ott-play/ottplay-control-server/commit/d8188b24d615db6e8132f28da69d82b315c6ba36).
 It contains all seven CLI modules, including the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, and Plex library
 commands. Update the controller and player too; confirm support with
@@ -96,8 +97,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_revision=e26070274259975efbfb7a6ceb7cdc101c23c7a1
-  ott_source="$HOME/.local/share/ottplay-control-server-e2607027"
+  ott_revision=d8188b24d615db6e8132f28da69d82b315c6ba36
+  ott_source="$HOME/.local/share/ottplay-control-server-d8188b24"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -116,7 +117,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-e2607027/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -130,7 +131,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-e2607027/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -152,8 +153,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRevision = 'e26070274259975efbfb7a6ceb7cdc101c23c7a1'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e2607027'
+$ottRevision = 'd8188b24d615db6e8132f28da69d82b315c6ba36'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-d8188b24'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -196,12 +197,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-e2607027/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e2607027\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-d8188b24\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -230,7 +231,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-e2607027`, stages the replacement beside it, then switches atomically.
+`ott.before-d8188b24`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -242,9 +243,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-e2607027")
-staged = launcher.with_name("ott.switch-e2607027")
-reviewed = Path.home() / ".local/share/ottplay-control-server-e2607027/cli/ott.py"
+backup = launcher.with_name("ott.before-d8188b24")
+staged = launcher.with_name("ott.switch-d8188b24")
+reviewed = Path.home() / ".local/share/ottplay-control-server-d8188b24/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -1227,6 +1228,88 @@ does not prove that playback never started.
   an uncertain `play`, `next` or `prev` automatically.
 - Parental access, kiosk policy, network restrictions and decoder availability
   can still reject playback. A successful preview never unlocks those controls.
+
+## Favorites across profiles
+
+Save the item currently playing on the target player together with its active
+provider and profile. You do not need to supply a profile number, channel ID,
+movie ID or playback URL:
+
+```sh
+ott l fav add                       # save the current channel or supported video
+ott l fav add "Вечерние мультфильмы" # give the entry a recognizable name
+ott l fav                           # list entries, IDs and their saved profiles
+ott l fav play "Вечерние мультфильмы"
+ott l fav play fav-abc123            # use the actual ID printed by fav
+ott l fav rm fav-abc123              # remove that saved entry
+```
+
+`favorite`, `favorites`, `favourite`, `favourites` and `favs` are aliases for
+`fav`. `fav current [NAME]` aliases `fav add [NAME]`; `fav list` aliases the bare
+`fav`; `fav remove` and `fav rm` are equivalent. A bare selector, such as
+`ott l fav "Вечерние мультфильмы"`, is shorthand for `fav play`. To play an entry
+whose name is a command word, use `fav play add` rather than `fav add`.
+An explicit `id:fav-abc123` selector is also accepted. Names are matched on the
+player, with an exact case-insensitive name preferred over a unique substring;
+ambiguous names fail and can be resolved using the printed ID.
+
+Adding the same item from the same profile/source again preserves its entry ID.
+An explicit new name renames that entry; omitting the name keeps the old one.
+Adding also uses the player's existing channel/media favorites storage.
+`fav remove` removes the cross-profile bookmark only; it does not remove the
+item from the provider's own favorites list.
+
+Favorites live in the target player's persistent storage. They survive normal
+player restarts and are shared across that installation's provider profiles;
+they are not copied to every paired device or stored in the CLI's local preset.
+Clearing the player's site/app data also clears these entries. Up to 100 entries
+are supported. Labels and selectors allow 1–160 UTF-8 bytes, so a non-ASCII
+character can occupy more than one byte.
+
+Selecting a favorite first restores the saved provider/profile and waits for
+its catalog to finish loading. It then selects the saved provider item and
+resolves a fresh playable link. A temporary stream URL is not used as its
+identity. A replaced profile source or an unavailable item fails instead of
+silently playing the same channel number from another playlist or a similarly
+named movie. An arbitrary URL, archive programme or item without a durable provider reference
+cannot be added. Live channels with stable IDs and supported provider VOD items
+are eligible; a Plex item remains bound to its Plex source. Numbered profile
+restoration supports M3U, VPortal and Stalker; other providers retain their
+single saved configuration. Existing kiosk and parental restrictions continue to apply.
+
+The CLI discovers support first and sends one `favorites` request bound to that
+player runtime. It does not read a potentially stale status snapshot and compose
+a second profile/item selection. An updated CLI, controller and player with
+`favorites` in `ott l caps` are required; `ott l` lists the operations currently
+available. The entire capability-and-command operation shares `-t`/`--timeout`:
+
+```sh
+ott -t 60 l fav play "Вечерние мультфильмы"
+ott --json l fav
+ott --receipt l fav play fav-abc123
+```
+
+`Favorite playback dispatched` means the saved profile loaded and the item was
+handed to the playback path after resolution. It does not establish that video
+or audio is visible on the physical device. Inspect `ott l` or read a returned
+request ID with `ott l operation REQUEST_ID` if playback is uncertain. A timeout
+or lost acknowledgement never triggers an automatic replay.
+
+Troubleshooting:
+
+- **No current playable item:** start the desired channel/video on that player,
+  then run `fav add`. The command does not guess from a highlighted menu row.
+- **Unsupported item:** the active provider cannot offer a stable reference for
+  that item. Saving a transient URL would not make it a reliable favorite.
+- **Saved profile changed or unavailable:** restore its original source or save
+  the desired item again under the new source. The CLI does not overwrite profile
+  credentials to force a match.
+- **Several favorites match:** list `fav`, then use the exact `fav-…` ID.
+- **Storage unavailable:** inspect the player's storage/site-data settings and
+  available space. A failed write is not reported as saved.
+- **Timeout or player changed:** inspect the current state before issuing another
+  playback request. Increase `-t` for a slow provider only on a new deliberate
+  command; a timed-out request may already have changed the profile.
 
 ## M3U profiles
 

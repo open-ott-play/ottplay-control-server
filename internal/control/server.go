@@ -31,6 +31,7 @@ type entry struct {
 	screenshotRuntime string
 	plexQueue         *plexQueueRequest
 	plexLibrary       *plexLibraryRequest
+	favorites         *favoritesRequest
 	playbackOperation string
 	inspect           *inspectRequest
 	aspect            *aspectRequest

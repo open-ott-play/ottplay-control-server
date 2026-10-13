@@ -139,6 +139,22 @@ Library lookup additionally requires an updated player and controller advertisin
 `plex_library`; it uses the player's saved Plex connection and rejects ambiguous
 or incomplete selections. See [Plex libraries by name](docs/cli.md#plex-libraries-by-name).
 
+### Save the current item across profiles
+
+```sh
+ott l fav add "Evening cartoons"    # capture this player's current item and profile
+ott l fav                           # list saved entries and their stable IDs
+ott l fav play "Evening cartoons"  # load that profile, then resolve and play the item
+ott l fav rm fav-abc123              # use the actual ID from the list
+```
+
+Favorites persist on the target player across normal restarts. Selecting one
+loads its saved provider/profile and resolves a fresh link; a changed source or
+missing item fails without substituting another channel/movie. The CLI, controller
+and player must support `favorites`; `ott l` shows available operations. See
+[favorites across profiles](docs/cli.md#favorites-across-profiles) for aliases,
+limits, acknowledgement semantics and troubleshooting.
+
 ### Load a saved setup
 
 Store named setups in the private `presets` section of

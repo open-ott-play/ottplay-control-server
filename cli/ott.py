@@ -77,6 +77,10 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME plex queue / status       show the Plex queue without changing it
   ott NAME plex next / prev / stop   move within or clear the Plex queue (no wrapping)
   ott NAME playlist URL              update the M3U playlist
+  ott NAME fav                       list saved favorites on this player
+  ott NAME fav add [NAME]            save the currently playing item and its profile
+  ott NAME fav play ID_OR_NAME       load the saved profile and play that exact item
+  ott NAME fav remove ID_OR_NAME     remove one saved favorite
   ott NAME profiles                  list the active provider’s 15 profiles without URLs
   ott NAME profile N                 select M3U or VPortal profile 1–15
   ott NAME profile N url URL         change a profile's playlist URL
@@ -134,7 +138,7 @@ Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
 provider/prov; providers/provs; capabilities/caps; input/key; prev/previous; screenshot/shot;
-aspect/aspect-ratio. Aspect modes also accept "Fit to screen" and "Fill screen".
+fav/favs/favorite/favorites/favourite/favourites; aspect/aspect-ratio. Aspect modes also accept "Fit to screen" and "Fill screen".
 Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
 Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
@@ -152,6 +156,8 @@ COMMAND_ALIASES = {
     "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
     "previous": "prev", "shot": "screenshot",
     "aspect-ratio": "aspect",
+    "fav": "favorites", "favs": "favorites", "favorite": "favorites",
+    "favourite": "favorites", "favourites": "favorites",
 }
 PROFILE_FIELD_ALIASES = {
     "url": "playlist", "playlist": "playlist",
@@ -181,7 +187,7 @@ RECEIPT_ACTIONS = frozenset((
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "restart", "play", "provider",
-    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "aspect",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "favorites", "aspect",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -210,6 +216,30 @@ PLEX_LIBRARY_ERRORS = {
     "too_many_libraries": "The Plex server has more than 1000 libraries; the result is incomplete.",
     "too_many_items": "The Plex library exceeds the 500-item queue limit; no partial queue was started.",
     "incomplete_library": "The complete Plex library could not be verified; no partial queue was started.",
+}
+
+
+FAVORITES_OPERATIONS = frozenset(("list", "add", "play", "remove"))
+MAX_FAVORITES = 100
+FAVORITE_ID_PATTERN = r"fav-[a-z0-9-]{1,60}"
+FAVORITES_ERRORS = {
+    "invalid_request": "The favorite request no longer matches this player runtime; check caps and try a new request.",
+    "unsupported": "Favorites are unavailable for this player or provider.",
+    "no_current_item": "There is no current playable item to save; start the desired item first.",
+    "unsupported_item": "This item has no stable provider reference and cannot be saved as a favorite.",
+    "profile_unavailable": "The saved profile is unavailable or could not finish loading.",
+    "profile_changed": "The saved profile's source has changed; restore it or save a new favorite from the desired source.",
+    "item_unavailable": "The exact saved item is unavailable from its provider; no substitute was selected.",
+    "ambiguous_favorite": "Several favorites match; use fav to list their exact IDs.",
+    "favorite_not_found": "No favorite matches; use fav to list saved entries.",
+    "too_many_favorites": "The player has reached the 100-favorite limit; remove an entry before adding another.",
+    "storage_unavailable": "The player's favorite storage could not be read or saved.",
+    "policy_denied": "Player kiosk or parental policy does not allow this favorite operation.",
+    "busy": "Another favorite operation is still in progress.",
+    "timeout": "The favorite operation timed out; check player status before another change.",
+    "cancelled": "The favorite operation was cancelled.",
+    "context_changed": "The player or profile changed while preparing the favorite.",
+    "playback_failed": "The provider could not start the saved item; check player status.",
 }
 
 
@@ -821,6 +851,8 @@ def parse_command(words):
             raise Error("Channel offset must be nonzero and between -9007199254740991 and +9007199254740991")
         offset = int(digits) * (-1 if verb[0] == "-" else 1)
         return "playback", {"operation": "step_channel", "offset": offset}
+    if verb == "favorites":
+        return "favorites", parse_favorites(tail)
     if verb == "update":
         return "app_update", parse_app_update(tail)
     if verb == "kiosk":
@@ -1704,6 +1736,153 @@ def screenshot_command(client, device, name, output, timeout):
             os.close(parent_fd)
 
 
+def parse_favorites(words):
+    """Keep selection on the target player; never snapshot its current URL here."""
+    if not words:
+        return {"op": "list"}
+    verb = words[0].casefold()
+    operation = {"current": "add", "rm": "remove"}.get(verb, verb)
+    if operation in FAVORITES_OPERATIONS:
+        values = words[1:]
+    else:
+        operation, values = "play", words
+    if values and values[0] == "--":
+        values = values[1:]
+    if operation == "list":
+        if values:
+            raise Error("Use fav or fav list without arguments")
+        return {"op": "list"}
+    text = " ".join(values).strip()
+    if operation == "add" and not values:
+        return {"op": "add"}
+    if not plex_library_text(text, 160):
+        raise Error("Use fav add [NAME], fav play ID_OR_NAME or fav remove ID_OR_NAME; names use 1–160 UTF-8 bytes without control characters")
+    if operation == "add":
+        return {"op": "add", "name": text}
+    if text.casefold().startswith("id:"):
+        item_id = text[3:]
+        if not re.fullmatch(FAVORITE_ID_PATTERN, item_id):
+            raise Error("Favorite IDs must match an ID shown by fav, for example fav-abc123")
+        return {"op": operation, "id": item_id}
+    if re.fullmatch(FAVORITE_ID_PATTERN, text):
+        return {"op": operation, "id": text}
+    return {"op": operation, "query": text}
+
+
+def favorites_metadata(data, runtime, params, max_items=MAX_FAVORITES):
+    invalid = "The player returned invalid favorites metadata. Check fav and player status before another change; the request was not repeated."
+    try:
+        if len(json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) > 1024 * 1024:
+            raise Error(invalid)
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise Error(invalid) from None
+    base = {"version", "runtime", "op", "state"}
+    if (not isinstance(data, dict) or not base <= set(data)
+            or type(data["version"]) is not int or data["version"] != 1
+            or data["runtime"] != runtime or data["op"] != params["op"]):
+        raise Error(invalid)
+    if data["state"] == "error":
+        if (set(data) != base | {"error"} or not isinstance(data["error"], str)
+                or data["error"] not in FAVORITES_ERRORS):
+            raise Error(invalid)
+        return dict(data)
+    expected_state = "dispatched" if params["op"] == "play" else "ready"
+    if data["state"] != expected_state:
+        raise Error(invalid)
+
+    def entry(row):
+        if (not isinstance(row, dict) or set(row) != {"id", "name", "provider", "profile_number", "profile_name", "kind", "title"}
+                or not isinstance(row["id"], str) or not re.fullmatch(FAVORITE_ID_PATTERN, row["id"])
+                or not isinstance(row["provider"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9_./-]{0,63}", row["provider"])
+                or not plex_library_text(row["name"], 160) or not plex_library_text(row["title"], 512)
+                or (row["profile_name"] != "" and not (epg_text(row["profile_name"], 256, "utf-8")
+                    and all(ord(char) >= 32 and ord(char) != 127 for char in row["profile_name"])))
+                or row["kind"] not in ("live", "vod")
+                or (row["profile_number"] is not None and
+                    (type(row["profile_number"]) is not int or not 1 <= row["profile_number"] <= 15))):
+            raise Error(invalid)
+        return dict(row)
+
+    if params["op"] == "list":
+        rows = data.get("entries")
+        if set(data) != base | {"entries"} or not isinstance(rows, list) or len(rows) > max_items:
+            raise Error(invalid)
+        rows = [entry(row) for row in rows]
+        if len({row["id"] for row in rows}) != len(rows):
+            raise Error(invalid)
+        return dict(data, entries=rows)
+    field = {"add": "created", "remove": "removed", "play": "dispatched"}.get(params["op"])
+    if (field is None or set(data) != base | {"entry", field} or type(data[field]) is not bool
+            or (field != "created" and data[field] is not True)):
+        raise Error(invalid)
+    row = entry(data["entry"])
+    if "id" in params and row["id"] != params["id"]:
+        raise Error(invalid)
+    return dict(data, entry=row)
+
+
+def favorites_command(client, device, params, timeout):
+    deadline = time.monotonic() + timeout
+    previous_timeout, runtime = client.timeout, None
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        capability = controls.get("favorites", {})
+        if params["op"] not in capability.get("operations", []):
+            raise Error("Favorites require an updated player and controller advertising favorites. No favorites command was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Favorite capability discovery exceeded --timeout; no favorites command was sent")
+        client.timeout = remaining
+        runtime = controls["player"]["runtime"]
+        result = client.call(device, "favorites", dict(params, runtime=runtime))
+        if time.monotonic() >= deadline:
+            raise Error("Favorite response exceeded --timeout. Acceptance is uncertain; check fav and player status before another change. The request was not repeated")
+        result = favorites_metadata(result, runtime, params, capability["max_items"])
+        if result["state"] == "error":
+            raise Error(FAVORITES_ERRORS[result["error"]] + " The request was not repeated")
+        return result
+    except (PlayerRejected, PlayerUnsupported) as exc:
+        detail = ("Favorites require an updated player and controller advertising favorites." if isinstance(exc, PlayerUnsupported)
+                  else "Favorites request was rejected; check the current player runtime and saved profile.")
+        if runtime is not None:
+            try:
+                rejected = favorites_metadata(exc.data, runtime, params)
+                if rejected["state"] == "error":
+                    detail = FAVORITES_ERRORS[rejected["error"]]
+            except Error:
+                pass
+        raise Error(detail + " The request was not repeated") from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("This controller does not accept favorites requests; update it and the player. The request was not repeated") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_favorites(data):
+    def label(row):
+        profile = f"profile {row['profile_number']}" if row["profile_number"] is not None else "provider settings"
+        if row["profile_name"]:
+            profile += " " + clean(row["profile_name"])
+        return f"{row['id']}  {clean(row['name'])} — {clean(row['title'])} ({row['provider']}, {profile}, {row['kind']})"
+    if data["op"] == "list":
+        if not data["entries"]:
+            print("No saved favorites. Use fav add [NAME] while the desired item is playing.")
+        for row in data["entries"]:
+            print(label(row))
+        return
+    row = data["entry"]
+    if data["op"] == "add":
+        print(("Favorite saved: " if data["created"] else "Favorite saved (existing entry): ") + label(row))
+    elif data["op"] == "remove":
+        print("Favorite removed: " + label(row))
+    else:
+        print("Favorite playback dispatched: " + label(row))
+        print("The saved profile was loaded and the item resolved; visible playback has not been confirmed.")
+
+
 def parse_plex_library(words):
     operation = words[0].casefold()
     if operation == "libraries":
@@ -2089,6 +2268,17 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": queue["max_items"]}
+    if "favorites" in data:
+        favorites = data["favorites"]
+        operations = favorites.get("operations") if isinstance(favorites, dict) else None
+        if (not isinstance(favorites, dict) or set(favorites) != {"version", "operations", "max_items"}
+                or type(favorites.get("version")) is not int or favorites["version"] != 1
+                or type(favorites.get("max_items")) is not int or not 1 <= favorites["max_items"] <= MAX_FAVORITES
+                or not isinstance(operations, list) or len(operations) > len(FAVORITES_OPERATIONS)
+                or any(not isinstance(op, str) or op not in FAVORITES_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["favorites"] = {"version": 1, "operations": list(operations), "max_items": favorites["max_items"]}
     if "plex_library" in data:
         library = data["plex_library"]
         operations = library.get("operations") if isinstance(library, dict) else None
@@ -2201,13 +2391,21 @@ def print_player_status(data, name):
         print(f'  {prefix} plex shuffle "NAME" / plex library "NAME"  — play a whole library (or id:NUMBER)')
     if "preview" in libraries:
         print(f'  {prefix} plex library --preview "NAME"  — check a whole library without playing')
+    favorites = controls.get("favorites", {}).get("operations", [])
+    for operation, command, description in (
+            ("list", "fav", "list this player's saved favorites"),
+            ("add", "fav add [NAME]", "save the current item and profile"),
+            ("play", "fav play ID_OR_NAME", "load the saved profile and play the exact item"),
+            ("remove", "fav remove ID_OR_NAME", "remove one saved favorite")):
+        if operation in favorites:
+            print(f"  {prefix} {command}  — {description}")
     aspect = controls.get("aspect", {})
     if "get" in aspect.get("operations", []):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
     if "set" in aspect.get("operations", []):
         print(f"  {prefix} aspect " + " / ".join(aspect["modes"]) + "  — request an aspect mode")
     if (not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not libraries and not aspect.get("operations")):
+            and shot.get("state") != "ready" and not queue and not libraries and not favorites and not aspect.get("operations")):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:
@@ -2978,6 +3176,8 @@ def main(argv=None):
             data = plex_queue_command(client, device, params, args.timeout)
         elif action == "plex_library":
             data = plex_library_command(client, device, params, args.timeout)
+        elif action == "favorites":
+            data = favorites_command(client, device, params, args.timeout)
         elif action == "aspect":
             data = aspect_command(client, device, params, args.timeout)
         elif action == "programs" and "epg" in config:
@@ -3083,6 +3283,8 @@ def main(argv=None):
             print_plex_queue(data, preview=params["op"] == "preview")
         elif action == "plex_library":
             print_plex_library(data)
+        elif action == "favorites":
+            print_favorites(data)
         elif action == "aspect":
             print_aspect(data, args.words[0])
         elif action == "channels" or (action == "play" and "channels" in data):
