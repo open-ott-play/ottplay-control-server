@@ -52,7 +52,7 @@
         "value": "package"
       }
     ],
-    "toolkit_revision": "ab9f337e5fa49c263c873d65c9e50dde7249af56"
+    "toolkit_revision": "35d84867c34262567801c44a0e4ec9aa5159326e"
   },
   "change_scope": {
     "documentation_paths": [],
@@ -60,5 +60,10 @@
     "always_validate_workflows": []
   },
   "nightly_cron": "52 5 * * *",
-  "release_notes": "CHANGELOG.md"
+  "release_notes": "CHANGELOG.md",
+  "fuzzing": {
+    "toolkit_ref": "35d84867c34262567801c44a0e4ec9aa5159326e"
+  },
+  "toolkit_revision": "35d84867c34262567801c44a0e4ec9aa5159326e",
+  "single_entry_ci": true
 }
