@@ -115,6 +115,11 @@ def verify_release(gh, tag: str, directory: Path) -> dict:
     rc.require(policy.get("container_assets") == {ARCHIVE: IMAGE}, "Container destination mapping is not the approved project mapping")
     plan = validate_plan(manifest.get("version_plan"), policy, manifest["source_sha"])
     receipts = verify_receipts(directory, plan, manifest["assets"], policy)
+    if "fuzzing" in policy and manifest["channel"] == "rc":
+        from release_fuzz import split_receipts
+
+        receipts, validation = split_receipts(receipts)
+        rc.require(manifest.get("validation_receipts") == [{"name": item["name"], "sha256": item["sha256"]} for item in validation], "Manifest validation receipt inventory differs from payload receipts")
     rc.require(manifest.get("build_receipts") == [{"name": item["name"], "sha256": item["sha256"]} for item in receipts], "Manifest receipt inventory differs from payload receipts")
     verify_declared_artifacts(directory, policy, plan)
     rc.require((directory / ARCHIVE).is_file(), "Verified OCI archive is missing")

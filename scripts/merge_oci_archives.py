@@ -49,6 +49,7 @@ LAYER_TYPES = {
 PLATFORMS = ("linux/amd64", "linux/arm64")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 MAX_JSON = 2_000_000
+MAX_ATTESTATION_JSON = 16 * 1024 * 1024
 MAX_JSON_TOTAL = 32_000_000
 CHUNK = 1024 * 1024
 MAX_LAYER_BYTES = 8 * 1024**3
@@ -80,7 +81,7 @@ def identity(stream):
     return {"sha256": digest.hexdigest(), "size": size}
 
 
-def document(raw):
+def document(raw, *, max_bytes=MAX_JSON):
     """Reject duplicate JSON keys and non-standard numeric constants."""
 
     def pairs(items):
@@ -93,7 +94,7 @@ def document(raw):
     def invalid_constant(value):
         raise ValueError(f"Invalid OCI JSON constant: {value}")
 
-    require(len(raw) <= MAX_JSON, "Oversized OCI JSON")
+    require(len(raw) <= max_bytes, "Oversized OCI JSON")
     try:
         result = json.loads(
             raw, object_pairs_hook=pairs, parse_constant=invalid_constant
@@ -137,6 +138,8 @@ class Archive:
         self.attestations = []
         self.visited = 0
         self.metadata_bytes = 0
+        self.metadata_names = set()
+        self.attestation_names = set()
         self.layer_identities = {}
         self.rootfs_bytes = 0
         require(not self.path.is_symlink(), "Input archive must not be a symlink")
@@ -159,13 +162,17 @@ class Archive:
         require(layout.get("imageLayoutVersion") == "1.0.0", "Invalid OCI layout")
         root = self.read_json("index.json")
         self.walk_index(root, 0)
+        self.validate_complete_graph()
+        self.unchanged()
+
+    def validate_complete_graph(self):
+        """Keep the native-input contract overridable only by explicit validators."""
         require(len(self.images) == 1, "Expected exactly one runnable image per input")
         for attestation in self.attestations:
             require(
                 attestation["subject"] == self.images[0]["descriptor"],
                 "OCI attestation subject differs from runnable image",
             )
-        self.unchanged()
 
     def inventory(self):
         """Check every outer member and every blob, including unreferenced blobs."""
@@ -199,18 +206,19 @@ class Archive:
             # OCI permits extension files (for example Docker manifest.json).
             # Safe regular extension files are ignored, never copied or executed.
 
-    def read_json(self, name):
+    def read_json(self, name, *, max_bytes=MAX_JSON):
+        self.metadata_names.add(name)
         entry = self.members.get(name)
         require(
-            entry is not None and 0 < entry.size <= MAX_JSON,
+            entry is not None and 0 < entry.size <= max_bytes,
             f"Missing or oversized OCI metadata: {name}",
         )
         with self.tar.extractfile(entry) as stream:
-            raw = stream.read(MAX_JSON + 1)
+            raw = stream.read(max_bytes + 1)
         require(len(raw) == entry.size, "Truncated OCI metadata")
         self.metadata_bytes += len(raw)
         require(self.metadata_bytes <= MAX_JSON_TOTAL, "Too much OCI metadata")
-        return document(raw)
+        return document(raw, max_bytes=max_bytes)
 
     def blob(self, descriptor, media_types, metadata=False):
         require(isinstance(descriptor, dict), "OCI descriptor must be an object")
@@ -486,7 +494,10 @@ class Archive:
         predicate_types = set()
         for layer in layers:
             self.blob(layer, {IN_TOTO})
-            statement = self.read_json(BLOB_PREFIX + layer["digest"][7:])
+            name = BLOB_PREFIX + layer["digest"][7:]
+            # SBOM statements can exceed structural OCI metadata without
+            # relaxing the manifest/config/index or aggregate byte budgets.
+            statement = self.read_json(name, max_bytes=MAX_ATTESTATION_JSON)
             subjects = statement.get("subject")
             require(
                 statement.get("_type")
@@ -507,6 +518,7 @@ class Archive:
                 "Attestation statement subject differs from image",
             )
             predicate_types.add(statement["predicateType"])
+            self.attestation_names.add(name)
         self.attestations.append(
             {
                 "digest": descriptor["digest"],
