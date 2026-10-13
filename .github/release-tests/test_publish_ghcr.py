@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import publish_ghcr as publish
 import release_control as rc
 from version_plan import create_plan, plan_digest
+from release_fuzz import profile as fuzz_profile
 
 
 class FakeGitHub:
@@ -89,14 +90,21 @@ class VerificationTests(unittest.TestCase):
         gh = FakeGitHub()
         plan = create_plan("0.1.0", "rc", 1, gh.sha, gh.policy)
         manifest = {**gh.manifest, "channel": "rc", "tag": plan["tag"], "version_plan": plan, "plan_sha256": plan_digest(plan)}
+        fuzz_receipt = {"name": "release-inputs-fuzz.json", "sha256": "d" * 64, "inputs": {"artifacts": [{"name": "fuzz-report.json"}]}}
+        manifest["fuzzing_profile"] = fuzz_profile(gh.policy, "rc")
+        manifest["assets"] = [*manifest["assets"], {"name": "release-inputs-fuzz.json", "size": 1, "sha256": "d" * 64}, {"name": "fuzz-report.json", "size": 1, "sha256": "e" * 64}]
+        manifest["validation_receipts"] = [{"name": "release-inputs-fuzz.json", "sha256": "d" * 64}]
         self.assertEqual(publish.validate_candidate(json.dumps(manifest).encode(), plan["tag"]), manifest)
         def verified(_gh, tag, directory):
             self.assertEqual(tag, "v0.1.0")
             (directory / publish.ARCHIVE).write_bytes(gh.payload)
             return manifest
-        with tempfile.TemporaryDirectory() as temporary, patch.object(publish, "verified_assets", side_effect=verified) as stable, patch.object(publish, "verify_receipts", return_value=[]), patch.object(publish, "verify_declared_artifacts"):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(publish, "verified_assets", side_effect=verified) as stable, patch.object(publish, "verify_receipts", return_value=[fuzz_receipt]), patch.object(publish, "verify_declared_artifacts"):
             self.assertEqual(publish.verify_release(gh, "v0.1.0", Path(temporary)), manifest)
             stable.assert_called_once()
+            manifest["validation_receipts"][0]["sha256"] = "0" * 64
+            with self.assertRaisesRegex(rc.ReleaseError, "validation receipt inventory"):
+                publish.verify_release(gh, "v0.1.0", Path(temporary))
 
     def test_destination_policy_and_receipt_coverage_cannot_be_bypassed(self):
         gh = FakeGitHub()
