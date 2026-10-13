@@ -375,6 +375,81 @@ Only play is journaled as `action:"plex_library"`; list/preview are read-only.
 Handler completion alone does not prove an observed playback effect. See the
 shared [contract fixtures](../contracts/plex-library-v1.json).
 
+### Current-item favorites across profiles
+
+`favorites` is an optional administrator-authenticated RPC; stored entries live
+in the player, not the controller queue. It accepts no profile selection, provider
+credentials, item reference or URL supplied by the controller:
+
+```json
+{"favorites":{"version":1,"operations":["list","add","play","remove"],"max_items":100}}
+{"action":"favorites","params":{"runtime":"page-123","op":"list"}}
+{"action":"favorites","params":{"runtime":"page-123","op":"add"}}
+{"action":"favorites","params":{"runtime":"page-123","op":"add","name":"Evening cartoons"}}
+{"action":"favorites","params":{"runtime":"page-123","op":"play","id":"fav-abc123"}}
+{"action":"favorites","params":{"runtime":"page-123","op":"remove","query":"Evening cartoons"}}
+```
+
+The capability has exactly `version`, `operations` and `max_items`. Operations
+are a distinct subset of `list`, `add`, `play`, `remove`; `max_items` is an integer
+from 1 to 100. Requests include `runtime`, matching `^[a-z0-9-]{1,64}$`, and `op`.
+`list` has no other fields; `add` optionally has `name`; `play`/`remove` require
+exactly one of `id` or `query`. IDs match `^fav-[a-z0-9-]{1,60}$`. Name/query
+are nonblank text up to 160 UTF-8 bytes, with no C0/DEL controls or malformed
+Unicode. The player trims surrounding whitespace and resolves exact names
+before unique substrings. Unknown/duplicate fields fail validation.
+
+Every result is bound to the original runtime and operation, including negative
+responses and repeated acknowledgements. Successful data has `version:1`,
+`runtime`, `op` and these operation-specific fields:
+
+- `list`: `state:"ready"`, `entries:[ENTRY,...]`, at most 100 unique IDs.
+- `add`: `state:"ready"`, `entry:ENTRY`, `created:boolean`.
+- `remove`: `state:"ready"`, `entry:ENTRY`, `removed:true`.
+- `play`: `state:"dispatched"`, `entry:ENTRY`, `dispatched:true`.
+
+A redacted `ENTRY` has exactly these fields:
+
+```json
+{"id":"fav-abc123","name":"Evening cartoons","provider":"m3u","profile_number":3,"profile_name":"Home","kind":"vod","title":"Winnie-the-Pooh"}
+```
+
+`name` is nonblank and at most 160 UTF-8 bytes; `title` is nonblank and at most
+512. `profile_name` may be empty and is at most 256 bytes. These strings exclude
+C0/DEL controls. `provider` matches `^[a-z0-9][a-z0-9_./-]{0,63}$`;
+`profile_number` is an integer from 1 to 15, or null for a provider without
+numbered profiles; `kind` is `live` or `vod`. Internal source fingerprints,
+provider item references, URLs and credentials are not exposed. If a request
+selected an explicit ID, the returned entry must match it.
+
+A failure has exactly the four common fields with `state:"error"`, plus a stable
+`error` code. Codes are `invalid_request`, `unsupported`, `no_current_item`,
+`unsupported_item`, `profile_unavailable`, `profile_changed`, `item_unavailable`,
+`ambiguous_favorite`, `favorite_not_found`, `too_many_favorites`,
+`storage_unavailable`, `policy_denied`, `busy`, `timeout`, `cancelled`,
+`context_changed`, `playback_failed`. There is no raw provider error text.
+Successful data requires envelope status `ok`; bound error data also supports
+`rejected` and `unsupported`. Invalid results do not consume the queued request.
+
+Adding an existing source/profile/item preserves the ID; a supplied name renames
+that entry, while no name keeps the existing label. Addition integrates with the
+player's channel/media favorites. Removal deletes the cross-profile bookmark,
+not the provider-specific favorite. Entries survive ordinary player restarts;
+clearing the installation's local data removes them.
+
+The player captures current state atomically when handling `add`; it restores
+and loads the saved profile before resolving the saved item for `play`. Existing
+parental/kiosk policy, original request lifetime and runtime ownership apply.
+A source mismatch fails rather than using a similarly named item or a stale URL.
+`dispatched` establishes a playback handoff, not physical display/audio evidence.
+Only play is journaled as `action:"favorites"`; handler completion must not be
+upgraded to observed playback. The CLI never automatically repeats a request.
+
+Serialized result data is limited to 1 MiB. A complete 100-entry list fits even
+with maximum-length HTML-escaped labels; the existing 2 MiB response-envelope
+limit and memory limits remain unchanged. See the shared
+[contract fixtures](../contracts/favorites-v1.json).
+
 ### Remote screenshot extension
 
 `screenshot` accepts exactly `{runtime:"page-runtime-id"}`, where runtime matches
