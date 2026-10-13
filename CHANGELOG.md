@@ -4,6 +4,10 @@
 
 ### Changes
 
+- Add bounded native Go fuzz qualification for public release candidates, with
+  source-bound evidence, synthetic seeds and documented reproduction. PRs, betas
+  and nightlies retain ordinary tests without mutation campaigns.
+
 - Add `stop` / `start` aliases for acknowledged standby / wake. Status shows
   these controls when supported and distinguishes full-player `restart` from
   `restart stream`, including explicit and short aliases. Stop keeps remote
