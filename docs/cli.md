@@ -820,7 +820,9 @@ before starting. Incomplete, timed-out or oversized searches start nothing; use 
 narrower filter when a catalog limit is reached. Only natural video completion
 advances the queue. Stop, manual playback or a provider change interrupts it. Each
 visit resolves a fresh stream URL; an unavailable next item stops playback instead
-of being silently skipped. Queues are not restored after restarting the player.
+of being silently skipped. The command's in-memory queue is not restored after
+restarting the player. With the standalone VPortal provider selected, use
+[`kiosk on`](#kiosk-mode) after playback starts to persist and repeat that selection.
 
 ## Programme search configuration and archives
 
@@ -898,7 +900,7 @@ The command accepts exactly one UTF-8 JSON object on stdin, up to 64 KiB:
 ```json
 {
   "version": 1,
-  "query": "Three Cats",
+  "query": "Tom and Jerry",
   "playlist_url": "https://proxy.example/playlist.m3u",
   "epg_url": "https://epg.example/epg/v1",
   "refresh": false,
@@ -1095,9 +1097,9 @@ Play a whole movie or show library using the player's saved Plex connection:
 
 ```sh
 ott l plex libraries                         # list library IDs, names and types
-ott l plex shuffle "Три кота"                 # shuffle the entire library once
-ott l plex library "Три кота"                 # play in library order
-ott l plex library --preview "Три кота"       # check without changing playback
+ott l plex shuffle "Tom and Jerry"            # shuffle the entire library once
+ott l plex library "Tom and Jerry"            # play in library order
+ott l plex library --preview "Tom and Jerry"  # check without changing playback
 ott l plex library --shuffle --preview id:16  # preview one new shuffled order
 ott l plex library --shuffle id:16            # explicit library ID, new shuffle
 ```
@@ -1107,8 +1109,8 @@ second timeout to collect. The CLI already defaults to 45 seconds, so the
 explicit option below is optional:
 
 ```sh
-ott -t 45 l plex library --shuffle --preview "Три кота"  # check without changing playback
-ott -t 45 l plex shuffle "Три кота"                     # start a new shuffled queue
+ott -t 45 l plex library --shuffle --preview "Tom and Jerry"  # check without changing playback
+ott -t 45 l plex shuffle "Tom and Jerry"                     # start a new shuffled queue
 ```
 
 `-t 45` means **wait up to 45 seconds for the command response**; it neither
@@ -1130,7 +1132,7 @@ one media item. Use `--` before a title beginning with a hyphen.
 
 These commands select Plex **libraries** (movie or show sections), not a series
 inside another library or a filesystem folder. For example, a dedicated
-“Три кота” library is independent from a series with that title in “TV Shows”.
+“Tom and Jerry” library is independent from a series with that title in “TV Shows”.
 Show libraries include their episodes. Lookup happens on the player using its
 own saved Plex server and token; local CLI presets are not used or applied.
 
@@ -1942,7 +1944,9 @@ OTT_CLI=/path/to/cli/ott.py node scripts/smoke-remote-cli.cjs
 ## Kiosk mode
 
 Requires updated player **and** controller builds. The player must be connected
-to the controller with its device credentials and have loaded live channels.
+to the controller with its device credentials. Live-TV locking requires a loaded
+channel catalogue. With the standalone VPortal or Plex provider, start the
+required video/queue instead; a TV playlist is not required.
 
 ```sh
 ott tv kiosk                # current policy and playback health
@@ -1971,7 +1975,8 @@ Parental access must already allow the requested channel; kiosk does not bypass 
 After selection the player blocks local navigation, channel switching, archives
 and VOD. Ordinary remote playback/provider/profile mutations and exit commands
 are rejected as well. Read queries, volume/mute, notifications and explicit remote
-restarts remain available. Only the `kiosk` request changes this policy.
+restarts remain available. In the web command API, only the `kiosk` request
+changes this policy; the separate native maintenance lane is described below.
 
 Use `ott tv kiosk on --strict [CHANNEL]` to let a short tap or the Info key display
 the video footer for five seconds. Updated core players allow tapping or dragging
@@ -2005,19 +2010,54 @@ the lock remotely. The policy, including strictness, survives reloads. Old playe
 that omit or ignore the strict flag cannot produce a successful strict CLI receipt.
 
 For the standalone VPortal provider, select the configured profile, then run
-`ott tv vp "три кота"` followed by `ott tv kiosk on --strict`. This locks the
+`ott tv vp "tom and jerry"` followed by `ott tv kiosk on --strict`. This locks the
 current repeating episode queue rather than arming a future TV selection.
+The `vp` command is the same for a VPortal link in an M3U profile and the
+standalone provider; it searches the active source. Their profile slots are
+separate. Unlike TV kiosk name matching, `vp` collects all matching titles.
+For example, to replace a lock with content from an already configured slot:
+
+```sh
+ott tv kiosk off
+ott tv provider vportal
+ott tv profiles
+ott tv profile 2
+ott tv vp --list "tom and jerry"
+ott tv vp "tom and jerry"
+ott tv kiosk on --strict
+ott tv kiosk status
+```
+
+Use your configured slot number. `kiosk on/set QUERY` selects TV channels and
+is rejected by the standalone VPortal/Plex providers. To choose another title
+or profile, release the lock first and repeat the selection sequence.
 
 A web page on here.now cannot block Android Home, Recents or browser navigation
 outside the page. Android app pinning with a PIN, or managed-device Lock Task,
 is needed to restrict exit from the browser.
 
+Legacy wrappers may intercept touch before it reaches the web player. A wrapper
+that only requests the information footer without forwarding timeline gestures
+retains a read-only footer, even with an updated player. Native touch interception
+does not by itself establish Android system-exit protection; check the wrapper's
+documented capabilities separately.
+
 The client retries the same channel every ten seconds without playback progress,
 resolving its stream URL again. Healthy playback continues uninterrupted. The lock
 uses channel and source identities, so list reordering or a missing channel never
-selects an unrelated stream. Policy persists across page reloads and controller
+selects an unrelated stream. Media startup and natural episode transitions have
+a 60-second grace period. Newer players also use supported decoded-frame counters
+to detect some stalls and can reload the player after repeated failed stream
+recovery, with a ten-minute reload cooldown; offline recovery waits for the
+network. See the [player recovery contract](https://github.com/open-ott-play/ottplay-foss/blob/main/docs/remote-command-server.md#kiosk-mode)
+for those version-dependent checks. Policy persists across page reloads and controller
 outages, and is excluded from portable settings. The running page owns recovery;
 this does not relaunch a crashed process or wake a suspended device.
+
+The separately provisioned [Android maintenance agent](../native/android-agent/README.md)
+can restart the application independently of its WebView. Its authenticated
+`android queue next/prev` and `queue stop` operations can move within or release
+the queue; ordinary remote playback commands remain subject to the kiosk lock.
 
 `status` reports `off`, `waiting` or `locked`, channel/provider metadata,
 `retry_seconds: 10`, retry count and observed health. A successful mutation means

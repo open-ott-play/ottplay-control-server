@@ -117,12 +117,12 @@ ott l plex queue                     # current item and preparation/playback sta
 ott l plex next                      # advance once; no wrap at the last item
 ott l plex stop                      # stop and clear this queue
 ott l plex libraries                 # list libraries (requires plex_library support)
-ott l plex shuffle "Три кота"         # shuffle one complete library, up to 500 items
+ott l plex shuffle "Tom and Jerry"   # shuffle one complete library, up to 500 items
 ott l plex library --preview id:16    # read-only check of an explicit library
 ```
 
 The CLI waits up to 45 seconds by default. Writing
-`ott -t 45 l plex shuffle "Три кота"` makes that same response timeout explicit;
+`ott -t 45 l plex shuffle "Tom and Jerry"` makes that same response timeout explicit;
 it does not limit how long the videos play. Large Plex libraries can take longer
 than a short 10–15 second timeout to collect. Put `-t SECONDS` (or
 `--timeout SECONDS`) before the player alias. See
@@ -218,8 +218,9 @@ and episode count; provider requests and stream URLs stay on the player.
 Use `ott a1 kiosk on --strict` for child-facing playback: a local tap shows the
 video footer. Updated core players allow tapping or dragging its timeline to
 seek within the current VPortal/Plex episode; other local controls remain locked.
-Older players and channel kiosks retain a read-only footer. An existing lock
-keeps its target. Release it with `ott a1 kiosk off` from the controller.
+Older players, channel kiosks and wrappers that intercept timeline gestures
+retain a read-only footer. An existing lock keeps its target. Release it with
+`ott a1 kiosk off` from the controller.
 On Android websites, system exit protection requires separate app pinning with
 a PIN; see [kiosk mode](docs/cli.md#kiosk-mode).
 

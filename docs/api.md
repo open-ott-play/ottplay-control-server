@@ -87,6 +87,26 @@ CORS is a browser boundary, not authentication. Keep administrator access separa
 
 `POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
 
+The `kiosk` action uses the same authenticated request route with
+`params: {"mode":"status|on|set|off"}`. `on` optionally accepts a string `query`;
+`set` requires it. Both accept optional boolean `strict`. `status` and `off`
+accept no other fields. For example:
+
+```json
+{"action":"kiosk","params":{"mode":"on","query":"Новости","strict":true}}
+```
+
+Queries contain 1–1024 UTF-8 bytes without control characters and select a
+one-based TV catalogue number or the first literal case-insensitive name match.
+Without a query, `on` arms the next TV selection, preserves an existing lock,
+or captures the current standalone VPortal/Plex media queue. Omitting `strict`
+preserves the existing setting; explicit `false` downgrades without releasing
+the target. Updated results include `enabled`, `state`, `strict`, provider and
+selection metadata, `retry_seconds`, retry count and observed health; they do
+not expose media URLs. A stored-policy receipt does not verify visible playback
+or Android system-exit protection. See [kiosk mode](cli.md#kiosk-mode) for
+source changes, recovery timing, version requirements and native-wrapper limits.
+
 `provider_settings` accepts provider IDs `m3u`, `xtream`, `stalker`, `ottclub`
 and `plex`. The controller requires exactly `provider` and an object-valued
 `settings`; provider-specific field validation remains on the player. For Plex,
@@ -321,7 +341,7 @@ changes the legacy command contract nor extends the `plex_queue` request schema.
 ```json
 {"plex_library":{"version":1,"operations":["list","preview","play"],"max_items":500}}
 {"action":"plex_library","params":{"runtime":"page-123","op":"list"}}
-{"action":"plex_library","params":{"runtime":"page-123","op":"preview","query":"Три кота"}}
+{"action":"plex_library","params":{"runtime":"page-123","op":"preview","query":"Tom and Jerry"}}
 {"action":"plex_library","params":{"runtime":"page-123","op":"play","library_id":"16","shuffle":true}}
 ```
 
@@ -346,7 +366,7 @@ Every response, including rejected/unsupported replies, is bound to the requeste
 runtime and operation. Exact successful list data is:
 
 ```json
-{"version":1,"runtime":"page-123","op":"list","state":"ready","libraries":[{"id":"16","title":"Три кота","type":"show"}]}
+{"version":1,"runtime":"page-123","op":"list","state":"ready","libraries":[{"id":"16","title":"Tom and Jerry","type":"show"}]}
 ```
 
 `libraries` contains 0–1000 rows with unique IDs. A row has exactly `id`, `title`
