@@ -1321,6 +1321,8 @@ target platform:
 ott d1 providers
 ott d1 provider m3u
 ott d1 prov m3u
+ott d1 profiles        # * marks the active profile; names are shown
+ott d1 profile 1       # select the first profile, after checking its name
 ott d1
 ```
 
@@ -1328,6 +1330,8 @@ ott d1
 separate from selecting one of its numbered profiles. If status already reports
 `"provider": "m3u"` with zero channels, M3U is selected: inspect `ott d1 profiles`
 and select/configure the intended profile instead of repeatedly switching providers.
+For example, `* 1: Home 1` means profile 1 named Home 1 is already active;
+`playlist: set` means a URL is saved, not that its channels loaded successfully.
 Provider changes remain subject to the player's settings lock and platform policy.
 
 ## M3U profiles
@@ -1675,7 +1679,8 @@ queries (`v`, `vol`, `volume`) remain a single request with compact output.
 When status identifies a provider and capabilities were read successfully, the
 same list also includes the existing `providers`, `provider m3u` and
 `provider ID_OR_NAME` commands. For active M3U or VPortal it includes `profiles`
-and `profile N`. These provider/profile hints do not add discovery requests or
+and `profile N`, with a concrete `profile 1` example. Empty M3U catalogs also
+show a reminder to inspect the active profile. These hints do not add discovery requests or
 change the capabilities protocol; the player checks settings locks and platform
 policy when the command runs. They remain visible with an empty or loading catalog.
 When status reports kiosk enabled, listings remain visible but switching hints

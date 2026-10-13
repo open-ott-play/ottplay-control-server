@@ -74,6 +74,10 @@ class StatusCliTest(unittest.TestCase):
                     self.assertIn('player settings and platform policy', out)
                     for command in ('profiles', 'profile N'):
                         self.assertEqual("ott 'Living room' " + command in out, provider in ('m3u', 'vportal'))
+                    self.assertEqual("Example: ott 'Living room' profile 1" in out, provider in ('m3u', 'vportal'))
+                    self.assertEqual('No channels loaded:' in out, provider == 'm3u')
+                    if provider in ('m3u', 'vportal'):
+                        self.assertIn('* marks the active profile', out)
                     self.assertNotIn('No controls are currently advertised', out)
 
     def test_missing_or_invalid_provider_does_not_infer_provider_commands(self):
@@ -92,6 +96,7 @@ class StatusCliTest(unittest.TestCase):
                 self.assertEqual("ott 'Living room' profiles" in out, provider in ('m3u', 'vportal'))
                 self.assertEqual("ott 'Living room' provider m3u" in out, not enabled)
                 self.assertEqual("ott 'Living room' profile N" in out, not enabled and provider in ('m3u', 'vportal'))
+                self.assertEqual("Example: ott 'Living room' profile 1" in out, not enabled and provider in ('m3u', 'vportal'))
                 self.assertEqual("run ott 'Living room' kiosk off first" in out, enabled)
 
     def test_provider_status_json_remains_machine_readable(self):

@@ -2371,9 +2371,12 @@ def print_player_status(data, name):
             print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
         if provider in ("m3u", "vportal"):
-            print(f"  {prefix} profiles  — list the current provider's profiles (alias: profs)")
+            print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
             if not kiosk_locked:
                 print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
+                print(f"    Example: {prefix} profile 1  — select the first profile listed by profiles")
+            if provider == "m3u" and data.get("channels") == 0:
+                print("    No channels loaded: check the active profile with profiles; selecting M3U alone does not choose a profile.")
         if kiosk_locked:
             print(f"    Provider/profile switching is locked by kiosk; run {prefix} kiosk off first.")
         else:
