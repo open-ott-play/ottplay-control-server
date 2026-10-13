@@ -58,6 +58,37 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual(json.loads(out), dict(status, capabilities=caps))
             self.assertNotIn('do-not-print', out)
 
+    def test_provider_commands_include_m3u_and_contextual_profiles_without_extra_requests(self):
+        for provider in ('m3u', 'vportal', 'stalker', 'plex'):
+            for words in ([], ['status'], ['st']):
+                with self.subTest(provider=provider, words=words):
+                    caps = self.capabilities()
+                    caps.update(lifecycle=[], input=[], playback=[])
+                    status = {'ready': False, 'channels': 0, 'provider': provider}
+                    code, out, err, _ = self.run_cli(words, status, caps, alias='Living room')
+                    self.assertEqual((code, err), (0, ''))
+                    self.assertIn("ott 'Living room' providers", out)
+                    self.assertIn("ott 'Living room' provider m3u", out)
+                    self.assertIn('alias: prov m3u', out)
+                    self.assertIn("ott 'Living room' provider ID_OR_NAME", out)
+                    self.assertIn('player settings and platform policy', out)
+                    for command in ('profiles', 'profile N'):
+                        self.assertEqual("ott 'Living room' " + command in out, provider in ('m3u', 'vportal'))
+                    self.assertNotIn('No controls are currently advertised', out)
+
+    def test_missing_or_invalid_provider_does_not_infer_provider_commands(self):
+        for provider in (None, '', '  ', [], {}):
+            code, out, err, _ = self.run_cli([], {'provider': provider}, self.capabilities())
+            self.assertEqual((code, err), (0, ''))
+            self.assertNotIn('ott tv provider', out)
+
+    def test_provider_status_json_remains_machine_readable(self):
+        caps = self.capabilities()
+        status = {'ready': True, 'channels': 0, 'provider': 'm3u'}
+        code, out, err, _ = self.run_cli([], status, caps, machine=True)
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(json.loads(out), dict(status, capabilities=caps))
+
     def test_default_status_lists_only_negotiated_workbench_sections(self):
         for sections in (['doctor'], ['snapshot'], ['operation'], ['doctor', 'snapshot', 'operation']):
             caps = self.capabilities()

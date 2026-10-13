@@ -1311,6 +1311,25 @@ Troubleshooting:
   playback request. Increase `-t` for a slow provider only on a new deliberate
   command; a timed-out request may already have changed the profile.
 
+## Selecting a provider
+
+Use a provider's ID, zero-based index or case-insensitive name. The provider list
+marks the current selection with `*` and includes only providers allowed on the
+target platform:
+
+```sh
+ott d1 providers
+ott d1 provider m3u
+ott d1 prov m3u
+ott d1
+```
+
+`prov` aliases `provider`; `provs` aliases `providers`. Selecting a provider is
+separate from selecting one of its numbered profiles. If status already reports
+`"provider": "m3u"` with zero channels, M3U is selected: inspect `ott d1 profiles`
+and select/configure the intended profile instead of repeatedly switching providers.
+Provider changes remain subject to the player's settings lock and platform policy.
+
 ## M3U profiles
 
 M3U has 15 numbered profiles. Select the M3U provider first; these commands
@@ -1652,6 +1671,13 @@ to a different player runtime, status still succeeds with `capabilities: null`
 and a `capabilities_error` explanation; text output shows the same limitation.
 Unavailable controls are never inferred from another platform. Volume-only
 queries (`v`, `vol`, `volume`) remain a single request with compact output.
+
+When status identifies a provider and capabilities were read successfully, the
+same list also includes the existing `providers`, `provider m3u` and
+`provider ID_OR_NAME` commands. For active M3U or VPortal it includes `profiles`
+and `profile N`. These provider/profile hints do not add discovery requests or
+change the capabilities protocol; the player checks settings locks and platform
+policy when the command runs. They remain visible with an empty or loading catalog.
 
 `ott tv caps` / `capabilities` reports the application's version, platform and a
 public runtime identifier for the current page, plus supported lifecycle,

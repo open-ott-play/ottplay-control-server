@@ -2361,6 +2361,16 @@ def print_player_status(data, name):
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("\nAvailable controls now:")
+    provider = data.get("provider")
+    provider_commands = isinstance(provider, str) and bool(provider.strip())
+    if provider_commands:
+        print(f"  {prefix} providers  — list allowed providers (alias: provs)")
+        print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
+        print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
+        if provider in ("m3u", "vportal"):
+            print(f"  {prefix} profiles  — list the current provider's profiles (alias: profs)")
+            print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
+        print("    Provider/profile commands are checked against player settings and platform policy when run.")
     for operation, (command, description) in lifecycle.items():
         if operation in controls["lifecycle"]:
             print(f"  {prefix} {command}  — {description}")
@@ -2404,7 +2414,7 @@ def print_player_status(data, name):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
     if "set" in aspect.get("operations", []):
         print(f"  {prefix} aspect " + " / ".join(aspect["modes"]) + "  — request an aspect mode")
-    if (not any(controls[key] for key in ("lifecycle", "playback", "input"))
+    if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
             and shot.get("state") != "ready" and not queue and not libraries and not favorites and not aspect.get("operations")):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
