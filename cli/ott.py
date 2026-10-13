@@ -2364,13 +2364,20 @@ def print_player_status(data, name):
     provider = data.get("provider")
     provider_commands = isinstance(provider, str) and bool(provider.strip())
     if provider_commands:
+        kiosk = data.get("kiosk")
+        kiosk_locked = isinstance(kiosk, dict) and kiosk.get("enabled") is True
         print(f"  {prefix} providers  — list allowed providers (alias: provs)")
-        print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
-        print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
+        if not kiosk_locked:
+            print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
+            print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
         if provider in ("m3u", "vportal"):
             print(f"  {prefix} profiles  — list the current provider's profiles (alias: profs)")
-            print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
-        print("    Provider/profile commands are checked against player settings and platform policy when run.")
+            if not kiosk_locked:
+                print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
+        if kiosk_locked:
+            print(f"    Provider/profile switching is locked by kiosk; run {prefix} kiosk off first.")
+        else:
+            print("    Provider/profile commands are checked against player settings and platform policy when run.")
     for operation, (command, description) in lifecycle.items():
         if operation in controls["lifecycle"]:
             print(f"  {prefix} {command}  — {description}")

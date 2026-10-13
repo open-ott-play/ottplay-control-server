@@ -7,6 +7,7 @@
 - Show provider selection in the status command's available controls, including
   `provider m3u` / `prov m3u` and provider listing. M3U and VPortal status also
   show numbered profile commands, including when the catalog has no channels.
+  Kiosk status explains blocked switching while preserving read-only listings.
   These hints add no remote requests and preserve player policy checks.
 
 - Add `fav add [NAME]`, `fav`, `fav play ID_OR_NAME` and `fav remove ID_OR_NAME`

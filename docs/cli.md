@@ -1678,6 +1678,8 @@ same list also includes the existing `providers`, `provider m3u` and
 and `profile N`. These provider/profile hints do not add discovery requests or
 change the capabilities protocol; the player checks settings locks and platform
 policy when the command runs. They remain visible with an empty or loading catalog.
+When status reports kiosk enabled, listings remain visible but switching hints
+are replaced with `ott tv kiosk off` guidance; displaying status never disables kiosk.
 
 `ott tv caps` / `capabilities` reports the application's version, platform and a
 public runtime identifier for the current page, plus supported lifecycle,

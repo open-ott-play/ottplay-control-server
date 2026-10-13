@@ -82,6 +82,18 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual((code, err), (0, ''))
             self.assertNotIn('ott tv provider', out)
 
+    def test_kiosk_keeps_provider_listing_but_explains_blocked_switching(self):
+        for enabled in (True, False):
+            for provider in ('m3u', 'vportal', 'stalker'):
+                status = {'provider': provider, 'kiosk': {'enabled': enabled}}
+                code, out, err, _ = self.run_cli([], status, self.capabilities(), alias='Living room')
+                self.assertEqual((code, err), (0, ''))
+                self.assertIn("ott 'Living room' providers", out)
+                self.assertEqual("ott 'Living room' profiles" in out, provider in ('m3u', 'vportal'))
+                self.assertEqual("ott 'Living room' provider m3u" in out, not enabled)
+                self.assertEqual("ott 'Living room' profile N" in out, not enabled and provider in ('m3u', 'vportal'))
+                self.assertEqual("run ott 'Living room' kiosk off first" in out, enabled)
+
     def test_provider_status_json_remains_machine_readable(self):
         caps = self.capabilities()
         status = {'ready': True, 'channels': 0, 'provider': 'm3u'}
