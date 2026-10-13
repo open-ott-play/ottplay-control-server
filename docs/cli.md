@@ -677,11 +677,14 @@ ott tv aspect fit           # show the complete picture, with bars if needed
 ott tv aspect fill          # proportional crop to fill the screen
 ott tv aspect "Fill screen" # full mode name, case-insensitive
 ott tv restart             # reload the player page after acknowledgement
+ott tv restart player      # explicit equivalent of restart
 ott tv restart stream      # restart only the current stream
 ott tv reload               # reload the player page after acknowledgement
 ott tv restart app          # relaunch a supported native app
 ott tv standby              # enter player standby
 ott tv wake                 # leave player standby
+ott tv stop                 # standby: stop playback while remaining connected
+ott tv start                # wake: start according to the player's startup settings
 ott tv exit                 # exit a supported app; no standby fallback
 ott tv reboot device        # reboot the device OS only if advertised/supported
 ott --json tv s             # machine-readable output
@@ -1311,6 +1314,29 @@ Troubleshooting:
   playback request. Increase `-t` for a slow provider only on a new deliberate
   command; a timed-out request may already have changed the profile.
 
+## Selecting a provider
+
+Use a provider's ID, zero-based index or case-insensitive name. The provider list
+marks the current selection with `*` and includes only providers allowed on the
+target platform:
+
+```sh
+ott d1 providers
+ott d1 provider m3u
+ott d1 prov m3u
+ott d1 profiles        # * marks the active profile; names are shown
+ott d1 profile 1       # select the first profile, after checking its name
+ott d1
+```
+
+`prov` aliases `provider`; `provs` aliases `providers`. Selecting a provider is
+separate from selecting one of its numbered profiles. If status already reports
+`"provider": "m3u"` with zero channels, M3U is selected: inspect `ott d1 profiles`
+and select/configure the intended profile instead of repeatedly switching providers.
+For example, `* 1: Home 1` means profile 1 named Home 1 is already active;
+`playlist: set` means a URL is saved, not that its channels loaded successfully.
+Provider changes remain subject to the player's settings lock and platform policy.
+
 ## M3U profiles
 
 M3U has 15 numbered profiles. Select the M3U provider first; these commands
@@ -1529,6 +1555,34 @@ an operating-system reboot, never a page reload. `exit`, `quit` and `close`
 request app exit, never standby. `standby` and `wake` are separate player-state
 operations; `wake` cannot contact an offline or powered-off player.
 
+### Stop playback while keeping the player online
+
+For a player that stays on all day:
+
+```sh
+ott d1 stop             # stop playback and enter standby (same as standby)
+ott d1 start            # leave standby (same as wake)
+ott d1 1                # select channel 1 after starting
+ott d1 restart stream   # reopen the current stream when one is active
+ott d1 restart          # reload the entire player; restart player is equivalent
+```
+
+`stop` and `start` use the existing acknowledged standby/wake operations.
+They do not shut down the device or disconnect remote control. `pause`/`resume`
+remain separate VOD controls; pausing can keep downloading buffered video.
+`start` follows the player's startup settings, so it does not promise to resume
+the same VOD at the saved position. Standby is an in-memory state: reloading the
+player can start playback again. Command polling and other background services
+can still use the network while playback is stopped.
+
+Use a current player: older builds can leave PiP or list-preview playback running
+when entering standby, or complete pending Plex preparation afterward. Updated
+players cancel that work and stop both media lanes. Kiosk and settings locks
+still apply; `ott d1` lists stop/start only when standby/wake are advertised.
+An accepted response is not a claim that teardown or startup already completed.
+To play channels literally named `stop` or `start`, use `ott d1 play stop` or
+`ott d1 play start`.
+
 Lifecycle availability is platform-specific. The player must advertise and
 implement the operation; an unavailable native exit, relaunch or OS reboot
 returns unsupported. None of these commands falls back to another operation.
@@ -1652,6 +1706,16 @@ to a different player runtime, status still succeeds with `capabilities: null`
 and a `capabilities_error` explanation; text output shows the same limitation.
 Unavailable controls are never inferred from another platform. Volume-only
 queries (`v`, `vol`, `volume`) remain a single request with compact output.
+
+When status identifies a provider and capabilities were read successfully, the
+same list also includes the existing `providers`, `provider m3u` and
+`provider ID_OR_NAME` commands. For active M3U or VPortal it includes `profiles`
+and `profile N`, with a concrete `profile 1` example. Empty M3U catalogs also
+show a reminder to inspect the active profile. These hints do not add discovery requests or
+change the capabilities protocol; the player checks settings locks and platform
+policy when the command runs. They remain visible with an empty or loading catalog.
+When status reports kiosk enabled, listings remain visible but switching hints
+are replaced with `ott tv kiosk off` guidance; displaying status never disables kiosk.
 
 `ott tv caps` / `capabilities` reports the application's version, platform and a
 public runtime identifier for the current page, plus supported lifecycle,

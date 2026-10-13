@@ -39,8 +39,11 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual((code, err), (0, ''))
             self.assertIn('"ready": true', out)
             self.assertIn('ott tv restart  — reload the player', out)
-            self.assertIn('ott tv standby', out)
-            self.assertIn('ott tv wake', out)
+            self.assertIn('ott tv stop', out)
+            self.assertIn('alias: standby', out)
+            self.assertIn('ott tv start', out)
+            self.assertIn('alias: wake', out)
+            self.assertIn('alias: restart player', out)
             self.assertIn('ott tv key KEY  — up, ok', out)
             for unsupported in ('restart stream', 'restart app', 'reboot', 'exit', 'seek', '+N', '-N'):
                 self.assertNotIn(unsupported, out)
@@ -57,6 +60,54 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual((code, err), (0, ''))
             self.assertEqual(json.loads(out), dict(status, capabilities=caps))
             self.assertNotIn('do-not-print', out)
+
+    def test_provider_commands_include_m3u_and_contextual_profiles_without_extra_requests(self):
+        for provider in ('m3u', 'vportal', 'stalker', 'plex'):
+            for words in ([], ['status'], ['st']):
+                with self.subTest(provider=provider, words=words):
+                    caps = self.capabilities()
+                    caps.update(lifecycle=[], input=[], playback=[])
+                    status = {'ready': False, 'channels': 0, 'provider': provider}
+                    code, out, err, _ = self.run_cli(words, status, caps, alias='Living room')
+                    self.assertEqual((code, err), (0, ''))
+                    self.assertIn("ott 'Living room' providers", out)
+                    self.assertIn("ott 'Living room' provider m3u", out)
+                    self.assertIn('alias: prov m3u', out)
+                    self.assertIn("ott 'Living room' provider ID_OR_NAME", out)
+                    self.assertIn('player settings and platform policy', out)
+                    for command in ('profiles', 'profile N'):
+                        self.assertEqual("ott 'Living room' " + command in out, provider in ('m3u', 'vportal'))
+                    self.assertEqual("Example: ott 'Living room' profile 1" in out, provider in ('m3u', 'vportal'))
+                    self.assertEqual('No channels loaded:' in out, provider == 'm3u')
+                    if provider in ('m3u', 'vportal'):
+                        self.assertIn('* marks the active profile', out)
+                    self.assertNotIn('No controls are currently advertised', out)
+
+    def test_missing_or_invalid_provider_does_not_infer_provider_commands(self):
+        for provider in (None, '', '  ', [], {}):
+            code, out, err, _ = self.run_cli([], {'provider': provider}, self.capabilities())
+            self.assertEqual((code, err), (0, ''))
+            self.assertNotIn('ott tv provider', out)
+
+    def test_kiosk_keeps_provider_listing_but_explains_blocked_switching(self):
+        for enabled in (True, False):
+            for provider in ('m3u', 'vportal', 'stalker'):
+                status = {'provider': provider, 'kiosk': {'enabled': enabled}}
+                code, out, err, _ = self.run_cli([], status, self.capabilities(), alias='Living room')
+                self.assertEqual((code, err), (0, ''))
+                self.assertIn("ott 'Living room' providers", out)
+                self.assertEqual("ott 'Living room' profiles" in out, provider in ('m3u', 'vportal'))
+                self.assertEqual("ott 'Living room' provider m3u" in out, not enabled)
+                self.assertEqual("ott 'Living room' profile N" in out, not enabled and provider in ('m3u', 'vportal'))
+                self.assertEqual("Example: ott 'Living room' profile 1" in out, not enabled and provider in ('m3u', 'vportal'))
+                self.assertEqual("run ott 'Living room' kiosk off first" in out, enabled)
+
+    def test_provider_status_json_remains_machine_readable(self):
+        caps = self.capabilities()
+        status = {'ready': True, 'channels': 0, 'provider': 'm3u'}
+        code, out, err, _ = self.run_cli([], status, caps, machine=True)
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(json.loads(out), dict(status, capabilities=caps))
 
     def test_default_status_lists_only_negotiated_workbench_sections(self):
         for sections in (['doctor'], ['snapshot'], ['operation'], ['doctor', 'snapshot', 'operation']):
@@ -110,6 +161,8 @@ class StatusCliTest(unittest.TestCase):
         code, out, _, _ = self.run_cli([], {'ready': True}, caps)
         self.assertEqual(code, 0)
         self.assertIn('No controls are currently advertised', out)
+        self.assertNotIn('ott tv stop', out)
+        self.assertNotIn('ott tv start', out)
         caps.update(lifecycle=['restart_stream', 'restart_app', 'exit_app', 'reboot_device'],
                     playback=['pause', 'resume', 'seek', 'previous_channel', 'next_channel', 'step_channel'])
         code, out, _, _ = self.run_cli([], {'ready': True}, caps, alias='Living room')
@@ -119,6 +172,7 @@ class StatusCliTest(unittest.TestCase):
         self.assertNotIn('next_channel', out)
         self.assertNotIn('step_channel', out)
         self.assertNotIn("ott 'Living room' restart  — reload", out)
+        self.assertIn('restart only the current stream (alias: restart s)', out)
 
     def test_status_failure_never_submits_capabilities_request(self):
         code, _, _, client = self.run_cli([], ott.Error('offline'), self.capabilities())

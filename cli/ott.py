@@ -105,6 +105,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME pause / resume            pause or resume supported archive/VOD playback
   ott NAME seek SECONDS              seek supported VOD to an absolute position (0–9007199254740991)
   ott NAME restart                   reload the player after acknowledgement
+  ott NAME restart player            explicit form of restart
   ott NAME restart stream            restart only the current stream
   ott NAME restart app               relaunch a supported native app
   ott NAME reload                    reload the player after acknowledgement
@@ -123,6 +124,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME update install SHA256     open the Android installer after ACK
   ott NAME android update HTTPS_URL SHA256  install a signed update manifest
   ott NAME standby / wake            enter or leave player standby
+  ott NAME stop / start              stop streaming / leave standby and start configured playback
   ott NAME kiosk [status]            show kiosk policy and playback health
   ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal/Plex video queue
   ott NAME kiosk on --strict [CHANNEL]  lock local controls; media-footer seeking needs a supported player
@@ -138,7 +140,8 @@ Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
 provider/prov; providers/provs; capabilities/caps; input/key; prev/previous; screenshot/shot;
-fav/favs/favorite/favorites/favourite/favourites; aspect/aspect-ratio. Aspect modes also accept "Fit to screen" and "Fill screen".
+fav/favs/favorite/favorites/favourite/favourites; aspect/aspect-ratio; stop/standby; start/wake.
+Aspect modes also accept "Fit to screen" and "Fill screen".
 Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
 Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
@@ -155,6 +158,7 @@ COMMAND_ALIASES = {
     "prov": "provider", "provs": "providers",
     "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
     "previous": "prev", "shot": "screenshot",
+    "stop": "standby", "start": "wake",
     "aspect-ratio": "aspect",
     "fav": "favorites", "favs": "favorites", "favorite": "favorites",
     "favourite": "favorites", "favourites": "favorites",
@@ -2352,15 +2356,35 @@ def print_player_status(data, name):
         print(f"Local diagnostic help: {prefix} test list")
         return
     lifecycle = {
-        "reload_player": ("restart", "reload the player"),
-        "restart_stream": ("restart stream", "restart the current stream"),
+        "reload_player": ("restart", "reload the player (alias: restart player)"),
+        "restart_stream": ("restart stream", "restart only the current stream (alias: restart s)"),
         "restart_app": ("restart app", "relaunch the native app"),
-        "standby": ("standby", "enter standby"),
-        "wake": ("wake", "leave standby"),
+        "standby": ("stop", "stop playback and enter standby; stay connected (alias: standby)"),
+        "wake": ("start", "leave standby and start configured playback (alias: wake)"),
         "exit_app": ("exit", "exit the app"),
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("\nAvailable controls now:")
+    provider = data.get("provider")
+    provider_commands = isinstance(provider, str) and bool(provider.strip())
+    if provider_commands:
+        kiosk = data.get("kiosk")
+        kiosk_locked = isinstance(kiosk, dict) and kiosk.get("enabled") is True
+        print(f"  {prefix} providers  — list allowed providers (alias: provs)")
+        if not kiosk_locked:
+            print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
+            print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
+        if provider in ("m3u", "vportal"):
+            print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
+            if not kiosk_locked:
+                print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
+                print(f"    Example: {prefix} profile 1  — select the first profile listed by profiles")
+            if provider == "m3u" and data.get("channels") == 0:
+                print("    No channels loaded: check the active profile with profiles; selecting M3U alone does not choose a profile.")
+        if kiosk_locked:
+            print(f"    Provider/profile switching is locked by kiosk; run {prefix} kiosk off first.")
+        else:
+            print("    Provider/profile commands are checked against player settings and platform policy when run.")
     for operation, (command, description) in lifecycle.items():
         if operation in controls["lifecycle"]:
             print(f"  {prefix} {command}  — {description}")
@@ -2404,7 +2428,7 @@ def print_player_status(data, name):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
     if "set" in aspect.get("operations", []):
         print(f"  {prefix} aspect " + " / ".join(aspect["modes"]) + "  — request an aspect mode")
-    if (not any(controls[key] for key in ("lifecycle", "playback", "input"))
+    if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
             and shot.get("state") != "ready" and not queue and not libraries and not favorites and not aspect.get("operations")):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
@@ -3323,7 +3347,11 @@ def main(argv=None):
             print("Stream restart requested." if data["target"] == "stream" else
                   "Player reload accepted; waiting for the acknowledgement to reach the player.")
         elif action == "lifecycle":
-            print(f"Lifecycle request accepted: {data['operation']}; waiting for the acknowledgement to reach the player.")
+            if data["operation"] in ("standby", "wake"):
+                label = "Stop" if data["operation"] == "standby" else "Start"
+                print(f"{label} request accepted ({data['operation']}); waiting for the acknowledgement to reach the player.")
+            else:
+                print(f"Lifecycle request accepted: {data['operation']}; waiting for the acknowledgement to reach the player.")
         elif action == "input":
             print(f"Input request accepted: {data['key']}; waiting for the acknowledgement to reach the player.")
         elif action == "playback":
