@@ -107,3 +107,33 @@ Evaluate legacy HTTP applicability, warning policy and dynamic-analysis coverage
 
 Report new issues through [SECURITY.md](../SECURITY.md). An OpenSSF assessment
 records evidence and applicability; it is not a guarantee that a system is safe.
+
+## Scoped command operators
+
+Ordinary RPC and legacy command submitters can use separate credentials without
+receiving the administrator credential. Add `operators` to the private server
+configuration. Each entry has `id`, `credential_sha256` (the lowercase SHA-256
+hex digest of a randomly generated 32–256 character bearer), `device_ids`, and
+`actions`. IDs and digests must be unique; credentials must differ from device,
+administrator and diagnostic credentials. Configuration is applied on restart.
+
+Actions name the exact RPC, for example `status`, `profiles`, `settings_compare`
+or `profile_settings`. RPCs with sub-operations require the exact operation:
+`input.channel_up`, `playback.next_channel`, `aspect.get`, `favorites.list`,
+`kiosk.status`, `app_update.status` or `command.set_volume`. No wildcards or
+family-wide `input`/`command` grant is accepted. The supported allowlist is in
+`internal/config/operators.go`. A `provider_settings` grant permits its validated
+provider settings on the scoped device, so do not give it to a remote-button bridge.
+Legacy command submissions and commands nested in RPCs share `command.*` scopes.
+
+Operators can only read receipts they created and only while their device/action
+scope still permits them. They cannot list all devices, read admin debug data,
+poll device work, acknowledge work, pair devices, or access diagnostics. Explicit
+`input.*` grants permit those physical-button equivalents, including their UI
+navigation effects; they are not a read-only application permission.
+
+Use a separate private CLI credentials file containing `operator_token` rather
+than `admin_token`, and point the CLI's `server_config` at it. Resolve players
+through the CLI `players` map. Keep administrator and operator files separate:
+the operator cannot administer registrations. The existing administrator path and
+player local consent/parental/kiosk checks remain unchanged.

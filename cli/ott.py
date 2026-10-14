@@ -554,7 +554,9 @@ class Client:
         if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise Error("server must be an HTTP(S) address without credentials, query or fragment")
         self.credentials = read_json(config["server_config"])
-        self.token = self.credentials["admin_token"]
+        self.token = self.credentials.get("operator_token", self.credentials.get("admin_token"))
+        if not isinstance(self.token, str) or not self.token:
+            raise Error("Private credentials require operator_token or admin_token")
         # Never forward an administrator credential through an HTTP redirect.
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *args, **kwargs):

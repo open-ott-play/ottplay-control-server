@@ -32,6 +32,7 @@ type entry struct {
 	plexQueue         *plexQueueRequest
 	plexLibrary       *plexLibraryRequest
 	favorites         *favoritesRequest
+	owner, permission string
 	playbackOperation string
 	inspect           *inspectRequest
 	aspect            *aspectRequest
@@ -66,6 +67,7 @@ type Server struct {
 	diagnostics            *diagnosticsState
 	mu                     sync.Mutex
 	admin                  [32]byte
+	operators              []*commandOperator
 	devices                []*device
 	origins                map[string]bool
 	allowNull              bool
@@ -88,6 +90,7 @@ func New(c config.Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{started: time.Now(), admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now}
+	s.configureOperators(c.Operators)
 	var err error
 	s.diagnostics, err = newDiagnostics(c)
 	if err != nil {
@@ -316,19 +319,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admin, d := s.authenticate(r)
-	if !admin && d == nil {
+	operator := s.commandOperator(r)
+	if operator != nil {
+		r = withOperator(r, operator)
+	}
+	if !admin && d == nil && operator == nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ottplay-control"`)
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
 	requiresAdmin := path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
-	if requiresAdmin != admin {
+	operatorRoute := operator != nil && (path == "/api/requests" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
+	if (!operatorRoute && requiresAdmin != admin) || (operator != nil && !operatorRoute) {
 		failure(w, 403, "credential role is not allowed")
 		return
 	}
 	s.mu.Lock()
 	allowed := false
-	if admin {
+	if operator != nil {
+		allowed = operator.rate.allow(now, 240)
+	} else if admin {
 		allowed = s.adminRate.allow(now, 240)
 	} else {
 		allowed = d.rate.allow(now, 120)
@@ -356,7 +366,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400, "unsupported query parameters")
 		return
 	}
-	if admin {
+	if admin || operator != nil {
 		for _, candidate := range s.devices {
 			if candidate.id == q.Get("device_id") {
 				d = candidate
@@ -395,6 +405,11 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now 
 		failure(w, 400, err.Error())
 		return
 	}
+	permission := commandAction("command", m)
+	if !allowedCommand(r, d, permission) {
+		failure(w, 403, "command scope is not allowed")
+		return
+	}
 	var random [16]byte
 	if _, err = rand.Read(random[:]); err != nil {
 		failure(w, 503, "cannot create command identifier")
@@ -420,7 +435,7 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now 
 		return
 	}
 	s.lastTS = ts
-	d.queue = append(d.queue, entry{id: id, data: data, expires: expires})
+	d.queue = append(d.queue, entry{id: id, data: data, expires: expires, owner: requestOwner(r), permission: permission})
 	s.bytes += len(data)
 	s.mu.Unlock()
 	reply(w, 202, map[string]any{"status": "queued", "id": id, "ts": ts, "expires_at": float64(expires.UnixNano()) / 1e9})

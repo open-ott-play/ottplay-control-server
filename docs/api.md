@@ -942,3 +942,11 @@ All numeric metrics are finite, nonnegative and at most 9007199254740991.
 `systemUptimeMs` measures OS uptime. PSS, physical footprint and RSS are separate
 fields and cannot be compared as the same measurement. A snapshot contains no
 raw logs, error messages, URLs, filenames, stack traces, keys or DOM content.
+
+## Scoped ordinary command credentials
+
+`operators` optionally authorizes exact device/action pairs for ordinary RPC and
+legacy command submission. Composite RPCs require an operation-qualified action
+such as `playback.next_channel`, `input.channel_up` or `command.set_volume`.
+Operators read only their own permitted RPC receipts. See the [scoped command
+operator configuration](security-design.md#scoped-command-operators).

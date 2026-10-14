@@ -14,12 +14,13 @@ const maxResponseBytes = 2 * 1024 * 1024
 const maxResultBytes = 16 * 1024 * 1024
 
 type requestResult struct {
-	data        json.RawMessage
-	expires     time.Time
-	inspect     *inspectRequest
-	aspect      *aspectRequest
-	plexLibrary *plexLibraryRequest
-	favorites   *favoritesRequest
+	owner, permission string
+	data              json.RawMessage
+	expires           time.Time
+	inspect           *inspectRequest
+	aspect            *aspectRequest
+	plexLibrary       *plexLibraryRequest
+	favorites         *favoritesRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
@@ -44,6 +45,10 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 403, "device_id does not match credentials")
 		return
 	}
+	if o := operatorFor(r); o != nil && !o.devices[d.id] {
+		failure(w, 403, "device scope is not allowed")
+		return
+	}
 	if r.URL.Path == "/api/responses" || r.URL.Path == "/api/responses/" {
 		s.receiveResult(w, r, d)
 		return
@@ -57,12 +62,18 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		s.expire(now)
 		result, found := d.results[q.Get("id")]
 		pending := false
+		permitted := !found || ownResult(r, result.owner, result.permission)
 		for _, e := range d.queue {
 			if e.rpc && e.id == q.Get("id") {
 				pending = true
+				permitted = ownResult(r, e.owner, e.permission)
 			}
 		}
 		s.mu.Unlock()
+		if !permitted {
+			failure(w, 403, "request scope is not allowed")
+			return
+		}
 		if found {
 			// The envelope was already validated and bounded on receipt. Encoding
 			// it again expands HTML characters and can exceed the same wire limit.
@@ -183,6 +194,11 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 400, "invalid request action or parameters")
 		return
 	}
+	permission := commandAction(action, params)
+	if !allowedCommand(r, d, permission) {
+		failure(w, 403, "command scope is not allowed")
+		return
+	}
 	var random [16]byte
 	if _, err = rand.Read(random[:]); err != nil {
 		failure(w, 503, "cannot create request identifier")
@@ -201,7 +217,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 429, "request queue is full")
 		return
 	}
-	e := entry{id: id, data: data, expires: expires, rpc: true}
+	e := entry{id: id, data: data, expires: expires, rpc: true, owner: requestOwner(r), permission: permission}
 	if action == "screenshot" {
 		_ = json.Unmarshal(params["runtime"], &e.screenshotRuntime)
 	}
@@ -403,7 +419,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])
