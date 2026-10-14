@@ -118,39 +118,44 @@ class KioskTest(unittest.TestCase):
         for provider, name in [('plex', 'Plex'), ('vportal', 'VPortal')]:
             for machine in [False, True]:
                 with self.subTest(provider=provider, machine=machine):
-                    data = {'enabled':True, 'state':'locked', 'channel':None, 'provider':provider,
-                            'retry_seconds':10, 'retries':0, 'health':'waiting', 'strict':True,
+                    data = {'enabled':True, 'state':'locked', 'retry_seconds':10, 'retries':0,
+                            'health':'waiting', 'channel':None, 'provider':provider,
                             'media':{'title':'Episode', 'index':0, 'total':2},
-                            'screen_suspended':True, 'startup_grace_seconds':60}
+                            'strict':True, 'screen_suspended':True, 'startup_grace_seconds':60}
                     client = mock.Mock(timeout=45)
                     client.device.return_value = 'dev_tv'
                     client.call.return_value = data
-                    output = io.StringIO()
+                    output, errors = io.StringIO(), io.StringIO()
                     with mock.patch.object(ott, 'Client', return_value=client), \
                             mock.patch.object(ott, 'read_json', return_value={}), \
-                            contextlib.redirect_stdout(output):
+                            contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
                         code = ott.main((['--json'] if machine else []) + ['tv', 'kiosk', 'status'])
-                    self.assertEqual(code, 0)
                     client.call.assert_called_once_with('dev_tv', 'kiosk', {'mode':'status'})
                     if machine:
-                        self.assertEqual(json.loads(output.getvalue()), data)
+                        expected = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
                     else:
-                        self.assertIn('Kiosk ' + name + ': Episode', output.getvalue())
-                        self.assertIn('suspended while the screen is off or the app is in the background', output.getvalue())
+                        expected = (
+                            'Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.\n'
+                            f'Kiosk {name}: Episode | 1/2 | waiting | retries: 0\n'
+                            'Kiosk playback is suspended while the screen is off or the app is in the background.\n'
+                        )
+                    self.assertEqual((code, output.getvalue(), errors.getvalue()), (0, expected, ''))
 
     def test_strict_waiting_does_not_claim_controls_are_already_locked(self):
         client = mock.Mock(timeout=45)
         client.device.return_value = 'dev_tv'
         client.call.return_value = {'enabled':True, 'state':'waiting', 'channel':None, 'provider':'m3u',
                                     'retry_seconds':10, 'retries':0, 'health':'waiting', 'strict':True}
-        output = io.StringIO()
+        output, errors = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'Client', return_value=client), \
                 mock.patch.object(ott, 'read_json', return_value={}), \
-                contextlib.redirect_stdout(output):
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             code = ott.main(['tv', 'kiosk', 'on', '--strict'])
-        self.assertEqual(code, 0)
-        self.assertIn('Strict kiosk is armed', output.getvalue())
-        self.assertNotIn('local controls locked', output.getvalue())
+        client.call.assert_called_once_with('dev_tv', 'kiosk', {'mode':'on', 'strict':True})
+        self.assertEqual((code, output.getvalue(), errors.getvalue()), (0, (
+            'Strict kiosk is armed; local controls lock after the first channel selection.\n'
+            'Kiosk mode enabled; waiting for the first channel selection in the player.\n'
+        ), ''))
 
 if __name__=='__main__':
     unittest.main()
