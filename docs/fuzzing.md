@@ -1,5 +1,7 @@
 # Release-candidate fuzzing
 
+> **Local packaging:** `python3 scripts/release.py package` is unsupported in this repository because no shell packaging adapter is installed. Use the [project commands below](#local-release-packaging); the generic example in `release-workflow.md` does not apply here.
+
 Native Go fuzzing covers result binding and Android-agent input parsing with
 synthetic data. The targets never start the server, contact a player, run ADB,
 install an APK, execute an operation, or mutate a device queue.
@@ -79,3 +81,27 @@ deterministic, with no network or physical device operations. Update the manifes
 and this document together. See [Go's fuzzing guide](https://go.dev/doc/security/fuzz/)
 for corpus format and minimization. Passing these campaigns is additional test
 evidence, not proof that every possible input is safe or hardware acceptance.
+
+## Local release packaging
+
+Use Python 3.12+ and the Go version declared by `go.mod` from the repository root:
+
+```sh
+go mod download
+python3 scripts/build.py linux-amd64
+```
+
+This builds and packages the selected portable server target under `dist/`. Select another target supported by `scripts/build.py` when needed. The complete release matrix, OCI archive and deployment-resource receipts are assembled by `.github/workflows/release-build.yml`; the one-target command does not publish or deploy them. Use a clean disposable checkout and a new output directory.
+
+To reproduce an already allocated beta or RC, first check out the exact source
+commit from its published `release-manifest.json`, restore that manifest's
+`version_plan` object as `.release-plan.json`, and apply its version overlay:
+
+```sh
+python3 scripts/version_plan.py sync --root . --plan .release-plan.json
+```
+
+Then run the project commands above. Keep the source, plan and channel together;
+do not invent a release sequence or edit version fields by hand. Local packaging
+does not create a qualified release: the hosted pipeline still verifies the full
+build inventory, provenance and, for an RC, its own isolated fuzz report.
