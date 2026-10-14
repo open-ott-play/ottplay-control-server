@@ -81,7 +81,10 @@ or `libfuzzer`), argument-array `command`, and `seconds` (1–120). Optional `cw
 is relative to the repository. Optional `corpus` names a committed seed directory;
 the runner copies it before mutation. Go uses its native `testdata/fuzz` corpus.
 The total mutation budget is at most 600 seconds across at most 12 targets.
-`go-version-file` is optional, Go-only and relative to the repository.
+`go-version-file` is optional, Go-only and relative to the repository. For a
+Go target launched through a build adapter, declare the module file and use the
+selected `go` on `PATH`; generated-corpus discovery queries `go env GOCACHE` in
+that module directory, not the adapter executable.
 
 ## Deterministic checks before mutation
 
@@ -116,7 +119,9 @@ evidence runs the check; documentation-only unrelated changes can skip it.
 Optional top-level `preflight` is a list of reviewed deterministic command argv
 arrays, for example `[["node", "--test", "fuzz/parser.test.mjs"]]`. Each command
 has a 90-second cap and the whole preflight, including Python dependency setup,
-has a four-minute cap. Native targets do not repeat their build setup in ordinary
+has a four-minute cap. The enclosing Python configuration job has a ten-minute
+cap to preserve time for checkout, existing contracts and failure diagnostics.
+Native targets do not repeat their build setup in ordinary
 CI: keep fixed-seed regression tests in their existing language test job. Explicit
 preflight commands also run in the isolated RC environment after its build.
 
