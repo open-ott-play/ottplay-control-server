@@ -67,6 +67,10 @@ func (a *Agent) execute(ctx context.Context, r Request) (Result, func() error) {
 		return reject()
 	}
 	op := stringParam(p, "operation")
+	if a.bundleRecoveryFailed && r.Action != "capabilities" &&
+		!(r.Action == "maintenance" && (op == "health" || op == "logs" || op == "update")) {
+		return rejected(r.ID, "Bundle recovery pending; only inspection and signed agent repair are available"), nil
+	}
 	switch r.Action {
 	case "capabilities":
 		if len(p) == 0 {
@@ -261,6 +265,9 @@ func (a *Agent) health(ctx context.Context) map[string]any {
 		h["player"] = p
 	}
 	h["system_evidence"] = systemEvidence(ctx, pid)
+	updates := updateStatus(ctx)
+	updates["recovery_failed"] = a.bundleRecoveryFailed
+	h["updates"] = updates
 	if after, _ := appPID(); after != pid {
 		h["system_evidence"] = map[string]any{"surface": unavailableEvidence("process_changed"), "audio": unavailableEvidence("process_changed")}
 	}
