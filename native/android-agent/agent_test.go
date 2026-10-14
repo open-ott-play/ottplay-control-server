@@ -34,6 +34,14 @@ func TestSignedUpdate(t *testing.T) {
 	if _, e := verifyUpdate(raw, digest(raw), pk); e != nil {
 		t.Fatal(e)
 	}
+	for _, kind := range []string{"apk", "bundle"} {
+		candidate := m
+		candidate.Kind = kind
+		signed := wrap(candidate)
+		if got, err := verifyUpdate(signed, digest(signed), pk); err != nil || got.Kind != kind {
+			t.Fatalf("signed %s manifest rejected: %v", kind, err)
+		}
+	}
 	for _, mutate := range []func(*Update){func(u *Update) { u.URL = "http://example.test" }, func(u *Update) { u.URL = "https://user:pass@example.test/a" }, func(u *Update) { u.Kind = "shell" }, func(u *Update) { u.Package = "another.app" }, func(u *Update) { u.Size = 65 * 1024 * 1024 }} {
 		bad := m
 		mutate(&bad)
@@ -110,6 +118,63 @@ func TestExpiredRequestsAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestBundleRecoveryFencesPlayerAndWatchdog(t *testing.T) {
+	a := &Agent{bundleRecoveryFailed: true}
+	for _, request := range []Request{
+		{Action: "lifecycle", Params: json.RawMessage(`{"operation":"restart_app"}`)},
+		{Action: "maintenance", Params: json.RawMessage(`{"operation":"recover_video"}`)},
+		{Action: "playback", Params: json.RawMessage(`{"operation":"resume"}`)},
+		{Action: "vportal_queue", Params: json.RawMessage(`{"operation":"next"}`)},
+	} {
+		result, effect := a.execute(context.Background(), request)
+		if result.Status != "rejected" || effect != nil {
+			t.Fatal("unsafe effect admitted during bundle recovery")
+		}
+	}
+	result, effect := a.execute(context.Background(), Request{Action: "maintenance", Params: json.RawMessage(`{"operation":"logs"}`)})
+	if result.Status != "ok" || effect != nil {
+		t.Fatal("independent diagnostics unavailable during recovery")
+	}
+	a.watchWithPlayer(context.Background(), func(context.Context, string, any) (map[string]any, error) {
+		t.Fatal("watchdog contacted potentially inconsistent player")
+		return nil, nil
+	})
+}
+
+func TestBundleRecoveryAllowsOnlySignedAgentRepair(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	kind := "bundle"
+	payloadRequests := 0
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/payload" {
+			payloadRequests++
+			w.Write([]byte("invalid ELF"))
+			return
+		}
+		manifest, _ := json.Marshal(Update{1, kind, "0.1.2", packageName, server.URL + "/payload", digest([]byte("invalid ELF")), 11})
+		envelope, _ := json.Marshal(map[string]string{"payload": base64.StdEncoding.EncodeToString(manifest), "signature": base64.StdEncoding.EncodeToString(ed25519.Sign(key, manifest))})
+		w.Write(envelope)
+	}))
+	defer server.Close()
+	a := &Agent{bundleRecoveryFailed: true, client: server.Client(), cfg: Config{UpdatePublicKey: base64.StdEncoding.EncodeToString(pub)}}
+	for _, candidate := range []string{"bundle", "apk", "agent"} {
+		kind = candidate
+		manifest, _ := json.Marshal(Update{1, kind, "0.1.2", packageName, server.URL + "/payload", digest([]byte("invalid ELF")), 11})
+		envelope, _ := json.Marshal(map[string]string{"payload": base64.StdEncoding.EncodeToString(manifest), "signature": base64.StdEncoding.EncodeToString(ed25519.Sign(key, manifest))})
+		_, err := a.prepareUpdate(context.Background(), strings.Repeat("a", 32), server.URL+"/manifest", digest(envelope))
+		if err == nil {
+			t.Fatal("invalid update admitted")
+		}
+		if candidate != "agent" && payloadRequests != 0 {
+			t.Fatal("non-repair payload fetched during pending recovery")
+		}
+	}
+	if payloadRequests != 1 {
+		t.Fatal("signed agent repair was blocked before payload verification")
+	}
+}
 func TestWatchdog(t *testing.T) {
 	now := time.Now()
 	w := Watchdog{Progress: now, LastAction: now}
@@ -126,6 +191,64 @@ func TestWatchdog(t *testing.T) {
 	}
 	if w.observe(now.Add(364*time.Second), nil, false, false) != "restart_app" {
 		t.Fatal("no unresponsive app escalation")
+	}
+}
+func TestWatchdogNewlyObservedLockGetsFullGrace(t *testing.T) {
+	now := time.Now()
+	w := Watchdog{Progress: now.Add(-10 * time.Minute), LastAction: now.Add(-10 * time.Minute)}
+	p := map[string]any{"kiosk": map[string]any{"enabled": true, "state": "locked"}, "video": map[string]any{"source": "a", "position": float64(0)}}
+	for _, offset := range []time.Duration{0, 119 * time.Second} {
+		if action := w.observe(now.Add(offset), p, true, false); action != "" {
+			t.Fatalf("recovery before 120 seconds of an observed lock: %q", action)
+		}
+	}
+	if action := w.observe(now.Add(120*time.Second), p, true, false); action != "recover" {
+		t.Fatalf("expected recovery after the full grace, got %q", action)
+	}
+
+	// A new lock is a new observation period, even if no replies arrived
+	// between disabling kiosk and enabling it again.
+	off := map[string]any{"kiosk": map[string]any{"enabled": false, "state": "off"}}
+	w.observe(now.Add(121*time.Second), off, true, false)
+	if action := w.observe(now.Add(10*time.Minute), p, true, false); action != "" {
+		t.Fatalf("re-enabled kiosk inherited a stale progress deadline: %q", action)
+	}
+}
+func TestWatchdogRecoveryHasIndependentDeadline(t *testing.T) {
+	now := time.Now()
+	a := Agent{watchdog: Watchdog{
+		Enabled: true, Source: "a", Position: 0,
+		Progress: now.Add(-3 * time.Minute), LastAction: now.Add(-3 * time.Minute),
+	}}
+	var healthContext context.Context
+	var calls []string
+	parent, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	a.watchWithPlayer(parent, func(ctx context.Context, action string, _ any) (map[string]any, error) {
+		calls = append(calls, action)
+		if action == "health" {
+			healthContext = ctx
+			return map[string]any{"kiosk": map[string]any{"enabled": true, "state": "locked"},
+				"video": map[string]any{"source": "a", "position": float64(0)}}, nil
+		}
+		if action != "recover" {
+			t.Fatalf("unexpected player action %q", action)
+		}
+		if healthContext.Err() != context.Canceled {
+			t.Fatal("health context remains active during recovery")
+		}
+		deadline, ok := ctx.Deadline()
+		if ctx.Err() != nil || !ok || time.Until(deadline) < 6*time.Second {
+			t.Fatal("recovery inherited an exhausted or missing health deadline")
+		}
+		cancel()
+		if ctx.Err() != context.Canceled {
+			t.Fatal("recovery detached from parent cancellation")
+		}
+		return nil, nil
+	})
+	if strings.Join(calls, ",") != "health,recover" || a.watchdog.Attempts != 1 {
+		t.Fatalf("expected one bounded health/recovery attempt, got %v (%d)", calls, a.watchdog.Attempts)
 	}
 }
 func TestScreenshotPreservesAspectAndBounds(t *testing.T) {

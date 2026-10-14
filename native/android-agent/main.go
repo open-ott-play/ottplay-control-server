@@ -42,21 +42,22 @@ type Entry struct {
 	State   string `json:"state"`
 }
 type Agent struct {
-	serverTime    float64
-	cfg           Config
-	client        *http.Client
-	runtime       string
-	bootID        string
-	journal       map[string]Entry
-	journalPath   string
-	effects       map[string]func() error
-	cdp           *CDP
-	logs          []map[string]any
-	watchdog      Watchdog
-	suspended     bool
-	lastOperation map[string]any
-	operations    []OperationReceipt
-	historyReset  bool
+	serverTime           float64
+	cfg                  Config
+	client               *http.Client
+	runtime              string
+	bootID               string
+	journal              map[string]Entry
+	journalPath          string
+	effects              map[string]func() error
+	cdp                  *CDP
+	logs                 []map[string]any
+	watchdog             Watchdog
+	suspended            bool
+	lastOperation        map[string]any
+	operations           []OperationReceipt
+	historyReset         bool
+	bundleRecoveryFailed bool
 }
 
 func newHTTPClient() *http.Client {
@@ -371,5 +372,11 @@ func main() {
 	a.watchdog.LastAction = time.Now()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+	// Keep independent maintenance online if recovery fails. App mutations
+	// remain fenced until a repaired, signed agent can recover the pair.
+	if e = a.recoverBundleUpdate(ctx); e != nil {
+		a.bundleRecoveryFailed = true
+		a.event("bundle_recovery_failed")
+	}
 	a.run(ctx)
 }
