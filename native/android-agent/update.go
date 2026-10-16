@@ -65,7 +65,7 @@ func verifyUpdate(raw []byte, want, key string) (Update, error) {
 	if e = d.Decode(&u); e != nil {
 		return u, e
 	}
-	if u.Schema != 1 || (u.Kind != "agent" && u.Kind != "apk") || !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(u.Version) || u.Package != packageName || !httpsURL(u.URL) || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(u.SHA256) || u.Size < 1 || u.Size > 64*1024*1024 {
+	if u.Schema != 1 || (u.Kind != "agent" && u.Kind != "apk" && u.Kind != "bundle") || !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(u.Version) || u.Package != packageName || !httpsURL(u.URL) || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(u.SHA256) || u.Size < 1 || u.Size > 64*1024*1024 {
 		return u, errors.New("unsupported manifest")
 	}
 	return u, nil
@@ -113,12 +113,30 @@ func (a *Agent) prepareUpdate(ctx context.Context, id, address, digest string) (
 	if e != nil {
 		return nil, e
 	}
+	if a.bundleRecoveryFailed && u.Kind != "agent" {
+		return nil, errors.New("bundle recovery pending; signed agent repair required")
+	}
 	payload, e := a.download(ctx, u.URL, u.Size)
 	if e != nil {
 		return nil, e
 	}
 	if int64(len(payload)) != u.Size || !digestOK(payload, u.SHA256) {
 		return nil, errors.New("invalid payload digest")
+	}
+	if u.Kind == "bundle" {
+		effect, err := a.prepareBundleUpdate(ctx, payload)
+		if err != nil {
+			return nil, err
+		}
+		return func() error {
+			err := effect()
+			state, stateErr := (bundleUpdater{bundleDirectory, androidBundleOps{a}}).readState()
+			a.bundleRecoveryFailed = stateErr != nil || state != nil && state.State == "pending"
+			if a.bundleRecoveryFailed {
+				a.event("bundle_recovery_failed")
+			}
+			return err
+		}, nil
 	}
 	if u.Kind == "agent" {
 		if len(payload) < 20 || string(payload[:4]) != "\x7fELF" || payload[4] != 1 || payload[5] != 1 || payload[18] != 40 || payload[19] != 0 {
@@ -129,6 +147,9 @@ func (a *Agent) prepareUpdate(ctx context.Context, id, address, digest string) (
 		pkg, err := apkPackage(payload)
 		if err != nil || pkg != packageName {
 			return nil, errors.New("wrong APK package")
+		}
+		if err = apkOnlyPreflight(ctx, payload); err != nil {
+			return nil, err
 		}
 	}
 	// A unique, root-private stage prevents a subsequent request from replacing
@@ -142,6 +163,9 @@ func (a *Agent) prepareUpdate(ctx context.Context, id, address, digest string) (
 		if u.Kind == "apk" {
 			child, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
+			if e = apkOnlyPreflight(child, payload); e != nil {
+				return e
+			}
 			out, e := runCommand(child, "/system/bin/pm", "install", "-r", stage)
 			success := false
 			for _, line := range strings.Split(string(out), "\n") {

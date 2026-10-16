@@ -106,6 +106,10 @@ selection metadata, `retry_seconds`, retry count and observed health; they do
 not expose media URLs. A stored-policy receipt does not verify visible playback
 or Android system-exit protection. See [kiosk mode](cli.md#kiosk-mode) for
 source changes, recovery timing, version requirements and native-wrapper limits.
+Newer players may include `startup_grace_seconds: 60` for a media queue and
+boolean `screen_suspended` for intentional screen-off/background suspension;
+older players may omit them. `strict: true` with `state: waiting` arms strict control locking
+for the first channel selection, rather than declaring an already locked UI.
 
 `provider_settings` accepts provider IDs `m3u`, `xtream`, `stalker`, `ottclub`
 and `plex`. The controller requires exactly `provider` and an object-valued
@@ -774,6 +778,45 @@ does not route requests to runtime instances. `maintenance` accepts exactly
 `{operation: update, manifest: HTTPS_URL, sha256: HEX_SHA256}`. The latter is only
 an envelope; the agent independently verifies a pinned Ed25519 signature and the
 payload digest before execution. There is no remote shell/JavaScript operation.
+
+The manifest URL and payload URL must be HTTPS endpoints that return file bytes
+with status 200 without a redirect. The request's `sha256` pins the exact signed
+envelope bytes. The envelope contains exactly `payload` and `signature`, both
+strict base64; the Ed25519 signature covers the decoded UTF-8 manifest bytes.
+The schema-1 manifest has exactly `schema`, `kind`, `version`, `package`, `url`,
+`sha256`, and `size`. The package is `play.ott.kitkat`; payloads are bounded to
+64 MiB; standalone APKs in the 0.1.2 agent are limited to 60 MiB. Existing
+agents accept `agent` (raw ARM ELF) and `apk` (wrapper APK). The 0.1.2 APK-only
+path requires an enabled, foreground OTT app and a candidate embedded helper
+identical to the installed system helper; changed helpers require a bundle.
+The 0.1.2 agent additionally accepts `bundle`, a ZIP with exactly `app.apk`
+and `ott-touch-guard`; the helper must match the APK's embedded helper bytes.
+There are no caller-supplied installation paths or commands. Bundle installation
+requires an enabled, foreground, responsive OTT app and a compatible existing
+APK/helper pair. An older agent must first receive an ordinary agent update.
+See the [native update contract](../native/android-agent/README.md#signed-updates-over-wi-fi)
+for component compatibility, coordinated updates and rollout order.
+
+An update response with `accepted`/`completion: inspect_status` records
+admission, not successful installation. Self-replacement may interrupt operation
+completion recording. Read the operation history and fresh native health/version
+evidence before deciding the outcome; do not blindly resend an uncertain update.
+The signed version label alone is not evidence of the running binary's version.
+The controller does not download, sign or install these artifacts, and upgrading
+the controller does not upgrade an already installed agent.
+
+Native health from the 0.1.2 agent optionally includes `updates` with schema
+`version: 1` and `agent`, `apk`, `touch_guard` objects. Each has `state:
+ready|unavailable`; ready components include fresh lowercase `sha256` evidence.
+`agent.version` is the running agent version. The APK object fixes `package` to
+`play.ott.kitkat` and, when readable, adds `version_name`, positive integer
+`version_code` and `app_state: enabled|disabled|unavailable`. Unavailable evidence
+uses a bounded `reason` and must not be interpreted as absence or successful
+rollback. This metadata contains no filesystem paths, binaries or package dumps.
+`updates.bundle_state` is `absent|pending|committed|rolled_back|unavailable`.
+Boolean `updates.recovery_failed` reports a failed automatic pair recovery.
+When true, capabilities, health/log reads and a signed agent-only repair update
+remain available; app mutations, APK/bundle updates and the watchdog are blocked.
 
 `vportal_queue` accepts `{operation: play, ids: [POSITIVE_SAFE_INTEGER,...],
 loop: BOOLEAN}` with 1–100 unique IDs, or `{operation:

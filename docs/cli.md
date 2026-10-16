@@ -78,8 +78,10 @@ It contains all seven CLI modules, including the local `resolve` command,
 commands. Update the controller and player too; confirm support with
 `ott PLAYER caps`.
 
-This is the **0.1.1 development line**, not a claim that a stable 0.1.1 binary
-release has shipped. Stable CLI v0.1.0 lacks `resolve`, workbench and offline
+This is a reviewed revision from the **0.1.1 development line**. Stable v0.1.1
+has since been published; the pinned revision above is retained as an exact
+installation example, not a moving latest version. It does not include later
+0.1.2 changes. Stable CLI v0.1.0 lacks `resolve`, workbench and offline
 verification. A server's `version` output, the repository's `VERSION` file and
 a player's reported version identify different components; none substitutes for
 checking this CLI checkout's commit. Follow the
@@ -2008,6 +2010,8 @@ with no TV lock it waits for the first UI selection. `kiosk set CHANNEL` preserv
 strictness, or add `--strict` to upgrade during replacement. `kiosk off` releases
 the lock remotely. The policy, including strictness, survives reloads. Old players
 that omit or ignore the strict flag cannot produce a successful strict CLI receipt.
+While `state` is `waiting`, strict input blocking is only armed: channel
+selection in the player remains available until that selection establishes the lock.
 
 For the standalone VPortal provider, select the configured profile, then run
 `ott tv vp "tom and jerry"` followed by `ott tv kiosk on --strict`. This locks the
@@ -2064,6 +2068,12 @@ the queue; ordinary remote playback commands remain subject to the kiosk lock.
 policy was stored and any requested launch attempted, not that visible playback
 was verified. Delivery and uncertain-result handling match the other CLI requests;
 do not repeat an uncertain mutation blindly. Inspect `kiosk status` first.
+On players that report them, `--json` also retains `startup_grace_seconds: 60`
+for media queues and `screen_suspended`. A true `screen_suspended` means the
+player intentionally suspended locked playback while the device screen is off
+or the app is in the background. The ordinary text status explains this instead
+of leaving only `health: waiting`.
+Absence of these optional fields on older players does not establish their state.
 
 Direct API example, submitted to the existing authenticated `/api/requests`
 route for the selected device:
@@ -2290,6 +2300,64 @@ are unavailable until that installation and binding have succeeded. A published
 server/CLI does not install the agent. Native restart/capture work independently
 of the WebView; queue/playback commands need a responsive trusted player page.
 See [installation, acceptance and signed updates](../native/android-agent/README.md).
+
+### Signed KitKat updates over Wi-Fi
+
+Once the separate native agent and its trusted update key have been installed,
+use its existing connection to update the agent or `play.ott.kitkat` wrapper:
+
+```sh
+ott a1 android status
+ott --receipt a1 android update https://updates.example/immutable-release/signed.json ENVELOPE_SHA256
+ott a1 android status
+ott a1 android operation REQUEST_ID
+```
+
+`ENVELOPE_SHA256` is the digest of the exact signed JSON bytes, not the APK or
+agent digest. The signed manifest separately contains the payload digest and
+size. Both HTTPS URLs must return the files directly; redirects are refused.
+Use the already trusted signing key and preserve the existing APK signing
+identity. The [native update guide](../native/android-agent/README.md#signed-updates-over-wi-fi)
+describes packaging, host verification, compatibility and rollback limits.
+The 0.1.2 source includes `native/android-agent/prepare_update.py` to prepare a
+signed delivery and verify both published files without sending device commands.
+
+`accepted` confirms admission, not installation. Keep the request ID from
+`--receipt`, read its outcome without replaying it, and compare fresh native
+status with the expected installed version and artifact evidence. Confirm
+an intentionally running player reconnects and retains its kiosk/queue state.
+For an agent-only update, preserve an intentionally disabled wrapper and any
+other selected HOME app instead of starting playback for verification. A self-update can
+leave an `unknown` operation receipt even if the replacement is running.
+Do not repeat an uncertain update automatically.
+
+With the 0.1.2 agent, `ott --json a1 android status` includes `updates.agent`,
+`updates.apk` and `updates.touch_guard`. Compare their fresh `sha256` values to
+the prepared payloads, along with the agent `version`, APK `version_name` and
+`version_code`. `updates.apk.app_state` distinguishes an enabled from an
+intentionally disabled package. `state: unavailable` means no usable evidence
+was collected, not that the component is missing or still at the old version;
+older agents can omit the entire `updates` section.
+
+`updates.bundle_state` reports `absent`, `pending`, `committed`, `rolled_back`
+or `unavailable`. With `updates.recovery_failed: true`, automatic pair recovery
+has failed: health/log inspection and a signed agent-only repair remain
+available, while app mutations, APK/bundle updates and the watchdog are blocked.
+The saved transaction must be repaired, not deleted to bypass the restriction.
+
+No USB or functioning WebView is required for an already provisioned agent to
+receive an agent-only update. Network loss, a hung kernel or a failed native agent can
+still require local recovery. An APK-only update does not replace the system
+touch helper: the new APK's embedded helper must match it exactly, and the app
+must be enabled and in the foreground. It has no automatic pair rollback.
+The 0.1.2 agent adds a signed `bundle` containing the matching
+APK/helper pair. Unlike an agent-only update, that transaction requires an
+enabled, foreground, responsive player and refuses an intentionally disabled
+app. Update older agents first, then follow the
+[bundle compatibility and rollback procedure](../native/android-agent/README.md#coordinated-wrapper-and-helper-updates).
+The hosted web player, controller and CLI are separate deliveries;
+follow [the release and rollout sequence](../native/android-agent/README.md#release-and-rollout).
+This root-agent path is distinct from the interactive Capacitor installer below.
 
 ### Native operation lookup
 

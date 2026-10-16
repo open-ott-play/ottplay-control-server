@@ -94,5 +94,68 @@ class KioskTest(unittest.TestCase):
         with self.assertRaises(ott.Error):
             ott.kiosk_metadata(off,'on')
 
+    def test_optional_recovery_metadata_is_validated_and_preserved(self):
+        data = {'enabled':True, 'state':'locked', 'channel':None, 'provider':'plex',
+                'retry_seconds':10, 'retries':0, 'health':'waiting',
+                'media':{'title':'Episode', 'index':0, 'total':2},
+                'screen_suspended':True, 'startup_grace_seconds':60}
+        self.assertEqual(ott.kiosk_metadata(data, 'status'), data)
+        for patch in [{'screen_suspended':1}, {'screen_suspended':'true'},
+                      {'startup_grace_seconds':True}, {'startup_grace_seconds':10},
+                      {'startup_grace_seconds':'60'}]:
+            with self.subTest(patch=patch), self.assertRaises(ott.Error):
+                ott.kiosk_metadata({**data, **patch}, 'status')
+        waiting = {**data, 'state':'waiting', 'media':None}
+        with self.assertRaises(ott.Error):
+            ott.kiosk_metadata(waiting, 'status')
+        waiting.pop('startup_grace_seconds')
+        with self.assertRaises(ott.Error):
+            ott.kiosk_metadata(waiting, 'status')
+        waiting['screen_suspended'] = False
+        self.assertFalse(ott.kiosk_metadata(waiting, 'status')['screen_suspended'])
+
+    def test_status_identifies_media_provider_and_screen_suspension(self):
+        for provider, name in [('plex', 'Plex'), ('vportal', 'VPortal')]:
+            for machine in [False, True]:
+                with self.subTest(provider=provider, machine=machine):
+                    data = {'enabled':True, 'state':'locked', 'retry_seconds':10, 'retries':0,
+                            'health':'waiting', 'channel':None, 'provider':provider,
+                            'media':{'title':'Episode', 'index':0, 'total':2},
+                            'strict':True, 'screen_suspended':True, 'startup_grace_seconds':60}
+                    client = mock.Mock(timeout=45)
+                    client.device.return_value = 'dev_tv'
+                    client.call.return_value = data
+                    output, errors = io.StringIO(), io.StringIO()
+                    with mock.patch.object(ott, 'Client', return_value=client), \
+                            mock.patch.object(ott, 'read_json', return_value={}), \
+                            contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                        code = ott.main((['--json'] if machine else []) + ['tv', 'kiosk', 'status'])
+                    client.call.assert_called_once_with('dev_tv', 'kiosk', {'mode':'status'})
+                    if machine:
+                        expected = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
+                    else:
+                        expected = (
+                            'Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.\n'
+                            f'Kiosk {name}: Episode | 1/2 | waiting | retries: 0\n'
+                            'Kiosk playback is suspended while the screen is off or the app is in the background.\n'
+                        )
+                    self.assertEqual((code, output.getvalue(), errors.getvalue()), (0, expected, ''))
+
+    def test_strict_waiting_does_not_claim_controls_are_already_locked(self):
+        client = mock.Mock(timeout=45)
+        client.device.return_value = 'dev_tv'
+        client.call.return_value = {'enabled':True, 'state':'waiting', 'channel':None, 'provider':'m3u',
+                                    'retry_seconds':10, 'retries':0, 'health':'waiting', 'strict':True}
+        output, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(ott, 'Client', return_value=client), \
+                mock.patch.object(ott, 'read_json', return_value={}), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = ott.main(['tv', 'kiosk', 'on', '--strict'])
+        client.call.assert_called_once_with('dev_tv', 'kiosk', {'mode':'on', 'strict':True})
+        self.assertEqual((code, output.getvalue(), errors.getvalue()), (0, (
+            'Strict kiosk is armed; local controls lock after the first channel selection.\n'
+            'Kiosk mode enabled; waiting for the first channel selection in the player.\n'
+        ), ''))
+
 if __name__=='__main__':
     unittest.main()

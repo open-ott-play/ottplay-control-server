@@ -85,6 +85,51 @@ class AndroidCLI(unittest.TestCase):
         c.call.assert_not_called()
 
 class NativeEvidenceCLI(unittest.TestCase):
+    def test_installed_update_evidence_is_complete_and_private(self):
+        updates = {'version': 1, 'bundle_state': 'absent', 'recovery_failed': False,
+                   'agent': {'state': 'ready', 'version': '0.1.2-beta.1', 'sha256': 'a'*64},
+                   'apk': {'state': 'ready', 'package': 'play.ott.kitkat', 'version_name': '0.9',
+                           'version_code': 9, 'sha256': 'b'*64, 'app_state': 'disabled'},
+                   'touch_guard': {'state': 'ready', 'sha256': 'c'*64}}
+        health = {'version': 1, 'agent_version': '0.1.2-beta.1', 'runtime': 'native',
+                  'webview_responsive': False, 'updates': copy.deepcopy(updates)}
+        for row in health['updates'].values():
+            if isinstance(row, dict): row['path'] = '/private/never-export'
+        result = ott.android_metadata(health, 'maintenance', {'operation': 'health'})
+        self.assertEqual(result['updates'], updates)
+        self.assertNotIn('private', json.dumps(result))
+        for component, field, bad in [('agent', 'version', 'different'), ('agent', 'sha256', 'A'*64),
+                                     ('apk', 'version_code', True), ('apk', 'version_code', 0),
+                                     ('apk', 'package', 'home.plan.panel'), ('apk', 'app_state', 'active'),
+                                     ('apk', 'version_name', 'https://private'),
+                                     ('touch_guard', 'sha256', None)]:
+            with self.subTest(component=component, field=field):
+                changed = copy.deepcopy(health)
+                changed['updates'][component][field] = bad
+                with self.assertRaises(ott.Error):
+                    ott.android_metadata(changed, 'maintenance', {'operation': 'health'})
+        for component in ('agent', 'apk', 'touch_guard'):
+            changed = copy.deepcopy(health)
+            changed['updates'].pop(component)
+            with self.assertRaises(ott.Error):
+                ott.android_metadata(changed, 'maintenance', {'operation': 'health'})
+
+    def test_unavailable_update_evidence_cannot_claim_installed_hash(self):
+        health = {'version': 1, 'agent_version': '0.1.2', 'runtime': 'native',
+                  'webview_responsive': False,
+                  'updates': {'version': 1,
+                              'agent': {'state': 'unavailable', 'version': '0.1.2', 'reason': 'file_unavailable'},
+                              'apk': {'state': 'unavailable', 'package': 'play.ott.kitkat', 'reason': 'package_changed'},
+                              'touch_guard': {'state': 'unavailable', 'reason': 'file_unavailable'}}}
+        self.assertEqual(ott.android_metadata(health, 'maintenance', {'operation': 'health'})['updates'], health['updates'])
+        for component in ('agent', 'apk', 'touch_guard'):
+            changed = copy.deepcopy(health)
+            changed['updates'][component]['sha256'] = 'a'*64
+            with self.assertRaises(ott.Error):
+                ott.android_metadata(changed, 'maintenance', {'operation': 'health'})
+        health.pop('updates')
+        self.assertNotIn('updates', ott.android_metadata(health, 'maintenance', {'operation': 'health'}))
+
     def test_operation_lookup_only_reads_native_health(self):
         c = AndroidCLI().client()
         key = 'a' * 32

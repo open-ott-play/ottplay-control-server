@@ -1,19 +1,46 @@
 # Changelog
 
-## [0.1.2] - Development line
+## [0.1.2] - Unreleased
 
-### Changed
+### Changes
 
-- Qualify this release with a bounded RC fuzz campaign, offline target execution, and deterministic seed replay checks.
-- Bind release evidence to the exact source and toolkit revision, validate seed corpora, and retain engine execution counts and diagnostic artifacts.
-- Document the fuzzing scope, resource limits, and the distinction between synthetic checks and target acceptance.
+- Qualify this release with a bounded RC fuzz campaign, offline target execution,
+  and deterministic seed replay checks. Bind release evidence to the exact source
+  and toolkit revision, validate seed corpora, and retain engine execution counts
+  and diagnostic artifacts. Document the fuzzing scope, resource limits, and the
+  distinction between synthetic checks and target acceptance.
+
+- Correct kiosk status output for Plex queues and armed strict mode, and retain
+  optional media startup-grace and screen-suspension metadata in CLI receipts.
+  The Android agent now starts its 120-second watchdog grace when it first
+  observes a lock, rather than counting time before the lock was observed, and
+  gives recovery a separate deadline after completing a health read.
+
+- Add a local signed-update preparation and HTTPS verification tool for the
+  Android maintenance agent. Native status now reports fresh installed agent,
+  APK and touch-helper hashes, APK version and enabled state, so delivery can
+  be checked independently of an accepted command receipt. Agent-only delivery
+  does not require launching an intentionally disabled player.
+
+- Add signed coordinated APK/touch-helper bundles with exact embedded-helper
+  matching, bounded archive validation, saved rollback pairs and pending
+  transaction recovery. Installation requires an enabled, foreground player;
+  it never changes HOME selection or updates the broker/startup supervisor.
+  Host tests cover failure paths; a physical rollout is a separate acceptance
+  step, and APK data migrations must remain compatible with rollback.
+  Standalone APK updates also require an enabled, foreground app and an
+  unchanged embedded helper. Failed pair recovery keeps read-only diagnostics
+  and signed agent repair available while blocking further app mutations.
 
 ### Upgrade
 
-Use the existing installation or update procedure. This release changes validation
-and release tooling; existing user configuration and data formats are preserved.
-Keep the previous immutable release for rollback. Test the exact RC package on the
-intended target before accepting a stable promotion.
+The controller, CLI, hosted player and Android maintenance agent are separate
+installations. Updating one does not replace the others. Follow the native
+agent's signed-update and rollout instructions; a command acknowledgement is
+not proof that the new binary is running or that playback recovered.
+
+Keep the previous immutable release for rollback. Test the exact RC package on
+the intended target before accepting a stable promotion.
 
 ### Security
 
@@ -23,7 +50,7 @@ campaign rejects missing or invalid seed corpora and incomplete execution
 evidence. These checks do not establish untested hardware, integrations,
 credentials, or deployment behavior.
 
-## [0.1.1] - Development line
+## [0.1.1]
 
 ### Changes
 
