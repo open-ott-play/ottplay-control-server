@@ -985,3 +985,18 @@ All numeric metrics are finite, nonnegative and at most 9007199254740991.
 `systemUptimeMs` measures OS uptime. PSS, physical footprint and RSS are separate
 fields and cannot be compared as the same measurement. A snapshot contains no
 raw logs, error messages, URLs, filenames, stack traces, keys or DOM content.
+
+Players supporting attached-engine observations retain `debug:{"version":1}`
+and additionally advertise `debug_versions:[1,2]`. Explicitly request them with
+the same three parameters and `version:2`. This version is supported only for
+the `debug` section. Both the response envelope and `data.version` must equal 2;
+the controller rejects a downgraded response, including a negative response with
+the wrong version. The exact version 2 schema adds one required key to each
+media lane: `engine`, limited to `"hls.js"`, `"shaka"`, `"html5"`, or null.
+All other fields, bounds, runtime binding and allowlists remain identical.
+
+Default requests still use version 1 and cannot carry `engine`. An updated
+player therefore remains compatible with earlier controllers and CLIs.
+`ott PLAYER debug --engine` opts in to version 2; unsupported players are not
+queried and unsupported controllers cause a clear failure without a version 1
+retry. An attached engine is not evidence of decoded frames or physical output.

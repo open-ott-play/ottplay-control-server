@@ -109,7 +109,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME caps                      show runtime identity and supported controls
   ott NAME doctor [-j]                read web/native identity and diagnostic capabilities
-  ott NAME debug [-j]                 read bounded runtime/native diagnostics (alias: dbg)
+  ott NAME debug [--engine] [-j]      read bounded runtime/native diagnostics (alias: dbg)
   ott NAME inspect --view ui,media    observe the interface and media without changing playback
   ott NAME operation REQUEST_ID      read a web operation receipt without repeating its effect
   ott NAME bundle --out DIRECTORY    save private, bounded diagnostic evidence
@@ -2337,6 +2337,13 @@ def capabilities_metadata(data):
                 or type(debug.get("version")) is not int or debug["version"] != 1):
             raise Error(invalid)
         result["debug"] = {"version": 1}
+    if "debug_versions" in data:
+        versions = data["debug_versions"]
+        if ("debug" not in result or not isinstance(versions, list)
+                or any(type(value) is not int for value in versions)
+                or versions != [1, 2]):
+            raise Error(invalid)
+        result["debug_versions"] = list(versions)
     return result
 
 
