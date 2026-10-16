@@ -21,6 +21,7 @@ type requestResult struct {
 	aspect            *aspectRequest
 	plexLibrary       *plexLibraryRequest
 	favorites         *favoritesRequest
+	handoff           *handoffRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
@@ -92,7 +93,14 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	m, err := decodeObject(b)
-	var action string
+	var action, key string
+	if raw, exists := m["idempotency_key"]; exists {
+		if json.Unmarshal(raw, &key) != nil || !operationKey.MatchString(key) {
+			failure(w, 400, "invalid operation key")
+			return
+		}
+		delete(m, "idempotency_key")
+	}
 	if err != nil || len(m) != 2 || json.Unmarshal(m["action"], &action) != nil {
 		failure(w, 400, "action and params are required")
 		return
@@ -147,6 +155,10 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = len(params) == 1 && profileInteger(params["number"], 1, 15)
 	case "profile_settings":
 		ok = len(params) == 2 && profileInteger(params["number"], 1, 15) && validProfileSettings(params["settings"])
+	case "settings_compare":
+		ok = validSettingsCompare(params)
+	case "playback_handoff_export", "playback_handoff_import":
+		ok = parseHandoffRequest(action, params) != nil
 	case "restart":
 		var target string
 		ok = len(params) == 1 && json.Unmarshal(params["target"], &target) == nil && (target == "stream" || target == "player")
@@ -205,6 +217,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	id := hex.EncodeToString(random[:])
+	canonical, _ := json.Marshal(m)
 	now = s.now()
 	expires := now.Add(s.ttl)
 	m["id"], _ = json.Marshal(id)
@@ -216,6 +229,13 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		s.mu.Unlock()
 		failure(w, 429, "request queue is full")
 		return
+	}
+	if key != "" {
+		replay, ok := s.startOperation(w, r, d, permission, key, id, canonical, now, expires)
+		if replay || !ok {
+			s.mu.Unlock()
+			return
+		}
 	}
 	e := entry{id: id, data: data, expires: expires, rpc: true, owner: requestOwner(r), permission: permission}
 	if action == "screenshot" {
@@ -235,6 +255,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "favorites" {
 		e.favorites = parseFavoritesRequest(params)
+	}
+	if action == "playback_handoff_export" || action == "playback_handoff_import" {
+		e.handoff = parseHandoffRequest(action, params)
 	}
 	if action == "playback" {
 		var operation string
@@ -337,6 +360,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var plexQueue *plexQueueRequest
 	var plexLibrary *plexLibraryRequest
 	var favorites *favoritesRequest
+	var handoff *handoffRequest
 	var inspect *inspectRequest
 	var aspect *aspectRequest
 	playbackOperation := ""
@@ -346,6 +370,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			plexQueue = pending.plexQueue
 			plexLibrary = pending.plexLibrary
 			favorites = pending.favorites
+			handoff = pending.handoff
 			playbackOperation = pending.playbackOperation
 			inspect = pending.inspect
 			aspect = pending.aspect
@@ -363,6 +388,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if favorites == nil {
 		favorites = d.results[id].favorites
+	}
+	if handoff == nil {
+		handoff = d.results[id].handoff
 	}
 	s.mu.Unlock()
 	// Both successful and negative inspection replies must belong to the exact
@@ -395,6 +423,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid favorites result")
 		return
 	}
+	if handoff != nil && !validHandoffResult(m["data"], status, handoff) {
+		failure(w, 400, "invalid handoff result")
+		return
+	}
 	if playbackOperation != "" && status == "ok" && !validPlexPlaybackResult(m["data"], playbackOperation) {
 		failure(w, 400, "invalid Plex playback result")
 		return
@@ -416,10 +448,15 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 429, "result storage is full")
 			return
 		}
+		if err := s.journal.finish(id, "responded", status, now); err != nil {
+			s.mu.Unlock()
+			failure(w, 503, "command outcome could not be retained")
+			return
+		}
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

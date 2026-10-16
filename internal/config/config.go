@@ -35,12 +35,16 @@ type Config struct {
 	Discovery           *Discovery        `json:"discovery,omitempty"`
 	Diagnostics         *Diagnostics      `json:"diagnostics,omitempty"`
 	Operators           []CommandOperator `json:"operators,omitempty"`
+	Journal             *CommandJournal   `json:"journal,omitempty"`
 }
 
 var deviceID = regexp.MustCompile(wire.DeviceIdPattern)
 var token = regexp.MustCompile(wire.TokenPattern)
 
 func (c *Config) Defaults() {
+	if c.Journal != nil {
+		c.Journal.Defaults()
+	}
 	if c.Diagnostics != nil {
 		c.Diagnostics.Defaults()
 	}
@@ -59,6 +63,14 @@ func (c *Config) Defaults() {
 }
 
 func (c Config) Validate() error {
+	if c.Journal != nil {
+		if err := c.Journal.Validate(); err != nil {
+			return err
+		}
+		if c.Journal.RetentionSeconds < c.CommandTTLSeconds {
+			return errors.New("journal retention must cover command TTL")
+		}
+	}
 	if err := c.validateOperators(); err != nil {
 		return err
 	}

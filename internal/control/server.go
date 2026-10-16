@@ -32,6 +32,7 @@ type entry struct {
 	plexQueue         *plexQueueRequest
 	plexLibrary       *plexLibraryRequest
 	favorites         *favoritesRequest
+	handoff           *handoffRequest
 	owner, permission string
 	playbackOperation string
 	inspect           *inspectRequest
@@ -68,6 +69,7 @@ type Server struct {
 	mu                     sync.Mutex
 	admin                  [32]byte
 	operators              []*commandOperator
+	journal                *commandJournal
 	devices                []*device
 	origins                map[string]bool
 	allowNull              bool
@@ -111,6 +113,10 @@ func New(c config.Config) (*Server, error) {
 			s.pairTokens[d.ID] = d.Token
 			s.pairRates[d.ID] = new(bucket)
 		}
+	}
+	s.journal, err = newCommandJournal(c.Journal)
+	if err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -269,7 +275,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if path == "/api/pairings/approve" {
 			methods = "POST"
 		}
-	case "/healthz", "/readyz", "/api/devices", "/api/debug", wire.LegacyPollPath:
+	case "/healthz", "/readyz", "/api/devices", "/api/debug", "/api/operations", wire.LegacyPollPath:
 		methods = "GET"
 	case wire.CommandPath:
 		methods = "GET,POST"
@@ -328,8 +334,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
-	operatorRoute := operator != nil && (path == "/api/requests" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
+	requiresAdmin := path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
+	operatorRoute := operator != nil && (path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
 	if (!operatorRoute && requiresAdmin != admin) || (operator != nil && !operatorRoute) {
 		failure(w, 403, "credential role is not allowed")
 		return
@@ -347,6 +353,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		w.Header().Set("Retry-After", "60")
 		failure(w, 429, "credential rate exceeded")
+		return
+	}
+	if path == "/api/operations" {
+		s.operation(w, r)
 		return
 	}
 	if path == "/api/devices" {
@@ -396,6 +406,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now time.Time) {
+	key := r.Header.Get("Idempotency-Key")
+	if len(r.Header.Values("Idempotency-Key")) > 1 || (key != "" && !operationKey.MatchString(key)) {
+		failure(w, 400, "invalid operation key")
+		return
+	}
 	b, ok := readBody(w, r)
 	if !ok {
 		return
@@ -416,6 +431,7 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now 
 		return
 	}
 	id := hex.EncodeToString(random[:])
+	canonical, _ := json.Marshal(m)
 	// Retention starts after the bounded request body has been received and checked.
 	now = s.now()
 	s.mu.Lock()
@@ -433,6 +449,13 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now 
 		s.mu.Unlock()
 		failure(w, 429, "command queue is full")
 		return
+	}
+	if key != "" {
+		replay, ok := s.startOperation(w, r, d, permission, key, id, canonical, now, expires)
+		if replay || !ok {
+			s.mu.Unlock()
+			return
+		}
 	}
 	s.lastTS = ts
 	d.queue = append(d.queue, entry{id: id, data: data, expires: expires, owner: requestOwner(r), permission: permission})
@@ -506,6 +529,15 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request, d *device, now time
 	s.mu.Lock()
 	s.expire(now)
 	d.lastSeen = now
+	for _, e := range d.queue {
+		if set[e.id] && !e.rpc {
+			if err := s.journal.finish(e.id, "acknowledged", "", now); err != nil {
+				s.mu.Unlock()
+				failure(w, 503, "command outcome could not be retained")
+				return
+			}
+		}
+	}
 	kept := d.queue[:0]
 	removed := 0
 	for _, e := range d.queue {
