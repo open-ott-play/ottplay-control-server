@@ -11,6 +11,10 @@ Do not replace the installed wrapper or remove USB until native status, capture,
 restart, queue transitions and touch lock have been verified on the device.
 A frozen kernel, disconnected Wi-Fi, or loss of power still requires local access.
 
+For USB setup and troubleshooting, see the [Android ADB guide](../../docs/android-adb.md).
+It also explains which commands work without the native agent and how to avoid
+confusing a controller alias with an ADB serial.
+
 ## Bootstrap
 
 Provision a **separate** controller device/token, e.g. `a1-native` using
