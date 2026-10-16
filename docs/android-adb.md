@@ -253,7 +253,12 @@ confirms Home selection and startup forwarding on this tablet. The controller
 also acknowledged loading the existing `Home` preset into M3U profile 1, and
 subsequent status reported the Android player ready with its channel list loaded.
 These checks do not claim system lock task, physical exit protection or
-successful video playback.
+successful video playback. For this dedicated deployment, the existing
+non-authenticating **Swipe** screen lock was changed to **None** through Android
+Settings → Security → Screen lock, and stay-awake was enabled while USB-powered.
+This avoids a manual swipe on wake. Revert through the same Settings page and
+restore the previous power setting if the tablet returns to general use. No
+PIN, password or pattern was removed.
 
 The same session exposed slow initial HTTPS setup: an unauthenticated request
 to the controller took about 13 seconds, longer than the player's eight-second

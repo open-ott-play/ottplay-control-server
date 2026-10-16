@@ -17,7 +17,9 @@ key and random password are generated once under `private/`, with permissions
 do not commit them. An incomplete key/password pair stops the build, so restore
 the matching pair instead of generating a different signing identity. The
 script prints signature verification and a SHA-256 digest; review both before
-installation. This companion has its own signing key, independent of OTT's.
+installation. This companion has its own signing key, independent of OTT's. It is not yet
+included in the native agent OTA bundle or the official player release assets;
+update it by installing a verified APK signed with this same companion key.
 
 Install the verified output on the explicitly selected device:
 
