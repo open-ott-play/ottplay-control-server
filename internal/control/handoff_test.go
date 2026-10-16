@@ -33,7 +33,8 @@ func TestSettingsComparisonRequiresBoundProviderShape(t *testing.T) {
 		params string
 		code   int
 	}{
-		{`{"provider":"m3u","number":1,"settings":{"playlist":"https://private.example"}}`, 202},
+		{`{"provider":"m3u","number":1,"settings":{"name":"Local","playlist":"https://private.example","history_hours":0,"vportal":""}}`, 202},
+		{`{"provider":"m3u","number":1,"settings":{"playlist":"https://private.example"}}`, 400},
 		{`{"provider":"m3u","settings":{"playlist":"x"}}`, 400},
 		{`{"provider":"plex","settings":{"server":"https://private.example","token":"secret"}}`, 202},
 		{`{"provider":"plex","settings":{"server":"https://private.example","token":"secret","extra":true}}`, 400},

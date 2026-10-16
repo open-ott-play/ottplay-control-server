@@ -14,7 +14,7 @@ func validSettingsCompare(p map[string]json.RawMessage) bool {
 	}
 	switch provider {
 	case "m3u":
-		return len(p) == 3 && profileInteger(p["number"], 1, 15) && validProfileSettings(p["settings"])
+		return len(p) == 3 && len(s) == 4 && profileInteger(p["number"], 1, 15) && validProfileSettings(p["settings"])
 	case "plex":
 		return len(p) == 2 && len(s) == 2 && profileText(s["server"], 8192) && profileText(s["token"], 1024)
 	case "stalker":
