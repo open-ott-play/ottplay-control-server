@@ -26,7 +26,7 @@ type requestResult struct {
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
 // clients ignore them, and the CLI times out rather than claiming execution.
-func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now time.Time) {
+func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now time.Time, route string) {
 	q, ok := query(r, "device_id", "id")
 	if !ok || (r.Method == "POST" && q.Has("id")) {
 		failure(w, 400, "unsupported query parameters")
@@ -50,7 +50,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 403, "device scope is not allowed")
 		return
 	}
-	if r.URL.Path == "/api/responses" || r.URL.Path == "/api/responses/" {
+	// Use the same canonical route that selected the credential role. Re-parsing
+	// a trailing-slash variant must never let a device become an RPC submitter.
+	if route == "/api/responses" {
 		s.receiveResult(w, r, d)
 		return
 	}

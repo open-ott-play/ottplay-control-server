@@ -4,6 +4,11 @@
 
 ### Changes
 
+- Keep response-route authorization and dispatch on the same normalized path;
+  trailing-slash variants cannot submit command envelopes with device credentials.
+- Round durable journal deadlines upward to retain idempotency through the
+  precise queue expiry, including fractional-second boundaries.
+
 - Add exact device/action-scoped ordinary command operators, an optional private
   bounded outcome journal with idempotency keys, and crash recovery that retains
   unknown outcomes without replaying commands.

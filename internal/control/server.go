@@ -368,7 +368,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/api/requests" || path == "/api/responses" {
-		s.requests(w, r, d, now)
+		s.requests(w, r, d, now, path)
 		return
 	}
 	q, ok := query(r, "device_id", "delivery")

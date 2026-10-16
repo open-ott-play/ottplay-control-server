@@ -959,6 +959,8 @@ administrator and ordinary scoped command operators. Device tokens cannot read
 this route. Without a key the response describes enabled state, retention,
 capacity and command TTL. With a key it contains `id`, `state`, `result_status`,
 `expires_at`, `command_expires_at` and `action`. Timestamps are Unix seconds.
+Journal deadlines round upward to the next whole second so retention never ends
+before a queue entry's precise deadline.
 Missing/expired keys return 404, disabled journals 503 and denied scopes 403.
 
 RPC POST accepts an optional `idempotency_key` string (16–80 ASCII letters,

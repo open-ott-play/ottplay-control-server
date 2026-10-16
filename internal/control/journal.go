@@ -44,6 +44,16 @@ func journalIndex(owner, key string) string {
 	h := sha256.Sum256([]byte(owner + "\x00" + key))
 	return hex.EncodeToString(h[:])
 }
+
+// Whole-second records must outlive the queue's precise deadline, never expire
+// up to 999 ms before it and allow the same key to enqueue a second command.
+func ceilUnix(t time.Time) int64 {
+	seconds := t.Unix()
+	if t.Nanosecond() != 0 {
+		seconds++
+	}
+	return seconds
+}
 func copyRecords(rows map[string]operationRecord, now time.Time) map[string]operationRecord {
 	result := map[string]operationRecord{}
 	for k, v := range rows {
@@ -214,7 +224,7 @@ func (j *commandJournal) begin(owner, device, permission, key, id string, payloa
 	if len(rows) >= j.config.MaxRecords {
 		return operationRecord{}, false, errors.New("full")
 	}
-	v := operationRecord{ID: id, Owner: owner, Device: device, Permission: permission, Key: key, Digest: sum, State: "pending", ExpiresAt: now.Add(time.Duration(j.config.RetentionSeconds) * time.Second).Unix(), CommandExpiresAt: deadline.Unix()}
+	v := operationRecord{ID: id, Owner: owner, Device: device, Permission: permission, Key: key, Digest: sum, State: "pending", ExpiresAt: ceilUnix(now.Add(time.Duration(j.config.RetentionSeconds) * time.Second)), CommandExpiresAt: ceilUnix(deadline)}
 	rows[index] = v
 	if e := j.save(rows); e != nil {
 		return operationRecord{}, false, e
