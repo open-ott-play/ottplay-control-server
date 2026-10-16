@@ -130,6 +130,121 @@ adb -s SERIAL shell monkey -p PACKAGE -c android.intent.category.LAUNCHER 1
 Stopping OTT interrupts playback. Neither launch command bypasses a secure
 lockscreen. Open and unlock the tablet normally when authentication is required.
 
+## Use OTT as the tablet's Home screen
+
+A dedicated OTT tablet should return to the player when Android opens its Home
+screen, including after startup. Installing the player and launching it once does
+not establish this behavior. The standard `play.ott.foss` APK inspected for
+`v1.1.55-beta.5` declares an ordinary `LAUNCHER` activity; it does not declare a
+`HOME` activity or a `BOOT_COMPLETED` receiver. Its update receiver handles
+replacement of its own APK, not Android startup.
+
+There are three separate controls to understand:
+
+- **Default Home app:** an activity handling `MAIN`, `HOME` and `DEFAULT` can be
+  chosen as Android's launcher. Android enters that activity when it opens Home.
+  A companion Home app can forward this entry to OTT while retaining the
+  official player's package, signature and normal update path. The companion
+  must be installed and selected as the default; its presence alone is not
+  enough.
+- **Boot receiver:** code receiving `BOOT_COMPLETED` can perform startup work.
+  This is separate from the Home role, does not change the Home button's target
+  and does not prove that playback resumed. Availability of foreground launches
+  also depends on the Android version and its restrictions.
+- **System kiosk:** managed lock task mode restricts leaving approved apps.
+  Making OTT the Home app does not by itself block Recents, the notification
+  shade, Settings or power controls. OTT's channel/strict-kiosk policy controls
+  its own interface; it is not proof of system-level containment.
+
+### Install the OTT Home companion
+
+The repository includes [OTT Home source and build instructions](../native/android-home/README.md),
+package `play.ott.home`, for the standard `play.ott.foss` player on API 22. It
+forwards Home entry to `play.ott.foss/.MainActivity`. Its boot receiver opens the
+companion only when Android already resolves it as the default Home app; mere
+installation does not take over startup. It does not request root, device-admin
+or device-owner access, and has no background polling timer.
+
+Build and verify the companion APK using that guide, then install it without
+replacing the official player's package:
+
+```sh
+adb -s SERIAL install -r /PRIVATE/verified-ott-home.apk
+adb -s SERIAL shell am start -n play.ott.home/.HomeActivity
+adb -s SERIAL shell input keyevent 3
+```
+
+Retain its local signing identity privately for future companion updates. The
+player continues to use its independent official signing key and update path.
+If the player is absent or disabled, OTT Home shows a recovery message and an
+**Open OTT-play** retry button. It does not continuously retry or take control
+away from Settings. These are implementation details, not a statement that the
+companion has passed device acceptance; complete the checks below per tablet.
+
+On Android 5.1, use the system Home chooser and select the intended OTT Home
+entry **Always**, rather than **Just once**, after the compatible Home component
+has been installed. Some firmware also exposes the choice in Settings → Home.
+Do not assume a newer `cmd role` or `pm set-home-activity` command exists: inspect
+the device's command help before using version-dependent administration tools.
+
+Bring up Android's actual Home intent to check the current choice:
+
+```sh
+adb -s SERIAL shell am start -a android.intent.action.MAIN -c android.intent.category.HOME
+adb -s SERIAL shell dumpsys activity activities
+```
+
+If a chooser appears, the persistent default still needs selection. Confirm the
+visible screen with a screenshot, then verify the controller identity and
+profile using `ott`. A forwarding Home component may appear briefly before the
+player, so its process starting is not sufficient evidence of a working setup.
+
+Before handing over a dedicated tablet, verify all of these on the real device:
+
+1. Press Home from another app: OTT returns without a chooser.
+2. Reboot normally, wait for `sys.boot_completed=1`, and unlock normally if the
+   tablet requests authentication: OTT opens without manually launching it.
+3. Check the remote connection, intended profile and picture. Auto-opening OTT
+   is separate from restoring a channel or restarting a failed stream.
+4. Test physical Back, Home, Recents and notification gestures against the
+   intended policy. Record any remaining system exits; an injected ADB key is
+   not a substitute for this check.
+
+The kiosk's failed-channel retry and Android process recovery are different
+mechanisms. Selecting a Home app does not establish a ten-second watchdog for a
+crashed or unresponsive player. Document and test any watchdog separately,
+including its behavior while the operator is doing maintenance.
+
+Android 5.1 supports device-owner management and lock task mode, but provisioning
+eligibility depends on the tablet's existing setup. On this version, a managed
+player must also cooperate with lock task entry; do not assume an external app
+can force any arbitrary foreground activity into managed lock task. Screen
+pinning remains user-exitable and is not equivalent to managed kiosk. Inspect
+existing ownership with `adb -s SERIAL shell dumpsys device_policy`; enabling
+USB debugging, OEM unlocking or ordinary device-admin access does not confer
+device-owner status. Do not reset the tablet, remove accounts or disable the
+stock launcher merely to make provisioning succeed without a separate,
+explicitly approved migration plan.
+
+Keep a maintenance route before changing the default Home app: authorized USB
+ADB and access to Android Settings. Selecting the original launcher again in
+Settings reverses a user-selected Home default without deleting OTT's data.
+Alternatively, removing only the companion restores Home selection while
+leaving the installed player and its configuration intact:
+
+```sh
+adb -s SERIAL uninstall play.ott.home
+adb -s SERIAL shell input keyevent 3
+```
+
+This is a deliberate rollback of the companion, not a general repair step. Keep
+the original system launcher installed and enabled for this recovery path.
+Changing Home does not remove a secure lockscreen or make a powered-off tablet
+turn on when charging.
+
+See Android's [custom Home app guide](https://developer.android.com/work/dpc/dedicated-devices/cookbook#custom-home-apps)
+and [managed lock task documentation](https://developer.android.com/work/dpc/dedicated-devices/lock-task-mode).
+
 ## Wake, navigate and enter text
 
 Inspect the screen before sending input. Coordinates refer to the tablet's
@@ -148,7 +263,7 @@ screen. Wake does not unlock a PIN/password or power on a shut-down tablet.
 Common navigation and key inputs:
 
 ```sh
-adb -s SERIAL shell input keyevent 3     # HOME: leaves the current app
+adb -s SERIAL shell input keyevent 3     # HOME: opens the selected Home app
 adb -s SERIAL shell input keyevent 4     # BACK: may leave a page or the app
 adb -s SERIAL shell input keyevent 82    # MENU: app/firmware dependent
 adb -s SERIAL shell input keyevent 19    # D-pad up
