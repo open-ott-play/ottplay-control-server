@@ -4,6 +4,12 @@
 
 ### Changes
 
+- Qualify this release with a bounded RC fuzz campaign, offline target execution,
+  and deterministic seed replay checks. Bind release evidence to the exact source
+  and toolkit revision, validate seed corpora, and retain engine execution counts
+  and diagnostic artifacts. Document the fuzzing scope, resource limits, and the
+  distinction between synthetic checks and target acceptance.
+
 - Correct kiosk status output for Plex queues and armed strict mode, and retain
   optional media startup-grace and screen-suspension metadata in CLI receipts.
   The Android agent now starts its 120-second watchdog grace when it first
@@ -32,6 +38,17 @@ The controller, CLI, hosted player and Android maintenance agent are separate
 installations. Updating one does not replace the others. Follow the native
 agent's signed-update and rollout instructions; a command acknowledgement is
 not proof that the new binary is running or that playback recovered.
+
+Keep the previous immutable release for rollback. Test the exact RC package on
+the intended target before accepting a stable promotion.
+
+### Security
+
+Fuzz targets and deterministic preflight commands run offline on synthetic
+inputs. Setup and dependency installation may use the runner network. The
+campaign rejects missing or invalid seed corpora and incomplete execution
+evidence. These checks do not establish untested hardware, integrations,
+credentials, or deployment behavior.
 
 ## [0.1.1]
 
