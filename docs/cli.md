@@ -2393,3 +2393,12 @@ only bounded metadata, not URLs, tokens or APK contents.
 
 The existing `android update` command is separate: it addresses a provisioned
 native/root agent and continues to use its signed manifest protocol.
+
+### Strong-key HTTPS endpoints
+
+For servers whose whole certificate chain supports OpenSSL security level 3,
+set `OTT_TLS_SECURITY_LEVEL=3` when invoking the CLI. This raises (never lowers)
+the host's TLS policy for controller, EPG, diagnostics and archive requests.
+It rejects RSA-2048 as well as smaller RSA keys; use RSA-3072 or EC-256 and
+strong trust anchors. Ordinary CA and hostname verification stays enabled.
+See [the complete supported profile](security-design.md#supported-strong-key-cli-configuration).

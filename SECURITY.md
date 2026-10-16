@@ -15,3 +15,7 @@ unmaintained historical versions. These are project policies, not assertions
 about the existence or response times of past reports.
 
 See [security design](docs/security-design.md) for project-specific trust boundaries.
+
+## Remediation and credit
+
+Assess impact and affected versions, reproduce with synthetic data, implement a fix and regression test, and coordinate disclosure with the reporter. Address publicly known vulnerabilities within 60 days and critical issues as quickly as practical. If a fix needs longer, publish available mitigations and keep the reporter informed. Credit vulnerability reporters in the advisory or release notes unless they request anonymity; do not publish identifying details without agreement.

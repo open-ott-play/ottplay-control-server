@@ -1,5 +1,7 @@
 # OTT-play Control Server
 
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15562/badge)](https://www.bestpractices.dev/projects/15562)
+
 [![Fuzzing: RC only](https://img.shields.io/badge/Fuzzing-RC%20only-blue)](docs/fuzzing.md)
 
 A small self-hosted server that delivers remote commands to OTT-play players. Players make outbound HTTP requests, so a TV does not need to expose a listening port. Each player has its own queue and access token; a separate administrator token submits commands.
@@ -281,3 +283,7 @@ Public release candidates run bounded native fuzzing of the input boundaries
 described in the [fuzzing guide](docs/fuzzing.md). Mutation campaigns do not run on
 PRs, betas or nightlies. The guide covers scope, budgets, evidence and regression
 reproduction.
+
+## Community and security evidence
+
+See [contributing](CONTRIBUTING.md), [governance](GOVERNANCE.md), the [Code of Conduct](CODE_OF_CONDUCT.md), [roadmap](ROADMAP.md) and [OpenSSF evidence](docs/openssf-evidence.md). The evidence index distinguishes supported security profiles, actual test results and remaining Silver requirements.
