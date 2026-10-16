@@ -950,3 +950,56 @@ legacy command submission. Composite RPCs require an operation-qualified action
 such as `playback.next_channel`, `input.channel_up` or `command.set_volume`.
 Operators read only their own permitted RPC receipts. See the [scoped command
 operator configuration](security-design.md#scoped-command-operators).
+
+## Durable operation outcomes
+
+The optional [`journal` configuration](reliable-control.md#enable-bounded-durable-outcomes)
+enables `GET /api/operations?device_id=ID[&key=KEY]`, authorized for the
+administrator and ordinary scoped command operators. Device tokens cannot read
+this route. Without a key the response describes enabled state, retention,
+capacity and command TTL. With a key it contains `id`, `state`, `result_status`,
+`expires_at`, `command_expires_at` and `action`. Timestamps are Unix seconds.
+Missing/expired keys return 404, disabled journals 503 and denied scopes 403.
+
+RPC POST accepts an optional `idempotency_key` string (16–80 ASCII letters,
+digits, underscores or hyphens). Legacy POST accepts `Idempotency-Key`.
+Reusing an owner/key for changed device/action/payload returns 409. An identical
+operation returns 202 with `{status:"retained",id,state}` and never enqueues a
+second command while retained. This does not return a second copy of the result
+body. Original RPC receipts remain in memory for 60 seconds. Pending journal
+records become `unknown` on restart and no commands are replayed.
+
+## Exact settings comparison
+
+`settings_compare` reads saved values without selecting a provider:
+
+- M3U: `{provider:"m3u",number:1,settings:{name,playlist,history_hours,vportal}}`;
+  all four settings fields are required.
+- Plex: `{provider:"plex",settings:{server,token}}`.
+- Stalker: `{provider:"stalker",number:1,settings:{name,server,mac}}`.
+
+The result data is `{provider,number?,matched}` with a boolean `matched` and no
+stored values. Slots range from 1 to 15. Existing player parental/settings policy
+still applies. The request carries expected values, so treat its body as private.
+
+## Explicit playback handoff
+
+`playback_handoff_export` accepts `{}` and returns `{handoff}`.
+`playback_handoff_import` accepts `{handoff}` and returns
+`{dispatched:true,kind:"live"|"archive"}`. The handoff has exact fields:
+
+```json
+{"version":1,"provider":"m3u","source_id":"opaque-source-identity","item_id":"stable-item-id","kind":"live"}
+```
+
+Providers are `m3u`, `xtream`, `stalker`. Source/item identifiers are nonempty
+text bounded to 256/512 UTF-8 bytes. Archive adds `archive_start`, a positive
+safe integer Unix timestamp incorporating the source's current seek offset.
+Live forbids that field. Additional fields, URLs and credential fields are not
+part of the schema. The destination requires exact source identity and a unique
+item match, and resolves its own stream address. The source is not stopped.
+
+Negative result data is a single `error` code: `unsupported`, `invalid_request`,
+`no_current_item`, `source_mismatch`, `item_unavailable`, `ambiguous_item`,
+`policy_denied`, `busy`, `playback_failed`, or `context_changed`.
+See the [workflow and limitations](reliable-control.md#continue-on-another-player).

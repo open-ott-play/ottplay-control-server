@@ -1,8 +1,8 @@
 # Control players from the terminal
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
-Keep all seven files together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py` and `report_verify.py`. Python 3.12 is the version used by CI. Commands take a short
+Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py` and `preset_session.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -143,7 +143,7 @@ interactive zsh or the appropriate bash startup file), then open a new terminal.
 Use `type -a ott` in bash/zsh to detect older aliases, functions or launchers that
 take precedence. In the remaining examples, replace `ott` with
 `python3 "$ott_script"` whenever using the direct invocation. If copying a source
-archive instead, copy all seven files in `cli/` together; a Git checkout is needed
+archive instead, copy all Python files in `cli/` together; a Git checkout is needed
 for the exact `git rev-parse HEAD` verification above.
 
 ### Install on Windows
@@ -622,7 +622,7 @@ ott diagnostics --help
 ```
 
 The existing symlink follows the checkout. For a copied installation replace all
-seven sibling Python files together from one version. Keep `cli.json`, presets
+the sibling Python files together from one version. Keep `cli.json`, presets
 and server credentials outside the checkout; updating CLI files does not update
 or restart the command server, native apps or players already open in a browser.
 After updating a hosted player, reload it and inspect `ott PLAYER caps`.
@@ -2107,7 +2107,7 @@ Add `~/.local/bin` to the current shell's PATH and its startup file, then reopen
 the terminal. Inspect `command -v ott` (or `type -a ott` in bash/zsh) for an older
 installation taking precedence. Check the symlink target still exists. Use
 `python3 /absolute/path/to/cli/ott.py --help` to separate PATH/executable problems
-from Python problems. Keep all seven CLI files from the same source version in
+from Python problems. Keep all CLI Python files from the same source version in
 the resolved target directory. A copied `ott.py` alone is not a complete install.
 On Windows use the `py -3 ...` invocation from the installation section.
 Stable CLI v0.1.0 does not provide `doctor`, `inspect`, `operation`, `bundle`,
@@ -2325,3 +2325,26 @@ only bounded metadata, not URLs, tokens or APK contents.
 
 The existing `android update` command is separate: it addresses a provisioned
 native/root agent and continues to use its signed manifest protocol.
+
+
+## Resumable presets and explicit handoff
+
+The optional new workflow is documented in [Reliable control](reliable-control.md)
+([Русский](reliable-control.ru.md)). It requires this newer CLI/controller/player
+revision, not the historical installation pin above. `plan` validates local
+configuration offline; `verify` compares saved player settings without writing.
+`apply` and `resume` require the controller journal and private checkpoint storage.
+
+```sh
+ott tv load Local plan
+ott tv load Local apply
+ott tv load Local resume
+ott tv load Local verify
+ott handoff living-room bedroom
+```
+
+An uncertain previous settings command prevents mutation until its deadline;
+resume then compares current saved values before writing. Handoff v1 accepts
+matching-source live/archive references only and does not stop the source player.
+The existing `ott tv load Local` continues to use its original acknowledgement
+workflow without a journal requirement.

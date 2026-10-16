@@ -1,5 +1,11 @@
 # Deployment
 
+Optional durable operation outcomes require a writable, persistent private
+directory mounted at the configured `journal.path` parent. Use one controller
+replica and one writer per journal; it is not shared HA storage. Keep this path
+outside the release directory so a binary update does not discard outcomes.
+See [journal configuration and failure semantics](reliable-control.md#enable-bounded-durable-outcomes).
+
 Use an exact published release tag such as `v0.1.0-beta.1`. The examples use `RELEASE_TAG` as a placeholder: replace it with a tag actually present in Releases and GHCR. Images contain both Linux amd64 and arm64 variants. On other server targets, install the native release archive.
 
 ## Choose and verify the installation
@@ -42,6 +48,11 @@ For direct TLS, pass both `--tls-cert /private/server.crt` and `--tls-key /priva
 Use Ctrl-C to stop a foreground process. On Unix, SIGTERM also requests a graceful shutdown with a ten-second deadline. There is no server `restart`, `reload`, `register` or `remove` subcommand: use your process manager for restarts and the CLI procedures for [registration](cli.md#installation-and-connection) or [disconnection and credential revocation](cli.md#disconnect-deregister-or-revoke-a-player). `ott PLAYER restart` reloads that player, not the command server.
 
 Configuration is read only at startup. This includes tokens, device entries, CORS origins and diagnostic operators. Every server restart discards queued commands, pending request/response exchanges, pairing requests and all diagnostic state, including the previous `server_epoch`; it does not remove credentials saved in configuration. Keep one replica.
+
+The optional command journal retains outcome metadata only. Previously pending
+records become `unknown`; commands and full result bodies are not restored.
+Its [persistent storage setup](reliable-control.md#enable-bounded-durable-outcomes)
+is available for systemd, an opt-in Compose override and an existing Helm PVC.
 
 ## Docker and Compose
 
