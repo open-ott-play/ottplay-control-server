@@ -1520,9 +1520,17 @@ def kiosk_metadata(data, mode, require_strict=False):
     provider = data.get("provider")
     if (data["enabled"] and not isinstance(provider, str)) or (not data["enabled"] and provider is not None):
         raise Error(message)
+    if ("screen_suspended" in data and
+            (type(data["screen_suspended"]) is not bool or
+             (data["screen_suspended"] and data["state"] != "locked"))):
+        raise Error(message)
+    if ("startup_grace_seconds" in data and
+            (type(data["startup_grace_seconds"]) is not int or
+             data["startup_grace_seconds"] != 60 or media is None)):
+        raise Error(message)
     return {**{key: data[key] for key in ("enabled", "state", "retry_seconds", "retries", "health")},
             "channel": channel, "provider": provider, **({"media": media} if media is not None else {}),
-            **({"strict": data["strict"]} if "strict" in data else {})}
+            **{key: data[key] for key in ("strict", "screen_suspended", "startup_grace_seconds") if key in data}}
 
 
 def restart_metadata(data, target):
@@ -2819,6 +2827,51 @@ See docs/cli.md for the request and result contract.
 
 
 
+def android_update_metadata(value, agent_version):
+    """Validate installed component evidence; never project paths or command output."""
+    def require(ok):
+        if not ok:
+            raise Error("Invalid native update metadata")
+
+    require(isinstance(value, dict) and type(value.get("version")) is int and value["version"] == 1)
+    result = {"version": 1}
+    if "bundle_state" in value:
+        require(value["bundle_state"] in ("absent", "pending", "committed", "rolled_back", "unavailable"))
+        result["bundle_state"] = value["bundle_state"]
+    if "recovery_failed" in value:
+        require(type(value["recovery_failed"]) is bool)
+        result["recovery_failed"] = value["recovery_failed"]
+    for name in ("agent", "apk", "touch_guard"):
+        row = value.get(name)
+        require(isinstance(row, dict) and row.get("state") in ("ready", "unavailable"))
+        clean_row = {"state": row["state"]}
+        if name == "agent":
+            require(isinstance(row.get("version"), str)
+                    and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", row["version"])
+                    and row["version"] == agent_version)
+            clean_row["version"] = row["version"]
+        if name == "apk":
+            require(row.get("package") == "play.ott.kitkat")
+            clean_row["package"] = row["package"]
+        if row["state"] == "ready":
+            require(isinstance(row.get("sha256"), str)
+                    and re.fullmatch(r"[a-f0-9]{64}", row["sha256"]) and "reason" not in row)
+            clean_row["sha256"] = row["sha256"]
+            if name == "apk":
+                require(isinstance(row.get("version_name"), str)
+                        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+\-]{0,63}", row["version_name"])
+                        and type(row.get("version_code")) is int and 1 <= row["version_code"] <= 2147483647
+                        and row.get("app_state") in ("enabled", "disabled", "unavailable"))
+                clean_row.update({key: row[key] for key in ("version_name", "version_code", "app_state")})
+        else:
+            reasons = ("file_unavailable", "package_metadata_unavailable", "package_changed") if name == "apk" else ("file_unavailable",)
+            require(row.get("reason") in reasons
+                    and not set(row).intersection(("sha256", "version_name", "version_code", "app_state")))
+            clean_row["reason"] = row["reason"]
+        result[name] = clean_row
+    return result
+
+
 def android_metadata(data, action, params):
     """Project public agent metadata; never print arbitrary diagnostics/URLs."""
     invalid = "Invalid native receipt; inspect android status and do not repeat blindly"
@@ -3003,6 +3056,8 @@ def android_metadata(data, action, params):
     if not isinstance(data, dict):
         raise Error(invalid)
     result = project(data, schema)
+    if "updates" in data:
+        result["updates"] = android_update_metadata(data["updates"], result.get("agent_version"))
     if "operations" in result:
         history = result["operations"]
         require(isinstance(history, list) and len(history) <= 64, "Invalid native operation history")
@@ -3424,15 +3479,21 @@ def main(argv=None):
                 print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")
         elif action == "kiosk":
             if data.get("strict"):
-                print("Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.")
+                if data["state"] == "waiting":
+                    print("Strict kiosk is armed; local controls lock after the first channel selection.")
+                else:
+                    print("Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.")
             if data["state"] == "off":
                 print("Kiosk mode disabled.")
             elif data["state"] == "waiting":
                 print("Kiosk mode enabled; waiting for the first channel selection in the player.")
             elif "media" in data:
-                print(f"Kiosk VPortal: {clean(data['media']['title'])} | {data['media']['index'] + 1}/{data['media']['total']} | {data['health']} | retries: {data['retries']}")
+                provider_name = "Plex" if data["provider"] == "plex" else "VPortal"
+                print(f"Kiosk {provider_name}: {clean(data['media']['title'])} | {data['media']['index'] + 1}/{data['media']['total']} | {data['health']} | retries: {data['retries']}")
             else:
                 print(f"Kiosk channel: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
+            if data.get("screen_suspended"):
+                print("Kiosk playback is suspended while the screen is off or the app is in the background.")
         elif plex_settings:
             print("Plex settings saved: " + ", ".join(data["fields"]) + ".")
         elif action == "play":

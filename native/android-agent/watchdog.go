@@ -23,11 +23,20 @@ func (w *Watchdog) observe(now time.Time, p map[string]any, responsive, suspende
 	if responsive {
 		k := object(p["kiosk"])
 		v := object(p["video"])
+		wasEnabled := w.Enabled
 		w.Enabled = k["enabled"] == true && k["state"] == "locked"
 		if !w.Enabled {
 			w.Progress = now
 			w.Attempts = 0
+			w.HealthySince = time.Time{}
 			return ""
+		}
+		if !wasEnabled {
+			// Time before a lock was observed is not evidence of a stalled
+			// kiosk. Give newly discovered playback its full startup grace.
+			w.Progress = now
+			w.Attempts = 0
+			w.HealthySince = time.Time{}
 		}
 		source, _ := v["source"].(string)
 		position, _ := v["position"].(float64)
@@ -54,7 +63,7 @@ func (w *Watchdog) observe(now time.Time, p map[string]any, responsive, suspende
 		return ""
 	}
 	// Back off between escalations; at most three automatic interventions per
-	// stalled episode. A subsequent healthy playback period re-arms recovery.
+	// stalled period. A subsequent healthy playback period re-arms recovery.
 	if now.Sub(w.LastAction) < time.Duration(60*(1<<uint(w.Attempts)))*time.Second || w.Attempts >= 3 {
 		return ""
 	}
@@ -67,21 +76,32 @@ func (w *Watchdog) observe(now time.Time, p map[string]any, responsive, suspende
 	return "restart_app"
 }
 func (a *Agent) watch(ctx context.Context) {
+	a.watchWithPlayer(ctx, a.player)
+}
+
+func (a *Agent) watchWithPlayer(ctx context.Context, player func(context.Context, string, any) (map[string]any, error)) {
+	if a.bundleRecoveryFailed {
+		return
+	}
 	now := time.Now()
 	if now.Sub(a.watchdog.LastCheck) < 15*time.Second {
 		return
 	}
 	a.watchdog.LastCheck = now
 	child, cancel := context.WithTimeout(ctx, 7*time.Second)
-	defer cancel()
-	p, e := a.player(child, "health", nil)
+	p, e := player(child, "health", nil)
+	cancel()
 	action := a.watchdog.observe(now, p, e == nil, a.suspended)
 	if action == "" {
 		return
 	}
 	a.event("watchdog_" + action)
 	if action == "recover" {
-		_, _ = a.player(child, "recover", nil)
+		// A slow but successful health read must not consume the recovery
+		// attempt's deadline. Both calls remain bounded by the parent.
+		child, cancel = context.WithTimeout(ctx, 7*time.Second)
+		defer cancel()
+		_, _ = player(child, "recover", nil)
 	} else {
 		_ = a.lifecycle(action)
 	}

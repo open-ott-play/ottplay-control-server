@@ -20,7 +20,7 @@ PANES = OWNERS + ["pin", "launch", "osd"]
 REASONS = "producer_unavailable producer_failed invalid_sample state_changed_during_snapshot build_identity_partial document_hidden document_unfocused owned_overlay_open video_element_missing video_css_hidden video_zero_rect decoder_not_ready decoder_paused decoder_ended decoder_error physical_display_unverified".split()
 CAPABILITIES = "screenshot diagnostics input restart_stream reload_player restart_app exit_app reboot_device standby wake".split()
 CAP_REASONS = "ready not_implemented producer_unavailable remote_disconnected source_selection_required busy no_active_media current_state_unsupported policy_restricted".split()
-NATIVE_EVENTS = frozenset("result_ack_failed effect_claim_failed effect_failed operation_history_reset receipt_write_failed journal_write_failed result_write_failed poll_failed invalid_poll watchdog_recover watchdog_restart_app".split())
+NATIVE_EVENTS = frozenset("result_ack_failed effect_claim_failed effect_failed operation_history_reset receipt_write_failed journal_write_failed result_write_failed poll_failed invalid_poll watchdog_recover watchdog_restart_app bundle_recovery_failed".split())
 
 
 class InvalidData(Exception):
@@ -233,7 +233,7 @@ def native_metadata(api, raw, operation, expected_runtime=None):
                 "runtime_correlation": correlation}
     # Do not export provider titles, URLs, arbitrary event text or queue contents.
     result = {key: data[key] for key in ("version", "agent_version", "runtime", "boot_id", "operation_history_reset", "app_pid", "uptime_seconds",
-              "battery_percent", "watchdog_suspended", "watchdog_attempts", "webview_responsive", "system_evidence") if key in data}
+              "battery_percent", "watchdog_suspended", "watchdog_attempts", "webview_responsive", "system_evidence", "updates") if key in data}
     player = data.get("player")
     if isinstance(player, dict):
         result["player"] = {}
