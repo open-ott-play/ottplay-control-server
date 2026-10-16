@@ -242,6 +242,23 @@ the original system launcher installed and enabled for this recovery path.
 Changing Home does not remove a secure lockscreen or make a powered-off tablet
 turn on when charging.
 
+### K960 acceptance record (2026-10-16)
+
+On the K960 running Android 5.1/API 22, `OTT Home` 0.1.0 was installed beside
+`play.ott.foss` 1.1.55-beta.5 and selected with **Always**. A Home press returned
+to OTT without a chooser. After a normal reboot, `sys.boot_completed` became
+`1`; Android reported the resumed player activity as launched by
+`play.ott.home`, and the player appeared without a manual app launch. This
+confirms Home selection and startup forwarding on this tablet. It does not
+claim system lock task, physical exit protection or successful video playback.
+
+The same session exposed slow initial HTTPS setup: an unauthenticated request
+to the controller took about 13 seconds, longer than the player's eight-second
+queue timeout, while the next request completed in about two seconds. The
+controller connection subsequently appeared. Separate connection startup from
+source playback failures, allow the existing retry to run, and inspect bounded
+logs before changing TLS or credentials. Keep certificate verification enabled.
+
 See Android's [custom Home app guide](https://developer.android.com/work/dpc/dedicated-devices/cookbook#custom-home-apps)
 and [managed lock task documentation](https://developer.android.com/work/dpc/dedicated-devices/lock-task-mode).
 
