@@ -100,6 +100,9 @@ another file. Checkpoints contain the device, preset name, hashed server/preset
 revision, completed step names and one pending random operation key/deadline.
 They contain no settings values. Files are atomically replaced after fsync and
 locked against concurrent CLI writers. Keep the matching local preset available.
+On Unix the checkpoint directory must be private (0700), with regular files at
+0600. On Windows restrict the checkpoint directory's inherited ACL to the user
+running the CLI; Unix mode bits do not enforce Windows access permissions.
 
 `resume` validates the same server, device and preset revision, then reads the
 pending outcome. A retained response allows immediate rechecking. An uncertain

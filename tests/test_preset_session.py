@@ -74,7 +74,10 @@ class PresetSessionTests(unittest.TestCase):
         text = self.path.read_text()
         self.assertNotIn(TOKEN, text)
         self.assertNotIn(PLAYLIST, text)
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        # Windows stat mode bits do not describe the inherited directory ACL.
+        # The recovery/content checks above still run on every platform.
+        if os.name != 'nt':
+            self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
     def test_completed_steps_are_rechecked_after_drift(self):
         self.assertEqual(self.run_session()['status'], 'loaded')
