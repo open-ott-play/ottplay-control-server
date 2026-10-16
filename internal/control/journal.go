@@ -106,8 +106,14 @@ func newCommandJournal(c *config.CommandJournal) (*commandJournal, error) {
 	}
 	now := time.Now()
 	j.records = copyRecords(j.records, now)
+	ids := make(map[string]bool)
 	for k, v := range j.records {
-		if k != journalIndex(v.Owner, v.Key) || !operationKey.MatchString(v.Key) || !commandID.MatchString(v.ID) || !config.ValidCommandAction(v.Permission) || v.Device == "" || len(v.Digest) != 64 || v.CommandExpiresAt <= 0 || v.ExpiresAt > now.Add(24*time.Hour).Unix()+60 {
+		digest, err := hex.DecodeString(v.Digest)
+		if k != journalIndex(v.Owner, v.Key) || !operationKey.MatchString(v.Key) || !commandID.MatchString(v.ID) || ids[v.ID] || !config.ValidCommandAction(v.Permission) || v.Owner == "" || len(v.Owner) > 256 || v.Device == "" || err != nil || len(digest) != 32 || hex.EncodeToString(digest) != v.Digest || v.CommandExpiresAt <= 0 || v.CommandExpiresAt > v.ExpiresAt || v.ExpiresAt > now.Add(24*time.Hour).Unix()+60 {
+			return nil, journalError
+		}
+		ids[v.ID] = true
+		if (v.State == "responded" && v.ResultStatus != "ok" && v.ResultStatus != "rejected" && v.ResultStatus != "unsupported") || (v.State != "responded" && v.ResultStatus != "") {
 			return nil, journalError
 		}
 		switch v.State {
@@ -170,6 +176,15 @@ func (s *Server) Close() error {
 		return s.journal.lock.Close()
 	}
 	return nil
+}
+
+// Called under s.mu; retained duplicates consume no queue capacity.
+func (s *Server) hasOperation(r *http.Request, key string, now time.Time) bool {
+	if key == "" || s.journal == nil {
+		return false
+	}
+	v, ok := s.journal.records[journalIndex(requestOwner(r), key)]
+	return ok && v.ExpiresAt > now.Unix()
 }
 
 // Called under s.mu. Payloads, URLs, tokens and result bodies never enter the journal.

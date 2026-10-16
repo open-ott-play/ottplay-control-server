@@ -33,6 +33,7 @@ func operationValue(t *testing.T, s *Server, key string) map[string]any {
 }
 func TestJournalRestartNeverReplaysUnknownRelativeCommand(t *testing.T) {
 	c := journalConfig(t)
+	c.MaxPendingPerDevice = 1
 	s, err := New(c)
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +63,24 @@ func TestJournalRestartNeverReplaysUnknownRelativeCommand(t *testing.T) {
 	expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, body, nil), 202)
 	if len(s.devices[0].queue) != 0 {
 		t.Fatal("unknown operation replayed after restart")
+	}
+}
+
+func TestJournalLegacyHeaderAndCanonicalParams(t *testing.T) {
+	c := journalConfig(t)
+	s, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	expect(t, request(s, "OPTIONS", "/api/webhook/commands", "", "", map[string]string{"Origin": "https://player.example", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization, content-type, idempotency-key"}), 204)
+	headers := map[string]string{"Idempotency-Key": "canonical-command-01"}
+	w := request(s, "POST", "/api/webhook/commands?device_id=first", adminToken, `{"command":"set_volume","volume":35}`, headers)
+	expect(t, w, 202)
+	w = request(s, "POST", "/api/webhook/commands?device_id=first", adminToken, `{ "volume":35,"command":"set_volume" }`, headers)
+	expect(t, w, 202)
+	if len(s.devices[0].queue) != 1 {
+		t.Fatal("semantic duplicate enqueued")
 	}
 }
 func TestJournalRetainsOutcomeWithoutSecretBody(t *testing.T) {

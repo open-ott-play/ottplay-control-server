@@ -153,13 +153,13 @@ func (s *Server) cors(w http.ResponseWriter, r *http.Request, methods string, de
 	}
 	for _, h := range strings.Split(r.Header.Get("Access-Control-Request-Headers"), ",") {
 		h = strings.ToLower(strings.TrimSpace(h))
-		if h != "" && h != "authorization" && h != "content-type" {
+		if h != "" && h != "authorization" && h != "content-type" && h != "idempotency-key" {
 			failure(w, 403, "preflight header is not allowed")
 			return false
 		}
 	}
 	w.Header().Set("Access-Control-Allow-Methods", strings.ReplaceAll(methods, ",", ", "))
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	w.WriteHeader(http.StatusNoContent)
 	return false
@@ -445,7 +445,7 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now 
 	expires := now.Add(s.ttl)
 	m["expires_at"], _ = json.Marshal(float64(expires.UnixNano()) / 1e9)
 	data, _ := json.Marshal(m)
-	if len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes {
+	if (len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes) && !s.hasOperation(r, key, now) {
 		s.mu.Unlock()
 		failure(w, 429, "command queue is full")
 		return

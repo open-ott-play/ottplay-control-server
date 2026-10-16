@@ -225,7 +225,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	data, _ := json.Marshal(m)
 	s.mu.Lock()
 	s.expire(now)
-	if len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes || len(d.results) >= 50 {
+	if (len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes || len(d.results) >= 50) && !s.hasOperation(r, key, now) {
 		s.mu.Unlock()
 		failure(w, 429, "request queue is full")
 		return
