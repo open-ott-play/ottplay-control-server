@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="675" viewBox="0 0 1280 675" role="img" aria-labelledby="title desc">
+  <title id="title">OTA architecture</title>
+  <desc id="desc">Separate release, command and verification paths for the Android kiosk.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#245de8" />
+    </marker>
+    <marker id="amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#b66a0b" />
+    </marker>
+  </defs>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <rect x="0" y="0" width="1280" height="675" rx="0" fill="#f5f7fc" stroke="#f5f7fc" />
+    <text x="44" y="57" font-size="32" fill="#17233f" font-weight="700">OTA architecture</text>
+    <text x="44" y="90" font-size="17" fill="#53627b" font-weight="400">Separate release, command and verification paths for the Android kiosk.</text>
+    <text x="44" y="146" font-size="17" fill="#7651c9" font-weight="700">01  PREPARE</text>
+    <text x="353" y="146" font-size="17" fill="#245de8" font-weight="700">02  DELIVER</text>
+    <text x="662" y="146" font-size="17" fill="#087f82" font-weight="700">03  VERIFY</text>
+    <text x="971" y="146" font-size="17" fill="#087f82" font-weight="700">04  RUN</text>
+    <rect x="44" y="166" width="265" height="152" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <rect x="44" y="181" width="5" height="122" rx="2" fill="#7651c9" />
+    <text x="66" y="200" font-size="22" fill="#7651c9" font-weight="700">Reviewed release</text>
+    <text x="66" y="231" font-size="17" fill="#53627b" font-weight="400">Verify source and CI</text>
+    <text x="66" y="256" font-size="17" fill="#53627b" font-weight="400">Select exact artifact bytes</text>
+    <text x="66" y="281" font-size="17" fill="#53627b" font-weight="400">Keep signing key private</text>
+    <rect x="353" y="166" width="265" height="152" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <rect x="353" y="181" width="5" height="122" rx="2" fill="#245de8" />
+    <text x="375" y="200" font-size="22" fill="#245de8" font-weight="700">HTTPS artifact host</text>
+    <text x="375" y="231" font-size="17" fill="#53627b" font-weight="400">Payload + signed envelope</text>
+    <text x="375" y="256" font-size="17" fill="#53627b" font-weight="400">Direct HTTP 200</text>
+    <text x="375" y="281" font-size="17" fill="#53627b" font-weight="400">Immutable version paths</text>
+    <rect x="662" y="166" width="265" height="152" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <rect x="662" y="181" width="5" height="122" rx="2" fill="#087f82" />
+    <text x="684" y="200" font-size="22" fill="#087f82" font-weight="700">Native Android agent</text>
+    <text x="684" y="231" font-size="17" fill="#53627b" font-weight="400">Pinned Ed25519 key</text>
+    <text x="684" y="256" font-size="17" fill="#53627b" font-weight="400">Envelope and payload SHA-256</text>
+    <text x="684" y="281" font-size="17" fill="#53627b" font-weight="400">Package, type and size</text>
+    <rect x="971" y="166" width="265" height="152" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <rect x="971" y="181" width="5" height="122" rx="2" fill="#087f82" />
+    <text x="993" y="200" font-size="22" fill="#087f82" font-weight="700">Installed components</text>
+    <text x="993" y="231" font-size="17" fill="#53627b" font-weight="400">Agent binary</text>
+    <text x="993" y="256" font-size="17" fill="#53627b" font-weight="400">APK + system touch helper</text>
+    <text x="993" y="281" font-size="17" fill="#53627b" font-weight="400">Fresh version / hash status</text>
+    <path d="M309 242 H353" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <path d="M618 242 H662" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <path d="M927 242 H971" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <rect x="44" y="373" width="574" height="129" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <rect x="44" y="388" width="5" height="99" rx="2" fill="#245de8" />
+    <text x="66" y="407" font-size="22" fill="#245de8" font-weight="700">Operator → controller → native queue</text>
+    <text x="66" y="438" font-size="17" fill="#53627b" font-weight="400">ott a1 android update HTTPS_MANIFEST SHA256</text>
+    <text x="66" y="463" font-size="17" fill="#53627b" font-weight="400">Acknowledgement admits the operation; verify the effect next.</text>
+    <path d="M618 435 H640" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <path d="M640 435 V339 H794 V318" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <rect x="662" y="373" width="574" height="129" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <rect x="662" y="388" width="5" height="99" rx="2" fill="#7651c9" />
+    <text x="684" y="407" font-size="22" fill="#7651c9" font-weight="700">Web player follows its own release path</text>
+    <text x="684" y="438" font-size="17" fill="#53627b" font-weight="400">Publish the verified web bundle at the existing origin.</text>
+    <text x="684" y="463" font-size="17" fill="#53627b" font-weight="400">Reload an active player and verify its kiosk target.</text>
+    <rect x="44" y="544" width="1192" height="96" rx="14" fill="#fff3df" stroke="#f1d7a8" />
+    <text x="65" y="578" font-size="21" fill="#b66a0b" font-weight="700">Bootstrap once; preserve the recovery channel.</text>
+    <text x="65" y="609" font-size="17" fill="#53627b" font-weight="400">Agent-only OTA works with OTT disabled. Firmware, kernel, broker and startup scripts need separate maintenance.</text>
+  </g>
+</svg>
