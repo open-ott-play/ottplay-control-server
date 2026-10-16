@@ -3215,6 +3215,8 @@ def handoff_command(client, source, target):
                 or type(handoff.get("version")) is not int or handoff["version"] != 1
                 or handoff.get("provider") not in ("m3u", "xtream", "stalker")
                 or handoff.get("kind") not in ("live", "archive")
+                or not isinstance(handoff.get("item_id"), str)
+                or not re.fullmatch(r"channel-v1:[0-9a-f]{8}\.[0-9a-f]{8}", handoff["item_id"])
                 or any(not epg_text(handoff.get(k), limit, "utf-8") or not handoff[k].strip()
                        or re.search(r"[\x00-\x1f\x7f]", handoff[k]) for k, limit in (("source_id",256),("item_id",512)))
                 or (archive and (type(handoff.get("archive_start")) is not int or not 1 <= handoff["archive_start"] <= 9007199254740991))):

@@ -8,7 +8,7 @@ class HandoffTests(unittest.TestCase):
     def setUp(self):
         self.client = mock.Mock()
         self.client.device.side_effect = lambda x: x
-        self.handoff = {'version': 1, 'provider': 'm3u', 'source_id': 'opaque-source', 'item_id':'stable-channel', 'kind':'live'}
+        self.handoff = {'version': 1, 'provider': 'm3u', 'source_id': 'opaque-source', 'item_id':'channel-v1:1234abcd.5678abcd', 'kind':'live'}
 
     def test_transfers_only_stable_reference_without_stopping_source(self):
         self.client.call.side_effect = [{'handoff': self.handoff}, {'dispatched':True,'kind':'live'}]
@@ -19,7 +19,9 @@ class HandoffTests(unittest.TestCase):
 
     def test_rejects_url_field_invalid_position_and_same_device_before_import(self):
         bad_rows = [dict(self.handoff,url='https://private.example'), dict(self.handoff,kind='vod'),
-                    dict(self.handoff,kind='archive',archive_start=-1), dict(self.handoff,version=True)]
+                    dict(self.handoff,kind='archive',archive_start=-1), dict(self.handoff,version=True),
+                    dict(self.handoff,item_id='https://private.example/stream?token=secret'),
+                    dict(self.handoff,item_id='channel-v1:1234ABCD.5678abcd')]
         for handoff in bad_rows:
             self.client.call.reset_mock()
             self.client.call.return_value = {'handoff':handoff}

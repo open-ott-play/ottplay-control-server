@@ -1034,11 +1034,13 @@ still applies. The request carries expected values, so treat its body as private
 `{dispatched:true,kind:"live"|"archive"}`. The handoff has exact fields:
 
 ```json
-{"version":1,"provider":"m3u","source_id":"opaque-source-identity","item_id":"stable-item-id","kind":"live"}
+{"version":1,"provider":"m3u","source_id":"opaque-source-identity","item_id":"channel-v1:1234abcd.5678abcd","kind":"live"}
 ```
 
-Providers are `m3u`, `xtream`, `stalker`. Source/item identifiers are nonempty
-text bounded to 256/512 UTF-8 bytes. Archive adds `archive_start`, a positive
+Providers are `m3u`, `xtream`, `stalker`. Source identifiers are nonempty
+text bounded to 256 UTF-8 bytes. Item identifiers must match
+`channel-v1:[0-9a-f]{8}\.[0-9a-f]{8}`: a player-produced opaque fingerprint,
+never a raw provider ID or stream URL. Archive adds `archive_start`, a positive
 safe integer Unix timestamp incorporating the source's current seek offset.
 Live forbids that field. Additional fields, URLs and credential fields are not
 part of the schema. The destination requires exact source identity and a unique

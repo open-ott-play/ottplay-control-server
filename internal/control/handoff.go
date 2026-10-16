@@ -1,6 +1,11 @@
 package control
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"regexp"
+)
+
+var handoffItemID = regexp.MustCompile(`^channel-v1:[0-9a-f]{8}\.[0-9a-f]{8}$`)
 
 type handoffRequest struct {
 	Kind   string
@@ -11,6 +16,10 @@ func validHandoff(raw json.RawMessage) (string, bool) {
 	m, err := decodeObject(raw)
 	if err != nil || !profileInteger(m["version"], 1, 1) || !inspectEnum(m["provider"], "m3u", "xtream", "stalker") ||
 		!favoriteText(m["source_id"], 256) || !favoriteText(m["item_id"], 512) {
+		return "", false
+	}
+	var itemID string
+	if json.Unmarshal(m["item_id"], &itemID) != nil || !handoffItemID.MatchString(itemID) {
 		return "", false
 	}
 	var kind string

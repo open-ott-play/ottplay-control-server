@@ -142,7 +142,8 @@ ott handoff living-room bedroom
 ```
 
 The source exports a version-1 live/archive reference: provider, opaque source
-identity, stable item ID and, for archive, the current programme time. The target
+identity, opaque `channel-v1:<8 hex>.<8 hex>` item fingerprint and, for archive,
+the current programme time. Raw provider IDs and stream URLs stay local. The target
 must have the **same configured source/account**, resolve a unique matching item
 in its own catalogue and obtain a fresh URL with its own local credentials.
 The controller neither copies a playable URL nor changes target credentials.
@@ -164,3 +165,19 @@ operation deadlines, two writers, corrupt journals, cross-operator reads and
 malformed handoff payloads. On a staging player additionally interrupt the CLI
 after a settings save, restart the controller, resume and verify; test a handoff
 between matching and mismatching sources. Confirm video/audio separately.
+
+For local cross-repository validation, with the current FOSS checkout and its
+development dependencies installed, run:
+
+```sh
+node scripts/smoke_foss_roadmap.cjs /path/to/ottplay-foss
+```
+
+The smoke builds this Go server, compiles the full FOSS TypeScript project, and
+runs its real transport, command handlers, source identity and shipped playlist
+codec against the Python CLI. It checks exact settings for all three supported
+providers, mismatches, live handoff with different local row IDs, archive seek
+offsets, failed URL resolution and strict wire validation. Only storage, provider
+policy and playback host ports are fixtures; it does not verify a browser,
+physical media output or real account access. It binds to loopback, uses private
+temporary files, contacts no stream URLs, and removes its files/server on exit.

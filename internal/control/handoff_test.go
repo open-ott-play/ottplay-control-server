@@ -9,7 +9,7 @@ import (
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
 )
 
-const liveHandoff = `{"version":1,"provider":"m3u","source_id":"opaque-source","item_id":"stable-channel","kind":"live"}`
+const liveHandoff = `{"version":1,"provider":"m3u","source_id":"opaque-source","item_id":"channel-v1:1234abcd.5678abcd","kind":"live"}`
 
 func TestHandoffStrictSchemaAndBoundResult(t *testing.T) {
 	s := newTestServer(t)
@@ -17,6 +17,8 @@ func TestHandoffStrictSchemaAndBoundResult(t *testing.T) {
 		strings.Replace(liveHandoff, `"version":1`, `"version":true`, 1),
 		strings.Replace(liveHandoff, `"kind":"live"`, `"kind":"vod"`, 1),
 		strings.Replace(liveHandoff, `"kind":"live"`, `"kind":"archive"`, 1),
+		strings.Replace(liveHandoff, `channel-v1:1234abcd.5678abcd`, `https://private.example/stream?token=secret`, 1),
+		strings.Replace(liveHandoff, `channel-v1:1234abcd.5678abcd`, `channel-v1:1234ABCD.5678abcd`, 1),
 		strings.Replace(liveHandoff, `"kind":"live"`, `"kind":"live","url":"https://private.example"`, 1),
 	} {
 		expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, `{"action":"playback_handoff_import","params":{"handoff":`+bad+`}}`, nil), 400)
@@ -25,6 +27,7 @@ func TestHandoffStrictSchemaAndBoundResult(t *testing.T) {
 	expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"ok","data":{"dispatched":true,"kind":"archive"}}`, nil), 400)
 	expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"ok","data":{"dispatched":true,"kind":"live"}}`, nil), 200)
 	id = rpcID(t, s, `{"action":"playback_handoff_export","params":{}}`)
+	expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"ok","data":{"handoff":`+strings.Replace(liveHandoff, `channel-v1:1234abcd.5678abcd`, `https://private.example/stream?token=secret`, 1)+`}}`, nil), 400)
 	expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"ok","data":{"handoff":`+liveHandoff+`}}`, nil), 200)
 }
 func TestSettingsComparisonRequiresBoundProviderShape(t *testing.T) {
