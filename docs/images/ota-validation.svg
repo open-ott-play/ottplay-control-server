@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="670" viewBox="0 0 1280 670" role="img" aria-labelledby="title desc">
+  <title id="title">Validation and rollout evidence</title>
+  <desc id="desc">Keep automated checks separate from installed-byte and physical playback evidence.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#245de8" />
+    </marker>
+    <marker id="amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#b66a0b" />
+    </marker>
+  </defs>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <rect x="0" y="0" width="1280" height="670" rx="0" fill="#f5f7fc" stroke="#f5f7fc" />
+    <text x="44" y="57" font-size="32" fill="#17233f" font-weight="700">Validation and rollout evidence</text>
+    <text x="44" y="90" font-size="17" fill="#53627b" font-weight="400">Keep automated checks separate from installed-byte and physical playback evidence.</text>
+    <text x="44" y="143" font-size="18" fill="#245de8" font-weight="700">LOCAL AUTOMATED CHECKS</text>
+    <text x="850" y="143" font-size="18" fill="#087f82" font-weight="700">EVIDENCE AT EACH LAYER</text>
+    <text x="44" y="217" font-size="20" fill="#17233f" font-weight="700">CLI</text>
+    <rect x="224" y="190" width="560" height="38" rx="6" fill="#e8edf7" stroke="#e8edf7" />
+    <rect x="224" y="190" width="455.46666666666664" height="38" rx="6" fill="#245de8" stroke="#245de8" />
+    <text x="691.4666666666667" y="217" font-size="21" fill="#245de8" font-weight="700">488</text>
+    <text x="44" y="331" font-size="20" fill="#17233f" font-weight="700">Release tooling</text>
+    <rect x="224" y="304" width="560" height="38" rx="6" fill="#e8edf7" stroke="#e8edf7" />
+    <rect x="224" y="304" width="537.6" height="38" rx="6" fill="#7651c9" stroke="#7651c9" />
+    <text x="773.6" y="331" font-size="21" fill="#7651c9" font-weight="700">576</text>
+    <text x="44" y="445" font-size="20" fill="#17233f" font-weight="700">OTA packager</text>
+    <rect x="224" y="418" width="560" height="38" rx="6" fill="#e8edf7" stroke="#e8edf7" />
+    <rect x="224" y="418" width="5.6" height="38" rx="6" fill="#087f82" stroke="#087f82" />
+    <text x="241.6" y="445" font-size="21" fill="#087f82" font-weight="700">6</text>
+    <path d="M224 476 H784" stroke="#a7b3c8" />
+    <path d="M224.0 476 V484" stroke="#a7b3c8" />
+    <text x="217.0" y="508" font-size="15" fill="#53627b" font-weight="400">0</text>
+    <path d="M317.3333333333333 476 V484" stroke="#a7b3c8" />
+    <text x="310.3333333333333" y="508" font-size="15" fill="#53627b" font-weight="400">100</text>
+    <path d="M410.66666666666663 476 V484" stroke="#a7b3c8" />
+    <text x="403.66666666666663" y="508" font-size="15" fill="#53627b" font-weight="400">200</text>
+    <path d="M504.0 476 V484" stroke="#a7b3c8" />
+    <text x="497.0" y="508" font-size="15" fill="#53627b" font-weight="400">300</text>
+    <path d="M597.3333333333333 476 V484" stroke="#a7b3c8" />
+    <text x="590.3333333333333" y="508" font-size="15" fill="#53627b" font-weight="400">400</text>
+    <path d="M690.6666666666667 476 V484" stroke="#a7b3c8" />
+    <text x="683.6666666666667" y="508" font-size="15" fill="#53627b" font-weight="400">500</text>
+    <path d="M784.0 476 V484" stroke="#a7b3c8" />
+    <text x="777.0" y="508" font-size="15" fill="#53627b" font-weight="400">600</text>
+    <text x="390" y="545" font-size="18" fill="#53627b" font-weight="400">Number of test cases</text>
+    <rect x="850" y="174" width="386" height="88" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <text x="868" y="203" font-size="21" fill="#245de8" font-weight="700">Source / release</text>
+    <text x="868" y="228" font-size="16" fill="#53627b" font-weight="400">Merged OTA implementation; beta artifacts</text>
+    <text x="868" y="248" font-size="16" fill="#53627b" font-weight="400">published.</text>
+    <rect x="850" y="279" width="386" height="88" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <text x="868" y="308" font-size="21" fill="#087f82" font-weight="700">Transport</text>
+    <text x="868" y="333" font-size="16" fill="#53627b" font-weight="400">Signed current and recovery packages</text>
+    <text x="868" y="353" font-size="16" fill="#53627b" font-weight="400">verified.</text>
+    <rect x="850" y="384" width="386" height="88" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <text x="868" y="413" font-size="21" fill="#087f82" font-weight="700">Reference tablet</text>
+    <text x="868" y="438" font-size="16" fill="#53627b" font-weight="400">Agent 0.1.2-beta.4: version and SHA-256</text>
+    <text x="868" y="458" font-size="16" fill="#53627b" font-weight="400">verified.</text>
+    <rect x="850" y="489" width="386" height="88" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <text x="868" y="518" font-size="21" fill="#b66a0b" font-weight="700">APK + helper</text>
+    <text x="868" y="543" font-size="16" fill="#53627b" font-weight="400">Host-tested; physical pair acceptance still</text>
+    <text x="868" y="563" font-size="16" fill="#53627b" font-weight="400">pending.</text>
+    <text x="44" y="610" font-size="16" fill="#53627b" font-weight="400">Source: local audit runs, 14 Oct 2026; reference-tablet status checked 15 Oct 2026.</text>
+    <text x="44" y="638" font-size="16" fill="#53627b" font-weight="400">Counts describe suite size, not coverage or runtime. CLI: 1 skipped. Go race tests and ARMv7 compilation also passed.</text>
+  </g>
+</svg>

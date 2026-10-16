@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="877" viewBox="0 0 1280 877" role="img" aria-labelledby="title desc">
+  <title id="title">APK + helper transaction</title>
+  <desc id="desc">The coordinated bundle uses saved recovery files and verifies the pinned content.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#245de8" />
+    </marker>
+    <marker id="amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#b66a0b" />
+    </marker>
+  </defs>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <rect x="0" y="0" width="1280" height="877" rx="0" fill="#f5f7fc" stroke="#f5f7fc" />
+    <text x="44" y="57" font-size="32" fill="#17233f" font-weight="700">APK + helper transaction</text>
+    <text x="44" y="90" font-size="17" fill="#53627b" font-weight="400">The coordinated bundle uses saved recovery files and verifies the pinned content.</text>
+    <rect x="44" y="139" width="806" height="93" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <circle cx="81" cy="173" r="19" fill="#245de8" />
+    <text x="75" y="180" font-size="20" fill="#ffffff" font-weight="700">1</text>
+    <text x="116" y="172" font-size="23" fill="#245de8" font-weight="700">Preflight</text>
+    <text x="116" y="204" font-size="16" fill="#53627b" font-weight="400">Verify signature, matching old pair, foreground OTT, space and /system read-only.</text>
+    <path d="M445 232 V257" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <rect x="44" y="257" width="806" height="93" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <circle cx="81" cy="291" r="19" fill="#245de8" />
+    <text x="75" y="298" font-size="20" fill="#ffffff" font-weight="700">2</text>
+    <text x="116" y="290" font-size="23" fill="#245de8" font-weight="700">Save recovery state</text>
+    <text x="116" y="322" font-size="16" fill="#53627b" font-weight="400">Persist previous APK + helper and the pending transaction before changing files.</text>
+    <path d="M445 350 V375" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <rect x="44" y="375" width="806" height="93" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <circle cx="81" cy="409" r="19" fill="#245de8" />
+    <text x="75" y="416" font-size="20" fill="#ffffff" font-weight="700">3</text>
+    <text x="116" y="408" font-size="23" fill="#245de8" font-weight="700">Apply the pair</text>
+    <text x="116" y="440" font-size="16" fill="#53627b" font-weight="400">Stop OTT and old helper; replace helper atomically, restore read-only, install APK.</text>
+    <path d="M445 468 V493" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <rect x="44" y="493" width="806" height="93" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <circle cx="81" cy="527" r="19" fill="#245de8" />
+    <text x="75" y="534" font-size="20" fill="#ffffff" font-weight="700">4</text>
+    <text x="116" y="526" font-size="23" fill="#245de8" font-weight="700">Verify the result</text>
+    <text x="116" y="558" font-size="16" fill="#53627b" font-weight="400">Compare bytes, kiosk target and flags; require progress if playback was active.</text>
+    <path d="M445 586 V611" fill="none" stroke="#245de8" stroke-width="3" marker-end="url(#arrow)" />
+    <rect x="44" y="611" width="806" height="93" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <circle cx="81" cy="645" r="19" fill="#087f82" />
+    <text x="75" y="652" font-size="20" fill="#ffffff" font-weight="700">5</text>
+    <text x="116" y="644" font-size="23" fill="#087f82" font-weight="700">Commit</text>
+    <text x="116" y="676" font-size="16" fill="#53627b" font-weight="400">Mark the transaction committed only after verification succeeds.</text>
+    <rect x="918" y="257" width="318" height="144" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <rect x="918" y="272" width="5" height="114" rx="2" fill="#b66a0b" />
+    <text x="940" y="291" font-size="22" fill="#b66a0b" font-weight="700">Any apply / verify error</text>
+    <text x="940" y="322" font-size="17" fill="#53627b" font-weight="400">Restore the saved pair</text>
+    <text x="940" y="347" font-size="17" fill="#53627b" font-weight="400">Return /system to read-only</text>
+    <text x="940" y="372" font-size="17" fill="#53627b" font-weight="400">Check the restored bytes</text>
+    <path d="M850 411 H900" fill="none" stroke="#b66a0b" stroke-width="3" marker-end="url(#amber)" />
+    <path d="M900 411 V330 H918" fill="none" stroke="#b66a0b" stroke-width="3" marker-end="url(#amber)" />
+    <path d="M850 539 H883 V365 H918" fill="none" stroke="#b66a0b" stroke-width="3" marker-end="url(#amber)" />
+    <rect x="918" y="431" width="318" height="169" rx="14" fill="#ffffff" stroke="#dce3ef" />
+    <rect x="918" y="446" width="5" height="139" rx="2" fill="#b64255" />
+    <text x="940" y="465" font-size="22" fill="#b64255" font-weight="700">Recovery stays pending</text>
+    <text x="940" y="496" font-size="17" fill="#53627b" font-weight="400">If recovery cannot finish:</text>
+    <text x="940" y="521" font-size="17" fill="#53627b" font-weight="400">block app mutations; keep</text>
+    <text x="940" y="546" font-size="17" fill="#53627b" font-weight="400">diagnostics and signed</text>
+    <text x="940" y="571" font-size="17" fill="#53627b" font-weight="400">agent repair available.</text>
+    <path d="M1077 401 V431" fill="none" stroke="#b66a0b" stroke-width="3" marker-end="url(#amber)" />
+    <rect x="44" y="758" width="1192" height="85" rx="14" fill="#f0eafa" stroke="#ded1f3" />
+    <text x="65" y="791" font-size="20" fill="#7651c9" font-weight="700">After a process restart: recover files without launching OTT or taking over HOME.</text>
+    <text x="65" y="819" font-size="17" fill="#53627b" font-weight="400">Binary rollback does not undo app-data migrations. Device acceptance is required before unattended bundle rollout.</text>
+  </g>
+</svg>
