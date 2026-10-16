@@ -42,6 +42,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show player status and available controls
   ott NAME load PRESET               apply a private Plex, M3U and optional Stalker preset
+  ott NAME load PRESET plan|apply|resume|verify [--checkpoint FILE]
+                                     inspect or safely resume exact preset settings
+  ott handoff SOURCE TARGET          continue live/archive viewing on another player
   ott NAME 12                        play channel 12 from the s listing
   ott NAME prev / previous           play the previous channel in the current category
   ott NAME next                      play the next channel in the current category
@@ -192,6 +195,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "restart", "play", "provider",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "favorites", "aspect",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -637,11 +641,13 @@ class Client:
             return ids[0]
         raise Error(f"Unknown player {name!r}. Run ott devices or ott add NAME UUID")
 
-    def call(self, device, action, params):
+    def call(self, device, action, params, idempotency_key=None):
         """Preserve the legacy data-only API for existing commands."""
-        return self.call_receipt(device, action, params)["data"]
+        if idempotency_key is None:
+            return self.call_receipt(device, action, params)["data"]
+        return self.call_receipt(device, action, params, idempotency_key=idempotency_key)["data"]
 
-    def call_receipt(self, device, action, params):
+    def call_receipt(self, device, action, params, idempotency_key=None):
         """Submit once and retain the request identity, including read failures."""
         request_id = None
         status = "unknown"
@@ -649,7 +655,10 @@ class Client:
             query = "?" + urllib.parse.urlencode({"device_id": device})
             deadline = time.monotonic() + self.timeout
             try:
-                _, queued = self.api("/api/requests" + query, {"action": action, "params": params}, timeout=self.timeout)
+                payload = {"action": action, "params": params}
+                if idempotency_key is not None:
+                    payload["idempotency_key"] = idempotency_key
+                _, queued = self.api("/api/requests" + query, payload, timeout=self.timeout)
             except Error as exc:
                 # A lost POST response cannot prove whether the mutation was queued.
                 # Replaying it would give a relative-volume command a second ID.
@@ -1313,7 +1322,7 @@ def validate_preset(config, requested):
     return name, result
 
 
-def load_preset(client, device, name, preset):
+def load_preset(client, device, name, preset, session=None):
     """Apply acknowledged steps; repeat only proven pre-write mount rejections."""
     completed = []
     stage = "start"
@@ -1322,6 +1331,9 @@ def load_preset(client, device, name, preset):
     def step(label, action, params, validate, retry_errors=()):
         nonlocal stage
         stage = label
+        if session is not None and session.prepare(label, action, params):
+            completed.append(label)
+            return True
         deadline = time.monotonic() + budget
         while True:
             remaining = deadline - time.monotonic()
@@ -1330,10 +1342,12 @@ def load_preset(client, device, name, preset):
             pending = False
             try:
                 client.timeout = remaining
-                data = client.call(device, action, params)
+                data = (session.call(action, params) if session is not None else client.call(device, action, params))
             except PlayerRejected as exc:
                 if not isinstance(exc.data, dict) or exc.data.get("error") not in retry_errors:
                     raise
+                if session is not None:
+                    session.retry(label, action, params)
                 pending = True
             finally:
                 client.timeout = budget
@@ -1342,6 +1356,8 @@ def load_preset(client, device, name, preset):
             if not pending:
                 result = validate(data)
                 if result is not None:
+                    if session is not None:
+                        session.complete(label)
                     completed.append(label)
                     return result
             time.sleep(min(0.25, max(0, deadline - time.monotonic())))
@@ -1434,6 +1450,14 @@ def load_preset(client, device, name, preset):
 
 
 def preset_command(config, words, timeout, json_output, on_receipt=None):
+    if len(words) > 3:
+        path = Path(__file__).resolve().with_name("preset_session.py")
+        if not path.is_file():
+            raise Error("Install preset_session.py beside ott.py")
+        spec = importlib.util.spec_from_file_location("ott_preset_session", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.run(SimpleNamespace(**globals()), config, words, timeout, json_output, on_receipt)
     receipt = {"status": "failed", "stage": "validate", "completed": [], "error": "Invalid preset configuration or command."}
     try:
         _, params = parse_command(words[1:])
@@ -3119,6 +3143,36 @@ def android_command(client, config_path, device, name, words, json_output):
     return result
 
 
+def handoff_command(client, source, target):
+    source_id, target_id = client.device(source), client.device(target)
+    if source_id == target_id:
+        raise Error("Choose two different players for handoff")
+    try:
+        data = client.call(source_id, "playback_handoff_export", {})
+        handoff = data.get("handoff") if isinstance(data, dict) else None
+        if not isinstance(handoff, dict):
+            raise Error("The source player returned an invalid handoff")
+        keys = {"version", "provider", "source_id", "item_id", "kind"}
+        archive = handoff.get("kind") == "archive"
+        if archive:
+            keys.add("archive_start")
+        if (set(data) != {"handoff"} or set(handoff) != keys
+                or type(handoff.get("version")) is not int or handoff["version"] != 1
+                or handoff.get("provider") not in ("m3u", "xtream", "stalker")
+                or handoff.get("kind") not in ("live", "archive")
+                or any(not epg_text(handoff.get(k), limit, "utf-8") or not handoff[k].strip()
+                       or re.search(r"[\x00-\x1f\x7f]", handoff[k]) for k, limit in (("source_id",256),("item_id",512)))
+                or (archive and (type(handoff.get("archive_start")) is not int or not 1 <= handoff["archive_start"] <= 9007199254740991))):
+            raise Error("The source player returned an invalid handoff")
+        result = client.call(target_id, "playback_handoff_import", {"handoff": handoff})
+        if (not isinstance(result, dict) or set(result) != {"dispatched", "kind"}
+                or result["dispatched"] is not True or result["kind"] != handoff["kind"]):
+            raise Error("Target handoff was not confirmed; inspect playback before retrying")
+    except (PlayerRejected, PlayerUnsupported):
+        raise Error("Handoff is unavailable or rejected. Both players require the same configured source and a unique matching channel") from None
+    return {"source": source_id, "target": target_id, "dispatched": True, "kind": handoff["kind"], "source_stopped": False}
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "resolve":
@@ -3174,6 +3228,11 @@ def main(argv=None):
                                   print_request_receipt if args.receipt else None)
         client = Client(config, args.timeout)
         client.on_receipt = print_request_receipt if args.receipt else None
+        if args.words[0].casefold() == "handoff":
+            if len(args.words) != 3:
+                raise Error("Use ott handoff SOURCE TARGET")
+            print(json.dumps(handoff_command(client, args.words[1], args.words[2]), ensure_ascii=False, indent=2))
+            return 0
         if management(client, args.config, args.words, json_output=args.json):
             return 0
         device = client.device(args.words[0])
