@@ -49,4 +49,5 @@ No device installation or default change is performed by the build script.
 See the [ADB guide](../../docs/android-adb.md#use-ott-as-the-tablets-home-screen)
 for acceptance checks and the distinction between Home, autostart and managed
 kiosk. Source/build availability does not establish that these checks have
-passed on a particular tablet.
+passed on a particular tablet. The linked guide includes the dated K960
+acceptance record and the tested streaming-engine workaround.

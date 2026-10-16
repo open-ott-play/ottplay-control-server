@@ -252,8 +252,12 @@ to OTT without a chooser. After a normal reboot, `sys.boot_completed` became
 confirms Home selection and startup forwarding on this tablet. The controller
 also acknowledged loading the existing `Home` preset into M3U profile 1, and
 subsequent status reported the Android player ready with its channel list loaded.
-These checks do not claim system lock task, physical exit protection or
-successful video playback. For this dedicated deployment, the existing
+Native HTML5 playback initially reported `error 4 SRC_NOT_SUPPORTED`. Choosing
+**Settings → Interface settings → Streaming player type → hls.js**, saving with
+**Save settings**, and restarting the player produced a visible live picture.
+This records a working engine choice for this installation, not a guarantee
+for every channel, codec or firmware. System lock task and physical exit
+protection were not established. For this dedicated deployment, the existing
 non-authenticating **Swipe** screen lock was changed to **None** through Android
 Settings → Security → Screen lock, and stay-awake was enabled while USB-powered.
 This avoids a manual swipe on wake. Revert through the same Settings page and
