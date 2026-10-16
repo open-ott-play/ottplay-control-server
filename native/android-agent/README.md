@@ -90,6 +90,10 @@ Logs are a bounded ring of agent event codes, not unrestricted Android logcat.
 
 ## Signed updates over Wi-Fi
 
+See the [illustrated OTA guide](../../docs/android-ota.md) for architecture,
+delivery steps, bundle recovery and the distinction between automated checks
+and confirmed device results.
+
 After the one-time root USB bootstrap, the independent agent can install its
 own binary and the `play.ott.kitkat` APK over its existing outbound HTTPS
 connection. USB and a responsive WebView are not needed for downloading or
