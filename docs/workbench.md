@@ -81,6 +81,15 @@ capabilities. The new CLI sends no debug request to a player without the
 capability. An older controller reports `unsupported_controller`, without retry
 or a fallback to playback commands. `ott a1 play debug` still searches that title.
 
+Use `ott a1 debug --engine --json` to request the attached playback engine with
+debug schema version 2. This requires an updated controller and a player that
+advertises the separate `debug_versions: [1, 2]` capability. Each HTML media lane
+then includes `engine`: `hls.js`, `shaka`, `html5`, or null when no current attached
+engine can be observed. This describes actual ownership, not the selected player
+preference, decoded frames, or physical display output. The CLI rejects unknown
+values and does not downgrade the request if the controller or player lacks
+support. Ordinary `debug` and bundle reads retain the exact version 1 schema.
+
 Bundles use evaluator `workbench-v3` and keep exactly `manifest.json` and
 `result.json`. The latter contains separate `debug_observations`; a native-only
 bundle has an empty array. The ordinary observations retain three quarters of

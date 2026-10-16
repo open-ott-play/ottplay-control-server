@@ -84,11 +84,18 @@ func validDebugNative(raw json.RawMessage) bool {
 }
 
 func validDebugSnapshot(raw json.RawMessage, runtime string) bool {
+	return validDebugSnapshotVersion(raw, runtime, 1)
+}
+
+func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int) bool {
+	if version != 1 && version != 2 {
+		return false
+	}
 	if len(raw) > maxDebugSnapshotBytes {
 		return false
 	}
 	m, ok := inspectObject(raw, "version", "runtime", "capturedAt", "platform", "metrics", "media", "events", "eventsDropped", "native")
-	if !ok || !inspectNumber(m["version"], 1, 1, true, false) || !inspectEnum(m["runtime"], runtime) ||
+	if !ok || !inspectNumber(m["version"], float64(version), float64(version), true, false) || !inspectEnum(m["runtime"], runtime) ||
 		!inspectNumber(m["capturedAt"], 0, inspectMaxInteger, true, false) ||
 		!inspectEnum(m["platform"], "browser", "webos", "capacitor-android", "capacitor-ios", "tauri", "unknown") ||
 		!validDebugMetrics(m["metrics"], debugBrowserNumbers, debugBrowserBools, false) ||
@@ -101,11 +108,18 @@ func validDebugSnapshot(raw json.RawMessage, runtime string) bool {
 	}
 	seen := map[string]bool{}
 	for _, rawLane := range lanes {
-		lane, valid := inspectObject(rawLane, "lane", "generation", "handleId", "metrics")
+		keys := []string{"lane", "generation", "handleId", "metrics"}
+		if version == 2 {
+			keys = append(keys, "engine")
+		}
+		lane, valid := inspectObject(rawLane, keys...)
 		if !valid || !inspectEnum(lane["lane"], "main", "pip") ||
 			!inspectNumber(lane["generation"], 0, inspectMaxInteger, true, true) ||
 			!inspectNumber(lane["handleId"], 0, inspectMaxInteger, true, true) ||
 			!validDebugMetrics(lane["metrics"], debugMediaNumbers, debugMediaBools, true) {
+			return false
+		}
+		if version == 2 && !inspectNull(lane["engine"]) && !inspectEnum(lane["engine"], "hls.js", "shaka", "html5") {
 			return false
 		}
 		name, _ := inspectString(lane["lane"], 8)

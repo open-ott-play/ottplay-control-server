@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Support explicitly requested debug version 2 attached-engine observations via
+  `ott PLAYER debug --engine`, with strict engine enums and request-version
+  binding. Preserve version 1 requests and payloads for existing players and CLIs.
+
 - Document project governance, confidential conduct reporting, maintenance continuity limits and reviewed OpenSSF evidence.
 - Add an optional stronger Python TLS profile that preserves CA/hostname verification and cannot lower host security settings; test exact weak-key boundaries before credentials are sent.
 

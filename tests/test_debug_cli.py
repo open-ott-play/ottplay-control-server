@@ -33,6 +33,7 @@ class DebugClient(Client):
     def call_receipt(self, target, action, params):
         result = super().call_receipt(target, action, params)
         if action == "inspect" and params["section"] == "debug" and self.inspect_envelope is None:
+            result["data"]["version"] = params["version"]
             result["data"]["data"] = copy.deepcopy(self.debug)
         return result
 
@@ -89,6 +90,49 @@ class DebugCLITest(unittest.TestCase):
             self.client.debug = debug_snapshot()
             mutate(self.client.debug)
             code, result = self.run_debug(["debug"])
+            self.assertEqual((code, result["observations"][0]["reason"]), (3, "invalid_response"))
+            self.assertNotIn("data", result["observations"][0])
+
+    def test_engine_v2_is_explicit_and_keeps_default_v1(self):
+        self.client.capabilities["debug_versions"] = [1, 2]
+        code, result = self.run_debug(["debug"])
+        self.assertEqual(code, 0)
+        self.assertEqual(result["observations"][0]["data"]["version"], 1)
+        self.assertNotIn("engine", result["observations"][0]["data"]["media"][0])
+        self.client.debug["version"] = 2
+        for engine in (None, "hls.js", "shaka", "html5"):
+            self.client.debug["media"][0]["engine"] = engine
+            code, result = self.run_debug(["debug", "--engine"])
+            self.assertEqual(code, 0)
+            self.assertEqual(self.client.calls[-1][2]["version"], 2)
+            self.assertEqual(result["observations"][0]["data"]["media"][0]["engine"], engine)
+
+    def test_engine_v2_requires_exact_capability_and_never_downgrades(self):
+        code, result = self.run_debug(["debug", "--engine"])
+        self.assertEqual((code, result["observations"][0]["reason"]), (3, "unsupported"))
+        self.assertEqual([call[1] for call in self.client.calls], ["capabilities"])
+        for versions in (None, [], [1], [2], [1, 2, 2], [True, 2], [1, 2.0], "1,2"):
+            with self.subTest(versions=versions), self.assertRaises(ott.Error):
+                ott.capabilities_metadata(dict(self.client.capabilities, debug_versions=versions))
+        self.client.capabilities["debug_versions"] = [1, 2]
+        self.client.calls.clear()
+        self.client.inspect_failure = ott.HTTPError(400)
+        code, result = self.run_debug(["debug", "--engine"])
+        self.assertEqual((code, result["observations"][0]["reason"]), (3, "unsupported_controller"))
+        self.assertEqual([call[1] for call in self.client.calls], ["capabilities", "inspect"])
+
+    def test_engine_v2_rejects_missing_invalid_or_downgraded_data(self):
+        self.client.capabilities["debug_versions"] = [1, 2]
+        for mutate in (lambda d: d["media"][0].pop("engine"),
+                       lambda d: d["media"][0].update(engine="auto"),
+                       lambda d: d["media"][0].update(engine=SECRET),
+                       lambda d: d["media"][0].update(engine={}),
+                       lambda d: d.update(version=1)):
+            self.client.debug = debug_snapshot()
+            self.client.debug["version"] = 2
+            self.client.debug["media"][0]["engine"] = "hls.js"
+            mutate(self.client.debug)
+            code, result = self.run_debug(["debug", "--engine"])
             self.assertEqual((code, result["observations"][0]["reason"]), (3, "invalid_response"))
             self.assertNotIn("data", result["observations"][0])
 
