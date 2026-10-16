@@ -249,8 +249,11 @@ On the K960 running Android 5.1/API 22, `OTT Home` 0.1.0 was installed beside
 to OTT without a chooser. After a normal reboot, `sys.boot_completed` became
 `1`; Android reported the resumed player activity as launched by
 `play.ott.home`, and the player appeared without a manual app launch. This
-confirms Home selection and startup forwarding on this tablet. It does not
-claim system lock task, physical exit protection or successful video playback.
+confirms Home selection and startup forwarding on this tablet. The controller
+also acknowledged loading the existing `Home` preset into M3U profile 1, and
+subsequent status reported the Android player ready with its channel list loaded.
+These checks do not claim system lock task, physical exit protection or
+successful video playback.
 
 The same session exposed slow initial HTTPS setup: an unauthenticated request
 to the controller took about 13 seconds, longer than the player's eight-second
