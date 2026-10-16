@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import os
+import ssl
 import queue
 import re
 import stat
@@ -13,6 +14,20 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+
+
+
+def https_handler():
+    """Retain platform verification; optionally require stronger OpenSSL keys."""
+    context = ssl.create_default_context()
+    level = os.environ.get("OTT_TLS_SECURITY_LEVEL")
+    if level is not None:
+        if level not in ("2", "3", "4", "5"):
+            raise ValueError("OTT_TLS_SECURITY_LEVEL must be 2, 3, 4 or 5")
+        # A caller can raise the platform level, never lower a stricter one.
+        context.set_ciphers("DEFAULT:@SECLEVEL=" + str(max(int(level), context.security_level)))
+    return urllib.request.HTTPSHandler(context=context)
+
 
 BASE = "/api/v2/diagnostics"
 MAX_REPLY = 65536
@@ -351,7 +366,7 @@ class DiagnosticsClient:
             raise DiagnosticError("invalid_input")
         self._token = token
         self.timeout = timeout
-        self._opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+        self._opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), https_handler())
         self._busy = threading.Lock()
 
     def _request(self, method, path, payload=None, *, epoch=None, kind, context=None):

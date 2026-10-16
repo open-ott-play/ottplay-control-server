@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Document project governance, confidential conduct reporting, maintenance continuity limits and reviewed OpenSSF evidence.
+- Add an optional stronger Python TLS profile that preserves CA/hostname verification and cannot lower host security settings; test exact weak-key boundaries before credentials are sent.
+
 ## [0.1.2] - Unreleased
 
 ### Changes
