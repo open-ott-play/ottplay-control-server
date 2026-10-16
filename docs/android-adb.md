@@ -280,6 +280,22 @@ adb -s SERIAL shell input keyevent 224
 The power key (`26`) **toggles** state; do not blindly send it to an unknown
 screen. Wake does not unlock a PIN/password or power on a shut-down tablet.
 
+For a dedicated tablet attached to USB power, an operator can keep the display
+awake while charging. This is a persistent device setting, separate from Home
+selection. Record its previous value first and restore it when maintenance ends
+unless the deployment is meant to remain awake:
+
+```sh
+adb -s SERIAL shell settings get global stay_on_while_plugged_in
+adb -s SERIAL shell svc power stayon usb
+```
+
+This does not wake an already sleeping tablet, remove a lockscreen or keep the
+display awake after USB power is removed. `svc power stayon false` restores
+normal timeout behavior when the previous setting was disabled; otherwise
+restore the previous power-source setting. Verify `mStayOn` and `mPlugType` in
+`dumpsys power` rather than relying on an empty command result.
+
 Common navigation and key inputs:
 
 ```sh
