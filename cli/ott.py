@@ -287,7 +287,7 @@ class HTTPError(Error):
     def __init__(self, code):
         self.code = code
         super().__init__(f"Server returned HTTP {code}. " + {
-            401: "Check admin_token in the private configuration.",
+            401: "Check operator_token or admin_token in the private configuration.",
             403: "Insufficient permissions or a disallowed Origin.",
             404: "Check the address and update the server to support CLI requests.",
             429: "The queue or request limit has been reached; try again later.",

@@ -450,7 +450,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 429, "result storage is full")
 			return
 		}
-		if err := s.journal.finish(id, "responded", status, now); err != nil {
+		if err := s.journal.finish(map[string]bool{id: true}, "responded", status, now); err != nil {
 			s.mu.Unlock()
 			failure(w, 503, "command outcome could not be retained")
 			return

@@ -36,3 +36,15 @@ class HandoffTests(unittest.TestCase):
         with self.assertRaises(ott.Error) as cm:
             ott.handoff_command(self.client,'one','two')
         self.assertNotIn('secret-url',str(cm.exception))
+
+    def test_rejects_unconfirmed_target_import_without_retry(self):
+        for response in [
+                {'dispatched': False, 'kind': 'live'},
+                {'dispatched': True, 'kind': 'archive'},
+                {'dispatched': True, 'kind': 'live', 'extra': 'unexpected'}]:
+            with self.subTest(response=response):
+                self.client.call.reset_mock()
+                self.client.call.side_effect = [{'handoff': self.handoff}, response]
+                with self.assertRaises(ott.Error):
+                    ott.handoff_command(self.client, 'one', 'two')
+                self.assertEqual(self.client.call.call_count, 2)

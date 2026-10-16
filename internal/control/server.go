@@ -529,14 +529,18 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request, d *device, now time
 	s.mu.Lock()
 	s.expire(now)
 	d.lastSeen = now
+	acknowledged := map[string]bool{}
 	for _, e := range d.queue {
 		if set[e.id] && !e.rpc {
-			if err := s.journal.finish(e.id, "acknowledged", "", now); err != nil {
-				s.mu.Unlock()
-				failure(w, 503, "command outcome could not be retained")
-				return
-			}
+			acknowledged[e.id] = true
 		}
+	}
+	// Persist the whole batch before removing any queue entries. Separate saves
+	// could publish only some outcomes if a later write in the batch fails.
+	if err := s.journal.finish(acknowledged, "acknowledged", "", now); err != nil {
+		s.mu.Unlock()
+		failure(w, 503, "command outcome could not be retained")
+		return
 	}
 	kept := d.queue[:0]
 	removed := 0

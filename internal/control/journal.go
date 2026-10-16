@@ -232,19 +232,18 @@ func (j *commandJournal) begin(owner, device, permission, key, id string, payloa
 	j.records = rows
 	return v, false, nil
 }
-func (j *commandJournal) finish(id, state, status string, now time.Time) error {
-	if j == nil {
+func (j *commandJournal) finish(ids map[string]bool, state, status string, now time.Time) error {
+	if j == nil || len(ids) == 0 {
 		return nil
 	}
 	rows := copyRecords(j.records, now)
 	changed := false
 	for k, v := range rows {
-		if v.ID == id {
+		if ids[v.ID] {
 			v.State = state
 			v.ResultStatus = status
 			rows[k] = v
 			changed = true
-			break
 		}
 	}
 	if !changed {

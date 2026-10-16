@@ -160,3 +160,90 @@ func TestJournalFailsClosedForInvalidDiskAndConfiguration(t *testing.T) {
 		t.Fatal("retention shorter than TTL")
 	}
 }
+
+func TestJournalAckBatchFailureRetryAndIsolation(t *testing.T) {
+	c := journalConfig(t)
+	s, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	keys := []string{"batch-command-0001", "batch-command-0002", "batch-rpc-key-0001", "batch-other-key-01"}
+	for _, key := range keys[:2] {
+		expect(t, request(s, "POST", "/api/webhook/commands?device_id=first", adminToken,
+			`{"command":"set_volume","volume":35}`, map[string]string{"Idempotency-Key": key}), 202)
+	}
+	expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken,
+		`{"action":"status","params":{},"idempotency_key":"`+keys[2]+`"}`, nil), 202)
+	expect(t, request(s, "POST", "/api/webhook/commands?device_id=second", adminToken,
+		`{"command":"set_volume","volume":35}`, map[string]string{"Idempotency-Key": keys[3]}), 202)
+	ids := make([]string, 0, len(keys))
+	for _, key := range keys {
+		ids = append(ids, s.journal.records[journalIndex("admin", key)].ID)
+	}
+	unknownID := strings.Repeat("f", 32)
+	ids = append(ids, unknownID)
+	body, _ := json.Marshal(map[string]any{"ids": ids})
+	before, err := os.ReadFile(c.Journal.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeBytes := s.bytes
+	removedBytes := len(s.devices[0].queue[0].data) + len(s.devices[0].queue[1].data)
+	// Make atomic replacement fail on every platform without relying on Unix
+	// permission bits (which privileged test runners can bypass).
+	backup := c.Journal.Path + ".before"
+	if err := os.Rename(c.Journal.Path, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(c.Journal.Path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, request(s, "POST", "/api/webhook/commands/ack", firstToken, string(body), nil), 503)
+	for _, record := range s.journal.records {
+		if record.State != "pending" {
+			t.Fatal("failed batch changed in-memory outcomes", record)
+		}
+	}
+	if len(s.devices[0].queue) != 3 || len(s.devices[1].queue) != 1 || s.bytes != beforeBytes {
+		t.Fatal("failed batch removed queued commands")
+	}
+	retained, err := os.ReadFile(backup)
+	if err != nil || string(retained) != string(before) {
+		t.Fatal("failed batch changed retained outcomes", err)
+	}
+	if err := os.Remove(c.Journal.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(backup, c.Journal.Path); err != nil {
+		t.Fatal(err)
+	}
+	w := request(s, "POST", "/api/webhook/commands/ack", firstToken, string(body), nil)
+	expect(t, w, 200)
+	if !strings.Contains(w.Body.String(), `"acknowledged":2`) ||
+		len(s.devices[0].queue) != 1 || !s.devices[0].queue[0].rpc ||
+		len(s.devices[1].queue) != 1 || s.bytes != beforeBytes-removedBytes {
+		t.Fatal("successful batch did not preserve RPC/other-device isolation", w.Body.String())
+	}
+	retained, err = os.ReadFile(c.Journal.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk struct{ Records map[string]operationRecord }
+	if err := json.Unmarshal(retained, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if len(disk.Records) != len(keys) || strings.Contains(string(retained), unknownID) {
+		t.Fatal("unowned acknowledgement inserted journal data")
+	}
+	for i, key := range keys {
+		want := "pending"
+		if i < 2 {
+			want = "acknowledged"
+		}
+		index := journalIndex("admin", key)
+		if disk.Records[index].State != want || s.journal.records[index].State != want {
+			t.Fatal("batch outcome mismatch", key, disk.Records[index], s.journal.records[index])
+		}
+	}
+}
