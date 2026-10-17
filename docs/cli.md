@@ -1406,7 +1406,7 @@ digit. Use `ott PLAYER play load` to select a channel literally named `load`.
 
 Add `presets` to the existing private `~/.config/ottplay-control/cli.json`, keeping
 its controller settings and player aliases. This example shows the object to add;
-replace the credential placeholders before use:
+replace the example addresses and credential placeholders before use:
 
 ```json
 "presets": {
@@ -1435,14 +1435,14 @@ replace the credential placeholders before use:
       {
         "number": 1,
         "name": "Home 1",
-        "playlist": "https://m.2560801.xyz",
+        "playlist": "https://playlist.example.com/channels.m3u",
         "history_hours": 144,
         "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
       },
       {
         "number": 2,
         "name": "Home 2",
-        "playlist": "https://m.2560801.xyz",
+        "playlist": "https://playlist.example.com/channels.m3u",
         "history_hours": 144,
         "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
       }
@@ -1453,9 +1453,11 @@ replace the credential placeholders before use:
 }
 ```
 
-`local` uses the Mac's playlist service on loopback. `home` uses its external
-address for the TV and phone. Both can use the same VPortal link and Plex
-credentials. The Plex address must be reachable from each target device.
+`local` illustrates a playlist service on the player's own loopback interface.
+`home` illustrates a service reachable from a TV or phone over HTTPS. Use URLs
+reachable from the target player, not just from the computer running the CLI.
+Both presets can use the same VPortal link and Plex credentials. The Plex address
+must be reachable from each target device.
 The second M3U slot starts with the same settings so it can be customized
 independently. Editing a preset changes only this file; run `load` to apply it.
 Set mode 600 on the file and keep it out of source control and public uploads.
