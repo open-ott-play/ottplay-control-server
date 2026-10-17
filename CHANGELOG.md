@@ -4,6 +4,11 @@
 
 ### Changed
 
+- Use the Go 1.27.2 toolchain consistently for host validation, release binaries,
+  Android-agent tests and fuzzing, matching the existing container builder.
+  This fixes the upstream fuzz-coordinator deadline race (golang/go#75804)
+  while preserving the Go 1.26 language baseline.
+
 - Support explicitly requested debug version 2 attached-engine observations via
   `ott PLAYER debug --engine`, with strict engine enums and request-version
   binding. Preserve version 1 requests and payloads for existing players and CLIs.
