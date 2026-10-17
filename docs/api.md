@@ -601,14 +601,16 @@ Programme results use one `as_of` Unix-seconds timestamp captured at collection 
 
 ## Opt-in DNS-SD discovery and pairing
 
-These routes return 404 unless the optional `discovery` configuration is present:
+These routes return 404 unless the optional `discovery` configuration is present.
+The following configuration and response examples use illustrative addresses;
+replace them with your network domain, resolver and controller URL:
 
 ```json
 {
   "discovery": {
-    "domain": "alvit.cf",
-    "nameserver": "192.168.160.1:53",
-    "public_url": "https://www.2560801.xyz/ott-control"
+    "domain": "home.arpa",
+    "nameserver": "192.168.1.1:53",
+    "public_url": "https://controller.example.com/ott-control"
   }
 }
 ```
@@ -624,9 +626,9 @@ any device credential is released.
 DNS contains routing information only, never access codes or credentials:
 
 ```dns
-_ottplay-ctrl._tcp.alvit.cf. 30 IN PTR home._ottplay-ctrl._tcp.alvit.cf.
-home._ottplay-ctrl._tcp.alvit.cf. 30 IN SRV 0 0 443 www.2560801.xyz.
-home._ottplay-ctrl._tcp.alvit.cf. 30 IN TXT "txtvers=1" "scheme=https" "path=/ott-control"
+_ottplay-ctrl._tcp.home.arpa. 30 IN PTR home._ottplay-ctrl._tcp.home.arpa.
+home._ottplay-ctrl._tcp.home.arpa. 30 IN SRV 0 0 443 controller.example.com.
+home._ottplay-ctrl._tcp.home.arpa. 30 IN TXT "txtvers=1" "scheme=https" "path=/ott-control"
 ```
 
 An instance must have exactly one SRV and one TXT record. The TXT fields above
@@ -650,11 +652,11 @@ remain. Failures have a two-second discovery cache.
 {
   "version": 1,
   "servers": [{
-    "id": "home._ottplay-ctrl._tcp.alvit.cf.",
-    "domain": "alvit.cf",
-    "address": "https://www.2560801.xyz/ott-control"
+    "id": "home._ottplay-ctrl._tcp.home.arpa.",
+    "domain": "home.arpa",
+    "address": "https://controller.example.com/ott-control"
   }],
-  "pairing_url": "https://www.2560801.xyz/ott-control/api/pairings"
+  "pairing_url": "https://controller.example.com/ott-control/api/pairings"
 }
 ```
 
@@ -684,7 +686,7 @@ bootstrap traffic and pairing creation have separate bounded rate limits.
 `POST /api/pairings`, Content-Type application/json:
 
 ```json
-{"device_id":"registered-device-uuid","server_id":"home._ottplay-ctrl._tcp.alvit.cf."}
+{"device_id":"registered-device-uuid","server_id":"home._ottplay-ctrl._tcp.home.arpa."}
 ```
 
 `server_id` is optional only when exactly one valid server is discovered in the
@@ -740,7 +742,7 @@ approved. Once approved, a fresh DNS check precedes the 200 response:
 {
   "status":"approved",
   "device_id":"registered-device-uuid",
-  "address":"https://www.2560801.xyz/ott-control",
+  "address":"https://controller.example.com/ott-control",
   "token":"existing-private-device-token"
 }
 ```
@@ -985,6 +987,21 @@ All numeric metrics are finite, nonnegative and at most 9007199254740991.
 `systemUptimeMs` measures OS uptime. PSS, physical footprint and RSS are separate
 fields and cannot be compared as the same measurement. A snapshot contains no
 raw logs, error messages, URLs, filenames, stack traces, keys or DOM content.
+
+Players supporting attached-engine observations retain `debug:{"version":1}`
+and additionally advertise `debug_versions:[1,2]`. Explicitly request them with
+the same three parameters and `version:2`. This version is supported only for
+the `debug` section. Both the response envelope and `data.version` must equal 2;
+the controller rejects a downgraded response, including a negative response with
+the wrong version. The exact version 2 schema adds one required key to each
+media lane: `engine`, limited to `"hls.js"`, `"shaka"`, `"html5"`, or null.
+All other fields, bounds, runtime binding and allowlists remain identical.
+
+Default requests still use version 1 and cannot carry `engine`. An updated
+player therefore remains compatible with earlier controllers and CLIs.
+`ott PLAYER debug --engine` opts in to version 2; unsupported players are not
+queried and unsupported controllers cause a clear failure without a version 1
+retry. An attached engine is not evidence of decoded frames or physical output.
 
 ## Scoped ordinary command credentials
 

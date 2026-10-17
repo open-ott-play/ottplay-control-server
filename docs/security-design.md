@@ -108,6 +108,37 @@ Evaluate legacy HTTP applicability, warning policy and dynamic-analysis coverage
 Report new issues through [SECURITY.md](../SECURITY.md). An OpenSSF assessment
 records evidence and applicability; it is not a guarantee that a system is safe.
 
+## Supported strong-key CLI configuration
+
+For the complete direct-HTTPS configuration, run the Go server with its validated
+`--tls-cert`/`--tls-key` chain; use HTTPS controller, EPG and archive endpoints;
+and set `OTT_TLS_SECURITY_LEVEL=3` for Python CLI commands. This setting applies
+to the controller, EPG, diagnostics and both archive redirect policies. It keeps
+the normal CA/hostname verification and raises OpenSSL's minimum key strength to
+128 bits (for example, RSA/DH 3072 and EC 256). It never lowers a stricter
+platform setting. Values outside 2–5 fail before creating a network connection.
+
+```sh
+OTT_TLS_SECURITY_LEVEL=3 python3 cli/ott.py --config /private/path/client.json devices
+```
+
+Use certificates and trust anchors meeting this profile throughout the chain.
+The usual default context remains compatible with existing RSA-2048 endpoints;
+level 2 alone is not an exact RSA-2048-bit guarantee because OpenSSL may round
+its security estimate for a 2047-bit key. The stricter profile intentionally
+rejects RSA-2048 too. Upgrade endpoint certificates before enabling it.
+
+The Android agent and Go healthcheck already validate actual verified-chain
+key lengths. In this supported configuration, do not route traffic through a
+separate TLS terminator or an HTTPS proxy whose certificate policy has not been
+assessed. Plain HTTP remains an explicit legacy trusted-LAN configuration; it
+provides neither confidentiality nor a strong-TLS claim. No deployment setting
+has been changed by this documentation.
+
+`tests/test_strict_tls.py` exercises the actual Python client openers over TLS
+1.2 and 1.3. RSA-3072 chains succeed; 2047-bit leaf, intermediate and trust-anchor
+keys fail before HTTP requests or synthetic credentials reach the server.
+
 ## Scoped command operators
 
 Ordinary RPC and legacy command submitters can use separate credentials without

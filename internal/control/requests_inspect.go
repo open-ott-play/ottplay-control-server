@@ -16,6 +16,7 @@ var inspectVersionPattern = regexp.MustCompile(`^[A-Za-z0-9_.+-]{1,64}$`)
 var inspectRevisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type inspectRequest struct {
+	Version     int
 	Runtime     string
 	Section     string
 	OperationID string
@@ -94,11 +95,19 @@ func inspectArray(raw json.RawMessage, maximum int) ([]json.RawMessage, bool) {
 
 func parseInspectRequest(params map[string]json.RawMessage) *inspectRequest {
 	runtime, ok := inspectToken(params["runtime"], 96)
-	if !ok || !inspectNumber(params["version"], 1, 1, true, false) || !inspectEnum(params["section"], "doctor", "snapshot", "operation", "debug") {
+	maximumVersion := float64(1)
+	if inspectEnum(params["section"], "debug") {
+		maximumVersion = 2
+	}
+	if !ok || !inspectNumber(params["version"], 1, maximumVersion, true, false) || !inspectEnum(params["section"], "doctor", "snapshot", "operation", "debug") {
 		return nil
 	}
 	section, _ := inspectString(params["section"], 32)
-	v := &inspectRequest{Runtime: runtime, Section: section}
+	var version int
+	if json.Unmarshal(params["version"], &version) != nil {
+		return nil
+	}
+	v := &inspectRequest{Runtime: runtime, Section: section, Version: version}
 	if section == "operation" {
 		id, valid := inspectString(params["operation_id"], 80)
 		if len(params) != 4 || !valid || !commandID.MatchString(id) {
@@ -125,7 +134,8 @@ func validInspectResult(raw json.RawMessage, status string, expected *inspectReq
 		payload = "error"
 	}
 	m, ok := inspectObject(raw, "version", "runtime", "section", payload)
-	if !ok || !inspectNumber(m["version"], 1, 1, true, false) || !inspectEnum(m["runtime"], expected.Runtime) || !inspectEnum(m["section"], expected.Section) {
+	version := float64(expected.Version)
+	if !ok || !inspectNumber(m["version"], version, version, true, false) || !inspectEnum(m["runtime"], expected.Runtime) || !inspectEnum(m["section"], expected.Section) {
 		return false
 	}
 	if status != "ok" {
@@ -135,7 +145,7 @@ func validInspectResult(raw json.RawMessage, status string, expected *inspectReq
 		return validInspectOperation(m["data"], expected.OperationID)
 	}
 	if expected.Section == "debug" {
-		return validDebugSnapshot(m["data"], expected.Runtime)
+		return validDebugSnapshotVersion(m["data"], expected.Runtime, expected.Version)
 	}
 	return validDoctorSnapshot(m["data"], expected.Runtime)
 }

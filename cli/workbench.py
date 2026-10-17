@@ -128,15 +128,18 @@ def debug_native(value):
         "webviewVersion": nullable(version_label), "metrics": debug_metrics(NATIVE_NUMBERS, NATIVE_BOOLS)})}
 
 
-def debug_metadata(raw, runtime):
-    result = exact(inspection_data(raw, runtime, "debug"), {
-        "version": number(1, 1, True), "runtime": token, "capturedAt": number(integral=True),
+def debug_metadata(raw, runtime, version=1):
+    check(type(version) is int and version in (1, 2))
+    lane = {"lane": enum(["main", "pip"]), "generation": nullable(number(integral=True)),
+            "handleId": nullable(number(integral=True)),
+            "metrics": debug_metrics(MEDIA_NUMBERS, MEDIA_BOOLS, {"volume": 1, "readyState": 4, "networkState": 3, "mediaErrorCode": 4})}
+    if version == 2:
+        lane["engine"] = nullable(enum(["hls.js", "shaka", "html5"]))
+    result = exact(inspection_data(raw, runtime, "debug", version), {
+        "version": number(version, version, True), "runtime": token, "capturedAt": number(integral=True),
         "platform": enum("browser webos capacitor-android capacitor-ios tauri unknown".split()),
         "metrics": debug_metrics(DEBUG_NUMBERS, DEBUG_BOOLS),
-        "media": array(lambda value: exact(value, {
-            "lane": enum(["main", "pip"]), "generation": nullable(number(integral=True)),
-            "handleId": nullable(number(integral=True)),
-            "metrics": debug_metrics(MEDIA_NUMBERS, MEDIA_BOOLS, {"volume": 1, "readyState": 4, "networkState": 3, "mediaErrorCode": 4})}), 2),
+        "media": array(lambda value: exact(value, lane), 2),
         "events": array(lambda value: exact(value, {
             "sequence": number(1, SAFE_INTEGER, True), "elapsedMs": number(), "code": enum(DEBUG_EVENTS)}), 32),
         "eventsDropped": number(integral=True), "native": debug_native,
@@ -175,8 +178,9 @@ SNAPSHOT = {
 }
 
 
-def inspection_data(raw, runtime, section):
-    check(isinstance(raw, dict) and raw.get("version") == 1 and type(raw.get("version")) is int)
+def inspection_data(raw, runtime, section, version=1):
+    check(type(version) is int and (version == 1 or version == 2 and section == "debug"))
+    check(isinstance(raw, dict) and raw.get("version") == version and type(raw.get("version")) is int)
     check(set(raw) == {"version", "runtime", "section", "error" if "error" in raw else "data"})
     check(len(json.dumps(raw, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) <= 32768)
     check(raw.get("runtime") == runtime and raw.get("section") == section)
@@ -304,7 +308,7 @@ class Workbench:
                 # Unbound legacy errors must not be attributed to this page.
                 data = getattr(exc, "data", None)
                 check(isinstance(data, dict) and "error" in data)
-                inspection_data(data, params["runtime"], params["section"])
+                inspection_data(data, params["runtime"], params["section"], params["version"])
             raise
         finally:
             self.client.timeout = previous
@@ -326,7 +330,7 @@ class Workbench:
                 return "unauthorized"
         return "unavailable"
 
-    def observe_lane(self, lane, section, deadline, logs=False, operation_id=None):
+    def observe_lane(self, lane, section, deadline, logs=False, operation_id=None, debug_version=1):
         observation = {"lane": lane, "source": "runtime_reported", "observed_at": now(),
                        "status": "unknown", "requests": []}
         receipts = observation["requests"]
@@ -349,11 +353,13 @@ class Workbench:
                 supported = "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", [])
                 if not supported:
                     raise ObservationError("unsupported")
-                params = {"version": 1, "runtime": caps["player"]["runtime"], "section": section}
+                if section == "debug" and debug_version == 2 and caps.get("debug_versions") != [1, 2]:
+                    raise ObservationError("unsupported")
+                params = {"version": debug_version if section == "debug" else 1, "runtime": caps["player"]["runtime"], "section": section}
                 if section == "operation":
                     params["operation_id"] = operation_id
                 raw = self.request(self.device, "inspect", params, deadline, receipts)
-                data = (debug_metadata(raw, caps["player"]["runtime"]) if section == "debug"
+                data = (debug_metadata(raw, caps["player"]["runtime"], debug_version) if section == "debug"
                         else operation_metadata(raw, caps["player"]["runtime"], operation_id) if section == "operation"
                         else snapshot_metadata(raw, caps["player"]["runtime"], section))
             observation.update(status="observed", data=data, runtime=data["runtime"] if lane == "native" or section != "operation" else caps["player"]["runtime"])
@@ -367,14 +373,14 @@ class Workbench:
             observation["reason"] = self.reason(exc)
         return observation
 
-    def observe(self, lane="auto", section="snapshot", logs=False, operation_id=None):
+    def observe(self, lane="auto", section="snapshot", logs=False, operation_id=None, debug_version=1):
         # Split the original budget: an offline page must not starve a native agent.
         lanes = [lane] if lane != "auto" else ["web", "native"]
         results = []
         for index, name in enumerate(lanes):
             remaining = max(0, self.deadline - time.monotonic())
             deadline = time.monotonic() + remaining / (len(lanes) - index)
-            results.append(self.observe_lane(name, section, deadline, logs, operation_id))
+            results.append(self.observe_lane(name, section, deadline, logs, operation_id, debug_version))
         return results
 
 
@@ -589,6 +595,7 @@ def arguments(words, json_output):
     command = words[0]
     if command == "debug":
         parser.set_defaults(lane="web")
+        parser.add_argument("--engine", action="store_true", help="request debug v2 attached-engine evidence (requires updated player and controller)")
     if command == "inspect":
         parser.add_argument("--view", default="ui,media")
     elif command == "operation":
@@ -664,7 +671,8 @@ def run(api, client, device, words, timeout, json_output=False):
                 if command == "bundle" and args.lane != "native":
                     bench.deadline = time.monotonic() + max(0, final_deadline - time.monotonic()) * 0.75
                 observations = bench.observe(args.lane, "debug" if command == "debug" else "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
-                                             logs=command == "bundle", operation_id=args.operation_id if command == "operation" else None)
+                                             logs=command == "bundle", operation_id=args.operation_id if command == "operation" else None,
+                                             debug_version=2 if command == "debug" and args.engine else 1)
                 bench.deadline = final_deadline
                 if command == "bundle":
                     result["debug_observations"] = bench.observe("web", "debug") if args.lane != "native" else []
