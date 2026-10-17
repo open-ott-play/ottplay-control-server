@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import unittest
 from unittest import mock
 from test_presets_cli import ott
@@ -18,6 +19,23 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(self.client.call.call_args_list, [mock.call('one','playback_handoff_export',{}),
             mock.call('two','playback_handoff_import',{'handoff':self.handoff})])
 
+    def test_main_reports_confirmed_handoff_without_stopping_source(self):
+        self.client.call.side_effect = [{'handoff': self.handoff}, {'dispatched': True, 'kind': 'live'}]
+        output, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(ott, 'read_json', return_value={}), \
+                mock.patch.object(ott, 'Client', return_value=self.client), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            status = ott.main(['--json', 'handoff', 'one', 'two'])
+        self.assertEqual(status, 0)
+        self.assertEqual(errors.getvalue(), '')
+        self.assertEqual(output.getvalue(), json.dumps({
+            'source': 'one', 'target': 'two', 'dispatched': True,
+            'kind': 'live', 'source_stopped': False}, indent=2) + '\n')
+        self.assertEqual(self.client.device.call_args_list, [mock.call('one'), mock.call('two')])
+        self.assertEqual(self.client.call.call_args_list, [
+            mock.call('one', 'playback_handoff_export', {}),
+            mock.call('two', 'playback_handoff_import', {'handoff': self.handoff})])
+
     def test_rejects_url_field_invalid_position_and_same_device_before_import(self):
         bad_rows = [dict(self.handoff,url='https://private.example'), dict(self.handoff,kind='vod'),
                     dict(self.handoff,kind='archive',archive_start=-1), dict(self.handoff,version=True),
@@ -28,9 +46,11 @@ class HandoffTests(unittest.TestCase):
             self.client.call.return_value = {'handoff':handoff}
             with self.assertRaises(ott.Error):
                 ott.handoff_command(self.client,'one','two')
-            self.assertEqual(self.client.call.call_count,1)
+            self.assertEqual(self.client.call.call_args_list, [mock.call('one', 'playback_handoff_export', {})])
+        self.client.call.reset_mock()
         with self.assertRaises(ott.Error):
             ott.handoff_command(self.client,'one','one')
+        self.client.call.assert_not_called()
 
     def test_negative_response_does_not_print_provider_secrets(self):
         self.client.call.side_effect = ott.PlayerRejected('secret-url',{'error':'secret-url'})

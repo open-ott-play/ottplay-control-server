@@ -11,8 +11,9 @@ A small self-hosted server that delivers remote commands to OTT-play players. Pl
 Optional [reliable control](docs/reliable-control.md) adds scoped integration
 credentials, bounded durable command outcomes, resumable Local/Home application
 with exact settings verification, and explicit live/archive playback handoff.
-These features require matching new controller/CLI/player revisions; the older
-installation pin below does not include them. The [architecture diagram](docs/assets/reliable-control.svg)
+These features require controller and CLI revisions containing this guide.
+Exact settings verification and handoff also require an updated player. The older
+installation pin below does not include these features. The [architecture diagram](docs/assets/reliable-control.svg)
 shows where settings, credentials and operation state remain.
 
 The server runs as a single portable Go executable, with a pinned DNS library for optional service discovery. Release packages cover Linux amd64, arm64 and ARMv7; macOS Intel and Apple Silicon; and Windows amd64 and arm64. Container images support Linux amd64 and arm64. Kubernetes and k3s use the included Helm chart.
