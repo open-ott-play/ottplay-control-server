@@ -129,6 +129,7 @@ func run(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "Cannot initialize server.")
 		return 1
 	}
+	defer h.Close()
 	server := &http.Server{Addr: c.Listen, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192, TLSConfig: tlsConfig, ErrorLog: log.New(io.Discard, "", 0)}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

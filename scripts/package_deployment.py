@@ -33,7 +33,7 @@ def package(root: Path, plan: dict, output: Path) -> None:
         shutil.copytree(root / "deploy", stage / "deploy")
         rendered = subprocess.check_output(["helm", "template", "ottplay-control-server", str(chart)])
         (stage / "deploy/kubernetes.yaml").write_bytes(rendered)
-        names = ["config.example.json", "README.md", "LICENSE", "NOTICE", "LICENSES", "docs"]
+        names = ["config.example.json", "README.md", "README.ru.md", "LICENSE", "NOTICE", "LICENSES", "docs"]
         for name in names:
             source = root / name
             if source.is_dir():

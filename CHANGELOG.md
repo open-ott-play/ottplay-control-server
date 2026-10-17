@@ -13,6 +13,21 @@
 
 ### Changes
 
+- Keep response-route authorization and dispatch on the same normalized path;
+  trailing-slash variants cannot submit command envelopes with device credentials.
+- Round durable journal deadlines upward to retain idempotency through the
+  precise queue expiry, including fractional-second boundaries.
+
+- Add exact device/action-scoped ordinary command operators, an optional private
+  bounded outcome journal with idempotency keys, and crash recovery that retains
+  unknown outcomes without replaying commands.
+- Add `load PRESET plan|apply|resume|verify` with private checkpoints and exact
+  player-side settings comparison, while preserving plain `load PRESET`.
+- Add explicit `handoff SOURCE TARGET` for same-source live/archive playback,
+  transferring stable references rather than stream URLs or credentials.
+- Add English/Russian reliable-control guides, localized README and wiki index,
+  and an accessible SVG explaining command, checkpoint and source ownership.
+
 - Qualify this release with a bounded RC fuzz campaign, offline target execution,
   and deterministic seed replay checks. Bind release evidence to the exact source
   and toolkit revision, validate seed corpora, and retain engine execution counts

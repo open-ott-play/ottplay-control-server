@@ -32,11 +32,21 @@ class PackageTests(unittest.TestCase):
             with tarfile.open(output / "ottplay-control-server-deployment.tar.gz") as archive:
                 self.assertIn(expected, archive.extractfile("deploy/kubernetes.yaml").read().decode())
                 self.assertIsNotNone(archive.getmember("docs/deployment.md"))
+                self.assertIsNotNone(archive.getmember("README.ru.md"))
+                self.assertIsNotNone(archive.getmember("deploy/compose.journal.yml"))
             with tarfile.open(chart) as archive:
                 metadata = archive.extractfile("ottplay-control-server/Chart.yaml").read().decode()
                 self.assertIn("version: 0.1.0-rc.7", metadata)
                 self.assertIn("appVersion: 0.1.0", metadata)
         self.assertEqual(original, (ROOT / "charts/ottplay-control-server/values.yaml").read_bytes())
+
+    def test_optional_journal_volume_preserves_single_writer_and_root_isolation(self):
+        base = ["helm", "template", "control", str(ROOT / "charts/ottplay-control-server"), "--set", "image.tag=v0.1.0"]
+        plain = subprocess.check_output(base, text=True)
+        self.assertNotIn("name: journal", plain)
+        rendered = subprocess.check_output(base + ["--set", "journalExistingClaim=control-state"], text=True)
+        for expected in ("replicas: 1", "type: Recreate", "readOnlyRootFilesystem: true", "mountPath: /var/lib/ottplay-control", 'claimName: "control-state"', "fsGroupChangePolicy: OnRootMismatch"):
+            self.assertIn(expected, rendered)
 
 
 if __name__ == "__main__":

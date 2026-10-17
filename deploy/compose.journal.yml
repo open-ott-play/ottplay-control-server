@@ -1,0 +1,9 @@
+# Opt in with: docker compose -f compose.yml -f compose.journal.yml up -d
+# Provision this host directory for the image's UID 65532 before starting.
+services:
+  control-server:
+    volumes:
+      - type: bind
+        source: ${CONTROL_SERVER_STATE:?Set CONTROL_SERVER_STATE to an absolute private state directory}
+        target: /var/lib/ottplay-control
+        read_only: false

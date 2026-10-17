@@ -1,10 +1,20 @@
 # OTT-play Control Server
 
+[English](README.md) · [Русский](README.ru.md) · [Documentation / Wiki](docs/wiki/Home.md)
+
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15562/badge)](https://www.bestpractices.dev/projects/15562)
 
 [![Fuzzing: RC only](https://img.shields.io/badge/Fuzzing-RC%20only-blue)](docs/fuzzing.md)
 
 A small self-hosted server that delivers remote commands to OTT-play players. Players make outbound HTTP requests, so a TV does not need to expose a listening port. Each player has its own queue and access token; a separate administrator token submits commands.
+
+Optional [reliable control](docs/reliable-control.md) adds scoped integration
+credentials, bounded durable command outcomes, resumable Local/Home application
+with exact settings verification, and explicit live/archive playback handoff.
+These features require controller and CLI revisions containing this guide.
+Exact settings verification and handoff also require an updated player. The older
+installation pin below does not include these features. The [architecture diagram](docs/assets/reliable-control.svg)
+shows where settings, credentials and operation state remain.
 
 The server runs as a single portable Go executable, with a pinned DNS library for optional service discovery. Release packages cover Linux amd64, arm64 and ARMv7; macOS Intel and Apple Silicon; and Windows amd64 and arm64. Container images support Linux amd64 and arm64. Kubernetes and k3s use the included Helm chart.
 
@@ -56,7 +66,7 @@ Both server and player must include the request/response extension.
 
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
-cover macOS/Linux and Windows, Python/PATH setup and all seven required CLI files.
+cover macOS/Linux and Windows, Python/PATH setup and the required CLI modules.
 They pin a reviewed 0.1.1 development source commit with workbench and offline
 verification; stable CLI v0.1.0 and native server archives do not include those
 commands. [Update or roll back the CLI](docs/cli.md#update-select-or-roll-back-the-cli)

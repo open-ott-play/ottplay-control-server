@@ -14,17 +14,19 @@ const maxResponseBytes = 2 * 1024 * 1024
 const maxResultBytes = 16 * 1024 * 1024
 
 type requestResult struct {
-	data        json.RawMessage
-	expires     time.Time
-	inspect     *inspectRequest
-	aspect      *aspectRequest
-	plexLibrary *plexLibraryRequest
-	favorites   *favoritesRequest
+	owner, permission string
+	data              json.RawMessage
+	expires           time.Time
+	inspect           *inspectRequest
+	aspect            *aspectRequest
+	plexLibrary       *plexLibraryRequest
+	favorites         *favoritesRequest
+	handoff           *handoffRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
 // clients ignore them, and the CLI times out rather than claiming execution.
-func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now time.Time) {
+func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now time.Time, route string) {
 	q, ok := query(r, "device_id", "id")
 	if !ok || (r.Method == "POST" && q.Has("id")) {
 		failure(w, 400, "unsupported query parameters")
@@ -44,7 +46,13 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 403, "device_id does not match credentials")
 		return
 	}
-	if r.URL.Path == "/api/responses" || r.URL.Path == "/api/responses/" {
+	if o := operatorFor(r); o != nil && !o.devices[d.id] {
+		failure(w, 403, "device scope is not allowed")
+		return
+	}
+	// Use the same canonical route that selected the credential role. Re-parsing
+	// a trailing-slash variant must never let a device become an RPC submitter.
+	if route == "/api/responses" {
 		s.receiveResult(w, r, d)
 		return
 	}
@@ -57,12 +65,18 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		s.expire(now)
 		result, found := d.results[q.Get("id")]
 		pending := false
+		permitted := !found || ownResult(r, result.owner, result.permission)
 		for _, e := range d.queue {
 			if e.rpc && e.id == q.Get("id") {
 				pending = true
+				permitted = ownResult(r, e.owner, e.permission)
 			}
 		}
 		s.mu.Unlock()
+		if !permitted {
+			failure(w, 403, "request scope is not allowed")
+			return
+		}
 		if found {
 			// The envelope was already validated and bounded on receipt. Encoding
 			// it again expands HTML characters and can exceed the same wire limit.
@@ -81,7 +95,14 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	m, err := decodeObject(b)
-	var action string
+	var action, key string
+	if raw, exists := m["idempotency_key"]; exists {
+		if json.Unmarshal(raw, &key) != nil || !operationKey.MatchString(key) {
+			failure(w, 400, "invalid operation key")
+			return
+		}
+		delete(m, "idempotency_key")
+	}
 	if err != nil || len(m) != 2 || json.Unmarshal(m["action"], &action) != nil {
 		failure(w, 400, "action and params are required")
 		return
@@ -136,6 +157,10 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = len(params) == 1 && profileInteger(params["number"], 1, 15)
 	case "profile_settings":
 		ok = len(params) == 2 && profileInteger(params["number"], 1, 15) && validProfileSettings(params["settings"])
+	case "settings_compare":
+		ok = validSettingsCompare(params)
+	case "playback_handoff_export", "playback_handoff_import":
+		ok = parseHandoffRequest(action, params) != nil
 	case "restart":
 		var target string
 		ok = len(params) == 1 && json.Unmarshal(params["target"], &target) == nil && (target == "stream" || target == "player")
@@ -183,12 +208,18 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 400, "invalid request action or parameters")
 		return
 	}
+	permission := commandAction(action, params)
+	if !allowedCommand(r, d, permission) {
+		failure(w, 403, "command scope is not allowed")
+		return
+	}
 	var random [16]byte
 	if _, err = rand.Read(random[:]); err != nil {
 		failure(w, 503, "cannot create request identifier")
 		return
 	}
 	id := hex.EncodeToString(random[:])
+	canonical, _ := json.Marshal(m)
 	now = s.now()
 	expires := now.Add(s.ttl)
 	m["id"], _ = json.Marshal(id)
@@ -196,12 +227,19 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	data, _ := json.Marshal(m)
 	s.mu.Lock()
 	s.expire(now)
-	if len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes || len(d.results) >= 50 {
+	if (len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes || len(d.results) >= 50) && !s.hasOperation(r, key, now) {
 		s.mu.Unlock()
 		failure(w, 429, "request queue is full")
 		return
 	}
-	e := entry{id: id, data: data, expires: expires, rpc: true}
+	if key != "" {
+		replay, ok := s.startOperation(w, r, d, permission, key, id, canonical, now, expires)
+		if replay || !ok {
+			s.mu.Unlock()
+			return
+		}
+	}
+	e := entry{id: id, data: data, expires: expires, rpc: true, owner: requestOwner(r), permission: permission}
 	if action == "screenshot" {
 		_ = json.Unmarshal(params["runtime"], &e.screenshotRuntime)
 	}
@@ -219,6 +257,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "favorites" {
 		e.favorites = parseFavoritesRequest(params)
+	}
+	if action == "playback_handoff_export" || action == "playback_handoff_import" {
+		e.handoff = parseHandoffRequest(action, params)
 	}
 	if action == "playback" {
 		var operation string
@@ -321,6 +362,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var plexQueue *plexQueueRequest
 	var plexLibrary *plexLibraryRequest
 	var favorites *favoritesRequest
+	var handoff *handoffRequest
 	var inspect *inspectRequest
 	var aspect *aspectRequest
 	playbackOperation := ""
@@ -330,6 +372,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			plexQueue = pending.plexQueue
 			plexLibrary = pending.plexLibrary
 			favorites = pending.favorites
+			handoff = pending.handoff
 			playbackOperation = pending.playbackOperation
 			inspect = pending.inspect
 			aspect = pending.aspect
@@ -347,6 +390,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if favorites == nil {
 		favorites = d.results[id].favorites
+	}
+	if handoff == nil {
+		handoff = d.results[id].handoff
 	}
 	s.mu.Unlock()
 	// Both successful and negative inspection replies must belong to the exact
@@ -379,6 +425,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid favorites result")
 		return
 	}
+	if handoff != nil && !validHandoffResult(m["data"], status, handoff) {
+		failure(w, 400, "invalid handoff result")
+		return
+	}
 	if playbackOperation != "" && status == "ok" && !validPlexPlaybackResult(m["data"], playbackOperation) {
 		failure(w, 400, "invalid Plex playback result")
 		return
@@ -400,10 +450,15 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 429, "result storage is full")
 			return
 		}
+		if err := s.journal.finish(map[string]bool{id: true}, "responded", status, now); err != nil {
+			s.mu.Unlock()
+			failure(w, 503, "command outcome could not be retained")
+			return
+		}
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

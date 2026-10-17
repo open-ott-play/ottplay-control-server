@@ -32,6 +32,8 @@ type entry struct {
 	plexQueue         *plexQueueRequest
 	plexLibrary       *plexLibraryRequest
 	favorites         *favoritesRequest
+	handoff           *handoffRequest
+	owner, permission string
 	playbackOperation string
 	inspect           *inspectRequest
 	aspect            *aspectRequest
@@ -66,6 +68,8 @@ type Server struct {
 	diagnostics            *diagnosticsState
 	mu                     sync.Mutex
 	admin                  [32]byte
+	operators              []*commandOperator
+	journal                *commandJournal
 	devices                []*device
 	origins                map[string]bool
 	allowNull              bool
@@ -88,6 +92,7 @@ func New(c config.Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{started: time.Now(), admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now}
+	s.configureOperators(c.Operators)
 	var err error
 	s.diagnostics, err = newDiagnostics(c)
 	if err != nil {
@@ -108,6 +113,10 @@ func New(c config.Config) (*Server, error) {
 			s.pairTokens[d.ID] = d.Token
 			s.pairRates[d.ID] = new(bucket)
 		}
+	}
+	s.journal, err = newCommandJournal(c.Journal)
+	if err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -144,13 +153,13 @@ func (s *Server) cors(w http.ResponseWriter, r *http.Request, methods string, de
 	}
 	for _, h := range strings.Split(r.Header.Get("Access-Control-Request-Headers"), ",") {
 		h = strings.ToLower(strings.TrimSpace(h))
-		if h != "" && h != "authorization" && h != "content-type" {
+		if h != "" && h != "authorization" && h != "content-type" && h != "idempotency-key" {
 			failure(w, 403, "preflight header is not allowed")
 			return false
 		}
 	}
 	w.Header().Set("Access-Control-Allow-Methods", strings.ReplaceAll(methods, ",", ", "))
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	w.WriteHeader(http.StatusNoContent)
 	return false
@@ -266,7 +275,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if path == "/api/pairings/approve" {
 			methods = "POST"
 		}
-	case "/healthz", "/readyz", "/api/devices", "/api/debug", wire.LegacyPollPath:
+	case "/healthz", "/readyz", "/api/devices", "/api/debug", "/api/operations", wire.LegacyPollPath:
 		methods = "GET"
 	case wire.CommandPath:
 		methods = "GET,POST"
@@ -316,19 +325,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admin, d := s.authenticate(r)
-	if !admin && d == nil {
+	operator := s.commandOperator(r)
+	if operator != nil {
+		r = withOperator(r, operator)
+	}
+	if !admin && d == nil && operator == nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ottplay-control"`)
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
-	if requiresAdmin != admin {
+	requiresAdmin := path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
+	operatorRoute := operator != nil && (path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
+	if (!operatorRoute && requiresAdmin != admin) || (operator != nil && !operatorRoute) {
 		failure(w, 403, "credential role is not allowed")
 		return
 	}
 	s.mu.Lock()
 	allowed := false
-	if admin {
+	if operator != nil {
+		allowed = operator.rate.allow(now, 240)
+	} else if admin {
 		allowed = s.adminRate.allow(now, 240)
 	} else {
 		allowed = d.rate.allow(now, 120)
@@ -337,6 +353,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		w.Header().Set("Retry-After", "60")
 		failure(w, 429, "credential rate exceeded")
+		return
+	}
+	if path == "/api/operations" {
+		s.operation(w, r)
 		return
 	}
 	if path == "/api/devices" {
@@ -348,7 +368,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/api/requests" || path == "/api/responses" {
-		s.requests(w, r, d, now)
+		s.requests(w, r, d, now, path)
 		return
 	}
 	q, ok := query(r, "device_id", "delivery")
@@ -356,7 +376,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400, "unsupported query parameters")
 		return
 	}
-	if admin {
+	if admin || operator != nil {
 		for _, candidate := range s.devices {
 			if candidate.id == q.Get("device_id") {
 				d = candidate
@@ -386,6 +406,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now time.Time) {
+	key := r.Header.Get("Idempotency-Key")
+	if len(r.Header.Values("Idempotency-Key")) > 1 || (key != "" && !operationKey.MatchString(key)) {
+		failure(w, 400, "invalid operation key")
+		return
+	}
 	b, ok := readBody(w, r)
 	if !ok {
 		return
@@ -395,12 +420,18 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now 
 		failure(w, 400, err.Error())
 		return
 	}
+	permission := commandAction("command", m)
+	if !allowedCommand(r, d, permission) {
+		failure(w, 403, "command scope is not allowed")
+		return
+	}
 	var random [16]byte
 	if _, err = rand.Read(random[:]); err != nil {
 		failure(w, 503, "cannot create command identifier")
 		return
 	}
 	id := hex.EncodeToString(random[:])
+	canonical, _ := json.Marshal(m)
 	// Retention starts after the bounded request body has been received and checked.
 	now = s.now()
 	s.mu.Lock()
@@ -414,13 +445,20 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now 
 	expires := now.Add(s.ttl)
 	m["expires_at"], _ = json.Marshal(float64(expires.UnixNano()) / 1e9)
 	data, _ := json.Marshal(m)
-	if len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes {
+	if (len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes) && !s.hasOperation(r, key, now) {
 		s.mu.Unlock()
 		failure(w, 429, "command queue is full")
 		return
 	}
+	if key != "" {
+		replay, ok := s.startOperation(w, r, d, permission, key, id, canonical, now, expires)
+		if replay || !ok {
+			s.mu.Unlock()
+			return
+		}
+	}
 	s.lastTS = ts
-	d.queue = append(d.queue, entry{id: id, data: data, expires: expires})
+	d.queue = append(d.queue, entry{id: id, data: data, expires: expires, owner: requestOwner(r), permission: permission})
 	s.bytes += len(data)
 	s.mu.Unlock()
 	reply(w, 202, map[string]any{"status": "queued", "id": id, "ts": ts, "expires_at": float64(expires.UnixNano()) / 1e9})
@@ -491,6 +529,19 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request, d *device, now time
 	s.mu.Lock()
 	s.expire(now)
 	d.lastSeen = now
+	acknowledged := map[string]bool{}
+	for _, e := range d.queue {
+		if set[e.id] && !e.rpc {
+			acknowledged[e.id] = true
+		}
+	}
+	// Persist the whole batch before removing any queue entries. Separate saves
+	// could publish only some outcomes if a later write in the batch fails.
+	if err := s.journal.finish(acknowledged, "acknowledged", "", now); err != nil {
+		s.mu.Unlock()
+		failure(w, 503, "command outcome could not be retained")
+		return
+	}
 	kept := d.queue[:0]
 	removed := 0
 	for _, e := range d.queue {
