@@ -66,4 +66,4 @@ Install `.github/requirements-lint.txt` with `python3 -m pip install --require-h
 
 The maintainer updates the repository front page to link newly recognized project achievements within 48 hours. The OpenSSF image links directly to this project's live assessment and updates with its awarded level. Do not copy another project's achievement.
 
-For JavaScript, use the file's ESM/CommonJS format consistently, two-space indentation, semicolons and strict equality; keep compatibility-oriented upstream styles intact. HCL follows `terraform fmt` and its module variable/output conventions. These supplement PEP 8 for Python, `gofmt`/Effective Go for Go, and quoted expansions in Bash.
+For JavaScript, use the file's ESM/CommonJS format consistently, two-space indentation, semicolons and strict equality; keep compatibility-oriented upstream styles intact. These supplement PEP 8 for Python, `gofmt`/Effective Go for Go, and quoted expansions in Bash.
