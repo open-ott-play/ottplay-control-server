@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.4] - 2026-10-18
+
+### Changed
+
+- Add the optional OTT Home Android launcher companion and ADB setup guide. Target Android API 24 for modern installation while retaining minimum API 22. Update pinned CI tooling and declare code owners.
+
+### Upgrade
+
+Controller protocols and persistent formats are unchanged. Installing the optional launcher and selecting a Home application remain explicit device operations.
+
+### Security
+
+The companion requests only the normal boot permission; it performs no network or file-sharing operations. Target-device acceptance remains necessary.
+
 ## [0.1.3] - 2026-10-17
 
 ### Changed

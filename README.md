@@ -55,6 +55,10 @@ The player stores this connection only on the current installation and excludes 
 The [illustrated Android OTA guide](docs/android-ota.md) explains signed agent
 and APK/helper updates, recovery and verification of the installed result.
 
+The [Android ADB guide](docs/android-adb.md) covers USB access through a workstation
+or Synology, screen and keyboard control, screenshots, logs, APK installation
+and normal reboot, including limitations on older tablets.
+
 Optional [DNS-SD discovery and pairing](docs/discovery.md) lets players find the
 controller through their network domain and receive an individual device token
 after `ott approve NAME CODE`. DNS contains service metadata only. Existing
