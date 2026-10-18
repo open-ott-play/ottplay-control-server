@@ -1,9 +1,20 @@
 # OTT Home companion
 
-Small dependency-free Android 5.1 (API 22) companion, package `play.ott.home`,
+Small dependency-free Android 5.1+ (minimum API 22, target API 24) companion, package `play.ott.home`,
 version `0.1.0`. It offers **OTT Home** in Android's Home application picker and
 opens the independently installed official `play.ott.foss/.MainActivity`.
 The official player's binary, signature, data and update path remain untouched.
+
+Target API 24 permits normal installation on Android 14 and 15 while retaining
+minimum API 22 for Android 5.1. The companion requests only the normal
+`RECEIVE_BOOT_COMPLETED` permission, shares no files or file URIs, uses no native
+libraries or private APIs, and performs no network I/O. The API 23 runtime
+permission and API 24 file-sharing/network changes therefore require no extra
+permissions or compatibility exceptions. See the [Android 15 installation
+requirement](https://developer.android.com/about/versions/15/behavior-changes-all#minimum-target-api-level)
+and [Android 7.0 behavior changes](https://developer.android.com/about/versions/nougat/android-7.0-changes).
+Targeting API 24 does not establish device acceptance; repeat the Home, missing
+player, Settings recovery and reboot checks on each supported Android version.
 
 The build requires Python 3, Java 8-compatible compilation, Android SDK platform
 36 and build-tools 36.0.0. `ANDROID_HOME` selects the SDK; `JAVA_HOME` selects the
