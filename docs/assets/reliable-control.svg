@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="510" viewBox="0 0 1040 510" role="img" aria-labelledby="title desc">
+  <title id="title">OTT-play reliable control and handoff</title>
+  <desc id="desc">CLI stores a private checkpoint before sending scoped commands. The controller records a bounded outcome, and the player compares local settings or resolves a handoff reference. Unknown outcomes are never replayed automatically. Source credentials remain local.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0 0 L9 3 L0 6" fill="#40576b"/></marker></defs>
+  <rect width="1040" height="510" fill="#fff"/>
+  <g font-family="system-ui,sans-serif" fill="#172b3b">
+    <text x="36" y="44" font-size="25" font-weight="700">Reliable control • Надёжное управление</text>
+    <text x="36" y="73" font-size="16">Intent → private checkpoint → scoped request → exact player verification</text>
+    <g stroke="#40576b" stroke-width="2" fill="#f4f7fa">
+      <rect x="36" y="112" width="268" height="116" rx="10"/>
+      <rect x="386" y="112" width="268" height="116" rx="10"/>
+      <rect x="736" y="112" width="268" height="116" rx="10"/>
+      <rect x="36" y="306" width="268" height="118" rx="10"/>
+      <rect x="386" y="306" width="268" height="118" rx="10"/>
+      <rect x="736" y="306" width="268" height="118" rx="10"/>
+    </g>
+    <g font-size="20" font-weight="650">
+      <text x="56" y="145">CLI / HA / agent</text><text x="406" y="145">Controller</text><text x="756" y="145">Target player</text>
+      <text x="56" y="340">Private checkpoint</text><text x="406" y="340">Bounded journal</text><text x="756" y="340">Local source/account</text>
+    </g>
+    <g font-size="15">
+      <text x="56" y="177">Plan · apply · resume · verify</text><text x="56" y="201">План · запись · проверка</text>
+      <text x="406" y="177">Device + action permission</text><text x="406" y="201">Устройство + действие</text>
+      <text x="756" y="177">Compare bytes / resolve ID</text><text x="756" y="201">Сравнить / найти канал</text>
+      <text x="56" y="371">Revision · step · intent key</text><text x="56" y="396">No settings values / без секретов</text>
+      <text x="406" y="371">ID · digest · state · deadline</text><text x="406" y="396">Unknown ≠ automatic replay</text>
+      <text x="756" y="371">Resolve a fresh stream URL</text><text x="756" y="396">Реквизиты остаются в плеере</text>
+    </g>
+    <g stroke="#40576b" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M306 170 H380"/><path d="M656 170 H730"/>
+      <path d="M170 232 V299"/><path d="M520 232 V299"/><path d="M870 299 V235"/>
+    </g>
+    <text x="36" y="468" font-size="16">Handoff passes a stable reference, never a playable URL. The source keeps playing.</text>
+    <text x="36" y="493" font-size="16">Переносит ссылку на канал, а не URL потока. Исходный плеер продолжает работать.</text>
+  </g>
+</svg>

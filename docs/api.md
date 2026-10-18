@@ -601,14 +601,16 @@ Programme results use one `as_of` Unix-seconds timestamp captured at collection 
 
 ## Opt-in DNS-SD discovery and pairing
 
-These routes return 404 unless the optional `discovery` configuration is present:
+These routes return 404 unless the optional `discovery` configuration is present.
+The following configuration and response examples use illustrative addresses;
+replace them with your network domain, resolver and controller URL:
 
 ```json
 {
   "discovery": {
-    "domain": "alvit.cf",
-    "nameserver": "192.168.160.1:53",
-    "public_url": "https://www.2560801.xyz/ott-control"
+    "domain": "home.arpa",
+    "nameserver": "192.168.1.1:53",
+    "public_url": "https://controller.example.com/ott-control"
   }
 }
 ```
@@ -624,9 +626,9 @@ any device credential is released.
 DNS contains routing information only, never access codes or credentials:
 
 ```dns
-_ottplay-ctrl._tcp.alvit.cf. 30 IN PTR home._ottplay-ctrl._tcp.alvit.cf.
-home._ottplay-ctrl._tcp.alvit.cf. 30 IN SRV 0 0 443 www.2560801.xyz.
-home._ottplay-ctrl._tcp.alvit.cf. 30 IN TXT "txtvers=1" "scheme=https" "path=/ott-control"
+_ottplay-ctrl._tcp.home.arpa. 30 IN PTR home._ottplay-ctrl._tcp.home.arpa.
+home._ottplay-ctrl._tcp.home.arpa. 30 IN SRV 0 0 443 controller.example.com.
+home._ottplay-ctrl._tcp.home.arpa. 30 IN TXT "txtvers=1" "scheme=https" "path=/ott-control"
 ```
 
 An instance must have exactly one SRV and one TXT record. The TXT fields above
@@ -650,11 +652,11 @@ remain. Failures have a two-second discovery cache.
 {
   "version": 1,
   "servers": [{
-    "id": "home._ottplay-ctrl._tcp.alvit.cf.",
-    "domain": "alvit.cf",
-    "address": "https://www.2560801.xyz/ott-control"
+    "id": "home._ottplay-ctrl._tcp.home.arpa.",
+    "domain": "home.arpa",
+    "address": "https://controller.example.com/ott-control"
   }],
-  "pairing_url": "https://www.2560801.xyz/ott-control/api/pairings"
+  "pairing_url": "https://controller.example.com/ott-control/api/pairings"
 }
 ```
 
@@ -684,7 +686,7 @@ bootstrap traffic and pairing creation have separate bounded rate limits.
 `POST /api/pairings`, Content-Type application/json:
 
 ```json
-{"device_id":"registered-device-uuid","server_id":"home._ottplay-ctrl._tcp.alvit.cf."}
+{"device_id":"registered-device-uuid","server_id":"home._ottplay-ctrl._tcp.home.arpa."}
 ```
 
 `server_id` is optional only when exactly one valid server is discovered in the
@@ -740,7 +742,7 @@ approved. Once approved, a fresh DNS check precedes the 200 response:
 {
   "status":"approved",
   "device_id":"registered-device-uuid",
-  "address":"https://www.2560801.xyz/ott-control",
+  "address":"https://controller.example.com/ott-control",
   "token":"existing-private-device-token"
 }
 ```
@@ -985,3 +987,83 @@ All numeric metrics are finite, nonnegative and at most 9007199254740991.
 `systemUptimeMs` measures OS uptime. PSS, physical footprint and RSS are separate
 fields and cannot be compared as the same measurement. A snapshot contains no
 raw logs, error messages, URLs, filenames, stack traces, keys or DOM content.
+
+Players supporting attached-engine observations retain `debug:{"version":1}`
+and additionally advertise `debug_versions:[1,2]`. Explicitly request them with
+the same three parameters and `version:2`. This version is supported only for
+the `debug` section. Both the response envelope and `data.version` must equal 2;
+the controller rejects a downgraded response, including a negative response with
+the wrong version. The exact version 2 schema adds one required key to each
+media lane: `engine`, limited to `"hls.js"`, `"shaka"`, `"html5"`, or null.
+All other fields, bounds, runtime binding and allowlists remain identical.
+
+Default requests still use version 1 and cannot carry `engine`. An updated
+player therefore remains compatible with earlier controllers and CLIs.
+`ott PLAYER debug --engine` opts in to version 2; unsupported players are not
+queried and unsupported controllers cause a clear failure without a version 1
+retry. An attached engine is not evidence of decoded frames or physical output.
+
+## Scoped ordinary command credentials
+
+`operators` optionally authorizes exact device/action pairs for ordinary RPC and
+legacy command submission. Composite RPCs require an operation-qualified action
+such as `playback.next_channel`, `input.channel_up` or `command.set_volume`.
+Operators read only their own permitted RPC receipts. See the [scoped command
+operator configuration](security-design.md#scoped-command-operators).
+
+## Durable operation outcomes
+
+The optional [`journal` configuration](reliable-control.md#enable-bounded-durable-outcomes)
+enables `GET /api/operations?device_id=ID[&key=KEY]`, authorized for the
+administrator and ordinary scoped command operators. Device tokens cannot read
+this route. Without a key the response describes enabled state, retention,
+capacity and command TTL. With a key it contains `id`, `state`, `result_status`,
+`expires_at`, `command_expires_at` and `action`. Timestamps are Unix seconds.
+Journal deadlines round upward to the next whole second so retention never ends
+before a queue entry's precise deadline.
+Missing/expired keys return 404, disabled journals 503 and denied scopes 403.
+
+RPC POST accepts an optional `idempotency_key` string (16–80 ASCII letters,
+digits, underscores or hyphens). Legacy POST accepts `Idempotency-Key`.
+Reusing an owner/key for changed device/action/payload returns 409. An identical
+operation returns 202 with `{status:"retained",id,state}` and never enqueues a
+second command while retained. This does not return a second copy of the result
+body. Original RPC receipts remain in memory for 60 seconds. Pending journal
+records become `unknown` on restart and no commands are replayed.
+
+## Exact settings comparison
+
+`settings_compare` reads saved values without selecting a provider:
+
+- M3U: `{provider:"m3u",number:1,settings:{name,playlist,history_hours,vportal}}`;
+  all four settings fields are required.
+- Plex: `{provider:"plex",settings:{server,token}}`.
+- Stalker: `{provider:"stalker",number:1,settings:{name,server,mac}}`.
+
+The result data is `{provider,number?,matched}` with a boolean `matched` and no
+stored values. Slots range from 1 to 15. Existing player parental/settings policy
+still applies. The request carries expected values, so treat its body as private.
+
+## Explicit playback handoff
+
+`playback_handoff_export` accepts `{}` and returns `{handoff}`.
+`playback_handoff_import` accepts `{handoff}` and returns
+`{dispatched:true,kind:"live"|"archive"}`. The handoff has exact fields:
+
+```json
+{"version":1,"provider":"m3u","source_id":"opaque-source-identity","item_id":"channel-v1:1234abcd.5678abcd","kind":"live"}
+```
+
+Providers are `m3u`, `xtream`, `stalker`. Source identifiers are nonempty
+text bounded to 256 UTF-8 bytes. Item identifiers must match
+`channel-v1:[0-9a-f]{8}\.[0-9a-f]{8}`: a player-produced opaque fingerprint,
+never a raw provider ID or stream URL. Archive adds `archive_start`, a positive
+safe integer Unix timestamp incorporating the source's current seek offset.
+Live forbids that field. Additional fields, URLs and credential fields are not
+part of the schema. The destination requires exact source identity and a unique
+item match, and resolves its own stream address. The source is not stopped.
+
+Negative result data is a single `error` code: `unsupported`, `invalid_request`,
+`no_current_item`, `source_mismatch`, `item_unavailable`, `ambiguous_item`,
+`policy_denied`, `busy`, `playback_failed`, or `context_changed`.
+See the [workflow and limitations](reliable-control.md#continue-on-another-player).

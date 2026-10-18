@@ -26,6 +26,7 @@ spec:
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -54,11 +55,20 @@ spec:
             - name: config
               mountPath: /etc/ottplay-control-server
               readOnly: true
+            {{- if .Values.journalExistingClaim }}
+            - name: journal
+              mountPath: /var/lib/ottplay-control
+            {{- end }}
       volumes:
         - name: config
           secret:
             secretName: {{ required "Set existingSecret to a Secret containing config.json" .Values.existingSecret }}
             defaultMode: 0440
+        {{- if .Values.journalExistingClaim }}
+        - name: journal
+          persistentVolumeClaim:
+            claimName: {{ .Values.journalExistingClaim | quote }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

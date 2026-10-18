@@ -1,8 +1,8 @@
 # Control players from the terminal
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
-Keep all seven files together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py` and `report_verify.py`. Python 3.12 is the version used by CI. Commands take a short
+Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py` and `preset_session.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -145,7 +145,7 @@ interactive zsh or the appropriate bash startup file), then open a new terminal.
 Use `type -a ott` in bash/zsh to detect older aliases, functions or launchers that
 take precedence. In the remaining examples, replace `ott` with
 `python3 "$ott_script"` whenever using the direct invocation. If copying a source
-archive instead, copy all seven files in `cli/` together; a Git checkout is needed
+archive instead, copy all Python files in `cli/` together; a Git checkout is needed
 for the exact `git rev-parse HEAD` verification above.
 
 ### Install on Windows
@@ -624,7 +624,7 @@ ott diagnostics --help
 ```
 
 The existing symlink follows the checkout. For a copied installation replace all
-seven sibling Python files together from one version. Keep `cli.json`, presets
+the sibling Python files together from one version. Keep `cli.json`, presets
 and server credentials outside the checkout; updating CLI files does not update
 or restart the command server, native apps or players already open in a browser.
 After updating a hosted player, reload it and inspect `ott PLAYER caps`.
@@ -1406,7 +1406,7 @@ digit. Use `ott PLAYER play load` to select a channel literally named `load`.
 
 Add `presets` to the existing private `~/.config/ottplay-control/cli.json`, keeping
 its controller settings and player aliases. This example shows the object to add;
-replace the credential placeholders before use:
+replace the example addresses and credential placeholders before use:
 
 ```json
 "presets": {
@@ -1435,14 +1435,14 @@ replace the credential placeholders before use:
       {
         "number": 1,
         "name": "Home 1",
-        "playlist": "https://m.2560801.xyz",
+        "playlist": "https://playlist.example.com/channels.m3u",
         "history_hours": 144,
         "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
       },
       {
         "number": 2,
         "name": "Home 2",
-        "playlist": "https://m.2560801.xyz",
+        "playlist": "https://playlist.example.com/channels.m3u",
         "history_hours": 144,
         "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
       }
@@ -1453,9 +1453,11 @@ replace the credential placeholders before use:
 }
 ```
 
-`local` uses the Mac's playlist service on loopback. `home` uses its external
-address for the TV and phone. Both can use the same VPortal link and Plex
-credentials. The Plex address must be reachable from each target device.
+`local` illustrates a playlist service on the player's own loopback interface.
+`home` illustrates a service reachable from a TV or phone over HTTPS. Use URLs
+reachable from the target player, not just from the computer running the CLI.
+Both presets can use the same VPortal link and Plex credentials. The Plex address
+must be reachable from each target device.
 The second M3U slot starts with the same settings so it can be customized
 independently. Editing a preset changes only this file; run `load` to apply it.
 Set mode 600 on the file and keep it out of source control and public uploads.
@@ -2117,7 +2119,7 @@ Add `~/.local/bin` to the current shell's PATH and its startup file, then reopen
 the terminal. Inspect `command -v ott` (or `type -a ott` in bash/zsh) for an older
 installation taking precedence. Check the symlink target still exists. Use
 `python3 /absolute/path/to/cli/ott.py --help` to separate PATH/executable problems
-from Python problems. Keep all seven CLI files from the same source version in
+from Python problems. Keep all CLI Python files from the same source version in
 the resolved target directory. A copied `ott.py` alone is not a complete install.
 On Windows use the `py -3 ...` invocation from the installation section.
 Stable CLI v0.1.0 does not provide `doctor`, `inspect`, `operation`, `bundle`,
@@ -2393,3 +2395,35 @@ only bounded metadata, not URLs, tokens or APK contents.
 
 The existing `android update` command is separate: it addresses a provisioned
 native/root agent and continues to use its signed manifest protocol.
+
+### Strong-key HTTPS endpoints
+
+For servers whose whole certificate chain supports OpenSSL security level 3,
+set `OTT_TLS_SECURITY_LEVEL=3` when invoking the CLI. This raises (never lowers)
+the host's TLS policy for controller, EPG, diagnostics and archive requests.
+It rejects RSA-2048 as well as smaller RSA keys; use RSA-3072 or EC-256 and
+strong trust anchors. Ordinary CA and hostname verification stays enabled.
+See [the complete supported profile](security-design.md#supported-strong-key-cli-configuration).
+
+
+## Resumable presets and explicit handoff
+
+The optional new workflow is documented in [Reliable control](reliable-control.md)
+([Русский](reliable-control.ru.md)). It requires this newer CLI/controller/player
+revision, not the historical installation pin above. `plan` validates local
+configuration offline; `verify` compares saved player settings without writing.
+`apply` and `resume` require the controller journal and private checkpoint storage.
+
+```sh
+ott tv load Local plan
+ott tv load Local apply
+ott tv load Local resume
+ott tv load Local verify
+ott handoff living-room bedroom
+```
+
+An uncertain previous settings command prevents mutation until its deadline;
+resume then compares current saved values before writing. Handoff v1 accepts
+matching-source live/archive references only and does not stop the source player.
+The existing `ott tv load Local` continues to use its original acknowledgement
+workflow without a journal requirement.

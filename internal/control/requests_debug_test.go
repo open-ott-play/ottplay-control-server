@@ -48,6 +48,65 @@ func TestDebugRequestRoundTripAndRuntimeBinding(t *testing.T) {
 	expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, "unsupported", map[string]any{"error": "unsupported"}), nil), 400)
 }
 
+func TestDebugV2RequiresNegotiatedExactEngineSchema(t *testing.T) {
+	for _, engine := range []any{nil, "hls.js", "shaka", "html5"} {
+		s := newTestServer(t)
+		id := rpcID(t, s, `{"action":"inspect","params":{"version":2,"runtime":"page-123","section":"debug"}}`)
+		body := debugEnvelope()
+		body["version"] = 2
+		data := body["data"].(map[string]any)
+		data["version"] = 2
+		data["media"].([]any)[0].(map[string]any)["engine"] = engine
+		result := screenshotEnvelope(id, "ok", body)
+		expect(t, request(s, "POST", "/api/responses", firstToken, result, nil), 200)
+		expect(t, request(s, "POST", "/api/responses", firstToken, result, nil), 200)
+		body["version"] = 1
+		expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, "ok", body), nil), 400)
+	}
+	mutations := map[string]func(map[string]any){
+		"missing engine": func(v map[string]any) { delete(v["media"].([]any)[0].(map[string]any), "engine") },
+		"unknown engine": func(v map[string]any) { v["media"].([]any)[0].(map[string]any)["engine"] = "auto" },
+		"private engine": func(v map[string]any) { v["media"].([]any)[0].(map[string]any)["engine"] = "https://private.invalid" },
+		"object engine":  func(v map[string]any) { v["media"].([]any)[0].(map[string]any)["engine"] = map[string]any{} },
+		"extra field":    func(v map[string]any) { v["media"].([]any)[0].(map[string]any)["url"] = "private" },
+		"data downgrade": func(v map[string]any) { v["version"] = 1 },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			s := newTestServer(t)
+			id := rpcID(t, s, `{"action":"inspect","params":{"version":2,"runtime":"page-123","section":"debug"}}`)
+			body := debugEnvelope()
+			body["version"] = 2
+			data := body["data"].(map[string]any)
+			data["version"] = 2
+			data["media"].([]any)[0].(map[string]any)["engine"] = "hls.js"
+			mutate(data)
+			expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, "ok", body), nil), 400)
+			if s.resultBytes != 0 || len(s.devices[0].queue) != 1 {
+				t.Fatal("invalid engine result consumed request")
+			}
+		})
+	}
+	for _, section := range []string{"doctor", "snapshot", "operation"} {
+		s := newTestServer(t)
+		expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken,
+			`{"action":"inspect","params":{"version":2,"runtime":"page-123","section":"`+section+`"}}`, nil), 400)
+	}
+	for _, status := range []string{"unsupported", "rejected"} {
+		s := newTestServer(t)
+		id := rpcID(t, s, `{"action":"inspect","params":{"version":2,"runtime":"page-123","section":"debug"}}`)
+		body := map[string]any{"version": 1, "runtime": "page-123", "section": "debug", "error": "unavailable"}
+		expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, status, body), nil), 400)
+		body["version"] = 2
+		expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, status, body), nil), 200)
+	}
+	legacy := debugEnvelope()
+	legacy["data"].(map[string]any)["media"].([]any)[0].(map[string]any)["engine"] = nil
+	s := newTestServer(t)
+	id := rpcID(t, s, inspectPayload("debug"))
+	expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, "ok", legacy), nil), 400)
+}
+
 func TestDebugRejectsMalformedDataBeforeStoring(t *testing.T) {
 	mutations := map[string]func(map[string]any){
 		"runtime":               func(v map[string]any) { v["runtime"] = "other" },

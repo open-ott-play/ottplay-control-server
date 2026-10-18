@@ -9,6 +9,7 @@ import hashlib
 from http.client import HTTPException
 import json
 import os
+import ssl
 from pathlib import Path
 import re
 import tempfile
@@ -16,7 +17,25 @@ import time
 import unicodedata
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urljoin, urlsplit
-from urllib.request import Request, HTTPRedirectHandler, build_opener
+from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, build_opener
+
+
+
+def https_handler():
+    """Retain platform verification; optionally require stronger OpenSSL keys."""
+    context = ssl.create_default_context()
+    context.minimum_version = max(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+    level = os.environ.get("OTT_TLS_SECURITY_LEVEL")
+    if level is not None:
+        if level not in ("2", "3", "4", "5"):
+            raise ValueError("OTT_TLS_SECURITY_LEVEL must be 2, 3, 4 or 5")
+        # Raise strength without widening a host-selected cipher allowlist.
+        if int(level) > context.security_level:
+            ciphers = ":".join(cipher["name"] for cipher in context.get_ciphers()
+                               if cipher["protocol"] != "TLSv1.3")
+            context.set_ciphers(ciphers + ":@SECLEVEL=" + level)
+    return HTTPSHandler(context=context)
+
 
 CACHE = Path(os.environ.get("OTT_CACHE", "~/.cache/ottplay-control")).expanduser()
 GUIDE_TTL = 7200
@@ -84,7 +103,7 @@ def epg_request(base, path, payload=None, attempts=1):
     try:
         for attempt in range(attempts):
             try:
-                with build_opener(NoRedirect()).open(request, timeout=20) as response:
+                with build_opener(NoRedirect(), https_handler()).open(request, timeout=20) as response:
                     raw = response.read(16 * 1024 * 1024 + 1)
                 break
             except HTTPError as exc:
@@ -303,13 +322,13 @@ def same_origin_opener(expected):
             if origin(newurl) != expected:
                 return None
             return super().redirect_request(request, fp, code, message, headers, newurl)
-    return build_opener(SameOriginRedirect())
+    return build_opener(SameOriginRedirect(), https_handler())
 
 
 def archive_available(url, start, require_hls=False, allow_redirects=False):
     try:
         expected = origin(url)
-        opener = same_origin_opener(expected) if allow_redirects else build_opener(NoRedirect())
+        opener = same_origin_opener(expected) if allow_redirects else build_opener(NoRedirect(), https_handler())
         for depth in range(4):
             if origin(url) != expected:
                 return False

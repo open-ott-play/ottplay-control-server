@@ -253,7 +253,7 @@ func FuzzInspectResultBinding(f *testing.F) {
 		if len(raw) > maxInspectResultBytes || (section != "doctor" && section != "snapshot" && section != "operation") {
 			return
 		}
-		expected := &inspectRequest{Runtime: "page-123", Section: section, OperationID: strings.Repeat("a", 32)}
+		expected := &inspectRequest{Version: 1, Runtime: "page-123", Section: section, OperationID: strings.Repeat("a", 32)}
 		if !validInspectResult(raw, status, expected) {
 			return
 		}

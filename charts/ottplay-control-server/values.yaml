@@ -5,6 +5,9 @@ image:
   digest: ""
   pullPolicy: IfNotPresent
 existingSecret: ottplay-control-server
+# Optional persistent volume for journal.path below /var/lib/ottplay-control/private.
+# Provision separately; the chart never creates or deletes the claim.
+journalExistingClaim: ""
 service:
   type: ClusterIP
   port: 8081

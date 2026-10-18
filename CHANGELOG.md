@@ -1,6 +1,57 @@
 # Changelog
 
-## [0.1.2] - Unreleased
+## [0.1.3] - 2026-10-17
+
+### Changed
+
+- Use the Go 1.27.2 toolchain consistently for host validation, release binaries,
+  Android-agent tests and fuzzing, matching the existing container builder.
+  This fixes the upstream fuzz-coordinator deadline race (golang/go#75804)
+  while preserving the Go 1.26 language baseline.
+
+- Support explicitly requested debug version 2 attached-engine observations via
+  `ott PLAYER debug --engine`, with strict engine enums and request-version
+  binding. Preserve version 1 requests and payloads for existing players and CLIs.
+
+- Document project governance, confidential conduct reporting, maintenance continuity limits and reviewed OpenSSF evidence.
+- Add an optional stronger Python TLS profile that preserves CA/hostname verification and cannot lower host security settings; test exact weak-key boundaries before credentials are sent.
+
+- Keep response-route authorization and dispatch on the same normalized path;
+  trailing-slash variants cannot submit command envelopes with device credentials.
+- Round durable journal deadlines upward to retain idempotency through the
+  precise queue expiry, including fractional-second boundaries.
+
+- Add exact device/action-scoped ordinary command operators, an optional private
+  bounded outcome journal with idempotency keys, and crash recovery that retains
+  unknown outcomes without replaying commands.
+- Add `load PRESET plan|apply|resume|verify` with private checkpoints and exact
+  player-side settings comparison, while preserving plain `load PRESET`.
+- Add explicit `handoff SOURCE TARGET` for same-source live/archive playback,
+  transferring stable references rather than stream URLs or credentials.
+- Add English/Russian reliable-control guides, localized README and wiki index,
+  and an accessible SVG explaining command, checkpoint and source ownership.
+
+### Upgrade
+
+Update the controller and CLI together. Reliable preset application and playback
+handoff require the matching player capabilities; older players and the previously
+published FOSS stable must not be assumed to implement them. Keep plain preset
+loading for older players. Configure scoped operators and the optional outcome
+journal explicitly, with private storage and a retained backup of configuration.
+Controller publication does not deploy the player, maintenance agent or cluster.
+Keep the previous binary and configuration for rollback, and inspect unresolved
+outcomes before retrying commands after a restart.
+
+### Security
+
+Authorization and dispatch use the same normalized response path. Journal
+persistence is bounded and private; unknown outcomes remain unknown after a crash
+and are not replayed automatically. Handoff transfers stable references rather
+than stream credentials. The optional strict Python TLS profile retains CA and
+hostname checks and stronger host settings. Offline and paired synthetic checks
+do not establish physical-player, provider or production-cluster acceptance.
+
+## [0.1.2]
 
 ### Changes
 

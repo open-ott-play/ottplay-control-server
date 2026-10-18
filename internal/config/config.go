@@ -25,21 +25,26 @@ type Device struct {
 }
 
 type Config struct {
-	Listen              string       `json:"listen"`
-	AdminToken          string       `json:"admin_token"`
-	AllowedOrigins      []string     `json:"allowed_origins"`
-	AllowNullOrigin     bool         `json:"allow_null_origin,omitempty"`
-	Devices             []Device     `json:"devices"`
-	CommandTTLSeconds   int          `json:"command_ttl_seconds"`
-	MaxPendingPerDevice int          `json:"max_pending_per_device"`
-	Discovery           *Discovery   `json:"discovery,omitempty"`
-	Diagnostics         *Diagnostics `json:"diagnostics,omitempty"`
+	Listen              string            `json:"listen"`
+	AdminToken          string            `json:"admin_token"`
+	AllowedOrigins      []string          `json:"allowed_origins"`
+	AllowNullOrigin     bool              `json:"allow_null_origin,omitempty"`
+	Devices             []Device          `json:"devices"`
+	CommandTTLSeconds   int               `json:"command_ttl_seconds"`
+	MaxPendingPerDevice int               `json:"max_pending_per_device"`
+	Discovery           *Discovery        `json:"discovery,omitempty"`
+	Diagnostics         *Diagnostics      `json:"diagnostics,omitempty"`
+	Operators           []CommandOperator `json:"operators,omitempty"`
+	Journal             *CommandJournal   `json:"journal,omitempty"`
 }
 
 var deviceID = regexp.MustCompile(wire.DeviceIdPattern)
 var token = regexp.MustCompile(wire.TokenPattern)
 
 func (c *Config) Defaults() {
+	if c.Journal != nil {
+		c.Journal.Defaults()
+	}
 	if c.Diagnostics != nil {
 		c.Diagnostics.Defaults()
 	}
@@ -58,6 +63,17 @@ func (c *Config) Defaults() {
 }
 
 func (c Config) Validate() error {
+	if c.Journal != nil {
+		if err := c.Journal.Validate(); err != nil {
+			return err
+		}
+		if c.Journal.RetentionSeconds < c.CommandTTLSeconds {
+			return errors.New("journal retention must cover command TTL")
+		}
+	}
+	if err := c.validateOperators(); err != nil {
+		return err
+	}
 	if err := c.validateDiagnostics(); err != nil {
 		return err
 	}

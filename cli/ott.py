@@ -9,6 +9,7 @@ import importlib.util
 import json
 import math
 import os
+import ssl
 from pathlib import Path
 import queue
 import re
@@ -28,6 +29,24 @@ import urllib.request
 import warnings
 import zlib
 
+
+
+def https_handler():
+    """Retain platform verification; optionally require stronger OpenSSL keys."""
+    context = ssl.create_default_context()
+    context.minimum_version = max(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+    level = os.environ.get("OTT_TLS_SECURITY_LEVEL")
+    if level is not None:
+        if level not in ("2", "3", "4", "5"):
+            raise ValueError("OTT_TLS_SECURITY_LEVEL must be 2, 3, 4 or 5")
+        # Raise strength without widening a host-selected cipher allowlist.
+        if int(level) > context.security_level:
+            ciphers = ":".join(cipher["name"] for cipher in context.get_ciphers()
+                               if cipher["protocol"] != "TLSv1.3")
+            context.set_ciphers(ciphers + ":@SECLEVEL=" + level)
+    return urllib.request.HTTPSHandler(context=context)
+
+
 HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] PLAYER [COMMAND ...]
   ott resolve --request-stdin         resolve a private playlist search for a local player
   ott diagnostics --help             scoped runtime diagnostics and session control
@@ -42,6 +61,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show player status and available controls
   ott NAME load PRESET               apply a private Plex, M3U and optional Stalker preset
+  ott NAME load PRESET plan|apply|resume|verify [--checkpoint FILE]
+                                     inspect or safely resume exact preset settings
+  ott handoff SOURCE TARGET          continue live/archive viewing on another player
   ott NAME 12                        play channel 12 from the s listing
   ott NAME prev / previous           play the previous channel in the current category
   ott NAME next                      play the next channel in the current category
@@ -90,7 +112,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME caps                      show runtime identity and supported controls
   ott NAME doctor [-j]                read web/native identity and diagnostic capabilities
-  ott NAME debug [-j]                 read bounded runtime/native diagnostics (alias: dbg)
+  ott NAME debug [--engine] [-j]      read bounded runtime/native diagnostics (alias: dbg)
   ott NAME inspect --view ui,media    observe the interface and media without changing playback
   ott NAME operation REQUEST_ID      read a web operation receipt without repeating its effect
   ott NAME bundle --out DIRECTORY    save private, bounded diagnostic evidence
@@ -192,6 +214,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "restart", "play", "provider",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "favorites", "aspect",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -283,7 +306,7 @@ class HTTPError(Error):
     def __init__(self, code):
         self.code = code
         super().__init__(f"Server returned HTTP {code}. " + {
-            401: "Check admin_token in the private configuration.",
+            401: "Check operator_token or admin_token in the private configuration.",
             403: "Insufficient permissions or a disallowed Origin.",
             404: "Check the address and update the server to support CLI requests.",
             429: "The queue or request limit has been reached; try again later.",
@@ -313,7 +336,7 @@ class EpgClient:
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *args, **kwargs):
                 return None
-        self.opener = urllib.request.build_opener(NoRedirect())
+        self.opener = urllib.request.build_opener(NoRedirect(), https_handler())
 
     def current(self, channels, search):
         payload = {"version": 1, "source": "epg-one", "channels": channels, "search": search}
@@ -554,12 +577,14 @@ class Client:
         if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise Error("server must be an HTTP(S) address without credentials, query or fragment")
         self.credentials = read_json(config["server_config"])
-        self.token = self.credentials["admin_token"]
+        self.token = self.credentials.get("operator_token", self.credentials.get("admin_token"))
+        if not isinstance(self.token, str) or not self.token:
+            raise Error("Private credentials require operator_token or admin_token")
         # Never forward an administrator credential through an HTTP redirect.
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *args, **kwargs):
                 return None
-        self.opener = urllib.request.build_opener(NoRedirect())
+        self.opener = urllib.request.build_opener(NoRedirect(), https_handler())
 
     def api(self, path, payload=None, timeout=None):
         budget = min(10, self.timeout if timeout is None else timeout)
@@ -635,11 +660,13 @@ class Client:
             return ids[0]
         raise Error(f"Unknown player {name!r}. Run ott devices or ott add NAME UUID")
 
-    def call(self, device, action, params):
+    def call(self, device, action, params, idempotency_key=None):
         """Preserve the legacy data-only API for existing commands."""
-        return self.call_receipt(device, action, params)["data"]
+        if idempotency_key is None:
+            return self.call_receipt(device, action, params)["data"]
+        return self.call_receipt(device, action, params, idempotency_key=idempotency_key)["data"]
 
-    def call_receipt(self, device, action, params):
+    def call_receipt(self, device, action, params, idempotency_key=None):
         """Submit once and retain the request identity, including read failures."""
         request_id = None
         status = "unknown"
@@ -647,7 +674,10 @@ class Client:
             query = "?" + urllib.parse.urlencode({"device_id": device})
             deadline = time.monotonic() + self.timeout
             try:
-                _, queued = self.api("/api/requests" + query, {"action": action, "params": params}, timeout=self.timeout)
+                payload = {"action": action, "params": params}
+                if idempotency_key is not None:
+                    payload["idempotency_key"] = idempotency_key
+                _, queued = self.api("/api/requests" + query, payload, timeout=self.timeout)
             except Error as exc:
                 # A lost POST response cannot prove whether the mutation was queued.
                 # Replaying it would give a relative-volume command a second ID.
@@ -1311,7 +1341,7 @@ def validate_preset(config, requested):
     return name, result
 
 
-def load_preset(client, device, name, preset):
+def load_preset(client, device, name, preset, session=None):
     """Apply acknowledged steps; repeat only proven pre-write mount rejections."""
     completed = []
     stage = "start"
@@ -1320,6 +1350,9 @@ def load_preset(client, device, name, preset):
     def step(label, action, params, validate, retry_errors=()):
         nonlocal stage
         stage = label
+        if session is not None and session.prepare(label, action, params):
+            completed.append(label)
+            return True
         deadline = time.monotonic() + budget
         while True:
             remaining = deadline - time.monotonic()
@@ -1328,10 +1361,12 @@ def load_preset(client, device, name, preset):
             pending = False
             try:
                 client.timeout = remaining
-                data = client.call(device, action, params)
+                data = (session.call(action, params) if session is not None else client.call(device, action, params))
             except PlayerRejected as exc:
                 if not isinstance(exc.data, dict) or exc.data.get("error") not in retry_errors:
                     raise
+                if session is not None:
+                    session.retry(label, action, params)
                 pending = True
             finally:
                 client.timeout = budget
@@ -1340,6 +1375,8 @@ def load_preset(client, device, name, preset):
             if not pending:
                 result = validate(data)
                 if result is not None:
+                    if session is not None:
+                        session.complete(label)
                     completed.append(label)
                     return result
             time.sleep(min(0.25, max(0, deadline - time.monotonic())))
@@ -1432,6 +1469,14 @@ def load_preset(client, device, name, preset):
 
 
 def preset_command(config, words, timeout, json_output, on_receipt=None):
+    if len(words) > 3:
+        path = Path(__file__).resolve().with_name("preset_session.py")
+        if not path.is_file():
+            raise Error("Install preset_session.py beside ott.py")
+        spec = importlib.util.spec_from_file_location("ott_preset_session", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.run(SimpleNamespace(**globals()), config, words, timeout, json_output, on_receipt)
     receipt = {"status": "failed", "stage": "validate", "completed": [], "error": "Invalid preset configuration or command."}
     try:
         _, params = parse_command(words[1:])
@@ -2318,6 +2363,13 @@ def capabilities_metadata(data):
                 or type(debug.get("version")) is not int or debug["version"] != 1):
             raise Error(invalid)
         result["debug"] = {"version": 1}
+    if "debug_versions" in data:
+        versions = data["debug_versions"]
+        if ("debug" not in result or not isinstance(versions, list)
+                or any(type(value) is not int for value in versions)
+                or versions != [1, 2]):
+            raise Error(invalid)
+        result["debug_versions"] = list(versions)
     return result
 
 
@@ -3172,6 +3224,38 @@ def android_command(client, config_path, device, name, words, json_output):
     return result
 
 
+def handoff_command(client, source, target):
+    source_id, target_id = client.device(source), client.device(target)
+    if source_id == target_id:
+        raise Error("Choose two different players for handoff")
+    try:
+        data = client.call(source_id, "playback_handoff_export", {})
+        handoff = data.get("handoff") if isinstance(data, dict) else None
+        if not isinstance(handoff, dict):
+            raise Error("The source player returned an invalid handoff")
+        keys = {"version", "provider", "source_id", "item_id", "kind"}
+        archive = handoff.get("kind") == "archive"
+        if archive:
+            keys.add("archive_start")
+        if (set(data) != {"handoff"} or set(handoff) != keys
+                or type(handoff.get("version")) is not int or handoff["version"] != 1
+                or handoff.get("provider") not in ("m3u", "xtream", "stalker")
+                or handoff.get("kind") not in ("live", "archive")
+                or not isinstance(handoff.get("item_id"), str)
+                or not re.fullmatch(r"channel-v1:[0-9a-f]{8}\.[0-9a-f]{8}", handoff["item_id"])
+                or any(not epg_text(handoff.get(k), limit, "utf-8") or not handoff[k].strip()
+                       or re.search(r"[\x00-\x1f\x7f]", handoff[k]) for k, limit in (("source_id",256),("item_id",512)))
+                or (archive and (type(handoff.get("archive_start")) is not int or not 1 <= handoff["archive_start"] <= 9007199254740991))):
+            raise Error("The source player returned an invalid handoff")
+        result = client.call(target_id, "playback_handoff_import", {"handoff": handoff})
+        if (not isinstance(result, dict) or set(result) != {"dispatched", "kind"}
+                or result["dispatched"] is not True or result["kind"] != handoff["kind"]):
+            raise Error("Target handoff was not confirmed; inspect playback before retrying")
+    except (PlayerRejected, PlayerUnsupported):
+        raise Error("Handoff is unavailable or rejected. Both players require the same configured source and a unique matching channel") from None
+    return {"source": source_id, "target": target_id, "dispatched": True, "kind": handoff["kind"], "source_stopped": False}
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "resolve":
@@ -3227,6 +3311,11 @@ def main(argv=None):
                                   print_request_receipt if args.receipt else None)
         client = Client(config, args.timeout)
         client.on_receipt = print_request_receipt if args.receipt else None
+        if args.words[0].casefold() == "handoff":
+            if len(args.words) != 3:
+                raise Error("Use ott handoff SOURCE TARGET")
+            print(json.dumps(handoff_command(client, args.words[1], args.words[2]), ensure_ascii=False, indent=2))
+            return 0
         if management(client, args.config, args.words, json_output=args.json):
             return 0
         device = client.device(args.words[0])
