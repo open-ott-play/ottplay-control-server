@@ -115,6 +115,28 @@ class PresetSessionTests(unittest.TestCase):
         self.assertNotIn(TOKEN,out.getvalue())
         self.assertEqual(self.player.calls,[])
 
+    def test_legacy_vportal_does_not_change_revision_or_exact_comparisons(self):
+        legacy = config()
+        for row in legacy['presets']['local']['m3u']:
+            row['vportal'] = 'retired private portal'
+        _, normalized = ott.validate_preset(legacy, 'local')
+        self.assertEqual(session.digest(normalized), session.digest(self.preset))
+        self.assertEqual(list(session.comparisons(normalized)), list(session.comparisons(self.preset)))
+        for provider, params in session.comparisons(normalized):
+            if provider.startswith('m3u_'):
+                self.assertEqual(set(params['settings']), {'name', 'playlist', 'history_hours'})
+
+    def test_checkpoint_from_legacy_writer_is_not_silently_migrated(self):
+        old_preset = copy.deepcopy(self.preset)
+        for row in old_preset['m3u']:
+            row['settings']['vportal'] = 'old private portal'
+        current = session.Session(ott, self.player, 'dev_tv', self.name, old_preset, self.path, False)
+        current.retry('save_profile_1', 'profile_settings', old_preset['m3u'][0])
+        current.close()
+        with self.assertRaisesRegex(ott.Error, 'revision'):
+            self.run_session(True)
+        self.assertEqual(self.player.calls, [])
+
     def test_old_player_exact_compare_fails_before_mutation(self):
         self.player.call = mock.Mock(side_effect=ott.PlayerUnsupported('unsupported', {}))
         with mock.patch.object(ott,'Client',return_value=self.player), self.assertRaises(ott.PlayerUnsupported):

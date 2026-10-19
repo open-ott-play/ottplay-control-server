@@ -21,7 +21,7 @@ SERVER = 'http://nas.example:32400'
 def config():
     return {'presets': {'local': {
         'm3u': [{'number': number, 'name': 'Profile ' + str(number), 'playlist': PLAYLIST,
-                 'history_hours': 144, 'vportal': PORTAL} for number in (1, 2)],
+                 'history_hours': 144} for number in (1, 2)],
         'plex': {'server': SERVER, 'token': TOKEN}, 'active_profile': 1,
     }}}
 
@@ -36,7 +36,7 @@ class FakePlayer:
         self.counts = {}
         self.saved = []
         self.slots = {n: {'number': n, 'name': 'Old ' + str(n), 'history_hours': None,
-                         'playlist_configured': False, 'vportal_configured': False} for n in range(1, 16)}
+                         'playlist_configured': False} for n in range(1, 16)}
 
     def device(self, name):
         return 'dev_tv'
@@ -72,7 +72,7 @@ class FakePlayer:
             settings = params['settings']
             self.saved.append((n, copy.deepcopy(settings)))
             self.slots[n].update(name=settings['name'], history_hours=settings['history_hours'],
-                                 playlist_configured=bool(settings['playlist']), vportal_configured=bool(settings['vportal']))
+                                 playlist_configured=bool(settings['playlist']))
             return {'provider': 'm3u', 'saved': True, 'profile': self.metadata(n), 'private': TOKEN}
         if action == 'profile':
             self.active = params['number']
@@ -239,7 +239,7 @@ class PresetValidationTests(unittest.TestCase):
             lambda p: p.update(m3u=[]), lambda p: p.update(m3u={}),
             lambda p: p['m3u'][1].update(number=1), lambda p: p['m3u'][1].update(number=True),
             lambda p: p['m3u'][1].update(number=0), lambda p: p['m3u'][1].update(number=16),
-            lambda p: p['m3u'][1].pop('vportal'), lambda p: p['m3u'][1].update(extra=TOKEN),
+            lambda p: p['m3u'][1].pop('playlist'), lambda p: p['m3u'][1].update(extra=TOKEN),
             lambda p: p['m3u'][1].update(history_hours=True), lambda p: p['m3u'][1].update(history_hours=8761),
             lambda p: p['m3u'][1].update(name='bad\x00name'), lambda p: p['m3u'][1].update(name='\ud800'),
             lambda p: p['m3u'][1].update(name='x' * 257), lambda p: p.update(active_profile=True),
@@ -252,11 +252,7 @@ class PresetValidationTests(unittest.TestCase):
                     'https://bad%ffhost/list', 'https://bad^host/list', 'http://[v1.name]/list',
                     'http://[fe80::1%25eth0]/list']:
             mutations.append(lambda p, url=url: p['m3u'][1].update(playlist=url))
-        for link in ['https://portal.example/api/', 'portal::[key:]https://portal.example/',
-                     'portal::[key:x]https://user:password@portal.example/',
-                     'portal::[key:x]https://portal.example/#fragment',
-                     'portal::[key:x]https://portal.example/a b',
-                     'portal::[key:' + '😀' * 513 + ']https://portal.example/']:
+        for link in [None, {}, True, 'x' * 8193, 'bad\nlink', '\ud800']:
             mutations.append(lambda p, link=link: p['m3u'][1].update(vportal=link))
         for mutate in mutations:
             source = config(); mutate(source['presets']['local'])
@@ -272,29 +268,38 @@ class PresetValidationTests(unittest.TestCase):
     def test_request_limit_is_checked_for_later_slot_before_first_write(self):
         source = config()
         source['presets']['local']['m3u'][1].update(
-            playlist='https://a/' + 'x' * (8192 - len('https://a/')),
-            vportal='portal::[key:x]https://a/' + 'x' * (8192 - len('portal::[key:x]https://a/')))
+            playlist='https://a/' + '"' * (8192 - len('https://a/')))
         status, out, err, player, constructor = run(source)
         self.assertEqual(status, 1)
         self.assertIn('16 KiB', json.loads(out)['error'])
         self.assertEqual(player.calls, [])
         constructor.assert_not_called()
 
-    def test_empty_vportal_and_encoded_brackets_are_supported(self):
-        source = config()
-        source['presets']['local']['m3u'][0]['vportal'] = ''
-        source['presets']['local']['m3u'][1]['vportal'] = 'PORTAL::%5Bkey:opaque%2Fkey%5DHTTPS://portal.example/api/?a=b'
-        self.assertEqual(run(source)[0], 0)
+    def test_legacy_vportal_fields_are_ignored_without_mutating_source(self):
+        expected = ott.validate_preset(config(), 'local')
+        for link in ['', PORTAL, 'retired malformed portal link', 'x' * 8192]:
+            source = config()
+            for row in source['presets']['local']['m3u']:
+                row['vportal'] = link
+            before = copy.deepcopy(source)
+            self.assertEqual(ott.validate_preset(source, 'local'), expected)
+            status, out, err, player, _ = run(source)
+            self.assertEqual((status, err), (0, ''))
+            self.assertEqual(source, before)
+            for _, action, params in player.calls:
+                if action == 'profile_settings':
+                    self.assertEqual(set(params['settings']), {'name', 'playlist', 'history_hours'})
+            self.assert_no_secrets(out + err)
 
     def test_numeric_hosts_are_validated_before_any_provider_change(self):
         for host in ('999.999.999.999', 'host.123', 'host.0xff', '09', '127.1', '0x7f000001'):
-            for target in ('playlist', 'vportal', 'plex'):
+            for target in ('playlist', 'plex'):
                 source = config()
                 url = 'http://' + host + '/media'
                 if target == 'plex':
                     source['presets']['local']['plex']['server'] = url
                 else:
-                    source['presets']['local']['m3u'][1][target] = ('portal::[key:test-only-key]' if target == 'vportal' else '') + url
+                    source['presets']['local']['m3u'][1][target] = url
                 with self.subTest(host=host, target=target):
                     status, out, err, player, constructor = run(source)
                     self.assertEqual((status, json.loads(out)['stage'], player.calls), (1, 'validate', []))

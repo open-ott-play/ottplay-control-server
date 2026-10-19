@@ -36,7 +36,14 @@ func TestSettingsComparisonRequiresBoundProviderShape(t *testing.T) {
 		params string
 		code   int
 	}{
-		{`{"provider":"m3u","number":1,"settings":{"name":"Local","playlist":"https://private.example","history_hours":0,"vportal":""}}`, 202},
+		{`{"provider":"m3u","number":1,"settings":{"name":"Local","playlist":"https://private.example","history_hours":0}}`, 202},
+		{`{"provider":"m3u","number":15,"settings":{"name":"","playlist":"","history_hours":8760}}`, 202},
+		{`{"provider":"m3u","number":1,"settings":{"name":"Local","playlist":"https://private.example","history_hours":0,"vportal":""}}`, 400},
+		{`{"provider":"m3u","number":1,"settings":{"vportal":"","playlist":"https://private.example","history_hours":0}}`, 400},
+		{`{"provider":"m3u","number":1,"settings":{"name":"Local","playlist":"https://private.example","history_hours":true}}`, 400},
+		{`{"provider":"m3u","number":1,"settings":{"name":"Local","playlist":"https://private.example","history_hours":8761}}`, 400},
+		{`{"provider":"m3u","number":0,"settings":{"name":"Local","playlist":"https://private.example","history_hours":0}}`, 400},
+		{`{"provider":"m3u","number":1,"settings":{"name":"Local","playlist":"https://private.example","history_hours":0},"extra":true}`, 400},
 		{`{"provider":"m3u","number":1,"settings":{"playlist":"https://private.example"}}`, 400},
 		{`{"provider":"m3u","settings":{"playlist":"x"}}`, 400},
 		{`{"provider":"plex","settings":{"server":"https://private.example","token":"secret"}}`, 202},

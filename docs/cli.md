@@ -725,6 +725,7 @@ Profile setters accept `url` / `playlist`, `history` / `history-hours` /
 `history_hours`, `vp` / `vportal`, and `n` / `name`. For example,
 `ott tv prof 2 playlist https://example.com/list.m3u` and
 `ott tv profile 2 url https://example.com/list.m3u` are equivalent.
+The `vp` / `vportal` setter requires the standalone VPortal provider.
 These are CLI token aliases; JSON configuration keeps its canonical field names.
 
 Volume queries print the numeric percentage, or only `{"volume": 35}` with
@@ -1367,8 +1368,8 @@ in a numbered slot without starting playback. The optional name replaces the slo
 name. Load selects that saved configuration; it is a playback request, not proof
 that frames are rendering. Loading follows player settings and local access state.
 There are 15 slots; `profiles` displays the active slot, source count, selected file
-and whether local binding is required. Existing M3U/VPortal profile commands keep
-their behavior. `profile-config` remains the M3U/VPortal settings format, and
+and whether local binding is required. M3U and standalone VPortal use their
+provider-specific `profile-config` settings formats, and
 `ott PLAYER load PRESET` remains the separate named-setup command.
 
 Export writes a new, private JSON file (permissions `0600`) atomically; it refuses
@@ -1410,13 +1411,11 @@ ott tv profile 3
 ott tv profile 3 name "Living room"
 ott tv profile 3 url 'https://provider.example/list.m3u'
 ott tv profile 3 history 168
-ott tv profile 3 vportal 'portal::[key:YOUR_KEY]https://provider.example/api/v1/'
-ott tv profile 3 vportal ''
 ott tv profile-config 3 /private/profile.json
 ```
 
 `profiles` lists all 15 slots in order, marking the active slot with `*`. It shows
-the name, archive depth in hours and whether playlist/VPortal links are configured.
+the name, archive depth in hours and whether a playlist is configured.
 URLs, provider keys and credentials are omitted from both normal and JSON output.
 An existing history value that cannot be validated appears as `unknown` (`null`
 in JSON). `profile N` selects that slot; it reports a switch request, not completed
@@ -1426,21 +1425,24 @@ Use `profile-config N FILE.json` to update several settings together. Its conten
 are the settings object itself, without a `provider` or `settings` wrapper:
 
 ```json
-{"name":"Cinema","playlist":"https://provider.example/list.m3u","history_hours":168,"vportal":"portal::[key:YOUR_KEY]https://provider.example/api/v1/"}
+{"name":"Cinema","playlist":"https://provider.example/list.m3u","history_hours":168}
 ```
 
-VPortal requires the complete cabinet link in
-`portal::[key:YOUR_KEY]https://provider.example/api/v1/` format, including its key
-and endpoint. A bare HTTP(S) URL is not a VPortal cabinet link.
+M3U settings accept only `name`, `playlist` and `history_hours`. VPortal uses its
+own provider and profile storage. To configure it, select `provider vportal`,
+then use `profile N vportal LINK` or a private `profile-config` file containing
+`name` and `vportal`. The complete cabinet link has the form
+`portal::[key:YOUR_KEY]https://provider.example/api/v1/`. Direct VPortal settings
+updates while M3U is selected are rejected before mutation. Previously saved
+portal links in M3U device profiles are inactive and remain stored.
 
 Only supplied fields change. Editing an inactive profile leaves the active
-playlist running. Renaming a profile or changing only its VPortal link does not
-reload channels; a VPortal change replaces that profile's media source. Changing
+playlist running. Renaming a profile does not reload channels. Changing
 the active playlist or its archive depth reloads channels once.
 Profile numbers are integers 1–15; `history_hours`
 is an integer 0–8760. Archive depth tells the player what history to offer; the
 provider must still supply that history. Names are limited to 256 UTF-8 bytes,
-playlist and VPortal strings to 8192 bytes each, with no C0 or DEL control
+playlist URLs to 8192 bytes, with no C0 or DEL control
 characters. Empty strings clear the corresponding name or link. Clearing the
 active playlist also reloads that slot, so its previous stream does not remain
 active. The player validates links and applies changes through its normal driver.
@@ -1473,15 +1475,13 @@ replace the example addresses and credential placeholders before use:
         "number": 1,
         "name": "Local 1",
         "playlist": "http://127.0.0.1:8090",
-        "history_hours": 144,
-        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+        "history_hours": 144
       },
       {
         "number": 2,
         "name": "Local 2",
         "playlist": "http://127.0.0.1:8090",
-        "history_hours": 144,
-        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+        "history_hours": 144
       }
     ],
     "plex": {"server": "http://nas.example:32400", "token": "YOUR_PLEX_TOKEN"},
@@ -1493,15 +1493,13 @@ replace the example addresses and credential placeholders before use:
         "number": 1,
         "name": "Home 1",
         "playlist": "https://playlist.example.com/channels.m3u",
-        "history_hours": 144,
-        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+        "history_hours": 144
       },
       {
         "number": 2,
         "name": "Home 2",
         "playlist": "https://playlist.example.com/channels.m3u",
-        "history_hours": 144,
-        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+        "history_hours": 144
       }
     ],
     "plex": {"server": "http://nas.example:32400", "token": "YOUR_PLEX_TOKEN"},
@@ -1513,7 +1511,7 @@ replace the example addresses and credential placeholders before use:
 `local` illustrates a playlist service on the player's own loopback interface.
 `home` illustrates a service reachable from a TV or phone over HTTPS. Use URLs
 reachable from the target player, not just from the computer running the CLI.
-Both presets can use the same VPortal link and Plex credentials. The Plex address
+Both presets can use the same Plex credentials. The Plex address
 must be reachable from each target device.
 The second M3U slot starts with the same settings so it can be customized
 independently. Editing a preset changes only this file; run `load` to apply it.
@@ -1552,12 +1550,16 @@ for player in o1 o2 o3 o4; do ott "$player" load local || break; done
 ```
 
 The selected setup is fully validated before any remote request. Each M3U entry
-must include `number`, `name`, `playlist`, `history_hours` and `vportal`; numbers
+must include `number`, `name`, `playlist` and `history_hours`; numbers
 must be unique integers from 1 to 15. `active_profile` must refer to an included
 slot. Playlist URLs must be nonempty HTTP(S) addresses. Use IPv4 addresses in
 four decimal octets (for example, `127.0.0.1`), not shortened or hexadecimal
-forms. An empty VPortal string
-disables VPortal for that slot. Plex requires both `server` and `token`.
+forms. A legacy `vportal` string in an M3U setup entry is accepted but ignored:
+it is omitted from requests, comparisons and the normalized setup fingerprint.
+Remove it from the local file when convenient; loading does not erase old links
+on devices. An old resume checkpoint whose fingerprint included this field is
+rejected as a setup revision mismatch; inspect the device state before starting
+a new load. Plex requires both `server` and `token`.
 The existing provider length and request-size limits apply.
 
 Loading selects Plex, waits for its settings handler, saves its credentials,
@@ -2075,9 +2077,8 @@ selection in the player remains available until that selection establishes the l
 For the standalone VPortal provider, select the configured profile, then run
 `ott tv vp "tom and jerry"` followed by `ott tv kiosk on --strict`. This locks the
 current repeating episode queue rather than arming a future TV selection.
-The `vp` command is the same for a VPortal link in an M3U profile and the
-standalone provider; it searches the active source. Their profile slots are
-separate. Unlike TV kiosk name matching, `vp` collects all matching titles.
+The `vp` command searches the active standalone VPortal source; M3U no longer
+loads portal links. Unlike TV kiosk name matching, `vp` collects all matching titles.
 For example, to replace a lock with content from an already configured slot:
 
 ```sh

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- Remove VPortal from M3U setup entries, profile output and exact settings
+  comparisons. Legacy `vportal` strings in named setups are accepted but never
+  sent to players. Standalone VPortal profile commands remain available;
+  direct VPortal updates require the VPortal provider. Existing device values
+  are preserved. Update the controller, CLI and player together.
+
 ## [0.1.5] - 2026-10-19
 
 ### Added

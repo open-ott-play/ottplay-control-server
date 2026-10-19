@@ -252,7 +252,10 @@ class PresetTransportTest(unittest.TestCase):
                 self.assertEqual((fixture.active_profile, fixture.reloads), (1, 1))
                 for expected in PRESET['m3u']:
                     self.assertEqual(fixture.slots[expected['number']],
-                                     {key: value for key, value in expected.items() if key != 'number'})
+                                     {**{key: value for key, value in expected.items()
+                                         if key not in ('number', 'vportal')}, 'vportal': ''})
+                for _, settings in fixture.profile_writes:
+                    self.assertNotIn('vportal', settings)
                 mutations = [(request['action'], request['params'].get('number'))
                              for _, request in fixture.posts
                              if request['action'] in ('profile_settings', 'profile')]
