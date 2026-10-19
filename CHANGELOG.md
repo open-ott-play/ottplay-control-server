@@ -2,19 +2,35 @@
 
 ## Unreleased
 
+## [0.1.5] - 2026-10-19
+
 ### Added
 
 - Local videos (`offline`) profile save/load and portable export/import in the
   CLI, with capability-aware examples in `ott PLAYER`, strict request/reply
   validation and independent operator scopes. Exports use private, atomic new
-  files and never include videos, filesystem paths or device access grants.
+  files and never include videos, absolute filesystem paths or device access grants.
   Same-installation bindings may be reused; other devices require local binding.
 
 ### Upgrade
 
-- Update both the controller and player for `profile_save`, `profile_export` and
-  `profile_import`. Existing profile selectors and M3U/VPortal settings remain
-  compatible; importing Local videos configuration does not start playback.
+- Update the controller, CLI and a matching Local videos-capable player together
+  for `profile_save`, `profile_export` and `profile_import`. Existing profile
+  selectors and M3U/VPortal settings remain compatible. Import into an inactive
+  profile slot; saving or importing configuration does not start playback.
+- On another installation, load the imported profile to open local recovery,
+  connect and bind its sources locally, then load it again. Publishing this
+  controller release does not update or deploy players.
+
+### Security
+
+- Portable profiles accept only bounded, allowlisted configuration fields.
+  Filesystem handles, bookmarks, native references and access grants stay on the
+  originating installation. A profile's binding identifier does not grant access
+  to another device's files.
+- Keep exports private: source labels and selected relative filenames may expose
+  personal information. Device-scoped authorization and player capabilities
+  remain enforced; automated checks do not establish physical-player acceptance.
 
 ## [0.1.4] - 2026-10-18
 
