@@ -2,7 +2,7 @@
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py` and `preset_session.py`. Python 3.12 is the version used by CI. Commands take a short
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py` and `app_update.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -72,17 +72,15 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 reviewed source revision
-[`d8188b24d615db6e8132f28da69d82b315c6ba36`](https://github.com/open-ott-play/ottplay-control-server/commit/d8188b24d615db6e8132f28da69d82b315c6ba36).
-It contains all seven CLI modules, including the local `resolve` command,
-[workbench](workbench.md#quick-start), offline `report verify`, and Plex library
-commands. Update the controller and player too; confirm support with
+[`e112ef47dae45cecb0176f0bfd44c3e757faa0d1`](https://github.com/open-ott-play/ottplay-control-server/commit/e112ef47dae45cecb0176f0bfd44c3e757faa0d1).
+It contains the complete CLI module set, including the local `resolve` command,
+[workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
+OTA workflow (`app_update.py`). Update the controller and player too; confirm support with
 `ott PLAYER caps`.
 
-This is a reviewed revision from the **0.1.1 development line**. Stable v0.1.1
-has since been published; the pinned revision above is retained as an exact
-installation example, not a moving latest version. It does not include later
-0.1.2 changes. Stable CLI v0.1.0 lacks `resolve`, workbench and offline
-verification. A server's `version` output, the repository's `VERSION` file and
+This is the reviewed OTA implementation based on controller main `d89996a2`.
+The pinned revision is an exact installation example, not a moving latest
+version. Older CLI revisions do not include high-level Android release updates. A server's `version` output, the repository's `VERSION` file and
 a player's reported version identify different components; none substitutes for
 checking this CLI checkout's commit. Follow the
 [deployment guide](deployment.md) for the controller and the
@@ -99,8 +97,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_revision=d8188b24d615db6e8132f28da69d82b315c6ba36
-  ott_source="$HOME/.local/share/ottplay-control-server-d8188b24"
+  ott_revision=e112ef47dae45cecb0176f0bfd44c3e757faa0d1
+  ott_source="$HOME/.local/share/ottplay-control-server-e112ef47"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -119,7 +117,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-e112ef47/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -133,7 +131,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-e112ef47/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -155,8 +153,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRevision = 'd8188b24d615db6e8132f28da69d82b315c6ba36'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-d8188b24'
+$ottRevision = 'e112ef47dae45cecb0176f0bfd44c3e757faa0d1'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e112ef47'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -199,12 +197,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-e112ef47/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-d8188b24\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e112ef47\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -233,7 +231,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-d8188b24`, stages the replacement beside it, then switches atomically.
+`ott.before-e112ef47`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -245,9 +243,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-d8188b24")
-staged = launcher.with_name("ott.switch-d8188b24")
-reviewed = Path.home() / ".local/share/ottplay-control-server-d8188b24/cli/ott.py"
+backup = launcher.with_name("ott.before-e112ef47")
+staged = launcher.with_name("ott.switch-e112ef47")
+reviewed = Path.home() / ".local/share/ottplay-control-server-e112ef47/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -2428,6 +2426,42 @@ return only; `unknown` must not trigger automatic replay. See
 [native evidence and retention](../native/android-agent/README.md#durable-operation-history).
 
 ## Capacitor APK updates over Wi-Fi
+
+A running Capacitor player can download and install an official release without
+USB. Without `--version`, the command selects the latest published beta:
+
+```sh
+ott k8a update --variant api22
+ott fire8 update beta --variant api22
+ott k8a update --version v1.1.58-beta.3 --variant api22
+ott k8a update --version v1.1.58-beta.3 --variant api22 --prepare-only
+ott k8a update status
+```
+
+Use `api22` for Android 5.1/6 (including Fire OS 5), or `full` for Android 7+.
+The current updater does not report a reliable API level, so the CLI requires
+the variant rather than guessing from an alias. An explicit version can name a
+published stable, beta or RC from `open-ott-play/ottplay-foss`; arbitrary download
+URLs still use the low-level commands below. The CLI checks the published tag's
+commit, release manifest, version plan, APK hash, size and version metadata before
+sending the existing download request. Android additionally verifies the actual
+APK's package, signature and strictly increasing versionCode. Selecting an older
+version fails; selecting the already installed versionCode does nothing and is
+not proof of byte-for-byte equality.
+
+The command polls preparation, requests installation once, then reports verified
+installed versionCode, pending permission/confirmation, or unconfirmed reconnect.
+`--wait SECONDS` bounds the entire operation (default 300, maximum 900); metadata
+requests are also bounded to 15 seconds each. It never replays an uncertain install.
+Run `update status` after completing Android's installer prompt. The CLI does not
+automatically check for new releases on a timer or wake a closed/unreachable player.
+
+For a kiosk, first inspect `ott k8a kiosk`, record its target and strict setting,
+then explicitly use `ott k8a kiosk off`. Unlock protected settings on the player
+if required. Updating does not change PINs or automatically disable kiosk mode.
+After installation and playback verification, restore the intended kiosk target
+with the ordinary kiosk command; do not assume that a previously locked session
+was preserved while it was explicitly disabled for maintenance.
 
 A Capacitor player with the `AppUpdate` plugin supports the normal player queue:
 

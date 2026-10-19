@@ -52,7 +52,9 @@ The player stores this connection only on the current installation and excludes 
 
 ## Terminal remote
 
-The [illustrated Android OTA guide](docs/android-ota.md) explains signed agent
+The [illustrated Android OTA guide](docs/android-ota.md) distinguishes ordinary
+Capacitor Wi-Fi updates (`ott DEVICE update --variant api22|full`, latest beta by
+default; `--version` selects a release) from the separate rooted agent. It explains signed agent
 and APK/helper updates, recovery and verification of the installed result.
 
 The [Android ADB guide](docs/android-adb.md) covers USB access through a workstation
