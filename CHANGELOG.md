@@ -18,8 +18,9 @@
   for `profile_save`, `profile_export` and `profile_import`. Existing profile
   selectors and M3U/VPortal settings remain compatible. Import into an inactive
   profile slot; saving or importing configuration does not start playback.
-- Bind imported sources locally on another installation before loading the
-  profile. Publishing this controller release does not update or deploy players.
+- On another installation, load the imported profile to open local recovery,
+  connect and bind its sources locally, then load it again. Publishing this
+  controller release does not update or deploy players.
 
 ### Security
 
