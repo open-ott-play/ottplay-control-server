@@ -29,7 +29,7 @@ var CommandOperations = map[string]string{
 
 func ValidCommandAction(action string) bool {
 	switch action {
-	case "status", "providers", "profiles", "epg_catalog", "capabilities", "screenshot", "inspect", "profile", "profile_settings", "play_catalog", "resolve_archive", "play_archive_catalog", "play", "provider", "vportal", "vportal_random", "vportal_search", "channels", "programs", "provider_settings", "settings_compare", "playback_handoff_export", "playback_handoff_import":
+	case "status", "providers", "profiles", "epg_catalog", "capabilities", "screenshot", "inspect", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "play_catalog", "resolve_archive", "play_archive_catalog", "play", "provider", "vportal", "vportal_random", "vportal_search", "channels", "programs", "provider_settings", "settings_compare", "playback_handoff_export", "playback_handoff_import":
 		return true
 	}
 	family, operation, ok := strings.Cut(action, ".")

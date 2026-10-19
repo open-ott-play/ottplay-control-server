@@ -160,6 +160,25 @@ Library lookup additionally requires an updated player and controller advertisin
 `plex_library`; it uses the player's saved Plex connection and rejects ambiguous
 or incomplete selections. See [Plex libraries by name](docs/cli.md#plex-libraries-by-name).
 
+### Save Local videos profiles
+
+With a current player and controller, local files/folders use provider `offline`:
+
+```sh
+ott d1 provider offline
+ott d1 profile save 1 "Family movies"
+ott d1 profile export 1 family-movies.json
+ott d1 profile import 2 family-movies.json
+ott d1 profile load 2
+```
+
+Connect files/folders on the player first. Save records their configuration and
+selected video without starting playback. Export transfers descriptions only;
+media and OS/browser access grants remain on the device. Another installation
+requires local binding, and loading does not imply playback was confirmed.
+See [Local videos profiles](docs/cli.md#local-videos-profiles) for setup,
+capabilities, portable-format limits and troubleshooting.
+
 ### Save the current item across profiles
 
 ```sh

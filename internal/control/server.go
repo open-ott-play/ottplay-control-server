@@ -33,6 +33,7 @@ type entry struct {
 	plexLibrary       *plexLibraryRequest
 	favorites         *favoritesRequest
 	handoff           *handoffRequest
+	offlineProfile    *offlineProfileRequest
 	owner, permission string
 	playbackOperation string
 	inspect           *inspectRequest
