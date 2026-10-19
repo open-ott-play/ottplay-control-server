@@ -53,7 +53,7 @@ function moduleOf(file, dependency, host) {
         await pause(50);
     }
     assert(ready, 'controller readiness');
-    const settings = { name: 'Local Тест', playlist: 'https://source.invalid/list.m3u?token=PRIVATE_FIXTURE', history_hours: 24, vportal: '' };
+    const settings = { name: 'Local Тест', playlist: 'https://source.invalid/list.m3u?token=PRIVATE_FIXTURE', history_hours: 24 };
     const plex = { server: 'https://plex.invalid', token: 'PRIVATE_FIXTURE_PLEX' };
     const stalker = { name: 'Portal', server: 'https://stalker.invalid', mac: '02:00:00:00:00:01' };
     const preset = { m3u: [{ number: 1, ...settings }], plex, stalker: [{ number: 1, ...stalker }], active_profile: 1 };
