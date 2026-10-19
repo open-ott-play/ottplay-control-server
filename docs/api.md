@@ -1067,3 +1067,57 @@ Negative result data is a single `error` code: `unsupported`, `invalid_request`,
 `no_current_item`, `source_mismatch`, `item_unavailable`, `ambiguous_item`,
 `policy_denied`, `busy`, `playback_failed`, or `context_changed`.
 See the [workflow and limitations](reliable-control.md#continue-on-another-player).
+
+
+### Local videos profile transfer
+
+The `offline` provider uses the same `profiles {}` listing and `profile {number}`
+selector, with 15 slots. Its profile metadata is
+`{number,name,active,configured,binding_required,source_count,selected_name}`;
+`selected_name` is empty when no file is selected. A profile load returns
+`{provider:"offline",profile:METADATA,dispatched:true,binding_required:BOOL}`.
+Dispatch does not confirm playback. Missing local access requires interactive
+binding/permission on the player, and a missing selected file must not select a
+substitute.
+
+New requests (exact keys, integer slot 1–15):
+
+```json
+{"action":"profile_save","params":{"number":1,"name":"Family movies"}}
+{"action":"profile_export","params":{"number":1}}
+{"action":"profile_import","params":{"number":2,"profile":{"version":1,"provider":"offline","name":"Family movies","binding_id":"c98c115d-1234-4567-8abc-123456789abc","sources":[{"key":"s0","name":"Movies","kind":"folder"}],"selected":{"source_key":"s0","name":"Cartoons/movie.mp4"}}}}
+```
+
+`profile_save` captures current local sources/selection; `name` is optional.
+`profile_import` saves into an inactive slot. Neither starts playback. Both return
+`{provider:"offline",profile:METADATA,saved:true,binding_required:BOOL}`.
+`profile_export` returns `{provider:"offline",number:N,profile:DOCUMENT}`.
+Negative replies contain only `{error:TEXT}` (nonempty, at most 1024 UTF-8 bytes).
+New action replies are bounded to 16 KiB, validated against their request slot,
+and rejected before queue consumption if invalid. Operator scopes are the exact
+independent action names `profile_save`, `profile_export`, `profile_import`;
+export permission does not grant import/save permission.
+
+DOCUMENT accepts exactly `version`, `provider`, `name`, `binding_id`, `sources`,
+`selected`: version 1, provider `offline`, name up to 256 UTF-8 bytes, canonical
+lowercase UUIDv4 binding ID. Sources are 0–32 exact `{key,name,kind}` records with
+consecutive keys `s0`…`s31`, a nonempty basename up to 512 UTF-8 bytes, and kind
+`file` or `folder`. `selected` is null or exact `{source_key,name}` referencing an
+included source and a nonempty relative filename up to 1024 UTF-8 bytes. Strings
+exclude control characters; source/selection names exclude backslashes, URI
+schemes, absolute paths and `.`/`..` path segments. The compact document is at most
+12288 bytes and the full request at most 16 KiB. Duplicate and unknown fields are
+rejected recursively. Empty sources require null selection.
+
+The opaque binding ID resolves only an exact configuration in an installation's
+private binding map. It is not an access credential. Cross-device import transfers
+configuration only; it never carries media bytes, paths, native source IDs,
+bookmarks, grants or browser handles. Reusing local access requires the matching
+local binding; otherwise the player reports `binding_required` and provides a
+local binding flow.
+
+While Local videos is active and installed, capabilities may include
+`offline_profiles:{version:1,operations:["list","load","save","export","import"],max_profiles:15,max_sources:32}`.
+Operations are filtered by current player policy (a locked configuration may
+advertise only `list`). Absence means the extension is unavailable; older clients
+and existing M3U/VPortal wire shapes are unchanged.

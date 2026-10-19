@@ -20,7 +20,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
-- [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
+- [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles), [Local videos profiles](#local-videos-profiles) and [named setups](#named-setups)
 - [Favorites across profiles](#favorites-across-profiles)
 - [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
@@ -1340,6 +1340,63 @@ and select/configure the intended profile instead of repeatedly switching provid
 For example, `* 1: Home 1` means profile 1 named Home 1 is already active;
 `playlist: set` means a URL is saved, not that its channels loaded successfully.
 Provider changes remain subject to the player's settings lock and platform policy.
+
+## Local videos profiles
+
+Use provider ID `offline` (display name **Local videos**) for files or folders connected
+on the player. Install matching player and controller versions supporting
+`offline_profiles` before using the new save/import/export commands. `ott PLAYER`
+shows the commands currently available; `ott PLAYER caps` reports their capability.
+
+```sh
+ott d1 providers
+ott d1 provider offline
+ott d1 profiles
+ott d1 profile save 1 "Family movies"
+ott d1 profile export 1 family-movies.json
+ott d1 profile import 2 family-movies.json
+ott d1 profile load 2
+# The original selector and short command still work:
+ott d1 profile 1
+ott d1 prof load 1
+```
+
+Connect a folder or files in **Local videos** on the player and select the desired
+video before `profile save`. Save captures the connected sources and selected file
+in a numbered slot without starting playback. The optional name replaces the slot
+name. Load selects that saved configuration; it is a playback request, not proof
+that frames are rendering. Loading follows player settings and local access state.
+There are 15 slots; `profiles` displays the active slot, source count, selected file
+and whether local binding is required. Existing M3U/VPortal profile commands keep
+their behavior. `profile-config` remains the M3U/VPortal settings format, and
+`ott PLAYER load PRESET` remains the separate named-setup command.
+
+Export writes a new, private JSON file (permissions `0600`) atomically; it refuses
+to replace an existing file. The portable document contains only the profile name,
+source names/kinds, selected relative filename, and an opaque binding identifier.
+It contains **no videos, URLs, filesystem paths, native references, iOS bookmarks,
+Android grants or browser FileSystemHandles**. The binding identifier is only a
+lookup key into that installation's private bindings; it grants no filesystem
+access. Source/selected names themselves may be personal information.
+
+Import saves into an **inactive** slot and does not start playback. On the same
+installation, the original binding can be reused only while its matching sources
+and local permissions still exist. On another device, browser profile or origin,
+connect the original files/folder locally and use **Bind active profile** in Local
+videos settings. An import never guesses a folder by name or recreates an OS or
+browser permission. Browser permission prompts require local interaction. After
+binding, load the saved profile again; the exact selected file must still exist.
+
+Portable documents are version 1, at most 12 KiB compact JSON, with at most 32
+sources. Unknown fields, credentials/access objects, absolute or traversal paths,
+invalid source references and duplicate JSON keys are rejected before a command
+is sent. The complete request must fit the controller's 16 KiB limit.
+
+If the command is unavailable, select `offline`, check `caps`, update both player
+and controller and unlock settings/kiosk locally as appropriate. A “binding
+required” result means the profile is saved but the player needs local access.
+If a mutation times out or its acknowledgement is invalid, inspect `profiles`
+before retrying; the CLI never automatically repeats the change.
 
 ## M3U profiles
 

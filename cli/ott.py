@@ -84,6 +84,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME aspect fit / fill         request Fit to screen / Fill screen
   ott NAME providers                 list providers (zero-based indices)
   ott NAME provider m3u              select a provider by ID, index or name
+  ott NAME provider offline          select Local videos (if listed in providers)
   ott NAME provider-config FILE      update active provider settings from JSON
   ott NAME plex setup URL [TOKEN]    set Plex address and token (hidden prompt if omitted)
   ott NAME plex setup URL --token-file FILE  set Plex address and token from a file
@@ -104,7 +105,11 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME fav play ID_OR_NAME       load the saved profile and play that exact item
   ott NAME fav remove ID_OR_NAME     remove one saved favorite
   ott NAME profiles                  list the active provider’s 15 profiles without URLs
-  ott NAME profile N                 select M3U or VPortal profile 1–15
+  ott NAME profile N                 select M3U, VPortal or Local videos profile 1–15
+  ott NAME profile save N [NAME]     save the active Local videos source and selection
+  ott NAME profile load N            load a saved profile (alias: profile N)
+  ott NAME profile export N FILE     export portable Local videos configuration
+  ott NAME profile import N FILE     save exported configuration; bind locally if needed
   ott NAME profile N url URL         change a profile's playlist URL
   ott NAME profile N history HOURS   set archive depth in hours (0–8760)
   ott NAME profile N vportal LINK    set a profile's VPortal link
@@ -204,6 +209,8 @@ INPUT_ALIASES = {
 CHANNEL_STEPS = {"prev": "previous_channel", "next": "next_channel"}
 CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
 PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
+OFFLINE_PROFILE_OPERATIONS = frozenset(("list", "load", "save", "export", "import"))
+OFFLINE_BINDING_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 ASPECT_OPERATIONS = frozenset(("get", "set"))
 ASPECT_MODES = {"fit": "Fit to screen", "fill": "Fill screen"}
 SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
@@ -212,7 +219,7 @@ RECEIPT_ACTIONS = frozenset((
     "status", "capabilities", "screenshot", "inspect", "providers", "profiles",
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
-    "playback", "profile", "profile_settings", "restart", "play", "provider",
+    "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "favorites", "aspect",
     "settings_compare", "playback_handoff_export", "playback_handoff_import",
 ))
@@ -919,6 +926,25 @@ def parse_command(words):
         if tail:
             raise Error("Use profiles without arguments")
         return "profiles", {}
+    if verb == "profile" and tail and tail[0].casefold() in ("save", "load", "export", "import"):
+        operation = tail[0].casefold()
+        if len(tail) < 2 or not re.fullmatch(r"[1-9]|1[0-5]", tail[1]):
+            raise Error("Profile number must be an integer from 1 to 15")
+        params = {"number": int(tail[1])}
+        if operation == "load" and len(tail) == 2:
+            return "profile", params
+        if operation == "save":
+            if len(tail) > 2:
+                params["name"] = " ".join(tail[2:])
+                validate_profile_settings({"name": params["name"]})
+            return "profile_save", params
+        if operation in ("export", "import") and len(tail) == 3 and tail[2]:
+            if operation == "export":
+                params["output"] = tail[2]
+            else:
+                params["profile"] = offline_profile_document(read_settings_json(tail[2], "Local videos profile"))
+            return "profile_" + operation, params
+        raise Error("Use profile save N [NAME], profile load N, profile export N FILE or profile import N FILE")
     if verb in ("profile", "profile-config"):
         if not tail or not re.fullmatch(r"[1-9]|1[0-5]", tail[0]):
             raise Error("Profile number must be an integer from 1 to 15")
@@ -1191,13 +1217,121 @@ def validate_profile_settings(settings):
             raise Error("Profile settings must be UTF-8 text without control characters: name up to 256 bytes, playlist and VPortal links up to 8192 bytes")
 
 
+def offline_profile_text(value, maximum, *, nonempty=False):
+    return (epg_text(value, maximum, "utf-8")
+            and all(ord(char) >= 32 and ord(char) != 127 for char in value)
+            and (not nonempty or bool(value.strip())))
+
+
+def offline_source_name(value, maximum, *, relative=False):
+    if (not offline_profile_text(value, maximum, nonempty=True) or "\\" in value
+            or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", value)):
+        return False
+    if not relative:
+        return "/" not in value and value not in (".", "..")
+    return not value.startswith("/") and all(part not in ("", ".", "..") for part in value.split("/"))
+
+
+def offline_profile_document(value):
+    """Portable description only: authority and actual media stay on the player."""
+    invalid = "Invalid Local videos profile: use a version 1 portable export without URLs, paths, media or access grants"
+    if (not isinstance(value, dict)
+            or set(value) != {"version", "provider", "name", "binding_id", "sources", "selected"}
+            or type(value.get("version")) is not int or value["version"] != 1
+            or value.get("provider") != "offline"
+            or not offline_profile_text(value.get("name"), 256)
+            or not isinstance(value.get("binding_id"), str)
+            or not re.fullmatch(OFFLINE_BINDING_PATTERN, value["binding_id"])
+            or not isinstance(value.get("sources"), list) or len(value["sources"]) > 32):
+        raise Error(invalid)
+    for index, source in enumerate(value["sources"]):
+        if (not isinstance(source, dict) or set(source) != {"key", "name", "kind"}
+                or source.get("key") != "s" + str(index)
+                or source.get("kind") not in ("folder", "file")
+                or not offline_source_name(source.get("name"), 512)):
+            raise Error(invalid)
+    selected = value["selected"]
+    if selected is not None and (not isinstance(selected, dict) or set(selected) != {"source_key", "name"}
+            or selected.get("source_key") not in [row["key"] for row in value["sources"]]
+            or not offline_source_name(selected.get("name"), 1024, relative=True)):
+        raise Error(invalid)
+    if len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 12288:
+        raise Error("Local videos profile exceeds the 12 KiB document limit")
+    # Every export must also fit back into the bounded import request envelope.
+    request = {"action": "profile_import", "params": {"number": 15, "profile": value}}
+    if len(json.dumps(request, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
+        raise Error("Local videos profile exceeds the 16 KiB request limit")
+    return value
+
+
+def offline_profile_metadata(row, fail):
+    keys = {"number", "name", "active", "configured", "binding_required", "source_count", "selected_name"}
+    if (not isinstance(row, dict) or set(row) != keys
+            or type(row.get("number")) is not int or not 1 <= row["number"] <= 15
+            or not offline_profile_text(row.get("name"), 256)
+            or any(type(row.get(key)) is not bool for key in ("active", "configured", "binding_required"))
+            or type(row.get("source_count")) is not int or not 0 <= row["source_count"] <= 32
+            or not offline_profile_text(row.get("selected_name"), 1024)
+            or (not row["configured"] and (row["source_count"] or row["selected_name"] or row["binding_required"]))
+            or (row["selected_name"] and not row["source_count"])):
+        fail()
+    return dict(row)
+
+
+def offline_profile_command(client, device, action, params, timeout):
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    sent = False
+    operation = action.removeprefix("profile_")
+    try:
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        if operation not in controls.get("offline_profiles", {}).get("operations", []):
+            raise Error("Local videos profile operation is unavailable. Select provider offline, check caps and local restrictions, and update the player/controller. No profile command was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Profile capability discovery exceeded --timeout; no profile command was sent")
+        client.timeout = remaining
+        wire = {key: value for key, value in params.items() if key != "output"}
+        sent = True
+        data = client.call(device, action, wire)
+        if time.monotonic() >= deadline:
+            raise Error("Profile response exceeded --timeout. The request may have executed; it was not repeated")
+        if action != "profile_export":
+            return profile_metadata(data, action, params, expected_provider="offline")
+        if (not isinstance(data, dict) or set(data) != {"provider", "number", "profile"}
+                or data.get("provider") != "offline" or type(data.get("number")) is not int
+                or data["number"] != params["number"]):
+            raise Error("The player returned an invalid Local videos profile export")
+        document = offline_profile_document(data["profile"])
+        path = Path(params["output"]).expanduser()
+        try:
+            write_private(path, document, exclusive=True)
+        except FileExistsError:
+            raise Error("Export file already exists; choose a new path. The existing file was not changed") from None
+        except OSError:
+            raise Error("Could not create the Local videos export file") from None
+        return {"provider": "offline", "number": params["number"], "path": str(path.resolve()), "exported": True}
+    except (PlayerRejected, PlayerUnsupported):
+        outcome = "The request was not repeated" if sent else "No profile command was sent"
+        raise Error("Local videos profile request was rejected or unsupported; check provider offline, capabilities and local permissions. " + outcome) from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("This controller does not accept Local videos profile requests; update the controller and player. The request was not repeated") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
 def profile_metadata(data, action, params, *, expected_provider=None):
     message = "The player returned invalid profile metadata"
     if action != "profiles":
         message += ". The request may have executed; do not repeat the change blindly."
     def fail():
         raise Error(message)
+    provider = data.get("provider") if isinstance(data, dict) else None
     def profile(row):
+        if provider == "offline":
+            return offline_profile_metadata(row, fail)
         if (not isinstance(row, dict) or type(row.get("number")) is not int or not 1 <= row["number"] <= 15
                 or not epg_text(row.get("name"), 256, "utf-8")
                 or any(type(row.get(key)) is not bool for key in ("active", "playlist_configured", "vportal_configured"))
@@ -1205,14 +1339,15 @@ def profile_metadata(data, action, params, *, expected_provider=None):
                     and (type(row["history_hours"]) is not int or not 0 <= row["history_hours"] <= 8760))):
             fail()
         return {key: row[key] for key in ("number", "name", "active", "history_hours", "playlist_configured", "vportal_configured")}
-    if (not isinstance(data, dict) or data.get("provider") not in ("m3u", "vportal")
+    if (not isinstance(data, dict) or data.get("provider") not in ("m3u", "vportal", "offline")
             or (expected_provider is not None and data.get("provider") != expected_provider)):
         fail()
     if action == "profiles":
         if not isinstance(data.get("profiles"), list) or len(data["profiles"]) != 15:
             fail()
         rows = [profile(row) for row in data["profiles"]]
-        if any(row["number"] != number for number, row in enumerate(rows, 1)) or sum(row["active"] for row in rows) != 1:
+        if (any(row["number"] != number for number, row in enumerate(rows, 1))
+                or sum(row["active"] for row in rows) not in ((0, 1) if provider == "offline" else (1,))):
             fail()
         return {"provider": data["provider"], "profiles": rows}
     row = profile(data.get("profile"))
@@ -1221,8 +1356,27 @@ def profile_metadata(data, action, params, *, expected_provider=None):
     if action == "profile":
         if data.get("dispatched") is not True or row["active"] is not True:
             fail()
-        return {"provider": data["provider"], "profile": row, "dispatched": True}
+        result = {"provider": data["provider"], "profile": row, "dispatched": True}
+        if provider == "offline":
+            if type(data.get("binding_required")) is not bool or data["binding_required"] != row["binding_required"]:
+                fail()
+            result["binding_required"] = data["binding_required"]
+        return result
     if data.get("saved") is not True:
+        fail()
+    if action in ("profile_save", "profile_import"):
+        if provider != "offline" or type(data.get("binding_required")) is not bool or data["binding_required"] != row["binding_required"]:
+            fail()
+        expected_name = params.get("name") if action == "profile_save" else params["profile"]["name"]
+        if expected_name is not None and row["name"] != expected_name:
+            fail()
+        if action == "profile_import":
+            document = params["profile"]
+            selected = document["selected"]
+            if row["source_count"] != len(document["sources"]) or row["selected_name"] != (selected["name"] if selected else ""):
+                fail()
+        return {"provider": provider, "profile": row, "saved": True, "binding_required": row["binding_required"]}
+    if provider == "offline":
         fail()
     for key, value in params["settings"].items():
         if key in ("name", "history_hours"):
@@ -2284,6 +2438,18 @@ def capabilities_metadata(data):
                 any(not isinstance(value, str) or value not in allowed for value in values) or len(set(values)) != len(values)):
             raise Error(invalid)
         result[key] = list(values)
+    if data.get("offline_profiles") is not None:
+        offline = data["offline_profiles"]
+        operations = offline.get("operations") if isinstance(offline, dict) else None
+        if (not isinstance(offline, dict) or set(offline) != {"version", "operations", "max_profiles", "max_sources"}
+                or type(offline.get("version")) is not int or offline["version"] != 1
+                or type(offline.get("max_profiles")) is not int or offline["max_profiles"] != 15
+                or type(offline.get("max_sources")) is not int or offline["max_sources"] != 32
+                or not isinstance(operations, list) or len(operations) > len(OFFLINE_PROFILE_OPERATIONS)
+                or any(not isinstance(op, str) or op not in OFFLINE_PROFILE_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["offline_profiles"] = dict(offline, operations=list(operations))
     if "aspect" in data:
         aspect = data["aspect"]
         if (not isinstance(aspect, dict) or set(aspect) != {"version", "operations", "modes"}
@@ -2433,14 +2599,26 @@ def print_player_status(data, name):
         print(f"  {prefix} providers  — list allowed providers (alias: provs)")
         if not kiosk_locked:
             print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
+            print(f"  {prefix} provider offline  — request Local videos (when listed in providers)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
-        if provider in ("m3u", "vportal"):
+        if provider in ("m3u", "vportal", "offline"):
             print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
-            if not kiosk_locked:
+            if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):
                 print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
                 print(f"    Example: {prefix} profile 1  — select the first profile listed by profiles")
             if provider == "m3u" and data.get("channels") == 0:
                 print("    No channels loaded: check the active profile with profiles; selecting M3U alone does not choose a profile.")
+        offline = controls.get("offline_profiles", {}).get("operations", [])
+        if provider == "offline":
+            examples = {
+                "save": ("profile save 1 Movies", "save local sources and selected video in profile 1"),
+                "load": ("profile load 1", "load saved sources and selection; playback follows player settings"),
+                "export": ("profile export 1 movies.json", "export configuration without videos or access grants"),
+                "import": ("profile import 2 movies.json", "save configuration in profile 2; bind sources locally if needed"),
+            }
+            for operation, (example, explanation) in examples.items():
+                if operation in offline:
+                    print(f"  {prefix} {example}  — {explanation}")
         if kiosk_locked:
             print(f"    Provider/profile switching is locked by kiosk; run {prefix} kiosk off first.")
         else:
@@ -3338,7 +3516,9 @@ def main(argv=None):
         catalog_play = None
         playback_error = None
         plex_settings = action == "provider_settings" and params.get("provider") == "plex"
-        if action == "screenshot":
+        if action in ("profile_save", "profile_export", "profile_import"):
+            data = offline_profile_command(client, device, action, params, args.timeout)
+        elif action == "screenshot":
             data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
         elif action == "plex_queue":
             data = plex_queue_command(client, device, params, args.timeout)
@@ -3475,9 +3655,18 @@ def main(argv=None):
         elif action == "providers":
             for row in data["providers"]:
                 print(f"{'*' if row['active'] else ' '} {row['index']}: {clean(row['id'])} — {clean(row['name'])}")
+        elif action == "profile_export":
+            print("Local videos profile exported: " + clean(data["path"]) + ". Videos and access grants are not included.")
+        elif action in ("profile_save", "profile_import"):
+            print(f"Local videos profile saved: {data['profile']['number']}: {clean(data['profile']['name'])}. Playback was not started.")
+            if data["binding_required"]:
+                print("Local binding required: connect the source on this player and bind it in Local videos settings, then load the profile.")
         elif action == "profiles":
             for row in data["profiles"]:
-                if data["provider"] == "vportal":
+                if data["provider"] == "offline":
+                    state = "binding required" if row["binding_required"] else ("configured" if row["configured"] else "empty")
+                    print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | sources: {row['source_count']} | {state} | selected: {clean(row['selected_name']) or 'none'}")
+                elif data["provider"] == "vportal":
                     print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
                 else:
                     history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
@@ -3485,6 +3674,8 @@ def main(argv=None):
                           f"playlist: {'set' if row['playlist_configured'] else 'empty'} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
         elif action == "profile":
             print(f"Profile switch requested: {data['profile']['number']}: {clean(data['profile']['name'])}")
+            if data.get("binding_required"):
+                print("Local source binding or permission is required on the player. Playback has not been confirmed.")
         elif action == "profile_settings":
             print(f"Profile settings saved: {data['profile']['number']}: {clean(data['profile']['name'])}")
         elif action == "restart":

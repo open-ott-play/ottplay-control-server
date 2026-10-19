@@ -22,6 +22,7 @@ type requestResult struct {
 	plexLibrary       *plexLibraryRequest
 	favorites         *favoritesRequest
 	handoff           *handoffRequest
+	offlineProfile    *offlineProfileRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
@@ -153,8 +154,12 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = validVPortalQueueRequest(params)
 	case "lifecycle", "input", "playback":
 		ok = validControlRequest(action, params)
-	case "profile":
+	case "profile", "profile_export":
 		ok = len(params) == 1 && profileInteger(params["number"], 1, 15)
+	case "profile_save":
+		ok = profileInteger(params["number"], 1, 15) && (len(params) == 1 || (len(params) == 2 && profileText(params["name"], 256)))
+	case "profile_import":
+		ok = len(params) == 2 && profileInteger(params["number"], 1, 15) && validOfflineProfile(params["profile"])
 	case "profile_settings":
 		ok = len(params) == 2 && profileInteger(params["number"], 1, 15) && validProfileSettings(params["settings"])
 	case "settings_compare":
@@ -257,6 +262,11 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "favorites" {
 		e.favorites = parseFavoritesRequest(params)
+	}
+	if action == "profile_save" || action == "profile_export" || action == "profile_import" {
+		var number int
+		_ = json.Unmarshal(params["number"], &number)
+		e.offlineProfile = &offlineProfileRequest{Action: action, Number: number}
 	}
 	if action == "playback_handoff_export" || action == "playback_handoff_import" {
 		e.handoff = parseHandoffRequest(action, params)
@@ -363,6 +373,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var plexLibrary *plexLibraryRequest
 	var favorites *favoritesRequest
 	var handoff *handoffRequest
+	var offlineProfile *offlineProfileRequest
 	var inspect *inspectRequest
 	var aspect *aspectRequest
 	playbackOperation := ""
@@ -373,6 +384,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			plexLibrary = pending.plexLibrary
 			favorites = pending.favorites
 			handoff = pending.handoff
+			offlineProfile = pending.offlineProfile
 			playbackOperation = pending.playbackOperation
 			inspect = pending.inspect
 			aspect = pending.aspect
@@ -390,6 +402,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if favorites == nil {
 		favorites = d.results[id].favorites
+	}
+	if offlineProfile == nil {
+		offlineProfile = d.results[id].offlineProfile
 	}
 	if handoff == nil {
 		handoff = d.results[id].handoff
@@ -425,6 +440,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid favorites result")
 		return
 	}
+	if offlineProfile != nil && !validOfflineProfileResult(m["data"], status, offlineProfile) {
+		failure(w, 400, "invalid Local videos profile result")
+		return
+	}
 	if handoff != nil && !validHandoffResult(m["data"], status, handoff) {
 		failure(w, 400, "invalid handoff result")
 		return
@@ -458,7 +477,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])
