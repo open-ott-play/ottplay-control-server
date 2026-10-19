@@ -682,7 +682,8 @@ ott tv restart stream      # restart only the current stream
 ott tv reload               # reload the player page after acknowledgement
 ott tv restart app          # relaunch a supported native app
 ott tv standby              # enter player standby
-ott tv wake                 # leave player standby
+ott tv go                   # leave player standby and start configured playback
+ott tv wake                 # same operation as go
 ott tv stop                 # standby: stop playback while remaining connected
 ott tv start                # wake: start according to the player's startup settings
 ott tv exit                 # exit a supported app; no standby fallback
@@ -1615,36 +1616,60 @@ repeat queue.
 new acknowledged lifecycle API. `restart app`, `restart application` and
 `restart a` request a native app relaunch. `reboot` or `reboot device` requests
 an operating-system reboot, never a page reload. `exit`, `quit` and `close`
-request app exit, never standby. `standby` and `wake` are separate player-state
-operations; `wake` cannot contact an offline or powered-off player.
+request app exit, never standby. `standby` and `go` are separate player-state
+operations; `go` (also `wake` or `start`) cannot contact an offline or powered-off player.
 
 ### Stop playback while keeping the player online
 
 For a player that stays on all day:
 
 ```sh
-ott d1 stop             # stop playback and enter standby (same as standby)
-ott d1 start            # leave standby (same as wake)
+ott d1 standby          # stop playback and enter player standby; stay connected
+ott d1 go               # leave standby and start configured playback
+ott d1 stop             # same as standby
+ott d1 start            # same as go; wake is also accepted
+ott d1                  # inspect the current state and available controls
 ott d1 1                # select channel 1 after starting
 ott d1 restart stream   # reopen the current stream when one is active
 ott d1 restart          # reload the entire player; restart player is equivalent
 ```
 
-`stop` and `start` use the existing acknowledged standby/wake operations.
+`standby` and `go` use the existing acknowledged standby/wake operations.
+`stop` remains an alias for `standby`; `start` and `wake` remain aliases for `go`.
+These names are case-insensitive and accept no extra arguments. The wire
+operation is still `wake`, so `go` also works with older players advertising it.
 They do not shut down the device or disconnect remote control. `pause`/`resume`
 remain separate VOD controls; pausing can keep downloading buffered video.
-`start` follows the player's startup settings, so it does not promise to resume
-the same VOD at the saved position. Standby is an in-memory state: reloading the
-player can start playback again. Command polling and other background services
-can still use the network while playback is stopped.
+`go` follows the player's startup settings, so it does not promise to resume
+the same VOD at the saved position. Updated players save standby locally and
+retain it after reload; `go` clears it. Older players can lose standby on reload.
+Remote command polling remains active so the player can receive `go` and
+diagnostics. Player standby does not suspend the operating system or network
+activity owned by unrelated apps.
+
+Updated players report `player.standby` and
+`player.background: {"state":"suspended","pending":0}` in `ott -j d1`.
+Plain `ott d1` also prints these fields as a short summary. `suspending` means
+cancellation is still in progress; `suspended` with standby on and zero pending
+means the player reports its managed foreground and background work drained.
+`unsupported` means its native host cannot establish that state; `error` means
+the attempt failed. A null pending count means unknown, not zero. Older players
+without these fields remain controllable, but cannot confirm background
+quiescence. This snapshot is not a measurement of all host network traffic.
 
 Use a current player: older builds can leave PiP or list-preview playback running
 when entering standby, or complete pending Plex preparation afterward. Updated
 players cancel that work and stop both media lanes. Kiosk and settings locks
-still apply; `ott d1` lists stop/start only when standby/wake are advertised.
+still apply; `ott d1` lists standby/go only when standby/wake are advertised.
 An accepted response is not a claim that teardown or startup already completed.
-To play channels literally named `stop` or `start`, use `ott d1 play stop` or
-`ott d1 play start`.
+To play channels literally named `standby`, `go`, `stop`, `start` or `wake`, use
+the explicit `play` prefix, for example `ott d1 play go` or `ott d1 play stop`.
+Longer channel names such as `Goal` are not treated as command aliases.
+
+A separately provisioned native Android agent also accepts
+`ott d1 android standby` and `ott d1 android go`, with `stop`, `start` and `wake`
+aliases. These address the bound native queue and retain native receipts; they
+do not silently fall back to the web player's queue.
 
 Lifecycle availability is platform-specific. The player must advertise and
 implement the operation; an unavailable native exit, relaunch or OS reboot
@@ -2305,7 +2330,7 @@ new embedded native frontend.
 
 Read `caps` for currently supported lifecycle/input/playback operations. Ordinary
 browsers cannot perform native app exit/relaunch or an OS reboot; OS reboot is
-currently unsupported by every shipped player platform. `wake` only addresses
+currently unsupported by every shipped player platform. `go` (alias `wake`) only addresses
 player standby while connected, not a powered-off machine. Live streams do not
 support the archive/VOD `pause`/`resume` controls or VOD seeking.
 

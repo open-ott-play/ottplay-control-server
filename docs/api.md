@@ -188,6 +188,34 @@ require an updated controller and player; there is no legacy/input fallback.
 Response retries use the same request ID and do not repeat the step within the
 player session. Do not submit a new request after an uncertain result.
 
+### Player standby and wake
+
+Player standby uses the existing lifecycle request. For example, submit
+`{"action":"lifecycle","params":{"operation":"standby"}}` to enter standby
+and `{"action":"lifecycle","params":{"operation":"wake"}}` to leave it.
+The CLI command `ott PLAYER go` sends `wake`; `go`, `start` and `stop` are CLI
+aliases, not additional wire operations or operator permissions.
+
+Read `capabilities.lifecycle` for the operations supported in the current
+player state. The usual accepted response contains `operation`,
+`accepted: true`, `dispatched: false` and `effect: "lifecycle-after-ack"`.
+It confirms acceptance before the effect, not completed media teardown or
+playback startup. Inspect player status after the effect to observe its state.
+Standby retains remote control; it does not power off the device or provide
+Wake-on-LAN. Runtime and host background work must be distinguished from
+playback traffic when measuring standby.
+
+Updated player status can include `player.standby` (boolean) and
+`player.background` with exactly `state` and `pending`. States are `running`,
+`suspending`, `suspended`, `unsupported` or `error`; pending is a nonnegative
+integer at most 2147483647, or null when unknown. The fields are optional for
+older players. Interpret standby on, background suspended and zero pending
+together as the player's report of drained managed work, not an external
+measurement of all device traffic. Capability identity snapshots can change
+activity while a status request is in flight; only version, platform and runtime
+identify the responding player. The CLI displays the status activity snapshot
+and validates capabilities separately.
+
 ### Explicit aspect-ratio extension
 
 The typed `aspect` action reads or explicitly selects a supported picture mode.

@@ -4,6 +4,13 @@
 
 ### Changed
 
+- Show `standby` and `go` in player controls. `go` wakes the player using the
+  existing lifecycle operation; `stop`, `start` and `wake` remain compatible
+  aliases. Document acknowledgement, remote connectivity and reserved channel
+  names without claiming an accepted request proves completed playback changes.
+- Validate and display optional player standby/background activity snapshots,
+  distinguishing pending or unsupported cancellation from reported suspension.
+  Native Android agent commands accept the same standby/go aliases.
 - Remove VPortal from M3U setup entries, profile output and exact settings
   comparisons. Legacy `vportal` strings in named setups are accepted but never
   sent to players. Standalone VPortal profile commands remain available;
