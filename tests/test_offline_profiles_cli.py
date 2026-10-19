@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -62,11 +63,11 @@ class OfflineProfileTest(unittest.TestCase):
     def test_import_validates_before_any_rpc(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'profile.json'
-            target.write_text(json.dumps(document()))
+            target.write_text(json.dumps(document()), encoding='utf-8')
             self.assertEqual(ott.parse_command(['profile', 'import', '3', str(target)]),
                              ('profile_import', {'number': 3, 'profile': document()}))
             for content in ['{"version":1,"version":1}', '{"version":NaN}', '[]', '\ud800', ' ' * 16385]:
-                target.write_text(content, errors='surrogatepass')
+                target.write_text(content, encoding='utf-8', errors='surrogatepass')
                 status, output, error, client = self.run_cli(['profile', 'import', '3', str(target)], [])
                 self.assertEqual((status, output, client.call.call_count), (1, '', 0))
                 self.assertTrue(error.startswith('Error:'))
@@ -101,7 +102,7 @@ class OfflineProfileTest(unittest.TestCase):
         self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}),
                                                     mock.call('dev_tv', 'profile_save', {'number': 1, 'name': 'Movies'})])
         with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / 'profile.json'; target.write_text(json.dumps(document()))
+            target = Path(directory) / 'profile.json'; target.write_text(json.dumps(document()), encoding='utf-8')
             receipt.update(profile=row(binding=True), binding_required=True)
             status, output, error, client = self.run_cli(['profile', 'import', '1', str(target)], [caps(), receipt])
             self.assertEqual((status, error), (0, ''))
@@ -114,8 +115,9 @@ class OfflineProfileTest(unittest.TestCase):
             response = {'provider': 'offline', 'number': 1, 'profile': document()}
             status, output, error, client = self.run_cli(['profile', 'export', '1', str(target)], [caps(), response], True)
             self.assertEqual((status, error), (0, ''))
-            self.assertEqual(json.loads(target.read_text()), document())
-            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(target.read_text(encoding='utf-8')), document())
+            if os.name != 'nt':
+                self.assertEqual(target.stat().st_mode & 0o777, 0o600)
             self.assertEqual(json.loads(output)['path'], str(target.resolve()))
             self.assertEqual(client.call.call_args_list[-1], mock.call('dev_tv', 'profile_export', {'number': 1}))
             original = target.read_bytes()
@@ -127,6 +129,29 @@ class OfflineProfileTest(unittest.TestCase):
             status, output, error, _ = self.run_cli(['profile', 'export', '1', str(target)], [caps(), response])
             self.assertEqual((status, output, target.exists()), (1, '', False))
             self.assertNotIn('secret', error)
+
+    def test_utf8_profile_round_trip_with_cp1252_default(self):
+        real_open, real_fdopen = Path.open, os.fdopen
+
+        def cp1252_open(path, mode='r', buffering=-1, encoding=None, **kwargs):
+            return real_open(path, mode, buffering,
+                             encoding=encoding if encoding is not None else 'cp1252', **kwargs)
+
+        def cp1252_fdopen(fd, mode='r', buffering=-1, encoding=None, **kwargs):
+            return real_fdopen(fd, mode, buffering,
+                               encoding=encoding if encoding is not None else 'cp1252', **kwargs)
+
+        # Model a Windows text locale without changing the process-wide UTF-8
+        # mode. Removing either shipping encoding must break this round trip.
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'profile.json'
+            with mock.patch.object(Path, 'open', cp1252_open), mock.patch.object(os, 'fdopen', cp1252_fdopen):
+                response = {'provider': 'offline', 'number': 1, 'profile': document()}
+                status, _, error, _ = self.run_cli(['profile', 'export', '1', str(target)], [caps(), response])
+                self.assertEqual((status, error), (0, ''))
+                self.assertEqual(ott.parse_command(['profile', 'import', '2', str(target)]),
+                                 ('profile_import', {'number': 2, 'profile': document()}))
+            self.assertIn('Мультфильмы'.encode('utf-8'), target.read_bytes())
 
     def test_capabilities_and_mutation_uncertainty_never_retry(self):
         for responses, count in [([caps([])], 1), ([caps(), ott.PlayerRejected('secret-url', {})], 2),
