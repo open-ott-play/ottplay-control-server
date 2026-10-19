@@ -2,7 +2,7 @@
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py` and `preset_session.py`. Python 3.12 is the version used by CI. Commands take a short
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py` and `app_update.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -73,7 +73,7 @@ Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 reviewed source revision
 [`d8188b24d615db6e8132f28da69d82b315c6ba36`](https://github.com/open-ott-play/ottplay-control-server/commit/d8188b24d615db6e8132f28da69d82b315c6ba36).
-It contains all seven CLI modules, including the local `resolve` command,
+It contains the complete CLI module set, including the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, and Plex library
 commands. Update the controller and player too; confirm support with
 `ott PLAYER caps`.
@@ -2428,6 +2428,42 @@ return only; `unknown` must not trigger automatic replay. See
 [native evidence and retention](../native/android-agent/README.md#durable-operation-history).
 
 ## Capacitor APK updates over Wi-Fi
+
+A running Capacitor player can download and install an official release without
+USB. Without `--version`, the command selects the latest published beta:
+
+```sh
+ott k8a update --variant api22
+ott fire8 update beta --variant api22
+ott k8a update --version v1.1.58-beta.3 --variant api22
+ott k8a update --version v1.1.58-beta.3 --variant api22 --prepare-only
+ott k8a update status
+```
+
+Use `api22` for Android 5.1/6 (including Fire OS 5), or `full` for Android 7+.
+The current updater does not report a reliable API level, so the CLI requires
+the variant rather than guessing from an alias. An explicit version can name a
+published stable, beta or RC from `open-ott-play/ottplay-foss`; arbitrary download
+URLs still use the low-level commands below. The CLI checks the published tag's
+commit, release manifest, version plan, APK hash, size and version metadata before
+sending the existing download request. Android additionally verifies the actual
+APK's package, signature and strictly increasing versionCode. Selecting an older
+version fails; selecting the already installed versionCode does nothing and is
+not proof of byte-for-byte equality.
+
+The command polls preparation, requests installation once, then reports verified
+installed versionCode, pending permission/confirmation, or unconfirmed reconnect.
+`--wait SECONDS` bounds the entire operation (default 300, maximum 900); metadata
+requests are also bounded to 15 seconds each. It never replays an uncertain install.
+Run `update status` after completing Android's installer prompt. The CLI does not
+automatically check for new releases on a timer or wake a closed/unreachable player.
+
+For a kiosk, first inspect `ott k8a kiosk`, record its target and strict setting,
+then explicitly use `ott k8a kiosk off`. Unlock protected settings on the player
+if required. Updating does not change PINs or automatically disable kiosk mode.
+After installation and playback verification, restore the intended kiosk target
+with the ordinary kiosk command; do not assume that a previously locked session
+was preserved while it was explicitly disabled for maintenance.
 
 A Capacitor player with the `AppUpdate` plugin supports the normal player queue:
 

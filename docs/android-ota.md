@@ -1,4 +1,31 @@
-# Android kiosk OTA: process and evidence
+# Android OTA: ordinary players and the separate rooted agent
+
+For **k8a/fire8 and other Capacitor players**, use the normal player's Wi-Fi
+updater, not the rooted-agent command:
+
+```sh
+ott k8a update --variant api22
+ott k8a update --version v1.1.58-beta.3 --variant api22
+ott k8a update --variant api22 --prepare-only
+ott k8a update status
+```
+
+Omitting `--version` selects the latest published beta. Use `full` instead of
+`api22` on Android 7+. The CLI resolves the official release, checks its manifest,
+prepares the APK and polls its state before requesting installation once.
+Android may require confirmation on the tablet. Disable kiosk and unlock protected
+settings explicitly before maintenance; the command never changes those policies.
+See [the complete CLI procedure](cli.md#capacitor-apk-updates-over-wi-fi).
+
+This needs a previously installed `AppUpdate`-capable APK, Wi-Fi and a running
+player connected to the controller. It does not need USB for ordinary subsequent
+updates, but cannot reach an offline tablet or a stopped WebView. A first install,
+unavailable updater, broken app or lost network can still require local recovery.
+No automatic release scheduler or general silent installer is implied.
+
+The remainder of this guide describes a **different, rooted a1 maintenance agent**,
+restricted to the provisioned Matricom/API19 `play.ott.kitkat` installation. It is
+not already installed or usable on ordinary Fire/Capacitor devices.
 
 After the one-time root USB bootstrap, the independent Android agent can receive
 signed updates over its outbound HTTPS connection. It does not need a working
@@ -23,7 +50,7 @@ hardware requirements, use the [native agent reference](../native/android-agent/
 - **Hosted player:** deploy the verified web artifact at the existing origin,
   then reload and inspect an active player. An APK update does not deploy the
   hosted JavaScript. See the [release workflow](release-workflow.md).
-- **Controller and CLI:** deploy the controller and install all seven CLI modules
+- **Controller and CLI:** deploy the controller and install the complete CLI module set
   separately. Updating either does not replace code on the tablet.
 
 Firmware, the kernel, system WebView, root broker and startup scripts are outside

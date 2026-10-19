@@ -146,6 +146,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME android pause / resume / seek SECONDS  control native-owned playback
   ott NAME android queue play ID...  play an exact VPortal queue and loop it
   ott NAME android queue status / next / prev / restart / stop
+  ott NAME update --variant api22|full  install the latest published beta over Wi-Fi
+  ott NAME update --version TAG --variant api22|full  select an official release
+  ott NAME update --variant api22|full --prepare-only  download and verify only
   ott NAME update status             inspect Capacitor APK update progress
   ott NAME update prepare HTTPS_APK_URL SHA256  download and verify a newer APK
   ott NAME update install SHA256     open the Android installer after ACK
@@ -3527,6 +3530,15 @@ def main(argv=None):
             return 0
         device = client.device(args.words[0])
         words = args.words[1:]
+        if (words and words[0].casefold() == "update" and
+                (len(words) == 1 or words[1].casefold() not in ("status", "prepare", "install"))):
+            module_path = Path(__file__).resolve().with_name("app_update.py")
+            if not module_path.is_file():
+                raise Error("Install app_update.py beside ott.py to use release updates")
+            spec = importlib.util.spec_from_file_location("ott_app_update", module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.run(SimpleNamespace(**globals()), client, device, words, args.json)
         if words and words[0].casefold() in ("doctor", "inspect", "operation", "bundle", "test", "debug", "dbg"):
             module_path = Path(__file__).resolve().with_name("workbench.py")
             if not module_path.is_file():
