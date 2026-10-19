@@ -54,6 +54,7 @@ func TestControlRequestsRejectAmbiguityAndPrivilegeExpansion(t *testing.T) {
 		`{"action":"capabilities","params":{"all":true}}`,
 		`{"action":"lifecycle","params":{}}`,
 		`{"action":"lifecycle","params":{"operation":"reboot"}}`,
+		`{"action":"lifecycle","params":{"operation":"go"}}`,
 		`{"action":"lifecycle","params":{"operation":"exit_app","force":true}}`,
 		`{"action":"lifecycle","params":{"operation":"wake","operation":"exit_app"}}`,
 		`{"action":"lifecycle","params":{"operation":"EXIT_APP"}}`,

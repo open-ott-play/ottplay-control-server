@@ -64,6 +64,21 @@ class AndroidCLI(unittest.TestCase):
             ott.android_command(c, 'unused', 'web', 'a1', ['restart'], True)
         self.assertNotIn('private', str(err.exception))
 
+    def test_standby_go_aliases_use_only_the_bound_native_queue(self):
+        for name, operation in [('standby', 'standby'), ('stop', 'standby'),
+                                ('go', 'wake'), ('start', 'wake'), ('wake', 'wake')]:
+            for command in (name, name.upper()):
+                with self.subTest(command=command):
+                    c = self.client()
+                    c.call.return_value = {'operation': operation, 'accepted': True, 'completion': 'inspect_status'}
+                    result = ott.android_command(c, 'unused', 'web', 'a1', [command], True)
+                    self.assertEqual(result['operation'], operation)
+                    c.call.assert_called_once_with('native', 'lifecycle', {'operation': operation})
+                    c = self.client()
+                    with self.assertRaises(ott.Error):
+                        ott.android_command(c, 'unused', 'web', 'a1', [command, 'now'], True)
+                    c.call.assert_not_called()
+
     def test_existing_series_queue_is_readable_without_relaxing_play_or_log_limits(self):
         rows = [{'id': i+1, 'title': 'Episode', 'url': 'private'} for i in range(1000)]
         health = {'version': 1, 'runtime': 'android-test', 'webview_responsive': True,

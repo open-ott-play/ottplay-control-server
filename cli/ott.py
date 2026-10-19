@@ -142,6 +142,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME android operation ID      read a durable native receipt without replay
   ott NAME android recover           reattach stalled video, keeping its queue/position
   ott NAME android restart / reboot  restart the Android app / reboot the tablet
+  ott NAME android standby / go      enter or leave standby through the bound native agent
   ott NAME android screenshot [-o FILE.png]  capture the Android display
   ott NAME android pause / resume / seek SECONDS  control native-owned playback
   ott NAME android queue play ID...  play an exact VPortal queue and loop it
@@ -153,8 +154,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME update prepare HTTPS_APK_URL SHA256  download and verify a newer APK
   ott NAME update install SHA256     open the Android installer after ACK
   ott NAME android update HTTPS_URL SHA256  install a signed update manifest
-  ott NAME standby / wake            enter or leave player standby
-  ott NAME stop / start              stop streaming / leave standby and start configured playback
+  ott NAME standby / go              enter player standby / wake and start configured playback
+  ott NAME stop / start              aliases for standby / go (wake also wakes the player)
   ott NAME kiosk [status]            show kiosk policy and playback health
   ott NAME kiosk on [CHANNEL]        lock channel, or the current VPortal/Plex video queue
   ott NAME kiosk on --strict [CHANNEL]  lock local controls; media-footer seeking needs a supported player
@@ -170,7 +171,7 @@ Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
 provider/prov; providers/provs; capabilities/caps; input/key; prev/previous; screenshot/shot;
-fav/favs/favorite/favorites/favourite/favourites; aspect/aspect-ratio; stop/standby; start/wake.
+fav/favs/favorite/favorites/favourite/favourites; aspect/aspect-ratio; stop/standby; go/start/wake.
 Aspect modes also accept "Fit to screen" and "Fill screen".
 Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
@@ -188,7 +189,7 @@ COMMAND_ALIASES = {
     "prov": "provider", "provs": "providers",
     "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
     "previous": "prev", "shot": "screenshot",
-    "stop": "standby", "start": "wake",
+    "stop": "standby", "start": "wake", "go": "wake",
     "aspect-ratio": "aspect",
     "fav": "favorites", "favs": "favorites", "favorite": "favorites",
     "favourite": "favorites", "favourites": "favorites",
@@ -1002,7 +1003,7 @@ def parse_command(words):
     if verb in ("reload", "reboot", "exit", "standby", "wake"):
         if tail and not (verb in ("reload", "reboot") and len(tail) == 1 and
                          tail[0].casefold() == ("player" if verb == "reload" else "device")):
-            raise Error("Use reload [player], reboot [device], exit, standby or wake")
+            raise Error("Use reload [player], reboot [device], exit, standby or go (aliases: stop, start, wake) without extra arguments")
         operation = {"reload": "reload_player", "reboot": "reboot_device", "exit": "exit_app"}.get(verb, verb)
         return "lifecycle", {"operation": operation}
     if verb == "input":
@@ -2576,6 +2577,20 @@ def status_capabilities(client, device, data, deadline):
     if not isinstance(data, dict):
         raise Error("The player returned invalid status metadata")
     result = dict(data, capabilities=None)
+    player = data.get("player")
+    if isinstance(player, dict):
+        player = dict(player)
+        if "standby" in player and type(player["standby"]) is not bool:
+            raise Error("The player returned invalid standby metadata")
+        if "background" in player:
+            background = player["background"]
+            if (not isinstance(background, dict) or set(background) != {"state", "pending"}
+                    or background.get("state") not in ("running", "suspending", "suspended", "unsupported", "error")
+                    or (background.get("pending") is not None and
+                        (type(background["pending"]) is not int or not 0 <= background["pending"] <= 2147483647))):
+                raise Error("The player returned invalid background activity metadata")
+            player["background"] = dict(background)
+        result["player"] = player
     result.pop("capabilities_error", None)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -2608,6 +2623,15 @@ def print_player_status(data, name):
                       if key not in ("capabilities", "capabilities_error")}, ensure_ascii=False, indent=2))
     quoted_name = shlex.quote(clean(name))
     prefix = "ott " + quoted_name
+    player = data.get("player")
+    if isinstance(player, dict) and type(player.get("standby")) is bool:
+        background = player.get("background")
+        state = background["state"] if background else "not reported"
+        pending = background["pending"] if background else None
+        print("\nPlayer reports: standby " + ("on" if player["standby"] else "off") +
+              "; background " + state + "; pending " + (str(pending) if pending is not None else "unknown") + ".")
+        if player["standby"]:
+            print("Remote control stays connected. Host network activity is not measured here.")
     controls = data["capabilities"]
     if controls is None:
         print("\n" + data["capabilities_error"])
@@ -2617,8 +2641,8 @@ def print_player_status(data, name):
         "reload_player": ("restart", "reload the player (alias: restart player)"),
         "restart_stream": ("restart stream", "restart only the current stream (alias: restart s)"),
         "restart_app": ("restart app", "relaunch the native app"),
-        "standby": ("stop", "stop playback and enter standby; stay connected (alias: standby)"),
-        "wake": ("start", "leave standby and start configured playback (alias: wake)"),
+        "standby": ("standby", "stop playback and enter standby; stay connected (alias: stop)"),
+        "wake": ("go", "leave standby and start configured playback (aliases: start, wake)"),
         "exit_app": ("exit", "exit the app"),
         "reboot_device": ("reboot", "reboot the device OS"),
     }
@@ -3373,7 +3397,8 @@ def android_command(client, config_path, device, name, words, json_output):
     if not isinstance(native, str) or native == device or not any(
             row.get("id") == native for row in client.credentials.get("devices", [])):
         raise Error("No native agent is bound. Provision it once, then use android bind NATIVE_ALIAS")
-    op = words[0] if words else "status"
+    op = words[0].casefold() if words else "status"
+    op = {"stop": "standby", "go": "wake", "start": "wake"}.get(op, op)
     tail = words[1:]
     if op == "screenshot":
         if tail and (len(tail) != 2 or tail[0] not in ("-o", "--output")):
@@ -3726,7 +3751,7 @@ def main(argv=None):
                   "Player reload accepted; waiting for the acknowledgement to reach the player.")
         elif action == "lifecycle":
             if data["operation"] in ("standby", "wake"):
-                label = "Stop" if data["operation"] == "standby" else "Start"
+                label = "Standby" if data["operation"] == "standby" else "Wake"
                 print(f"{label} request accepted ({data['operation']}); waiting for the acknowledgement to reach the player.")
             else:
                 print(f"Lifecycle request accepted: {data['operation']}; waiting for the acknowledgement to reach the player.")

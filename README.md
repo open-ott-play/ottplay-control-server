@@ -95,6 +95,8 @@ ott a1 aspect fill          # fill the screen proportionally, cropping the edges
 ott a1 aspect "Fit to screen" # full mode name; preserve the whole picture
 ott a1 restart             # reload the player
 ott a1 restart stream      # restart only the current stream
+ott a1 standby             # stop playback and enter player standby; stay connected
+ott a1 go                  # leave standby and start configured playback (start/wake also work)
 ott a1 screenshot          # save a PNG; browser builds need a selected capture source
 ott a1 shot -o screen.png  # short alias; never overwrites an existing file
 ott a1 test run media-progress --report ./a1-progress
@@ -106,6 +108,13 @@ ott report verify ./a1-progress --json  # re-evaluate saved evidence offline
 [all commands with examples](docs/cli.md#commands),
 [disconnecting and revoking access](docs/cli.md#disconnect-deregister-or-revoke-a-player),
 and [troubleshooting](docs/cli.md#troubleshooting).
+
+For an always-on player, use [standby and go](docs/cli.md#stop-playback-while-keeping-the-player-online)
+to stop playback and wake it later without exiting the app. `stop` remains an
+alias for `standby`; `start` and `wake` remain aliases for `go`. Remote control
+must stay connected, so standby is not a promise of zero device network traffic.
+`ott a1` shows the operations advertised by that player. An accepted command is
+not confirmation that shutdown or playback startup has finished.
 
 [Aspect commands](docs/cli.md#aspect-ratio-fit-and-fill) require an updated CLI,
 controller and a player advertising the `aspect` capability. A change is applied
