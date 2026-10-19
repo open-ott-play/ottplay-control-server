@@ -2373,6 +2373,11 @@ only after registration finishes successfully.
 
 ### Independent Android agent
 
+For legacy tablets connected to a Linux host by USB, the separate
+[USB recovery supervisor](android-usb-recovery.md) can dismiss a verified
+non-secure swipe lockscreen after reboot. It is an explicit ADB backend,
+not an `ott NAME android` command or an ARTEMIS helper.
+
 `ott NAME android bind NATIVE_ALIAS` binds a separately provisioned native-agent
 queue. Do not reuse a WebView device token. `android status`, `logs`, `screenshot`,
 `recover`, `restart`, `reload` and `reboot` then use that independent channel.
@@ -2545,3 +2550,5 @@ resume then compares current saved values before writing. Handoff v1 accepts
 matching-source live/archive references only and does not stop the source player.
 The existing `ott tv load Local` continues to use its original acknowledgement
 workflow without a journal requirement.
+
+For local files without Wi-Fi, see [Android offline media feasibility](android-offline-media.md). This is an investigated design, not an implemented offline library.
