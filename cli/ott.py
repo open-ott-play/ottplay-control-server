@@ -1272,7 +1272,7 @@ def offline_profile_metadata(row, fail):
             or any(type(row.get(key)) is not bool for key in ("active", "configured", "binding_required"))
             or type(row.get("source_count")) is not int or not 0 <= row["source_count"] <= 32
             or not offline_profile_text(row.get("selected_name"), 1024)
-            or (not row["configured"] and (row["source_count"] or row["selected_name"] or row["binding_required"]))
+            or (not row["configured"] and (row["active"] or row["source_count"] or row["selected_name"] or row["binding_required"]))
             or (row["selected_name"] and not row["source_count"])):
         fail()
     return dict(row)
@@ -1365,7 +1365,8 @@ def profile_metadata(data, action, params, *, expected_provider=None):
     if data.get("saved") is not True:
         fail()
     if action in ("profile_save", "profile_import"):
-        if provider != "offline" or type(data.get("binding_required")) is not bool or data["binding_required"] != row["binding_required"]:
+        if (provider != "offline" or row["configured"] is not True
+                or type(data.get("binding_required")) is not bool or data["binding_required"] != row["binding_required"]):
             fail()
         expected_name = params.get("name") if action == "profile_save" else params["profile"]["name"]
         if expected_name is not None and row["name"] != expected_name:
@@ -2601,7 +2602,7 @@ def print_player_status(data, name):
             print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
             print(f"  {prefix} provider offline  — request Local videos (when listed in providers)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
-        if provider in ("m3u", "vportal", "offline"):
+        if provider in ("m3u", "vportal") or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", [])):
             print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
             if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):
                 print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")

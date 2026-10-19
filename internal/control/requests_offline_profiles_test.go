@@ -173,3 +173,19 @@ func TestOfflineProfileSaveAndImportResponseAreBounded(t *testing.T) {
 	id := rpcID(t, s, `{"action":"profile_save","params":{"number":1}}`)
 	expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"rejected","data":{"error":"Import into an inactive local profile, then load it"}}`, nil), 200)
 }
+
+func TestOfflineProfileSaveRequiresConfiguredEvenForEmptyLibrary(t *testing.T) {
+	for _, action := range []string{"profile_save", "profile_import"} {
+		request := &offlineProfileRequest{Action: action, Number: 1}
+		for _, active := range []string{"true", "false"} {
+			empty := `{"provider":"offline","profile":{"number":1,"name":"","active":` + active + `,"configured":false,"binding_required":false,"source_count":0,"selected_name":""},"saved":true,"binding_required":false}`
+			if validOfflineProfileResult([]byte(empty), "ok", request) {
+				t.Fatal("unconfigured empty profile acknowledged as saved")
+			}
+			configured := strings.Replace(empty, `"configured":false`, `"configured":true`, 1)
+			if !validOfflineProfileResult([]byte(configured), "ok", request) {
+				t.Fatal("configured empty library was rejected")
+			}
+		}
+	}
+}

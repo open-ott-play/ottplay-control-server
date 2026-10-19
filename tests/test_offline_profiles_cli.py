@@ -140,6 +140,42 @@ class OfflineProfileTest(unittest.TestCase):
             value = caps(); value['offline_profiles'] = bad
             with self.assertRaises(ott.Error): ott.capabilities_metadata(value)
 
+    def test_successful_save_import_and_load_require_configured_profile(self):
+        empty = row(active=False)
+        empty.update(configured=False, source_count=0, selected_name='')
+        for action, params in [('profile_save', {'number': 1}),
+                               ('profile_import', {'number': 1, 'profile': dict(document(), sources=[], selected=None)})]:
+            with self.subTest(action=action), self.assertRaisesRegex(ott.Error, 'may have executed'):
+                ott.profile_metadata({'provider': 'offline', 'profile': empty, 'saved': True,
+                                      'binding_required': False}, action, params)
+        active_empty = dict(empty, active=True)
+        with self.assertRaisesRegex(ott.Error, 'may have executed'):
+            ott.profile_metadata({'provider': 'offline', 'profile': active_empty, 'dispatched': True,
+                                  'binding_required': False}, 'profile', {'number': 1})
+        listing = {'provider': 'offline', 'profiles': [dict(empty, number=i) for i in range(1, 16)]}
+        listing['profiles'][0] = active_empty
+        with self.assertRaises(ott.Error):
+            ott.profile_metadata(listing, 'profiles', {})
+        # An intentionally saved empty library is still a configured profile.
+        configured = dict(empty, configured=True)
+        self.assertTrue(ott.profile_metadata({'provider': 'offline', 'profile': configured,
+                                            'saved': True, 'binding_required': False},
+                                           'profile_save', {'number': 1})['saved'])
+
+    def test_offline_profile_help_requires_list_capability(self):
+        for state in ('absent', 'null', 'empty', 'list'):
+            capability = caps([])
+            if state == 'absent':
+                capability.pop('offline_profiles')
+            elif state == 'null':
+                capability['offline_profiles'] = None
+            elif state == 'list':
+                capability['offline_profiles']['operations'] = ['list']
+            status, output, error, _ = self.run_cli([], [{'provider': 'offline'}, capability])
+            self.assertEqual((status, error), (0, ''))
+            self.assertEqual('ott tv profiles' in output, state == 'list')
+            self.assertNotIn('ott tv profile N', output)
+
     def test_null_offline_capability_is_absent_for_other_providers(self):
         data = caps()
         data['offline_profiles'] = None

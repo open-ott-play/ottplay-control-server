@@ -110,7 +110,7 @@ func validOfflineProfileResult(raw json.RawMessage, status string, request *offl
 		return len(m) == 3 && profileInteger(m["number"], request.Number, request.Number) && validOfflineProfile(m["profile"])
 	}
 	row, err := decodeObject(m["profile"])
-	if err != nil || len(m) != 4 || string(m["saved"]) != "true" || len(row) != 7 || !profileInteger(row["number"], request.Number, request.Number) || !profileText(row["name"], 256) || !profileText(row["selected_name"], 1024) || !profileInteger(row["source_count"], 0, 32) {
+	if err != nil || len(m) != 4 || string(m["saved"]) != "true" || string(row["configured"]) != "true" || len(row) != 7 || !profileInteger(row["number"], request.Number, request.Number) || !profileText(row["name"], 256) || !profileText(row["selected_name"], 1024) || !profileInteger(row["source_count"], 0, 32) {
 		return false
 	}
 	for _, key := range []string{"active", "configured", "binding_required"} {
@@ -125,5 +125,5 @@ func validOfflineProfileResult(raw json.RawMessage, status string, request *offl
 	var selected string
 	_ = json.Unmarshal(row["source_count"], &count)
 	_ = json.Unmarshal(row["selected_name"], &selected)
-	return !(string(row["configured"]) == "false" && (count != 0 || selected != "" || string(row["binding_required"]) == "true")) && !(count == 0 && selected != "")
+	return !(count == 0 && selected != "")
 }
