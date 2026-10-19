@@ -112,7 +112,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME profile import N FILE     save exported configuration; bind locally if needed
   ott NAME profile N url URL         change a profile's playlist URL
   ott NAME profile N history HOURS   set archive depth in hours (0–8760)
-  ott NAME profile N vportal LINK    set a profile's VPortal link
+  ott NAME profile N vportal LINK    set a standalone VPortal profile's link
   ott NAME profile N name NAME       rename a profile
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME caps                      show runtime identity and supported controls
@@ -1332,13 +1332,18 @@ def profile_metadata(data, action, params, *, expected_provider=None):
     def profile(row):
         if provider == "offline":
             return offline_profile_metadata(row, fail)
+        keys = ("number", "name", "active", "history_hours", "playlist_configured")
+        if provider == "vportal":
+            keys += ("vportal_configured",)
         if (not isinstance(row, dict) or type(row.get("number")) is not int or not 1 <= row["number"] <= 15
                 or not epg_text(row.get("name"), 256, "utf-8")
-                or any(type(row.get(key)) is not bool for key in ("active", "playlist_configured", "vportal_configured"))
+                or any(type(row.get(key)) is not bool for key in ("active", "playlist_configured"))
+                or ((provider == "vportal" or "vportal_configured" in row)
+                    and type(row.get("vportal_configured")) is not bool)
                 or "history_hours" not in row or (row["history_hours"] is not None
                     and (type(row["history_hours"]) is not int or not 0 <= row["history_hours"] <= 8760))):
             fail()
-        return {key: row[key] for key in ("number", "name", "active", "history_hours", "playlist_configured", "vportal_configured")}
+        return {key: row[key] for key in keys}
     if (not isinstance(data, dict) or data.get("provider") not in ("m3u", "vportal", "offline")
             or (expected_provider is not None and data.get("provider") != expected_provider)):
         fail()
@@ -1380,12 +1385,39 @@ def profile_metadata(data, action, params, *, expected_provider=None):
     if provider == "offline":
         fail()
     for key, value in params["settings"].items():
+        if key == "vportal" and provider != "vportal":
+            fail()
         if key in ("name", "history_hours"):
             if row[key] != value:
                 fail()
         elif row[key + "_configured"] != bool(value):
             fail()
     return {"provider": data["provider"], "profile": row, "saved": True}
+
+
+def vportal_profile_command(client, device, params, timeout):
+    """Require standalone VPortal before sending link settings."""
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    sent = False
+    try:
+        profiles = profile_metadata(client.call(device, "profiles", {}), "profiles", {})
+        if profiles["provider"] != "vportal":
+            raise Error("VPortal links belong to standalone VPortal profiles. Select provider vportal first; no profile settings were sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Profile discovery exceeded --timeout; no profile settings were sent")
+        client.timeout = remaining
+        sent = True
+        data = client.call(device, "profile_settings", params)
+        if time.monotonic() >= deadline:
+            raise Error("Profile response exceeded --timeout. The request may have executed; it was not repeated")
+        return profile_metadata(data, "profile_settings", params, expected_provider="vportal")
+    except (PlayerRejected, PlayerUnsupported):
+        outcome = "The request was not repeated" if sent else "No profile settings were sent"
+        raise Error("VPortal profile settings are unavailable; select provider vportal and check its settings. " + outcome) from None
+    finally:
+        client.timeout = previous_timeout
 
 
 def preset_name(value):
@@ -1425,15 +1457,6 @@ def preset_url(value):
         return False
 
 
-def preset_vportal(value):
-    # Match the player's cabinet-link grammar without decoding the key or URL.
-    match = re.fullmatch(r'portal::(?:\[|%5b)key:([^\[\]\s<>"\\]{1,1024}?)(?:\]|%5d)(https?://[^\s<>"\\]+)',
-                         value.strip(), re.I)
-    return bool(match and epg_text(match[1], 1024) and re.fullmatch(
-        r'https?://(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::[0-9]{1,5})?(?:[/?][^#]*)?',
-        match[2], re.I) and preset_url(match[2]))
-
-
 def validate_preset(config, requested):
     names = preset_names(config)
     if not preset_name(requested):
@@ -1451,13 +1474,18 @@ def validate_preset(config, requested):
     profiles = []
     numbers = set()
     for row in value["m3u"]:
-        if (not isinstance(row, dict) or set(row) != {"number", "name", "playlist", "history_hours", "vportal"}
+        if (not isinstance(row, dict) or not {"number", "name", "playlist", "history_hours"} <= set(row)
+                or set(row) - {"number", "name", "playlist", "history_hours", "vportal"}
                 or type(row["number"]) is not int or not 1 <= row["number"] <= 15 or row["number"] in numbers):
             raise Error("Preset M3U profiles require complete fields and unique numbers from 1 to 15")
-        settings = {key: row[key] for key in ("name", "playlist", "history_hours", "vportal")}
+        # Old local presets may contain VPortal credentials. Validate their text
+        # bounds, but never send, compare or fingerprint them as M3U settings.
+        if "vportal" in row:
+            validate_profile_settings({"vportal": row["vportal"]})
+        settings = {key: row[key] for key in ("name", "playlist", "history_hours")}
         validate_profile_settings(settings)
-        if not preset_url(settings["playlist"]) or (settings["vportal"] and not preset_vportal(settings["vportal"])):
-            raise Error("Preset profiles require an HTTP(S) playlist and a complete VPortal cabinet link")
+        if not preset_url(settings["playlist"]):
+            raise Error("Preset profiles require an HTTP(S) playlist")
         profiles.append({"number": row["number"], "settings": settings})
         numbers.add(row["number"])
     active = value["active_profile"]
@@ -3519,6 +3547,8 @@ def main(argv=None):
         plex_settings = action == "provider_settings" and params.get("provider") == "plex"
         if action in ("profile_save", "profile_export", "profile_import"):
             data = offline_profile_command(client, device, action, params, args.timeout)
+        elif action == "profile_settings" and "vportal" in params["settings"]:
+            data = vportal_profile_command(client, device, params, args.timeout)
         elif action == "screenshot":
             data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
         elif action == "plex_queue":
@@ -3672,7 +3702,7 @@ def main(argv=None):
                 else:
                     history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
                     print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | history: {history} h | "
-                          f"playlist: {'set' if row['playlist_configured'] else 'empty'} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
+                          f"playlist: {'set' if row['playlist_configured'] else 'empty'}")
         elif action == "profile":
             print(f"Profile switch requested: {data['profile']['number']}: {clean(data['profile']['name'])}")
             if data.get("binding_required"):

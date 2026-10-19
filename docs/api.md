@@ -137,7 +137,7 @@ Editing an inactive slot does not reload playback. The existing `server`/`mac`
 form without `profile` continues to update the selected slot.
 
 `profiles` accepts exactly `{}`. For the active M3U provider it returns
-`{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured,vportal_configured}]}`:
+`{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured}]}`:
 exactly 15 ordered slots numbered 1–15, with one active slot. History is an
 integer 0–8760 or `null` for an invalid legacy value. Configuration flags are
 booleans; URLs and credentials are not returned.
@@ -145,15 +145,21 @@ booleans; URLs and credentials are not returned.
 `profile` accepts exactly `{number:N}` and returns
 `{provider:"m3u",profile:METADATA,dispatched:true}` for the selected, active slot.
 `profile_settings` accepts exactly `{number:N,settings:{...}}`, with a nonempty
-allowlist of `name`, `playlist`, `history_hours` and `vportal`. Numbers must be
+M3U allowlist of `name`, `playlist` and `history_hours`. Numbers must be
 JSON integers: slot 1–15, history 0–8760. Strings must be valid Unicode without
-C0/DEL controls, limited to 256 UTF-8 bytes for names or 8192 for either link.
+C0/DEL controls, limited to 256 UTF-8 bytes for names or 8192 for playlist URLs.
 Empty strings clear fields. Unknown/duplicate fields and malformed settings are
 rejected; the 16 KiB request envelope limit still applies. The player validates
 and applies all settings together, returning
 `{provider:"m3u",profile:METADATA,saved:true}`. A saved result does not establish
 that provider loading completed. These operations require the active M3U driver
 and remain subject to parental and platform policy.
+
+The shared request schema also accepts `vportal` for the standalone VPortal
+provider, whose profile settings are `name` and `vportal`. The active player
+driver enforces the provider-specific fields: M3U rejects `vportal`, and its
+metadata omits `vportal_configured`. Legacy M3U portal links are not used or
+deleted. Update controller, CLI and player together for this contract.
 
 `restart` accepts exactly `{target:"stream"}` or `{target:"player"}`. Stream
 success is `{accepted:true,target:"stream",dispatched:true}`. Player reload
@@ -1035,8 +1041,8 @@ records become `unknown` on restart and no commands are replayed.
 
 `settings_compare` reads saved values without selecting a provider:
 
-- M3U: `{provider:"m3u",number:1,settings:{name,playlist,history_hours,vportal}}`;
-  all four settings fields are required.
+- M3U: `{provider:"m3u",number:1,settings:{name,playlist,history_hours}}`;
+  all three settings fields are required; saved legacy VPortal links are ignored.
 - Plex: `{provider:"plex",settings:{server,token}}`.
 - Stalker: `{provider:"stalker",number:1,settings:{name,server,mac}}`.
 
@@ -1119,5 +1125,6 @@ local binding flow.
 While Local videos is active and installed, capabilities may include
 `offline_profiles:{version:1,operations:["list","load","save","export","import"],max_profiles:15,max_sources:32}`.
 Operations are filtered by current player policy (a locked configuration may
-advertise only `list`). Absence means the extension is unavailable; older clients
-and existing M3U/VPortal wire shapes are unchanged.
+advertise only `list`). Absence means the extension is unavailable. This
+extension is separate from the provider-specific M3U/VPortal settings contracts
+described above.

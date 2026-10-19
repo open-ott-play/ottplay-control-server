@@ -199,7 +199,7 @@ limits, acknowledgement semantics and troubleshooting.
 
 Store named setups in the private `presets` section of
 `~/.config/ottplay-control/cli.json`. Each setup contains numbered M3U profiles
-(playlist, archive hours and VPortal link), Plex credentials and the M3U profile
+(playlist and archive hours), Plex credentials and the M3U profile
 to select when loading finishes. See the [configuration example](docs/cli.md#named-setups).
 
 ```sh
