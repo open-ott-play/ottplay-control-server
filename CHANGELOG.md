@@ -1,5 +1,67 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Share one hardened USB ADB container across an explicit Android registry,
+  with persistent authorized keys, serialized maintenance and per-device boot
+  recovery state. Protect shared forwarding ports from cross-device rebinding
+  and use verified unique serials so ADB restarts cannot retarget commands.
+- Provide Synology/systemd installation, SSH commands and a legacy-path redirect.
+  Unknown identities and duplicate serials remain blocked; normal screen sleep
+  does not trigger automatic wake or playback recovery.
+- Provide a maintained ADB/Python transport image, English/Russian guides and
+  architecture diagrams. Bound container memory and swap, disable inherited
+  health checks and stream APK staging to avoid a second full in-memory copy.
+- Confine USB screenshots to private capture directories, persist recovery
+  checkpoints durably and support both legacy and modern Android process lists.
+
+### Changed
+
+- Show `standby` and `go` in player controls. `go` wakes the player using the
+  existing lifecycle operation; `stop`, `start` and `wake` remain compatible
+  aliases. Document acknowledgement, remote connectivity and reserved channel
+  names without claiming an accepted request proves completed playback changes.
+- Validate and display optional player standby/background activity snapshots,
+  distinguishing pending or unsupported cancellation from reported suspension.
+  Native Android agent commands accept the same standby/go aliases.
+- Remove VPortal from M3U setup entries, profile output and exact settings
+  comparisons. Legacy `vportal` strings in named setups are accepted but never
+  sent to players. Standalone VPortal profile commands remain available;
+  direct VPortal updates require the VPortal provider. Existing device values
+  are preserved. Update the controller, CLI and player together.
+
+## [0.1.5] - 2026-10-19
+
+### Added
+
+- Local videos (`offline`) profile save/load and portable export/import in the
+  CLI, with capability-aware examples in `ott PLAYER`, strict request/reply
+  validation and independent operator scopes. Exports use private, atomic new
+  files and never include videos, absolute filesystem paths or device access grants.
+  Same-installation bindings may be reused; other devices require local binding.
+
+### Upgrade
+
+- Update the controller, CLI and a matching Local videos-capable player together
+  for `profile_save`, `profile_export` and `profile_import`. Existing profile
+  selectors and M3U/VPortal settings remain compatible. Import into an inactive
+  profile slot; saving or importing configuration does not start playback.
+- On another installation, load the imported profile to open local recovery,
+  connect and bind its sources locally, then load it again. Publishing this
+  controller release does not update or deploy players.
+
+### Security
+
+- Portable profiles accept only bounded, allowlisted configuration fields.
+  Filesystem handles, bookmarks, native references and access grants stay on the
+  originating installation. A profile's binding identifier does not grant access
+  to another device's files.
+- Keep exports private: source labels and selected relative filenames may expose
+  personal information. Device-scoped authorization and player capabilities
+  remain enforced; automated checks do not establish physical-player acceptance.
+
 ## [0.1.4] - 2026-10-18
 
 ### Changed

@@ -39,10 +39,10 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual((code, err), (0, ''))
             self.assertIn('"ready": true', out)
             self.assertIn('ott tv restart  — reload the player', out)
-            self.assertIn('ott tv stop', out)
-            self.assertIn('alias: standby', out)
-            self.assertIn('ott tv start', out)
-            self.assertIn('alias: wake', out)
+            self.assertIn('ott tv standby', out)
+            self.assertIn('alias: stop', out)
+            self.assertIn('ott tv go', out)
+            self.assertIn('aliases: start, wake', out)
             self.assertIn('alias: restart player', out)
             self.assertIn('ott tv key KEY  — up, ok', out)
             for unsupported in ('restart stream', 'restart app', 'reboot', 'exit', 'seek', '+N', '-N'):
@@ -60,6 +60,59 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual((code, err), (0, ''))
             self.assertEqual(json.loads(out), dict(status, capabilities=caps))
             self.assertNotIn('do-not-print', out)
+
+    def test_standby_and_go_help_follow_independent_wire_capabilities(self):
+        for operations in ([], ['standby'], ['wake'], ['standby', 'wake']):
+            with self.subTest(operations=operations):
+                caps = self.capabilities()
+                caps['lifecycle'] = operations
+                code, out, err, _ = self.run_cli([], {'ready': True}, caps)
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual('ott tv standby  —' in out, 'standby' in operations)
+                self.assertEqual('alias: stop' in out, 'standby' in operations)
+                self.assertEqual('ott tv go  —' in out, 'wake' in operations)
+                self.assertEqual('aliases: start, wake' in out, 'wake' in operations)
+
+    def test_standby_snapshot_is_retained_without_comparing_caps_activity(self):
+        for state, pending in [('running', 0), ('suspending', 3), ('suspending', None),
+                               ('suspended', 0), ('unsupported', None), ('error', 2147483647)]:
+            for machine in (False, True):
+                caps = self.capabilities()
+                status = {'ready': True, 'player': dict(caps['player'], standby=state != 'running',
+                                                       background={'state': state, 'pending': pending})}
+                # A later capabilities snapshot may observe progress; identity stays the same.
+                caps['player'].update(standby=False, background={'state': 'running', 'pending': 0})
+                code, out, err, _ = self.run_cli([], status, caps, machine)
+                self.assertEqual((code, err), (0, ''))
+                self.assertNotIn('player changed', out)
+                if machine:
+                    self.assertEqual(json.loads(out)['player'], status['player'])
+                    self.assertNotIn('background', json.loads(out)['capabilities']['player'])
+                else:
+                    self.assertIn('background ' + state, out)
+                    self.assertIn('pending ' + (str(pending) if pending is not None else 'unknown'), out)
+
+    def test_older_status_with_only_standby_never_claims_background_suspended(self):
+        caps = self.capabilities()
+        status = {'player': dict(caps['player'], standby=True)}
+        code, out, err, _ = self.run_cli([], status, caps)
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('background not reported; pending unknown', out)
+        self.assertNotIn('background suspended', out)
+
+    def test_malformed_activity_snapshot_rejected_before_capability_request(self):
+        invalid = [{'standby': value} for value in (None, 1, 'yes', [])]
+        invalid.extend({'background': value} for value in
+                       (None, {}, [], {'state': 'suspended'}, {'state': 'other', 'pending': 0},
+                        {'state': 'suspended', 'pending': 0, 'url': 'private'}))
+        invalid.extend({'background': {'state': 'suspended', 'pending': value}}
+                       for value in (True, -1, 1.5, '0', 2147483648))
+        for player in invalid:
+            client = mock.Mock(timeout=45)
+            with self.assertRaises(ott.Error):
+                ott.status_capabilities(client, 'dev_tv', {'player': player}, float('inf'))
+            client.call.assert_not_called()
+
 
     def test_provider_commands_include_m3u_and_contextual_profiles_without_extra_requests(self):
         for provider in ('m3u', 'vportal', 'stalker', 'plex'):
@@ -163,6 +216,8 @@ class StatusCliTest(unittest.TestCase):
         self.assertIn('No controls are currently advertised', out)
         self.assertNotIn('ott tv stop', out)
         self.assertNotIn('ott tv start', out)
+        self.assertNotIn('ott tv standby', out)
+        self.assertNotIn('ott tv go', out)
         caps.update(lifecycle=['restart_stream', 'restart_app', 'exit_app', 'reboot_device'],
                     playback=['pause', 'resume', 'seek', 'previous_channel', 'next_channel', 'step_channel'])
         code, out, _, _ = self.run_cli([], {'ready': True}, caps, alias='Living room')

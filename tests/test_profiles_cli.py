@@ -89,7 +89,7 @@ class ProfileParsingTest(unittest.TestCase):
 class ProfileOutputTest(unittest.TestCase):
     def row(self, number=1, active=True, **changes):
         result = {'number': number, 'name': 'Profile ' + str(number), 'active': active,
-                  'history_hours': 168, 'playlist_configured': True, 'vportal_configured': False}
+                  'history_hours': 168, 'playlist_configured': True}
         result.update(changes)
         return result
 
@@ -97,9 +97,9 @@ class ProfileOutputTest(unittest.TestCase):
         return {'provider': 'm3u', 'profiles': [self.row(number, active=number == 3) for number in range(1, 16)]}
 
     def run_command(self, words, response, json_output=False):
-        client = mock.Mock()
+        client = mock.Mock(timeout=45)
         client.device.return_value = 'dev_tv'
-        if isinstance(response, Exception):
+        if isinstance(response, (Exception, list)):
             client.call.side_effect = response
         else:
             client.call.return_value = response
@@ -108,6 +108,17 @@ class ProfileOutputTest(unittest.TestCase):
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 status = ott.main((['--json'] if json_output else []) + ['tv'] + words)
         return status, stdout.getvalue(), stderr.getvalue(), client.call.call_args_list
+
+    def test_legacy_m3u_vportal_flags_are_accepted_but_not_displayed(self):
+        legacy = self.listing()
+        for row in legacy['profiles']:
+            row['vportal_configured'] = True
+        for json_output in [False, True]:
+            status, output, errors, _ = self.run_command(['profiles'], legacy, json_output)
+            self.assertEqual((status, errors), (0, ''))
+            self.assertNotIn('vportal', output.casefold())
+            if json_output:
+                self.assertEqual(json.loads(output), self.listing())
 
     def test_listing_projects_public_metadata_and_preserves_unknown_history(self):
         data = self.listing()
@@ -192,8 +203,8 @@ class ProfileOutputTest(unittest.TestCase):
             self.assertIn('may have executed', errors)
 
     def test_atomic_settings_ack_matches_requested_values_and_redacts_urls(self):
-        settings = {'name': 'Cinema', 'history_hours': 8760, 'playlist': '', 'vportal': 'https://example?key=secret'}
-        row = self.row(5, False, name='Cinema', history_hours=8760, playlist_configured=False, vportal_configured=True)
+        settings = {'name': 'Cinema', 'history_hours': 8760, 'playlist': ''}
+        row = self.row(5, False, name='Cinema', history_hours=8760, playlist_configured=False)
         response = {'provider': 'm3u', 'profile': {**row, 'settings': settings}, 'saved': True, 'settings': settings}
         with mock.patch.object(ott, 'read_profile_settings', return_value=settings):
             status, output, errors, calls = self.run_command(['profile-config', '5', 'private.json'], response, True)
@@ -201,7 +212,7 @@ class ProfileOutputTest(unittest.TestCase):
         self.assertEqual(json.loads(output), {'provider': 'm3u', 'profile': row, 'saved': True})
         self.assertEqual(calls, [mock.call('dev_tv', 'profile_settings', {'number': 5, 'settings': settings})])
         for field, value in [('number', 6), ('name', 'Other'), ('history_hours', None),
-                             ('playlist_configured', True), ('vportal_configured', False)]:
+                             ('playlist_configured', True)]:
             bad = copy.deepcopy(response)
             bad['profile'][field] = value
             with mock.patch.object(ott, 'read_profile_settings', return_value=settings):
@@ -224,12 +235,71 @@ class ProfileOutputTest(unittest.TestCase):
         self.assertEqual((status, output, len(calls)), (1, '', 0))
 
     def test_empty_values_acknowledge_cleared_fields(self):
-        for field, row in [('name', self.row(name='')), ('url', self.row(playlist_configured=False)),
-                           ('vportal', self.row(vportal_configured=False))]:
+        for field, row in [('name', self.row(name='')), ('url', self.row(playlist_configured=False))]:
             with self.subTest(field=field):
                 status, _, errors, calls = self.run_command(['profile', '1', field, ''],
                                                            {'provider': 'm3u', 'profile': row, 'saved': True})
                 self.assertEqual((status, errors, len(calls)), (0, '', 1))
+
+    def test_vportal_link_writes_require_standalone_provider_before_dispatch(self):
+        for words in [['profile', '1', 'vportal', 'secret-link'],
+                      ['profile', '1', 'vp', ''], ['profile-config', '1', 'private.json']]:
+            with self.subTest(words=words), mock.patch.object(ott, 'read_profile_settings',
+                                                            return_value={'name': 'Cinema', 'vportal': 'secret-link'}):
+                status, output, errors, calls = self.run_command(words, self.listing())
+                self.assertEqual((status, output), (1, ''))
+                self.assertEqual(calls, [mock.call('dev_tv', 'profiles', {})])
+                self.assertIn('standalone VPortal profiles', errors)
+                self.assertNotIn('secret-link', errors)
+
+    def test_standalone_vportal_links_still_save_and_clear(self):
+        profiles = self.listing()
+        profiles['provider'] = 'vportal'
+        for row in profiles['profiles']:
+            row.update(vportal_configured=False)
+        for value in ['https://example?key=secret', '']:
+            row = self.row(vportal_configured=bool(value))
+            reply = {'provider': 'vportal', 'profile': row, 'saved': True}
+            status, output, errors, calls = self.run_command(
+                ['profile', '1', 'vportal', value], [profiles, reply], True)
+            self.assertEqual((status, errors), (0, ''))
+            self.assertEqual(json.loads(output), reply)
+            self.assertNotIn('secret', output)
+            self.assertEqual(calls, [mock.call('dev_tv', 'profiles', {}),
+                                    mock.call('dev_tv', 'profile_settings', {'number': 1, 'settings': {'vportal': value}})])
+
+    def test_standalone_vportal_requires_its_configured_flag(self):
+        profiles = self.listing()
+        profiles['provider'] = 'vportal'
+        status, output, errors, calls = self.run_command(['profile', '1', 'vportal', 'secret-link'], profiles)
+        self.assertEqual((status, output, len(calls)), (1, '', 1))
+        self.assertIn('invalid profile metadata', errors)
+
+    def test_vportal_preflight_and_write_share_timeout_and_never_replay(self):
+        profiles = self.listing()
+        profiles['provider'] = 'vportal'
+        for row in profiles['profiles']:
+            row['vportal_configured'] = False
+        params = {'number': 1, 'settings': {'vportal': 'secret-link'}}
+        client = mock.Mock(timeout=45)
+        client.call.return_value = profiles
+        with mock.patch.object(ott.time, 'monotonic', side_effect=[0, 46]), \
+                self.assertRaisesRegex(ott.Error, 'no profile settings were sent'):
+            ott.vportal_profile_command(client, 'dev_tv', params, 45)
+        self.assertEqual((client.call.call_count, client.timeout), (1, 45))
+        reply = {'provider': 'vportal', 'profile': self.row(vportal_configured=True), 'saved': True}
+        client.reset_mock()
+        client.call.side_effect = [profiles, reply]
+        with mock.patch.object(ott.time, 'monotonic', side_effect=[0, 2, 46]), \
+                self.assertRaisesRegex(ott.Error, 'may have executed'):
+            ott.vportal_profile_command(client, 'dev_tv', params, 45)
+        self.assertEqual((client.call.call_count, client.timeout), (2, 45))
+        for bad_reply in [dict(reply, provider='m3u'), ott.PlayerRejected('secret-link', {}),
+                          ott.PlayerUnsupported('secret-link'), ott.TransportError('Lost response')]:
+            status, output, errors, calls = self.run_command(
+                ['profile', '1', 'vportal', 'secret-link'], [profiles, bad_reply], True)
+            self.assertEqual((status, output, len(calls)), (1, '', 2))
+            self.assertNotIn('secret-link', errors)
 
     def test_invalid_config_never_enqueues_and_errors_do_not_echo_settings(self):
         with mock.patch.object(ott, 'read_profile_settings', return_value={'secret-key': 'secret-value'}):

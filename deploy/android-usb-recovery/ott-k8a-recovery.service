@@ -1,0 +1,19 @@
+[Unit]
+Description=OTT legacy Android USB boot recovery
+After=pkgctl-ContainerManager.service network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/etc/ott-k8a-recovery/android_usb_supervisor.py --config /usr/local/etc/ott-k8a-recovery/config.json run
+Restart=always
+RestartSec=10
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

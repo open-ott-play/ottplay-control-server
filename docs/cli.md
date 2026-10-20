@@ -2,7 +2,7 @@
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py` and `preset_session.py`. Python 3.12 is the version used by CI. Commands take a short
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py` and `app_update.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -20,7 +20,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
-- [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles) and [named setups](#named-setups)
+- [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles), [Local videos profiles](#local-videos-profiles) and [named setups](#named-setups)
 - [Favorites across profiles](#favorites-across-profiles)
 - [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
@@ -72,17 +72,16 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 reviewed source revision
-[`d8188b24d615db6e8132f28da69d82b315c6ba36`](https://github.com/open-ott-play/ottplay-control-server/commit/d8188b24d615db6e8132f28da69d82b315c6ba36).
-It contains all seven CLI modules, including the local `resolve` command,
-[workbench](workbench.md#quick-start), offline `report verify`, and Plex library
-commands. Update the controller and player too; confirm support with
-`ott PLAYER caps`.
+[`dd0a26bfaaa91792662374dec780c9c9c8423a22`](https://github.com/open-ott-play/ottplay-control-server/commit/dd0a26bfaaa91792662374dec780c9c9c8423a22).
+It contains the complete CLI module set, including the local `resolve` command,
+[workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
+OTA workflow (`app_update.py`), Local videos profile save/load/import/export, and
+`standby` / `go` controls. Update the controller and player too; confirm support
+with `ott PLAYER caps`.
 
-This is a reviewed revision from the **0.1.1 development line**. Stable v0.1.1
-has since been published; the pinned revision above is retained as an exact
-installation example, not a moving latest version. It does not include later
-0.1.2 changes. Stable CLI v0.1.0 lacks `resolve`, workbench and offline
-verification. A server's `version` output, the repository's `VERSION` file and
+The pinned revision is an exact installation example, not a moving latest
+version. Older CLI revisions may lack `go`, Local videos profile commands or
+high-level Android release updates. A server's `version` output, the repository's `VERSION` file and
 a player's reported version identify different components; none substitutes for
 checking this CLI checkout's commit. Follow the
 [deployment guide](deployment.md) for the controller and the
@@ -99,8 +98,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_revision=d8188b24d615db6e8132f28da69d82b315c6ba36
-  ott_source="$HOME/.local/share/ottplay-control-server-d8188b24"
+  ott_revision=dd0a26bfaaa91792662374dec780c9c9c8423a22
+  ott_source="$HOME/.local/share/ottplay-control-server-dd0a26bf"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -119,7 +118,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-dd0a26bf/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -133,7 +132,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-dd0a26bf/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -155,8 +154,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRevision = 'd8188b24d615db6e8132f28da69d82b315c6ba36'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-d8188b24'
+$ottRevision = 'dd0a26bfaaa91792662374dec780c9c9c8423a22'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-dd0a26bf'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -199,12 +198,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-d8188b24/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-dd0a26bf/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-d8188b24\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-dd0a26bf\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -233,7 +232,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-d8188b24`, stages the replacement beside it, then switches atomically.
+`ott.before-dd0a26bf`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -245,9 +244,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-d8188b24")
-staged = launcher.with_name("ott.switch-d8188b24")
-reviewed = Path.home() / ".local/share/ottplay-control-server-d8188b24/cli/ott.py"
+backup = launcher.with_name("ott.before-dd0a26bf")
+staged = launcher.with_name("ott.switch-dd0a26bf")
+reviewed = Path.home() / ".local/share/ottplay-control-server-dd0a26bf/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -684,7 +683,8 @@ ott tv restart stream      # restart only the current stream
 ott tv reload               # reload the player page after acknowledgement
 ott tv restart app          # relaunch a supported native app
 ott tv standby              # enter player standby
-ott tv wake                 # leave player standby
+ott tv go                   # leave player standby and start configured playback
+ott tv wake                 # same operation as go
 ott tv stop                 # standby: stop playback while remaining connected
 ott tv start                # wake: start according to the player's startup settings
 ott tv exit                 # exit a supported app; no standby fallback
@@ -725,6 +725,7 @@ Profile setters accept `url` / `playlist`, `history` / `history-hours` /
 `history_hours`, `vp` / `vportal`, and `n` / `name`. For example,
 `ott tv prof 2 playlist https://example.com/list.m3u` and
 `ott tv profile 2 url https://example.com/list.m3u` are equivalent.
+The `vp` / `vportal` setter requires the standalone VPortal provider.
 These are CLI token aliases; JSON configuration keeps its canonical field names.
 
 Volume queries print the numeric percentage, or only `{"volume": 35}` with
@@ -1341,6 +1342,63 @@ For example, `* 1: Home 1` means profile 1 named Home 1 is already active;
 `playlist: set` means a URL is saved, not that its channels loaded successfully.
 Provider changes remain subject to the player's settings lock and platform policy.
 
+## Local videos profiles
+
+Use provider ID `offline` (display name **Local videos**) for files or folders connected
+on the player. Install matching player and controller versions supporting
+`offline_profiles` before using the new save/import/export commands. `ott PLAYER`
+shows the commands currently available; `ott PLAYER caps` reports their capability.
+
+```sh
+ott d1 providers
+ott d1 provider offline
+ott d1 profiles
+ott d1 profile save 1 "Family movies"
+ott d1 profile export 1 family-movies.json
+ott d1 profile import 2 family-movies.json
+ott d1 profile load 2
+# The original selector and short command still work:
+ott d1 profile 1
+ott d1 prof load 1
+```
+
+Connect a folder or files in **Local videos** on the player and select the desired
+video before `profile save`. Save captures the connected sources and selected file
+in a numbered slot without starting playback. The optional name replaces the slot
+name. Load selects that saved configuration; it is a playback request, not proof
+that frames are rendering. Loading follows player settings and local access state.
+There are 15 slots; `profiles` displays the active slot, source count, selected file
+and whether local binding is required. M3U and standalone VPortal use their
+provider-specific `profile-config` settings formats, and
+`ott PLAYER load PRESET` remains the separate named-setup command.
+
+Export writes a new, private JSON file (permissions `0600`) atomically; it refuses
+to replace an existing file. The portable document contains only the profile name,
+source names/kinds, selected relative filename, and an opaque binding identifier.
+It contains **no videos, URLs, filesystem paths, native references, iOS bookmarks,
+Android grants or browser FileSystemHandles**. The binding identifier is only a
+lookup key into that installation's private bindings; it grants no filesystem
+access. Source/selected names themselves may be personal information.
+
+Import saves into an **inactive** slot and does not start playback. On the same
+installation, the original binding can be reused only while its matching sources
+and local permissions still exist. On another device, browser profile or origin,
+connect the original files/folder locally and use **Bind active profile** in Local
+videos settings. An import never guesses a folder by name or recreates an OS or
+browser permission. Browser permission prompts require local interaction. After
+binding, load the saved profile again; the exact selected file must still exist.
+
+Portable documents are version 1, at most 12 KiB compact JSON, with at most 32
+sources. Unknown fields, credentials/access objects, absolute or traversal paths,
+invalid source references and duplicate JSON keys are rejected before a command
+is sent. The complete request must fit the controller's 16 KiB limit.
+
+If the command is unavailable, select `offline`, check `caps`, update both player
+and controller and unlock settings/kiosk locally as appropriate. A “binding
+required” result means the profile is saved but the player needs local access.
+If a mutation times out or its acknowledgement is invalid, inspect `profiles`
+before retrying; the CLI never automatically repeats the change.
+
 ## M3U profiles
 
 M3U has 15 numbered profiles. Select the M3U provider first; these commands
@@ -1353,13 +1411,11 @@ ott tv profile 3
 ott tv profile 3 name "Living room"
 ott tv profile 3 url 'https://provider.example/list.m3u'
 ott tv profile 3 history 168
-ott tv profile 3 vportal 'portal::[key:YOUR_KEY]https://provider.example/api/v1/'
-ott tv profile 3 vportal ''
 ott tv profile-config 3 /private/profile.json
 ```
 
 `profiles` lists all 15 slots in order, marking the active slot with `*`. It shows
-the name, archive depth in hours and whether playlist/VPortal links are configured.
+the name, archive depth in hours and whether a playlist is configured.
 URLs, provider keys and credentials are omitted from both normal and JSON output.
 An existing history value that cannot be validated appears as `unknown` (`null`
 in JSON). `profile N` selects that slot; it reports a switch request, not completed
@@ -1369,21 +1425,24 @@ Use `profile-config N FILE.json` to update several settings together. Its conten
 are the settings object itself, without a `provider` or `settings` wrapper:
 
 ```json
-{"name":"Cinema","playlist":"https://provider.example/list.m3u","history_hours":168,"vportal":"portal::[key:YOUR_KEY]https://provider.example/api/v1/"}
+{"name":"Cinema","playlist":"https://provider.example/list.m3u","history_hours":168}
 ```
 
-VPortal requires the complete cabinet link in
-`portal::[key:YOUR_KEY]https://provider.example/api/v1/` format, including its key
-and endpoint. A bare HTTP(S) URL is not a VPortal cabinet link.
+M3U settings accept only `name`, `playlist` and `history_hours`. VPortal uses its
+own provider and profile storage. To configure it, select `provider vportal`,
+then use `profile N vportal LINK` or a private `profile-config` file containing
+`name` and `vportal`. The complete cabinet link has the form
+`portal::[key:YOUR_KEY]https://provider.example/api/v1/`. Direct VPortal settings
+updates while M3U is selected are rejected before mutation. Previously saved
+portal links in M3U device profiles are inactive and remain stored.
 
 Only supplied fields change. Editing an inactive profile leaves the active
-playlist running. Renaming a profile or changing only its VPortal link does not
-reload channels; a VPortal change replaces that profile's media source. Changing
+playlist running. Renaming a profile does not reload channels. Changing
 the active playlist or its archive depth reloads channels once.
 Profile numbers are integers 1–15; `history_hours`
 is an integer 0–8760. Archive depth tells the player what history to offer; the
 provider must still supply that history. Names are limited to 256 UTF-8 bytes,
-playlist and VPortal strings to 8192 bytes each, with no C0 or DEL control
+playlist URLs to 8192 bytes, with no C0 or DEL control
 characters. Empty strings clear the corresponding name or link. Clearing the
 active playlist also reloads that slot, so its previous stream does not remain
 active. The player validates links and applies changes through its normal driver.
@@ -1416,15 +1475,13 @@ replace the example addresses and credential placeholders before use:
         "number": 1,
         "name": "Local 1",
         "playlist": "http://127.0.0.1:8090",
-        "history_hours": 144,
-        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+        "history_hours": 144
       },
       {
         "number": 2,
         "name": "Local 2",
         "playlist": "http://127.0.0.1:8090",
-        "history_hours": 144,
-        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+        "history_hours": 144
       }
     ],
     "plex": {"server": "http://nas.example:32400", "token": "YOUR_PLEX_TOKEN"},
@@ -1436,15 +1493,13 @@ replace the example addresses and credential placeholders before use:
         "number": 1,
         "name": "Home 1",
         "playlist": "https://playlist.example.com/channels.m3u",
-        "history_hours": 144,
-        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+        "history_hours": 144
       },
       {
         "number": 2,
         "name": "Home 2",
         "playlist": "https://playlist.example.com/channels.m3u",
-        "history_hours": 144,
-        "vportal": "portal::[key:YOUR_KEY]https://provider.example/api/v1/"
+        "history_hours": 144
       }
     ],
     "plex": {"server": "http://nas.example:32400", "token": "YOUR_PLEX_TOKEN"},
@@ -1456,7 +1511,7 @@ replace the example addresses and credential placeholders before use:
 `local` illustrates a playlist service on the player's own loopback interface.
 `home` illustrates a service reachable from a TV or phone over HTTPS. Use URLs
 reachable from the target player, not just from the computer running the CLI.
-Both presets can use the same VPortal link and Plex credentials. The Plex address
+Both presets can use the same Plex credentials. The Plex address
 must be reachable from each target device.
 The second M3U slot starts with the same settings so it can be customized
 independently. Editing a preset changes only this file; run `load` to apply it.
@@ -1495,12 +1550,16 @@ for player in o1 o2 o3 o4; do ott "$player" load local || break; done
 ```
 
 The selected setup is fully validated before any remote request. Each M3U entry
-must include `number`, `name`, `playlist`, `history_hours` and `vportal`; numbers
+must include `number`, `name`, `playlist` and `history_hours`; numbers
 must be unique integers from 1 to 15. `active_profile` must refer to an included
 slot. Playlist URLs must be nonempty HTTP(S) addresses. Use IPv4 addresses in
 four decimal octets (for example, `127.0.0.1`), not shortened or hexadecimal
-forms. An empty VPortal string
-disables VPortal for that slot. Plex requires both `server` and `token`.
+forms. A legacy `vportal` string in an M3U setup entry is accepted but ignored:
+it is omitted from requests, comparisons and the normalized setup fingerprint.
+Remove it from the local file when convenient; loading does not erase old links
+on devices. An old resume checkpoint whose fingerprint included this field is
+rejected as a setup revision mismatch; inspect the device state before starting
+a new load. Plex requires both `server` and `token`.
 The existing provider length and request-size limits apply.
 
 Loading selects Plex, waits for its settings handler, saves its credentials,
@@ -1558,36 +1617,60 @@ repeat queue.
 new acknowledged lifecycle API. `restart app`, `restart application` and
 `restart a` request a native app relaunch. `reboot` or `reboot device` requests
 an operating-system reboot, never a page reload. `exit`, `quit` and `close`
-request app exit, never standby. `standby` and `wake` are separate player-state
-operations; `wake` cannot contact an offline or powered-off player.
+request app exit, never standby. `standby` and `go` are separate player-state
+operations; `go` (also `wake` or `start`) cannot contact an offline or powered-off player.
 
 ### Stop playback while keeping the player online
 
 For a player that stays on all day:
 
 ```sh
-ott d1 stop             # stop playback and enter standby (same as standby)
-ott d1 start            # leave standby (same as wake)
+ott d1 standby          # stop playback and enter player standby; stay connected
+ott d1 go               # leave standby and start configured playback
+ott d1 stop             # same as standby
+ott d1 start            # same as go; wake is also accepted
+ott d1                  # inspect the current state and available controls
 ott d1 1                # select channel 1 after starting
 ott d1 restart stream   # reopen the current stream when one is active
 ott d1 restart          # reload the entire player; restart player is equivalent
 ```
 
-`stop` and `start` use the existing acknowledged standby/wake operations.
+`standby` and `go` use the existing acknowledged standby/wake operations.
+`stop` remains an alias for `standby`; `start` and `wake` remain aliases for `go`.
+These names are case-insensitive and accept no extra arguments. The wire
+operation is still `wake`, so `go` also works with older players advertising it.
 They do not shut down the device or disconnect remote control. `pause`/`resume`
 remain separate VOD controls; pausing can keep downloading buffered video.
-`start` follows the player's startup settings, so it does not promise to resume
-the same VOD at the saved position. Standby is an in-memory state: reloading the
-player can start playback again. Command polling and other background services
-can still use the network while playback is stopped.
+`go` follows the player's startup settings, so it does not promise to resume
+the same VOD at the saved position. Updated players save standby locally and
+retain it after reload; `go` clears it. Older players can lose standby on reload.
+Remote command polling remains active so the player can receive `go` and
+diagnostics. Player standby does not suspend the operating system or network
+activity owned by unrelated apps.
+
+Updated players report `player.standby` and
+`player.background: {"state":"suspended","pending":0}` in `ott -j d1`.
+Plain `ott d1` also prints these fields as a short summary. `suspending` means
+cancellation is still in progress; `suspended` with standby on and zero pending
+means the player reports its managed foreground and background work drained.
+`unsupported` means its native host cannot establish that state; `error` means
+the attempt failed. A null pending count means unknown, not zero. Older players
+without these fields remain controllable, but cannot confirm background
+quiescence. This snapshot is not a measurement of all host network traffic.
 
 Use a current player: older builds can leave PiP or list-preview playback running
 when entering standby, or complete pending Plex preparation afterward. Updated
 players cancel that work and stop both media lanes. Kiosk and settings locks
-still apply; `ott d1` lists stop/start only when standby/wake are advertised.
+still apply; `ott d1` lists standby/go only when standby/wake are advertised.
 An accepted response is not a claim that teardown or startup already completed.
-To play channels literally named `stop` or `start`, use `ott d1 play stop` or
-`ott d1 play start`.
+To play channels literally named `standby`, `go`, `stop`, `start` or `wake`, use
+the explicit `play` prefix, for example `ott d1 play go` or `ott d1 play stop`.
+Longer channel names such as `Goal` are not treated as command aliases.
+
+A separately provisioned native Android agent also accepts
+`ott d1 android standby` and `ott d1 android go`, with `stop`, `start` and `wake`
+aliases. These address the bound native queue and retain native receipts; they
+do not silently fall back to the web player's queue.
 
 Lifecycle availability is platform-specific. The player must advertise and
 implement the operation; an unavailable native exit, relaunch or OS reboot
@@ -2018,9 +2101,8 @@ selection in the player remains available until that selection establishes the l
 For the standalone VPortal provider, select the configured profile, then run
 `ott tv vp "tom and jerry"` followed by `ott tv kiosk on --strict`. This locks the
 current repeating episode queue rather than arming a future TV selection.
-The `vp` command is the same for a VPortal link in an M3U profile and the
-standalone provider; it searches the active source. Their profile slots are
-separate. Unlike TV kiosk name matching, `vp` collects all matching titles.
+The `vp` command searches the active standalone VPortal source; M3U no longer
+loads portal links. Unlike TV kiosk name matching, `vp` collects all matching titles.
 For example, to replace a lock with content from an already configured slot:
 
 ```sh
@@ -2249,7 +2331,7 @@ new embedded native frontend.
 
 Read `caps` for currently supported lifecycle/input/playback operations. Ordinary
 browsers cannot perform native app exit/relaunch or an OS reboot; OS reboot is
-currently unsupported by every shipped player platform. `wake` only addresses
+currently unsupported by every shipped player platform. `go` (alias `wake`) only addresses
 player standby while connected, not a powered-off machine. Live streams do not
 support the archive/VOD `pause`/`resume` controls or VOD seeking.
 
@@ -2290,6 +2372,11 @@ Check context, namespace, Secret, Deployment and Pod events. Connect the player
 only after registration finishes successfully.
 
 ### Independent Android agent
+
+For legacy tablets connected to a Linux host by USB, the separate
+[USB recovery supervisor](android-usb-recovery.md) can dismiss a verified
+non-secure swipe lockscreen after reboot. It is an explicit ADB backend,
+not an `ott NAME android` command or an ARTEMIS helper.
 
 `ott NAME android bind NATIVE_ALIAS` binds a separately provisioned native-agent
 queue. Do not reuse a WebView device token. `android status`, `logs`, `screenshot`,
@@ -2371,6 +2458,42 @@ return only; `unknown` must not trigger automatic replay. See
 
 ## Capacitor APK updates over Wi-Fi
 
+A running Capacitor player can download and install an official release without
+USB. Without `--version`, the command selects the latest published beta:
+
+```sh
+ott k8a update --variant api22
+ott fire8 update beta --variant api22
+ott k8a update --version v1.1.58-beta.3 --variant api22
+ott k8a update --version v1.1.58-beta.3 --variant api22 --prepare-only
+ott k8a update status
+```
+
+Use `api22` for Android 5.1/6 (including Fire OS 5), or `full` for Android 7+.
+The current updater does not report a reliable API level, so the CLI requires
+the variant rather than guessing from an alias. An explicit version can name a
+published stable, beta or RC from `open-ott-play/ottplay-foss`; arbitrary download
+URLs still use the low-level commands below. The CLI checks the published tag's
+commit, release manifest, version plan, APK hash, size and version metadata before
+sending the existing download request. Android additionally verifies the actual
+APK's package, signature and strictly increasing versionCode. Selecting an older
+version fails; selecting the already installed versionCode does nothing and is
+not proof of byte-for-byte equality.
+
+The command polls preparation, requests installation once, then reports verified
+installed versionCode, pending permission/confirmation, or unconfirmed reconnect.
+`--wait SECONDS` bounds the entire operation (default 300, maximum 900); metadata
+requests are also bounded to 15 seconds each. It never replays an uncertain install.
+Run `update status` after completing Android's installer prompt. The CLI does not
+automatically check for new releases on a timer or wake a closed/unreachable player.
+
+For a kiosk, first inspect `ott k8a kiosk`, record its target and strict setting,
+then explicitly use `ott k8a kiosk off`. Unlock protected settings on the player
+if required. Updating does not change PINs or automatically disable kiosk mode.
+After installation and playback verification, restore the intended kiosk target
+with the ordinary kiosk command; do not assume that a previously locked session
+was preserved while it was explicitly disabled for maintenance.
+
 A Capacitor player with the `AppUpdate` plugin supports the normal player queue:
 
 ```sh
@@ -2427,3 +2550,5 @@ resume then compares current saved values before writing. Handoff v1 accepts
 matching-source live/archive references only and does not stop the source player.
 The existing `ott tv load Local` continues to use its original acknowledgement
 workflow without a journal requirement.
+
+For local files without Wi-Fi, see [Android offline media feasibility](android-offline-media.md). This is an investigated design, not an implemented offline library.

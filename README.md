@@ -52,7 +52,9 @@ The player stores this connection only on the current installation and excludes 
 
 ## Terminal remote
 
-The [illustrated Android OTA guide](docs/android-ota.md) explains signed agent
+The [illustrated Android OTA guide](docs/android-ota.md) distinguishes ordinary
+Capacitor Wi-Fi updates (`ott DEVICE update --variant api22|full`, latest beta by
+default; `--version` selects a release) from the separate rooted agent. It explains signed agent
 and APK/helper updates, recovery and verification of the installed result.
 
 The [Android ADB guide](docs/android-adb.md) covers USB access through a workstation
@@ -93,6 +95,8 @@ ott a1 aspect fill          # fill the screen proportionally, cropping the edges
 ott a1 aspect "Fit to screen" # full mode name; preserve the whole picture
 ott a1 restart             # reload the player
 ott a1 restart stream      # restart only the current stream
+ott a1 standby             # stop playback and enter player standby; stay connected
+ott a1 go                  # leave standby and start configured playback (start/wake also work)
 ott a1 screenshot          # save a PNG; browser builds need a selected capture source
 ott a1 shot -o screen.png  # short alias; never overwrites an existing file
 ott a1 test run media-progress --report ./a1-progress
@@ -104,6 +108,13 @@ ott report verify ./a1-progress --json  # re-evaluate saved evidence offline
 [all commands with examples](docs/cli.md#commands),
 [disconnecting and revoking access](docs/cli.md#disconnect-deregister-or-revoke-a-player),
 and [troubleshooting](docs/cli.md#troubleshooting).
+
+For an always-on player, use [standby and go](docs/cli.md#stop-playback-while-keeping-the-player-online)
+to stop playback and wake it later without exiting the app. `stop` remains an
+alias for `standby`; `start` and `wake` remain aliases for `go`. Remote control
+must stay connected, so standby is not a promise of zero device network traffic.
+`ott a1` shows the operations advertised by that player. An accepted command is
+not confirmation that shutdown or playback startup has finished.
 
 [Aspect commands](docs/cli.md#aspect-ratio-fit-and-fill) require an updated CLI,
 controller and a player advertising the `aspect` capability. A change is applied
@@ -160,6 +171,25 @@ Library lookup additionally requires an updated player and controller advertisin
 `plex_library`; it uses the player's saved Plex connection and rejects ambiguous
 or incomplete selections. See [Plex libraries by name](docs/cli.md#plex-libraries-by-name).
 
+### Save Local videos profiles
+
+With a current player and controller, local files/folders use provider `offline`:
+
+```sh
+ott d1 provider offline
+ott d1 profile save 1 "Family movies"
+ott d1 profile export 1 family-movies.json
+ott d1 profile import 2 family-movies.json
+ott d1 profile load 2
+```
+
+Connect files/folders on the player first. Save records their configuration and
+selected video without starting playback. Export transfers descriptions only;
+media and OS/browser access grants remain on the device. Another installation
+requires local binding, and loading does not imply playback was confirmed.
+See [Local videos profiles](docs/cli.md#local-videos-profiles) for setup,
+capabilities, portable-format limits and troubleshooting.
+
 ### Save the current item across profiles
 
 ```sh
@@ -180,7 +210,7 @@ limits, acknowledgement semantics and troubleshooting.
 
 Store named setups in the private `presets` section of
 `~/.config/ottplay-control/cli.json`. Each setup contains numbered M3U profiles
-(playlist, archive hours and VPortal link), Plex credentials and the M3U profile
+(playlist and archive hours), Plex credentials and the M3U profile
 to select when loading finishes. See the [configuration example](docs/cli.md#named-setups).
 
 ```sh
@@ -271,6 +301,7 @@ credentials do not grant diagnostic access.
 
 ## Deployment packages
 
+- [Shared Android USB management and boot recovery](docs/android-usb-manager.md)
 - [Docker / Compose, Kubernetes, k3s, systemd, macOS and Windows](docs/deployment.md)
 - [Configuration, delivery semantics and limits](docs/api.md)
 - [Release and validation process](docs/development.md)

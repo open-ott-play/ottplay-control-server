@@ -1,0 +1,22 @@
+[Unit]
+Description=OTT shared USB Android management
+After=pkgctl-ContainerManager.service
+ConditionPathExists=/usr/local/etc/ott-android-manager/config.json
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u -B /usr/local/etc/ott-android-manager/android_usb_manager.py --config /usr/local/etc/ott-android-manager/config.json run
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+KillMode=control-group
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

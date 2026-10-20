@@ -155,4 +155,11 @@ References: [GitHub schedules](https://docs.github.com/en/actions/reference/work
 
 Run `python3 scripts/release.py prepare-version --pr` from the clean default-branch HEAD. The command refreshes tags and opens a PR with synchronized owned version fields. An existing unreleased base is retained; use `--bump minor`, `--bump major`, or `--version X.Y.Z` for explicit intent. See [version plans](VERSIONING.md) for build overlays, the dedicated allocation ledger and recovery.
 
+In this repository, version preparation updates `VERSION`; it does not prepare
+the changelog. Before merging the preparation PR, move completed entries from
+`## Unreleased` into one nonempty `## [X.Y.Z]` section matching the new base, with
+concrete `### Upgrade` and `### Security` guidance. Keep `## Unreleased` for future
+changes; it may be empty. This applies to beta releases too: publication reads
+`CHANGELOG.md` at the exact build source and rejects an absent version section.
+
 A local candidate package also needs the saved `.release-plan.json` at its exact source commit. Restore the `version_plan` object from the published `release-manifest.json` into a disposable checkout before `release.py package`; do not invent a tag or native counter locally. Ordinary development builds can use the project's native build command and explicitly local version identity.

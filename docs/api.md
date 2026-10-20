@@ -137,7 +137,7 @@ Editing an inactive slot does not reload playback. The existing `server`/`mac`
 form without `profile` continues to update the selected slot.
 
 `profiles` accepts exactly `{}`. For the active M3U provider it returns
-`{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured,vportal_configured}]}`:
+`{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured}]}`:
 exactly 15 ordered slots numbered 1–15, with one active slot. History is an
 integer 0–8760 or `null` for an invalid legacy value. Configuration flags are
 booleans; URLs and credentials are not returned.
@@ -145,15 +145,21 @@ booleans; URLs and credentials are not returned.
 `profile` accepts exactly `{number:N}` and returns
 `{provider:"m3u",profile:METADATA,dispatched:true}` for the selected, active slot.
 `profile_settings` accepts exactly `{number:N,settings:{...}}`, with a nonempty
-allowlist of `name`, `playlist`, `history_hours` and `vportal`. Numbers must be
+M3U allowlist of `name`, `playlist` and `history_hours`. Numbers must be
 JSON integers: slot 1–15, history 0–8760. Strings must be valid Unicode without
-C0/DEL controls, limited to 256 UTF-8 bytes for names or 8192 for either link.
+C0/DEL controls, limited to 256 UTF-8 bytes for names or 8192 for playlist URLs.
 Empty strings clear fields. Unknown/duplicate fields and malformed settings are
 rejected; the 16 KiB request envelope limit still applies. The player validates
 and applies all settings together, returning
 `{provider:"m3u",profile:METADATA,saved:true}`. A saved result does not establish
 that provider loading completed. These operations require the active M3U driver
 and remain subject to parental and platform policy.
+
+The shared request schema also accepts `vportal` for the standalone VPortal
+provider, whose profile settings are `name` and `vportal`. The active player
+driver enforces the provider-specific fields: M3U rejects `vportal`, and its
+metadata omits `vportal_configured`. Legacy M3U portal links are not used or
+deleted. Update controller, CLI and player together for this contract.
 
 `restart` accepts exactly `{target:"stream"}` or `{target:"player"}`. Stream
 success is `{accepted:true,target:"stream",dispatched:true}`. Player reload
@@ -181,6 +187,34 @@ params reports these operations in its `playback` list when available. They
 require an updated controller and player; there is no legacy/input fallback.
 Response retries use the same request ID and do not repeat the step within the
 player session. Do not submit a new request after an uncertain result.
+
+### Player standby and wake
+
+Player standby uses the existing lifecycle request. For example, submit
+`{"action":"lifecycle","params":{"operation":"standby"}}` to enter standby
+and `{"action":"lifecycle","params":{"operation":"wake"}}` to leave it.
+The CLI command `ott PLAYER go` sends `wake`; `go`, `start` and `stop` are CLI
+aliases, not additional wire operations or operator permissions.
+
+Read `capabilities.lifecycle` for the operations supported in the current
+player state. The usual accepted response contains `operation`,
+`accepted: true`, `dispatched: false` and `effect: "lifecycle-after-ack"`.
+It confirms acceptance before the effect, not completed media teardown or
+playback startup. Inspect player status after the effect to observe its state.
+Standby retains remote control; it does not power off the device or provide
+Wake-on-LAN. Runtime and host background work must be distinguished from
+playback traffic when measuring standby.
+
+Updated player status can include `player.standby` (boolean) and
+`player.background` with exactly `state` and `pending`. States are `running`,
+`suspending`, `suspended`, `unsupported` or `error`; pending is a nonnegative
+integer at most 2147483647, or null when unknown. The fields are optional for
+older players. Interpret standby on, background suspended and zero pending
+together as the player's report of drained managed work, not an external
+measurement of all device traffic. Capability identity snapshots can change
+activity while a status request is in flight; only version, platform and runtime
+identify the responding player. The CLI displays the status activity snapshot
+and validates capabilities separately.
 
 ### Explicit aspect-ratio extension
 
@@ -1035,8 +1069,8 @@ records become `unknown` on restart and no commands are replayed.
 
 `settings_compare` reads saved values without selecting a provider:
 
-- M3U: `{provider:"m3u",number:1,settings:{name,playlist,history_hours,vportal}}`;
-  all four settings fields are required.
+- M3U: `{provider:"m3u",number:1,settings:{name,playlist,history_hours}}`;
+  all three settings fields are required; saved legacy VPortal links are ignored.
 - Plex: `{provider:"plex",settings:{server,token}}`.
 - Stalker: `{provider:"stalker",number:1,settings:{name,server,mac}}`.
 
@@ -1067,3 +1101,58 @@ Negative result data is a single `error` code: `unsupported`, `invalid_request`,
 `no_current_item`, `source_mismatch`, `item_unavailable`, `ambiguous_item`,
 `policy_denied`, `busy`, `playback_failed`, or `context_changed`.
 See the [workflow and limitations](reliable-control.md#continue-on-another-player).
+
+
+### Local videos profile transfer
+
+The `offline` provider uses the same `profiles {}` listing and `profile {number}`
+selector, with 15 slots. Its profile metadata is
+`{number,name,active,configured,binding_required,source_count,selected_name}`;
+`selected_name` is empty when no file is selected. A profile load returns
+`{provider:"offline",profile:METADATA,dispatched:true,binding_required:BOOL}`.
+Dispatch does not confirm playback. Missing local access requires interactive
+binding/permission on the player, and a missing selected file must not select a
+substitute.
+
+New requests (exact keys, integer slot 1–15):
+
+```json
+{"action":"profile_save","params":{"number":1,"name":"Family movies"}}
+{"action":"profile_export","params":{"number":1}}
+{"action":"profile_import","params":{"number":2,"profile":{"version":1,"provider":"offline","name":"Family movies","binding_id":"c98c115d-1234-4567-8abc-123456789abc","sources":[{"key":"s0","name":"Movies","kind":"folder"}],"selected":{"source_key":"s0","name":"Cartoons/movie.mp4"}}}}
+```
+
+`profile_save` captures current local sources/selection; `name` is optional.
+`profile_import` saves into an inactive slot. Neither starts playback. Both return
+`{provider:"offline",profile:METADATA,saved:true,binding_required:BOOL}`.
+`profile_export` returns `{provider:"offline",number:N,profile:DOCUMENT}`.
+Negative replies contain only `{error:TEXT}` (nonempty, at most 1024 UTF-8 bytes).
+New action replies are bounded to 16 KiB, validated against their request slot,
+and rejected before queue consumption if invalid. Operator scopes are the exact
+independent action names `profile_save`, `profile_export`, `profile_import`;
+export permission does not grant import/save permission.
+
+DOCUMENT accepts exactly `version`, `provider`, `name`, `binding_id`, `sources`,
+`selected`: version 1, provider `offline`, name up to 256 UTF-8 bytes, canonical
+lowercase UUIDv4 binding ID. Sources are 0–32 exact `{key,name,kind}` records with
+consecutive keys `s0`…`s31`, a nonempty basename up to 512 UTF-8 bytes, and kind
+`file` or `folder`. `selected` is null or exact `{source_key,name}` referencing an
+included source and a nonempty relative filename up to 1024 UTF-8 bytes. Strings
+exclude control characters; source/selection names exclude backslashes, URI
+schemes, absolute paths and `.`/`..` path segments. The compact document is at most
+12288 bytes and the full request at most 16 KiB. Duplicate and unknown fields are
+rejected recursively. Empty sources require null selection.
+
+The opaque binding ID resolves only an exact configuration in an installation's
+private binding map. It is not an access credential. Cross-device import transfers
+configuration only; it never carries media bytes, paths, native source IDs,
+bookmarks, grants or browser handles. Reusing local access requires the matching
+local binding; otherwise the player reports `binding_required` and provides a
+local binding flow.
+
+While Local videos is active and installed, capabilities may include
+`offline_profiles:{version:1,operations:["list","load","save","export","import"],max_profiles:15,max_sources:32}`.
+Operations are filtered by current player policy (a locked configuration may
+advertise only `list`). Absence means the extension is unavailable. This
+extension is separate from the provider-specific M3U/VPortal settings contracts
+described above.

@@ -38,7 +38,8 @@ class LifecycleCliTest(unittest.TestCase):
                  (['reboot'], 'reboot_device'), (['REBOOT', 'DEVICE'], 'reboot_device'),
                  (['exit'], 'exit_app'), (['QUIT'], 'exit_app'), (['close'], 'exit_app'),
                  (['standby'], 'standby'), (['WAKE'], 'wake'),
-                 (['stop'], 'standby'), (['STOP'], 'standby'), (['start'], 'wake'), (['START'], 'wake')]
+                 (['stop'], 'standby'), (['STOP'], 'standby'), (['start'], 'wake'), (['START'], 'wake'),
+                 (['go'], 'wake'), (['GO'], 'wake'), (['Go'], 'wake')]
         for words, operation in pairs:
             for machine in [False, True]:
                 with self.subTest(words=words, json=machine):
@@ -63,6 +64,7 @@ class LifecycleCliTest(unittest.TestCase):
         for words, action, field, value in [(['reboot'], 'lifecycle', 'operation', 'reboot_device'),
                                             (['stop'], 'lifecycle', 'operation', 'standby'),
                                             (['start'], 'lifecycle', 'operation', 'wake'),
+                                            (['go'], 'lifecycle', 'operation', 'wake'),
                                             (['key', 'enter'], 'input', 'key', 'ok')]:
             valid = self.deferred(action, field, value)
             invalid = [None, [], {}, {**valid, field: 'other'}, {**valid, 'accepted': 1}, {**valid, 'accepted': False},
@@ -75,14 +77,18 @@ class LifecycleCliTest(unittest.TestCase):
                     self.assertEqual((code, out, len(calls)), (1, '', 1))
                     self.assertIn('do not repeat', err)
 
-    def test_stop_start_do_not_accept_arguments_or_use_pause_resume(self):
-        for words in (['stop', 'now'], ['start', '1']):
+    def test_standby_go_aliases_do_not_accept_arguments_or_use_pause_resume(self):
+        for words in (['stop', 'now'], ['start', '1'], ['go', 'now'], ['GO', '1'], ['go', '--list']):
             code, out, _, calls = self.run_cli(words, {})
             self.assertEqual((code, out, calls), (1, '', []))
         self.assertEqual(ott.parse_command(['pause']), ('playback', {'operation': 'pause'}))
         self.assertEqual(ott.parse_command(['resume']), ('playback', {'operation': 'resume'}))
         self.assertEqual(ott.parse_command(['play', 'stop']), ('play', {'query': 'stop'}))
         self.assertEqual(ott.parse_command(['play', 'start']), ('play', {'query': 'start'}))
+        self.assertEqual(ott.parse_command(['play', 'go']), ('play', {'query': 'go'}))
+        self.assertEqual(ott.parse_command(['play', 'GO']), ('play', {'query': 'GO'}))
+        for title in ('goal', 'gone', 'gopher'):
+            self.assertEqual(ott.parse_command([title]), ('play', {'query': title}))
 
     def test_named_input_and_aliases_never_forward_numeric_or_arbitrary_keycodes(self):
         for key in ott.INPUT_KEYS:
@@ -253,13 +259,14 @@ class LifecycleCliTest(unittest.TestCase):
             self.assertIn('invalid capabilities', err)
 
     def test_unsupported_rejected_and_lost_control_replies_have_no_legacy_fallback(self):
-        for words in [['caps'], ['exit'], ['reboot'], ['stop'], ['start'], ['key', 'ok'], ['pause'], ['seek', '1'], ['prev'], ['previous'], ['next'], ['+15'], ['-15']]:
+        for words in [['caps'], ['exit'], ['reboot'], ['standby'], ['go'], ['stop'], ['start'], ['key', 'ok'], ['pause'], ['seek', '1'], ['prev'], ['previous'], ['next'], ['+15'], ['-15']]:
             for error in [ott.PlayerUnsupported('private-player-detail'), ott.PlayerRejected('private-player-detail', {}),
                           ott.TransportError('Lost reply; do not repeat blindly')]:
                 code, out, err, calls = self.run_cli(words, error, True)
                 self.assertEqual((code, out, len(calls)), (1, '', 1))
                 self.assertNotIn('private-player-detail', err)
                 expected = {'caps': 'capabilities', 'exit': 'lifecycle', 'reboot': 'lifecycle', 'stop': 'lifecycle', 'start': 'lifecycle',
+                            'standby': 'lifecycle', 'go': 'lifecycle',
                             'key': 'input', 'pause': 'playback', 'seek': 'playback',
                             'prev': 'playback', 'previous': 'playback', 'next': 'playback',
                             '+15': 'playback', '-15': 'playback'}[words[0]]
