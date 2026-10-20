@@ -2458,8 +2458,13 @@ return only; `unknown` must not trigger automatic replay. See
 
 ## Capacitor APK updates over Wi-Fi
 
+[Краткая инструкция на русском](android-ota.ru.md).
+
 A running Capacitor player can download and install an official release without
-USB. Without `--version`, the command selects the latest published beta:
+USB. Without `--version`, the command selects the highest numeric beta version
+among the 100 releases returned by GitHub, regardless of their listing order.
+Use `--version` to select an exact published release, including one outside that
+page:
 
 ```sh
 ott k8a update --variant api22
@@ -2468,6 +2473,14 @@ ott k8a update --version v1.1.58-beta.3 --variant api22
 ott k8a update --version v1.1.58-beta.3 --variant api22 --prepare-only
 ott k8a update status
 ```
+
+Bare `ott k8a` lists update examples when the player advertises the `AppUpdate`
+capability. The `update`, `beta`, `status`, `prepare` and `install` words are
+case-insensitive; APK URLs and SHA-256 values are preserved exactly.
+With `--receipt`, each update RPC reports `action: "app_update"` and its request
+ID on stderr without including the APK URL. A receipt with `status: "ok"` means
+the RPC completed; an accepted install still needs confirmation through
+`update status`, and may require a local Android installer prompt.
 
 Use `api22` for Android 5.1/6 (including Fire OS 5), or `full` for Android 7+.
 The current updater does not report a reliable API level, so the CLI requires

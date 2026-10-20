@@ -30,15 +30,16 @@ def state(phase="idle", code=10427, sha="", **kwargs):
                 error="", can_request_installs=True, user_confirmation_required=True, **kwargs)
 
 
-def metadata():
-    assets = [{"name": name, "size": size, "browser_download_url": PREFIX + name}
+def metadata(tag=TAG):
+    prefix = "https://github.com/" + ota.REPOSITORY + "/releases/download/" + tag + "/"
+    assets = [{"name": name, "size": size, "browser_download_url": prefix + name}
               for name, size in (("release-manifest.json", 1000), (APK, 12000000))]
-    release = dict(tag_name=TAG, draft=False, prerelease=True, published_at="2026-10-19T22:54:08Z", assets=assets)
-    manifest = dict(schema=1, repository=ota.REPOSITORY, source_sha=SOURCE, tag=TAG, channel="beta",
-                    version_plan=dict(schema_version=1, source_sha=SOURCE, tag=TAG, channel="beta",
-                                      version=TAG[1:], build_number=10438),
+    release = dict(tag_name=tag, draft=False, prerelease=True, published_at="2026-10-19T22:54:08Z", assets=assets)
+    manifest = dict(schema=1, repository=ota.REPOSITORY, source_sha=SOURCE, tag=tag, channel="beta",
+                    version_plan=dict(schema_version=1, source_sha=SOURCE, tag=tag, channel="beta",
+                                      version=tag[1:], build_number=10438),
                     assets=[dict(name=APK, sha256=SHA, size=12000000)],
-                    package_versions=[dict(path=APK, field="version", version=TAG[1:]),
+                    package_versions=[dict(path=APK, field="version", version=tag[1:]),
                                       dict(path=APK, field="versionCode", version="10438")])
     return release, manifest
 
@@ -92,6 +93,27 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(words=words), self.assertRaises(ott.Error):
                 ota.options(words, ott.Error)
         self.assertEqual(self.opts("--version", "1.1.58")["version"], "v1.1.58")
+
+    def test_explicit_beta_selector_ignores_case(self):
+        self.assertEqual(ota.options(["UPDATE", "BeTa", "--variant", "api22"], ott.Error), self.opts())
+
+    def test_latest_beta_is_numeric_not_the_first_release_in_the_api_page(self):
+        tag = "v1.1.58-beta.11"
+        release, manifest = metadata(tag)
+        releases = [metadata("v1.1.58-beta.9")[0], release, metadata("v1.1.58-beta.8")[0],
+                    dict(release, tag_name="v99.0.0-beta.1", draft=True),
+                    dict(release, tag_name="v99.0.0", prerelease=False)]
+        expected_urls = [
+            ota.API + "/releases?per_page=100",
+            "https://github.com/" + ota.REPOSITORY + "/releases/download/" + tag + "/release-manifest.json",
+            ota.API + "/git/ref/tags/" + tag,
+        ]
+        with patch.object(ota, "request_json", side_effect=[
+            releases, manifest, {"object": {"type": "commit", "sha": SOURCE}},
+        ]) as fetch:
+            selected = ota.release_target(self.opts(), ott.Error)
+        self.assertEqual(selected["tag"], tag)
+        self.assertEqual([call.args[0] for call in fetch.call_args_list], expected_urls)
 
     def test_rejects_unpublished_mismatched_or_ambiguous_metadata(self):
         mutations = [lambda r, m: r.update(draft=True),

@@ -1,5 +1,7 @@
 # Android OTA: ordinary players and the separate rooted agent
 
+[Обновление Capacitor по Wi-Fi: русская инструкция](android-ota.ru.md).
+
 For **k8a/fire8 and other Capacitor players**, use the normal player's Wi-Fi
 updater, not the rooted-agent command:
 
