@@ -142,20 +142,28 @@ class KioskTest(unittest.TestCase):
                     self.assertEqual((code, output.getvalue(), errors.getvalue()), (0, expected, ''))
 
     def test_strict_waiting_does_not_claim_controls_are_already_locked(self):
-        client = mock.Mock(timeout=45)
-        client.device.return_value = 'dev_tv'
-        client.call.return_value = {'enabled':True, 'state':'waiting', 'channel':None, 'provider':'m3u',
-                                    'retry_seconds':10, 'retries':0, 'health':'waiting', 'strict':True}
-        output, errors = io.StringIO(), io.StringIO()
-        with mock.patch.object(ott, 'Client', return_value=client), \
-                mock.patch.object(ott, 'read_json', return_value={}), \
-                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            code = ott.main(['tv', 'kiosk', 'on', '--strict'])
-        client.call.assert_called_once_with('dev_tv', 'kiosk', {'mode':'on', 'strict':True})
-        self.assertEqual((code, output.getvalue(), errors.getvalue()), (0, (
-            'Strict kiosk is armed; local controls lock after the first channel selection.\n'
-            'Kiosk mode enabled; waiting for the first channel selection in the player.\n'
-        ), ''))
+        data = {'enabled':True, 'state':'waiting', 'channel':None, 'provider':'m3u',
+                'retry_seconds':10, 'retries':0, 'health':'waiting', 'strict':True}
+        for machine in [False, True]:
+            with self.subTest(machine=machine):
+                client = mock.Mock(timeout=45)
+                client.device.return_value = 'dev_tv'
+                client.call.return_value = data
+                output, errors = io.StringIO(), io.StringIO()
+                with mock.patch.object(ott, 'Client', return_value=client), \
+                        mock.patch.object(ott, 'read_json', return_value={}), \
+                        contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    code = ott.main((['--json'] if machine else []) + ['tv', 'kiosk', 'on', '--strict'])
+                client.call.assert_called_once_with('dev_tv', 'kiosk', {'mode':'on', 'strict':True})
+                if machine:
+                    expected = data
+                else:
+                    expected = (
+                        'Strict kiosk is armed; local controls lock after the first channel selection.\n'
+                        'Kiosk mode enabled; waiting for the first channel selection in the player.\n'
+                    )
+                rendered = json.loads(output.getvalue()) if machine else output.getvalue()
+                self.assertEqual((code, rendered, errors.getvalue()), (0, expected, ''))
 
 if __name__=='__main__':
     unittest.main()
