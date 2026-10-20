@@ -111,6 +111,7 @@ Use the following host layout:
 /usr/local/etc/ott-android-manager/
   android_usb_manager.py
   android_usb_supervisor.py
+  android_usb_transaction.py
   config.json
   ott-android-manager.service
   adb-keys/
@@ -120,10 +121,11 @@ Use the following host layout:
       additional-authorized.adb_key
 /var/lib/ott-android-manager/
   manager.lock
+  captures/
   <alias>/state.json
 ```
 
-The manager and supervisor files must come from the same reviewed revision.
+The manager, supervisor and transaction adapter must come from the same reviewed revision.
 Keep configuration and keys outside Git and release archives. Set private
 directories to `0700`, configuration and private keys to `0600`, and make the
 source/service files root-owned. The key directory is mounted read-only.
@@ -193,7 +195,7 @@ python3 tools/android_usb_manager_remote.py --host tablet-host wake lobby
 python3 tools/android_usb_manager_remote.py --host tablet-host recover lobby
 python3 tools/android_usb_manager_remote.py --host tablet-host reboot lobby
 python3 tools/android_usb_manager_remote.py --host tablet-host swipe lobby 400 600 400 100 --duration 500
-python3 tools/android_usb_manager_remote.py --host tablet-host screenshot lobby /var/lib/ott-android-manager/lobby-check.png
+python3 tools/android_usb_manager_remote.py --host tablet-host screenshot lobby lobby-check.png
 python3 tools/android_usb_manager_remote.py --host tablet-host adb lobby -- shell getprop ro.product.model
 python3 tools/android_usb_manager_remote.py --host tablet-host adb lobby -- exec-out screencap -p > lobby.png
 ```
@@ -205,8 +207,12 @@ python3 tools/android_usb_manager_remote.py --host tablet-host adb lobby -- exec
 The wrapper uses SSH without a PTY, shell-quotes individual arguments, passes
 the process exit status through, and does not turn ADB output into JSON.
 Check the exit status before treating a redirected screenshot as valid.
-The `screenshot` command validates the PNG and creates an owner-only new file
-on the USB host without overwriting an existing path. The `adb ... exec-out`
+The `screenshot` command accepts only a bare PNG filename, such as
+`lobby-check.png`, and saves it in `<state_dir>/captures/` on the USB host.
+The name must match `[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.png`; paths, extra dots
+and implicit extensions are not accepted. It validates the PNG and creates an
+owner-only new file, refusing symlinks and existing filenames before capture.
+The `adb ... exec-out`
 example instead streams bytes to a file on the operator's computer. `swipe`
 uses current screen geometry and refuses protected or unknown keyguard state;
 the coordinates above are examples, not a universal unlock gesture.

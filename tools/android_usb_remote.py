@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Quote a restricted USB controller command for an existing SSH host."""
 import argparse
+import re
 import shlex
 import subprocess
 
@@ -17,9 +18,12 @@ if a.command == 'swipe':
     if len(a.arguments) != 4 or not all(v.isdecimal() for v in a.arguments):
         p.error('swipe requires four non-negative coordinates')
 elif a.command == 'screenshot':
-    if len(a.arguments) != 1 or not a.arguments[0].startswith('/'):
-        p.error('screenshot requires a new absolute path on the remote host')
+    if len(a.arguments) != 1 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.png', a.arguments[0]):
+        p.error('screenshot requires a bare PNG filename using letters, digits, _ or -')
 elif a.arguments:
     p.error('This command takes no extra arguments')
 command = ['sudo', '-n', '/usr/bin/python3', a.remote_script, '--config', a.remote_config, a.command, *a.arguments]
-raise SystemExit(subprocess.run(['ssh', '-T', '-o', 'BatchMode=yes', '--', a.host, shlex.join(command)]).returncode)
+raise SystemExit(subprocess.run([
+    'ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+    '--', a.host, shlex.join(command),
+]).returncode)

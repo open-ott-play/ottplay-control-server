@@ -1,17 +1,98 @@
 #!/usr/bin/env python3
 """Explicit-target USB Android recovery. No network ADB or general shell API."""
 import argparse
+from contextlib import ExitStack
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import time
 
 
 class RecoveryError(RuntimeError):
     pass
+
+
+def validate_capture_name(name):
+    """Accept one portable PNG filename, never an operator-selected host path."""
+    if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.png', name):
+        raise RecoveryError('Screenshot requires a bare PNG filename using letters, digits, _ or -')
+    return name
+
+
+def save_capture(state_dir, name, capture):
+    """Reserve a private, confined output before requesting bytes from a device."""
+    validate_capture_name(name)
+    root = Path(state_dir)
+    try:
+        with ExitStack() as stack:
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            stack.callback(os.close, root_fd)
+            try:
+                os.mkdir('captures', mode=0o700, dir_fd=root_fd)
+            except FileExistsError:
+                pass
+            captures_fd = os.open(
+                'captures', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd
+            )
+            stack.callback(os.close, captures_fd)
+            os.fchmod(captures_fd, 0o700)
+            fd = os.open(
+                name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600, dir_fd=captures_fd,
+            )
+            complete = False
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    os.fchmod(stream.fileno(), 0o600)
+                    data = capture()
+                    if (
+                        not isinstance(data, bytes) or not data.startswith(b'\x89PNG\r\n\x1a\n')
+                        or len(data) > 32 * 1024 * 1024
+                    ):
+                        raise RecoveryError('Invalid screenshot')
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.fsync(captures_fd)
+                complete = True
+            finally:
+                if not complete:
+                    os.unlink(name, dir_fd=captures_fd)
+        return {'result': 'captured', 'path': str(root / 'captures' / name)}
+    except (OSError, subprocess.TimeoutExpired):
+        raise RecoveryError('Screenshot unavailable, timed out or could not be saved privately') from None
+
+
+def save_recovery_state(state_dir, state):
+    """Atomically persist a checkpoint, including its containing directory."""
+    try:
+        with ExitStack() as stack:
+            root_fd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            stack.callback(os.close, root_fd)
+            temporary = '.state-' + secrets.token_hex(16)
+            fd = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600, dir_fd=root_fd,
+            )
+            pending = True
+            try:
+                with os.fdopen(fd, 'w') as stream:
+                    os.fchmod(stream.fileno(), 0o600)
+                    json.dump(state, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, 'state.json', src_dir_fd=root_fd, dst_dir_fd=root_fd)
+                pending = False
+                os.fsync(root_fd)
+            finally:
+                if pending:
+                    os.unlink(temporary, dir_fd=root_fd)
+    except (OSError, ValueError, TypeError):
+        raise RecoveryError('Recovery state could not be saved durably') from None
 
 
 def secure_keyguard(policy, trust):
@@ -181,14 +262,33 @@ class Supervisor:
 
     def read_state(self):
         p = self.root / 'state.json'
-        return json.loads(p.read_text()) if p.exists() else {}
+        try:
+            if p.is_symlink():
+                raise RecoveryError('Recovery state must not be a symlink')
+            state = json.loads(p.read_text())
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            raise RecoveryError('Invalid or unreadable recovery state') from None
+        if not isinstance(state, dict):
+            raise RecoveryError('Recovery state must be an object')
+        return state
 
     def save_state(self, state):
-        p = self.root / 'state.tmp'
-        with p.open('w') as f:
-            os.chmod(p, 0o600)
-            json.dump(state, f)
-        p.replace(self.root / 'state.json')
+        save_recovery_state(self.root, state)
+
+    def screenshot(self, name):
+        def capture():
+            self.connect()
+            command = [
+                self.c['docker_path'], 'exec', self.container, 'adb', '-s',
+                self.c['target']['serial'], 'exec-out', 'screencap', '-p',
+            ]
+            result = subprocess.run(command, capture_output=True, timeout=30)
+            if result.returncode:
+                raise RecoveryError('Screenshot transport failed')
+            return result.stdout
+        return save_capture(self.root, name, capture)
 
     def locked(self):
         try:
@@ -236,6 +336,7 @@ class Supervisor:
         self.shell('input', 'swipe', *map(str, coordinates), str(duration))
 
     def recover(self):
+        self.read_state()  # A corrupt checkpoint must fail before wake or launch.
         self.verify()
         if self.shell('getprop', 'sys.boot_completed') != '1':
             raise RecoveryError('Android is still booting')
@@ -291,8 +392,10 @@ def main():
     swipe.add_argument('coordinates', type=int, nargs=4)
     swipe.add_argument('--duration', type=int, default=500)
     shot = sub.add_parser('screenshot')
-    shot.add_argument('path')
+    shot.add_argument('name', help='New bare PNG filename under state_dir/captures')
     args = parser.parse_args()
+    if args.command == 'screenshot':
+        validate_capture_name(args.name)
     supervisor = Supervisor(json.loads(Path(args.config).read_text()))
     lock = (supervisor.root / 'supervisor.lock').open('a')
     if args.command == 'run':
@@ -319,6 +422,10 @@ def main():
             if time.monotonic() >= deadline:
                 raise RecoveryError('Target busy; no device action was sent') from None
             time.sleep(0.2)
+    if args.command == 'screenshot':
+        # Resolve the private destination before connecting or sending any ADB command.
+        print(json.dumps(supervisor.screenshot(args.name)))
+        return
     supervisor.connect()
     if args.command == 'status':
         result = {'connected': True, 'boot_completed': supervisor.shell('getprop', 'sys.boot_completed') == '1', 'locked': supervisor.locked(), 'state': supervisor.read_state()}
@@ -333,16 +440,6 @@ def main():
     elif args.command == 'reboot':
         supervisor.adb('reboot')
         result = {'result': 'reboot_sent'}
-    else:
-        # Binary screenshot goes through a bounded private subprocess, never shell interpolation.
-        command = [supervisor.c['docker_path'], 'exec', supervisor.container, 'adb', '-s', supervisor.c['target']['serial'], 'exec-out', 'screencap', '-p']
-        capture = subprocess.run(command, capture_output=True, timeout=30)
-        if capture.returncode or not capture.stdout.startswith(b'\x89PNG\r\n\x1a\n') or len(capture.stdout) > 32 * 1024 * 1024:
-            raise RecoveryError('Invalid screenshot')
-        fd = os.open(args.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, 'wb') as f:
-            f.write(capture.stdout)
-        result = {'result': 'captured', 'path': args.path}
     print(json.dumps(result))
 
 

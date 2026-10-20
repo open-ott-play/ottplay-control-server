@@ -118,6 +118,7 @@ digest образа; оба примера устройств выключены
 /usr/local/etc/ott-android-manager/
   android_usb_manager.py
   android_usb_supervisor.py
+  android_usb_transaction.py
   config.json
   ott-android-manager.service
   adb-keys/
@@ -127,10 +128,11 @@ digest образа; оба примера устройств выключены
       additional-authorized.adb_key
 /var/lib/ott-android-manager/
   manager.lock
+  captures/
   <alias>/state.json
 ```
 
-Менеджер и supervisor должны происходить из одной проверенной ревизии.
+Менеджер, supervisor и адаптер транзакций должны происходить из одной проверенной ревизии.
 Храните конфигурацию и ключи вне Git и архивов выпуска. Закрытым каталогам
 задайте `0700`, конфигурации и приватным ключам — `0600`; исходники
 и служебные файлы должны принадлежать root. Каталог ключей подключается
@@ -208,7 +210,7 @@ python3 tools/android_usb_manager_remote.py --host tablet-host wake lobby
 python3 tools/android_usb_manager_remote.py --host tablet-host recover lobby
 python3 tools/android_usb_manager_remote.py --host tablet-host reboot lobby
 python3 tools/android_usb_manager_remote.py --host tablet-host swipe lobby 400 600 400 100 --duration 500
-python3 tools/android_usb_manager_remote.py --host tablet-host screenshot lobby /var/lib/ott-android-manager/lobby-check.png
+python3 tools/android_usb_manager_remote.py --host tablet-host screenshot lobby lobby-check.png
 python3 tools/android_usb_manager_remote.py --host tablet-host adb lobby -- shell getprop ro.product.model
 python3 tools/android_usb_manager_remote.py --host tablet-host adb lobby -- exec-out screencap -p > lobby.png
 ```
@@ -221,8 +223,12 @@ python3 tools/android_usb_manager_remote.py --host tablet-host adb lobby -- exec
 Обёртка подключается по SSH без PTY, экранирует отдельные аргументы,
 сохраняет код завершения процесса и не преобразует вывод ADB в JSON.
 Проверяйте код завершения, прежде чем считать перенаправленный скриншот
-успешным. Команда `screenshot` проверяет PNG и создаёт новый файл
-на USB-хосте с доступом только владельцу, не перезаписывая существующий.
+успешным. Команда `screenshot` принимает только имя PNG-файла, например
+`lobby-check.png`, и сохраняет его в `<state_dir>/captures/` на USB-хосте.
+Имя должно соответствовать `[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.png`;
+пути и дополнительные точки запрещены, расширение не добавляется автоматически.
+Команда проверяет PNG и создаёт новый файл с доступом только владельцу.
+Символические ссылки и существующие имена отклоняются до получения снимка.
 Пример `adb ... exec-out` сохраняет бинарный поток в файл на компьютере
 оператора. `swipe` проверяет текущую геометрию экрана и отклоняет жест
 при защищённой или неизвестной блокировке. Координаты выше приведены

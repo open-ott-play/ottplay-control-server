@@ -164,11 +164,14 @@ universal unlock gesture. Coordinates must fit the current device dimensions.
 python3 /usr/local/etc/ott-k8a-recovery/android_usb_supervisor.py --config /usr/local/etc/ott-k8a-recovery/config.json swipe 640 640 640 160 --duration 500
 ```
 
-Save a private display capture. The destination must not already exist; the
-script creates it with mode `0600` and validates its PNG signature and size.
+Save a private display capture using a bare PNG filename. The script saves it
+under `<state_dir>/captures/` with mode `0600` and validates its PNG signature
+and size. Names must match `[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.png`; paths, extra
+dots and implicit extensions are not accepted. Symlinks and existing filenames
+are refused before capture.
 
 ```sh
-python3 /usr/local/etc/ott-k8a-recovery/android_usb_supervisor.py --config /usr/local/etc/ott-k8a-recovery/config.json screenshot /volume1/ott-usb/k8a/display.png
+python3 /usr/local/etc/ott-k8a-recovery/android_usb_supervisor.py --config /usr/local/etc/ott-k8a-recovery/config.json screenshot display.png
 ```
 
 A deliberate reboot is also available:
@@ -192,12 +195,14 @@ python3 tools/android_usb_remote.py --host s status
 python3 tools/android_usb_remote.py --host s wake
 python3 tools/android_usb_remote.py --host s recover
 python3 tools/android_usb_remote.py --host s swipe 400 1024 400 256
-python3 tools/android_usb_remote.py --host s screenshot /volume1/ott-usb/k8a/check.png
+python3 tools/android_usb_remote.py --host s screenshot check.png
 ```
 
 The swipe example assumes an 800 × 1280 current display. Inspect first and use
-coordinates for the actual orientation. The screenshot path is on Synology,
-not the operator machine, and must be a new absolute filename. The wrapper uses
+coordinates for the actual orientation. The screenshot is saved on Synology,
+under the configured `<state_dir>/captures/`, not on the operator machine.
+Supply a new bare PNG filename. When the legacy redirect is installed, the
+shared manager's state directory is used. The wrapper uses
 non-interactive SSH and `sudo -n`; the host must already authorize the operator.
 It does not provide a general remote-shell command or transfer screenshots.
 

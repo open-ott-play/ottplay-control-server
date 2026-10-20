@@ -15,7 +15,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 
@@ -168,18 +167,7 @@ class DeviceSupervisor(Supervisor):
         return state
 
     def save_state(self, state):
-        # Preserve the reviewed state transitions, but never follow a stale or
-        # externally supplied state.tmp symlink while replacing the checkpoint.
-        fd, temporary = tempfile.mkstemp(prefix=".state-", dir=str(self.root))
-        try:
-            with os.fdopen(fd, "w") as stream:
-                json.dump(state, stream)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.root / "state.json")
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+        _recovery.save_recovery_state(self.root, state)
 
 
 class Manager:
@@ -548,14 +536,10 @@ class Manager:
             return {"result": "swipe_sent"}
         return self._operate(alias, action)
 
-    def screenshot(self, alias, path):
-        capture = self.adb(alias, "exec-out", "screencap", "-p")
-        if not capture.startswith(b"\x89PNG\r\n\x1a\n") or len(capture) > 32 * 1024 * 1024:
-            raise RecoveryError("Invalid screenshot")
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(capture)
-        return {"result": "captured", "path": str(path)}
+    def screenshot(self, alias, name):
+        return _recovery.save_capture(
+            self.root, name, lambda: self.adb(alias, "exec-out", "screencap", "-p")
+        )
 
     def _forward(self, alias, args):
         """Forward's local port namespace is server-wide, despite using -s."""
@@ -626,7 +610,7 @@ def main(argv=None):
     swipe.add_argument("--duration", type=int, default=500)
     screenshot = sub.add_parser("screenshot")
     screenshot.add_argument("alias")
-    screenshot.add_argument("path")
+    screenshot.add_argument("name", help="New bare PNG filename under state_dir/captures")
     adb = sub.add_parser("adb")
     adb.add_argument("alias")
     adb.add_argument("args", nargs=argparse.REMAINDER)
@@ -650,7 +634,7 @@ def main(argv=None):
     elif args.command == "swipe":
         print(json.dumps(manager.swipe(args.alias, args.coordinates, args.duration)))
     elif args.command == "screenshot":
-        print(json.dumps(manager.screenshot(args.alias, args.path)))
+        print(json.dumps(manager.screenshot(args.alias, args.name)))
     else:
         method = getattr(manager, args.command)
         result = method(args.alias) if hasattr(args, "alias") else method()

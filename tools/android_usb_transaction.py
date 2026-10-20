@@ -58,6 +58,45 @@ class Transactions:
     def _temporary(self):
         return "/tmp/ott-transaction-" + uuid.uuid4().hex
 
+    def _processes(self, alias):
+        """Prefer all processes; old toolbox ps may reject -A or return only a header."""
+        def probe(all_processes):
+            # Capture ps status inside the device shell: old ADB shell protocols
+            # do not return it, while transport errors must still propagate.
+            command = ("ps -A" if all_processes else "ps") + (
+                " 2>&1; ott_ps_status=$?; echo; "
+                "echo __OTT_PS_STATUS__=$ott_ps_status"
+            )
+            raw = self.manager._device_adb(alias, ("shell", command))
+            output = raw.decode(errors="replace").replace("\r\n", "\n").strip()
+            match = re.fullmatch(r"(.*?)\s*__OTT_PS_STATUS__=([0-9]{1,3})", output, re.S)
+            if match is None:
+                raise TransactionError("Process discovery returned an invalid status")
+            body, status = match.group(1).strip(), int(match.group(2))
+            unsupported = status and re.search(
+                r"(?i:\b(?:unknown|invalid|unrecognized|unsupported|bad)\s+"
+                r"(?:option|argument)\b)[^\n]*\bA\b|(?i:\bbad\s+pid)\s+['\"]?-A(?:['\"]|\s|$)",
+                body.splitlines()[0] if body else "",
+            )
+            if unsupported and all_processes:
+                return None
+            if status:
+                raise TransactionError("Process discovery failed")
+            lines = body.splitlines()
+            if not lines:
+                return []
+            header = lines[0].split()
+            if "PID" not in header or header[-1] not in ("NAME", "CMD", "COMMAND", "ARGS"):
+                raise TransactionError("Process discovery returned an invalid listing")
+            pid_column = header.index("PID")
+            rows = [line.split() for line in lines[1:] if line.strip()]
+            if any(len(row) <= pid_column + 1 or not row[pid_column].isdigit() for row in rows):
+                raise TransactionError("Process discovery returned an invalid listing")
+            return [(row[pid_column], row[-1]) for row in rows]
+
+        rows = probe(True)
+        return probe(False) if not rows else rows
+
     def pull(self, alias, device_path):
         if not isinstance(device_path, str) or not device_path.startswith("/") or "\0" in device_path:
             raise TransactionError("An absolute device file path is required")
@@ -130,12 +169,7 @@ class Transactions:
                 model = text(self.manager._device_adb(alias, ("shell", "getprop", "ro.product.model")))
                 if model != expected_model:
                     raise TransactionError("Unexpected device model")
-            processes = text(self.manager._device_adb(alias, ("shell", "ps")))
-            pids = [
-                values[1] for line in processes.splitlines()
-                if len(values := line.split()) > 1 and values[-1] == package
-                and values[1].isdigit()
-            ]
+            pids = [pid for pid, name in self._processes(alias) if name == package]
             if len(pids) != 1:
                 raise TransactionError("Application process is not unique")
             socket = "webview_devtools_remote_" + pids[0]

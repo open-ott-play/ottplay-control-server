@@ -121,11 +121,28 @@ class LegacyRedirectTests(unittest.TestCase):
             self.command(["swipe", "10", "20", "30", "40", "--duration", "700"])[-8:],
             ["swipe", "renamed-tablet", "10", "20", "30", "40", "--duration", "700"],
         )
-        path = "/tmp/capture;$(must-not-run).png"
+        path = "capture-2026_10.png"
         self.assertEqual(
             self.command(["screenshot", path])[-3:],
             ["screenshot", "renamed-tablet", path],
         )
+
+    def test_screenshot_paths_rejected_before_reading_identity_or_executing(self):
+        for name in (
+            "/etc/cron.d/capture.png", "../capture.png", "sub/capture.png",
+            r"sub\capture.png", ".capture.png", "capture.PNG", "capture.png\n",
+            "capture;$(id).png", "a" * 121 + ".png", "",
+        ):
+            with self.subTest(name=name):
+                with patch.object(
+                    redirect, "read_config", side_effect=AssertionError("file read")
+                ) as reader:
+                    with self.assertRaises(redirect.RedirectError):
+                        redirect.build_command(
+                            ["--config", redirect.OLD_CONFIG, "screenshot", name],
+                            reader=reader,
+                        )
+                    reader.assert_not_called()
 
     def test_main_replaces_process_without_capturing_output(self):
         command = self.command(["status"])

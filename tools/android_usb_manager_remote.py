@@ -29,7 +29,7 @@ def build_command(argv=None):
     swipe.add_argument("--duration", type=int, default=500)
     screenshot = commands.add_parser("screenshot")
     screenshot.add_argument("alias")
-    screenshot.add_argument("path", help="New absolute PNG path on the USB host")
+    screenshot.add_argument("name", help="New bare PNG filename under the manager's captures directory")
     adb = commands.add_parser("adb")
     adb.add_argument("alias")
     adb.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -67,11 +67,9 @@ def build_command(argv=None):
             parser.error("swipe needs non-negative coordinates and duration 50..3000 ms")
         remote.extend([*map(str, args.coordinates), "--duration", str(args.duration)])
     elif args.command == "screenshot":
-        if not PurePosixPath(args.path).is_absolute() or any(
-            ord(character) < 32 for character in args.path
-        ):
-            parser.error("screenshot needs a new absolute path on the USB host")
-        remote.append(args.path)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.png", args.name):
+            parser.error("screenshot requires a bare PNG filename using letters, digits, _ or -")
+        remote.append(args.name)
     return [
         "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
         "--", args.host, shlex.join(remote),

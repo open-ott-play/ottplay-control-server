@@ -31,13 +31,23 @@ class TransactionDocker(manager_tests.FakeDocker):
         self.device_files = {"/sdcard/input.bin": b"\x00\xffdevice-file"}
         self.events = []
         self.next_port = 41000
+        self.ps_all = (0, "USER PID PPID VSZ RSS WCHAN ADDR S NAME\n"
+                          "shell 222 1 100 10 0 0 S play.ott.foss")
+        self.ps_legacy = (0, "USER PID PPID NAME\nshell 222 1 play.ott.foss")
+        self.ps_calls = []
+        self.ps_failure = None
 
     def __call__(self, argv):
         if argv[1] == "exec" and argv[4:6] == ["-s", "SERIAL-A"]:
             request = argv[6:]
-            if request == ["shell", "ps"]:
+            if len(request) == 2 and request[0] == "shell" and request[1].startswith(("ps -A ", "ps 2>")):
                 self.commands.append(argv)
-                return b"USER PID PPID NAME\nshell 222 1 play.ott.foss"
+                if self.ps_failure:
+                    raise self.ps_failure
+                all_processes = request[1].startswith("ps -A ")
+                self.ps_calls.append(all_processes)
+                status, output = self.ps_all if all_processes else self.ps_legacy
+                return (output + "\n__OTT_PS_STATUS__=" + str(status) + "\n").encode()
             if request == ["shell", "cat", "/proc/net/unix"]:
                 self.commands.append(argv)
                 return b"0000: 0000 0000 0000 0000 @webview_devtools_remote_222"
@@ -210,6 +220,74 @@ class TransactionTests(unittest.TestCase):
         )
         self.assertEqual(self.docker.forwards, {})
         self.assertEqual(self.manager._lock_depth, 0)
+        self.assertEqual(self.docker.ps_calls, [True])
+
+    def test_old_ps_falls_back_only_for_unsupported_or_empty_all_processes(self):
+        for status, output in (
+            (1, "ps: invalid option -- 'A'\nusage: ps"),
+            (1, 'ps: Unknown option "A"'),
+            (1, "ps: bad pid '-A'"),
+            (0, ""),
+            (0, "USER PID PPID VSIZE RSS WCHAN PC NAME"),
+        ):
+            with self.subTest(output=output):
+                self.docker.ps_all = status, output
+                self.docker.ps_calls.clear()
+                self.assertEqual(
+                    self.transaction.cdp("alpha", "play.ott.foss", CDP_SOURCE, {}),
+                    b'{"value":42}',
+                )
+                self.assertEqual(self.docker.ps_calls, [True, False])
+                self.assertEqual(self.docker.forwards, {})
+
+    def test_genuine_ps_failures_do_not_fall_back_or_forward(self):
+        for status, output in (
+            (1, "ps: Permission denied"),
+            (1, "ps: invalid argument for a process"),
+            (1, "USER PID PPID NAME\nshell 222 1 play.ott.foss"),
+            (0, "ps: cannot read /proc"),
+        ):
+            with self.subTest(output=output):
+                self.docker.ps_all = status, output
+                self.docker.ps_calls.clear()
+                with self.assertRaises(transaction.TransactionError):
+                    self.transaction.cdp("alpha", "play.ott.foss", CDP_SOURCE, {})
+                self.assertEqual(self.docker.ps_calls, [True])
+                self.assertEqual(self.docker.forwards, {})
+                self.assertEqual(self.aux_commands, [])
+
+    def test_ps_transport_failure_is_not_hidden_by_a_fallback(self):
+        self.docker.ps_failure = manager_tests.mod.RecoveryError("transport unavailable")
+        with self.assertRaisesRegex(manager_tests.mod.RecoveryError, "transport unavailable"):
+            self.transaction.cdp("alpha", "play.ott.foss", CDP_SOURCE, {})
+        self.assertEqual(self.docker.ps_calls, [])
+        self.assertEqual(self.aux_commands, [])
+
+    def test_nonempty_modern_listing_without_application_does_not_fall_back(self):
+        self.docker.ps_all = 0, "USER PID PPID NAME\nshell 111 1 adbd"
+        with self.assertRaisesRegex(transaction.TransactionError, "not unique"):
+            self.transaction.cdp("alpha", "play.ott.foss", CDP_SOURCE, {})
+        self.assertEqual(self.docker.ps_calls, [True])
+        self.assertEqual(self.aux_commands, [])
+
+    def test_failed_legacy_fallback_is_not_accepted(self):
+        self.docker.ps_all = 1, "ps: invalid option -- 'A'"
+        self.docker.ps_legacy = 1, "ps: Permission denied"
+        with self.assertRaisesRegex(transaction.TransactionError, "Process discovery failed"):
+            self.transaction.cdp("alpha", "play.ott.foss", CDP_SOURCE, {})
+        self.assertEqual(self.docker.ps_calls, [True, False])
+        self.assertEqual(self.aux_commands, [])
+
+    def test_ambiguous_application_process_refused_for_modern_and_legacy_ps(self):
+        listing = "USER PID PPID NAME\nshell 222 1 play.ott.foss\nshell 333 1 play.ott.foss"
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                self.docker.ps_all = (1, "ps: bad option '-A'") if legacy else (0, listing)
+                self.docker.ps_legacy = 0, listing
+                with self.assertRaisesRegex(transaction.TransactionError, "not unique"):
+                    self.transaction.cdp("alpha", "play.ott.foss", CDP_SOURCE, {})
+                self.assertEqual(self.docker.forwards, {})
+                self.assertEqual(self.aux_commands, [])
 
     def test_cdp_failure_still_removes_only_its_forward(self):
         self.aux_failure = "cdp"

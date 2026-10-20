@@ -58,7 +58,7 @@ def build_command(
     swipe = commands.add_parser("swipe")
     swipe.add_argument("coordinates", type=int, nargs=4)
     swipe.add_argument("--duration", type=int, default=500)
-    commands.add_parser("screenshot").add_argument("path")
+    commands.add_parser("screenshot").add_argument("name")
     args = parser.parse_args(argv)
     if args.command == "run":
         raise RedirectError(
@@ -66,6 +66,10 @@ def build_command(
         )
     if args.config != str(old_config):
         raise RedirectError("Only the known legacy configuration is accepted")
+    if args.command == "screenshot" and not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.png", args.name
+    ):
+        raise RedirectError("Screenshot requires a bare PNG filename using letters, digits, _ or -")
     previous, current = reader(old_config), reader(new_config)
     if (
         type(previous.get("version")) is not int or previous["version"] != 1
@@ -100,7 +104,7 @@ def build_command(
     if args.command == "swipe":
         command.extend([*map(str, args.coordinates), "--duration", str(args.duration)])
     elif args.command == "screenshot":
-        command.append(args.path)
+        command.append(args.name)
     return command
 
 

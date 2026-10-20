@@ -555,6 +555,42 @@ class ManagerTests(unittest.TestCase):
                             self.manager.recover("alpha")
                     self.assertEqual(self.docker.device_mutations(), [])
 
+    def test_device_checkpoint_syncs_the_alias_directory_after_replace(self):
+        device = self.manager.target("alpha")
+        state = {"observed_boot": BOOT_A, "completed_boot": BOOT_A, "attempts": 0}
+        events = []
+        real_fsync, real_replace = os.fsync, os.replace
+
+        def sync(fd):
+            events.append("directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
+            return real_fsync(fd)
+
+        def replace(*args, **kwargs):
+            events.append("replace")
+            return real_replace(*args, **kwargs)
+
+        with mock.patch.object(mod.os, "fsync", side_effect=sync):
+            with mock.patch.object(mod.os, "replace", side_effect=replace):
+                device.save_state(state)
+        self.assertEqual(events, ["file", "replace", "directory"])
+        self.assertEqual(device.read_state(), state)
+        self.assertEqual(stat.S_IMODE((device.root / "state.json").stat().st_mode), 0o600)
+        self.assertFalse((self.manager.target("beta").root / "state.json").exists())
+        self.assertEqual(self.docker.commands, [])
+
+    def test_checkpoint_write_failure_prevents_recovery_and_cleans_temporary_file(self):
+        self.attach()
+        self.save_checkpoint("alpha")
+        self.docker.devices["SERIAL-A"]["boot"] = BOOT_B
+        device = self.manager.target("alpha")
+        previous = device.read_state()
+        with mock.patch.object(mod.os, "replace", side_effect=OSError("disk full")):
+            result = self.manager.tick()
+        self.assertEqual(result["alpha"]["result"], "unavailable")
+        self.assertEqual(device.read_state(), previous)
+        self.assertEqual(self.docker.device_mutations(), [])
+        self.assertEqual([path.name for path in device.root.iterdir()], ["state.json"])
+
     def test_state_symlink_is_not_followed(self):
         self.attach()
         directory = self.manager.target("alpha").root
@@ -707,19 +743,66 @@ class ManagerTests(unittest.TestCase):
 
     def test_screenshot_is_private_and_never_overwrites_an_existing_path(self):
         self.attach()
-        path = self.root / "screen.png"
-        result = self.manager.screenshot("alpha", path)
-        self.assertEqual(result["result"], "captured")
+        path = self.manager.root / "captures" / "screen.png"
+        result = self.manager.screenshot("alpha", "screen.png")
+        self.assertEqual(result, {"result": "captured", "path": str(path)})
         self.assertEqual(path.read_bytes(), self.docker.capture)
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
         path.write_bytes(b"preserve-existing-file")
-        with self.assertRaises(FileExistsError):
-            self.manager.screenshot("alpha", path)
+        self.docker.commands.clear()
+        with self.assertRaises(mod.RecoveryError):
+            self.manager.screenshot("alpha", "screen.png")
         self.assertEqual(path.read_bytes(), b"preserve-existing-file")
-        self.assertEqual(self.docker.device_mutations(), [])
+        self.assertEqual(self.docker.commands, [])
+
+    def test_screenshot_rejects_paths_before_any_device_or_container_operation(self):
+        self.attach()
+        for name in (
+            str(self.root / "outside.png"), "../outside.png", "subdir/screen.png",
+            r"subdir\screen.png", ".", "..", ".hidden.png", "screen.PNG",
+            "screen.png\n", "screen;touch.png", "a" * 121 + ".png", "",
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(mod.RecoveryError):
+                    self.manager.screenshot("alpha", name)
+                self.assertEqual(self.docker.commands, [])
+        self.assertFalse((self.root / "outside.png").exists())
+        self.assertFalse((self.manager.root / "captures").exists())
+
+    def test_screenshot_refuses_symlink_directory_and_destination_before_adb(self):
+        self.attach()
+        outside = self.root / "outside"
+        outside.mkdir()
+        captures = self.manager.root / "captures"
+        captures.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(mod.RecoveryError):
+            self.manager.screenshot("alpha", "screen.png")
+        self.assertEqual(self.docker.commands, [])
+        self.assertEqual(list(outside.iterdir()), [])
+        captures.unlink()
+        captures.mkdir()
+        victim = outside / "victim.png"
+        victim.write_bytes(b"keep this")
+        (captures / "screen.png").symlink_to(victim)
+        with self.assertRaises(mod.RecoveryError):
+            self.manager.screenshot("alpha", "screen.png")
+        self.assertEqual(self.docker.commands, [])
+        self.assertEqual(victim.read_bytes(), b"keep this")
+
+    def test_screenshot_refuses_state_root_replaced_by_symlink(self):
+        self.attach()
+        outside = self.root / "outside"
+        outside.mkdir()
+        self.manager.root.rename(self.root / "original-state")
+        self.manager.root.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(mod.RecoveryError):
+            self.manager.screenshot("alpha", "screen.png")
+        self.assertEqual(self.docker.commands, [])
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_screenshot_rejects_invalid_or_oversized_capture_without_creating_file(self):
-        path = self.root / "screen.png"
+        path = self.manager.root / "captures" / "screen.png"
         for capture in (
             b"not-a-png",
             b"\x89PNG\r\n\x1a\n" + b"\0" * (32 * 1024 * 1024),
@@ -727,8 +810,20 @@ class ManagerTests(unittest.TestCase):
             with self.subTest(size=len(capture)):
                 with mock.patch.object(self.manager, "adb", return_value=capture):
                     with self.assertRaisesRegex(mod.RecoveryError, "Invalid screenshot"):
-                        self.manager.screenshot("alpha", path)
+                        self.manager.screenshot("alpha", "screen.png")
                 self.assertFalse(path.exists())
+
+    def test_screenshot_transport_failure_removes_reservation_and_allows_retry(self):
+        path = self.manager.root / "captures" / "screen.png"
+        with mock.patch.object(
+            self.manager, "adb", side_effect=mod.RecoveryError("device disconnected")
+        ):
+            with self.assertRaisesRegex(mod.RecoveryError, "device disconnected"):
+                self.manager.screenshot("alpha", "screen.png")
+        self.assertFalse(path.exists())
+        self.attach()
+        self.manager.screenshot("alpha", "screen.png")
+        self.assertEqual(path.read_bytes(), self.docker.capture)
 
     def test_usb_reenumeration_invalidates_bound_transport(self):
         path = self.attach()
@@ -811,7 +906,9 @@ class RemoteWrapperTests(unittest.TestCase):
             ["--host", "nas alias", "status"],
             ["--host", "nas", "status", "../other"],
             ["--host", "nas", "--remote-script", "relative.py", "status"],
-            ["--host", "nas", "screenshot", "alpha", "relative.png"],
+            ["--host", "nas", "screenshot", "alpha", "/tmp/screen.png"],
+            ["--host", "nas", "screenshot", "alpha", "../screen.png"],
+            ["--host", "nas", "screenshot", "alpha", r"subdir\screen.png"],
             ["--host", "nas", "swipe", "alpha", "1", "2", "3", "4", "--duration", "5"],
         ]
         for args in invalid:
@@ -819,6 +916,15 @@ class RemoteWrapperTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as caught:
                     remote.build_command(args)
                 self.assertEqual(caught.exception.code, 2)
+
+    def test_remote_screenshot_passes_only_a_bare_png_name(self):
+        command = remote.build_command([
+            "--host", "nas", "screenshot", "alpha", "screen-2026_10.png",
+        ])
+        self.assertEqual(
+            shlex.split(command[-1])[-3:],
+            ["screenshot", "alpha", "screen-2026_10.png"],
+        )
 
     def test_remote_main_preserves_binary_stdout_stderr_and_ssh_exit_code(self):
         with tempfile.TemporaryDirectory() as temporary:
