@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "docker_path": "/var/packages/ContainerManager/target/usr/bin/docker",
+  "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "container_name": "ott-android-manager",
+  "adb_key_dir": "/usr/local/etc/ott-android-manager/adb-keys",
+  "state_dir": "/var/lib/ott-android-manager",
+  "poll_seconds": 5,
+  "command_timeout_seconds": 60,
+  "max_attempts": 3,
+  "devices": {
+    "lobby": {
+      "enabled": false,
+      "target": {
+        "serial": "EXAMPLE-USB-SERIAL",
+        "product": "Example Tablet",
+        "model": "Example Model",
+        "sdk": 22,
+        "android_id": "0000000000000000"
+      },
+      "package": "play.ott.foss",
+      "recover_on_boot": true
+    },
+    "workshop": {
+      "enabled": false,
+      "target": {
+        "model": "Awaiting attended identification"
+      },
+      "package": "play.ott.foss",
+      "recover_on_boot": false
+    }
+  }
+}

@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="830" viewBox="0 0 1200 830" role="img" aria-labelledby="title desc">
+  <title id="title">One Android USB manager, explicit device ownership</title>
+  <desc id="desc">A host manager serializes SSH commands and boot recovery through one ADB container. Existing keys are read only. Only verified enabled USB devices are mapped. Unprovisioned devices remain disabled. Four former transport containers become one; application services remain separate. The container has a combined memory and swap limit of 256 MiB, CPU shares of 128, and no Docker healthcheck.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101d36"/><stop offset="1" stop-color="#192d48"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#76d9e6"/></marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#edf5ff}
+      .heading{font-size:30px;font-weight:700}.label{font-size:22px;font-weight:700}
+      .body{font-size:18px}.small{font-size:16px;fill:#b7cce3}
+      .line{stroke:#76d9e6;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="830" rx="24" fill="url(#bg)"/>
+  <text x="48" y="63" class="heading">Android USB management</text>
+  <text x="48" y="96" class="body" fill="#b7cce3">One owner · verified devices · durable recovery state</text>
+  <rect x="963" y="35" width="189" height="79" rx="16" fill="#214743"/>
+  <text x="1058" y="70" text-anchor="middle" font-size="32" font-weight="700">4 → 1</text>
+  <text x="1058" y="96" text-anchor="middle" class="small">ADB containers</text>
+
+  <rect x="48" y="155" width="274" height="114" rx="16" fill="#25436a" stroke="#4879aa"/>
+  <text x="72" y="193" class="label">Operator / helper</text>
+  <text x="72" y="226" class="body">SSH · alias · command</text>
+  <text x="72" y="252" class="small">CDP and file transactions</text>
+  <rect x="48" y="317" width="274" height="114" rx="16" fill="#25436a" stroke="#4879aa"/>
+  <text x="72" y="355" class="label">Private registry</text>
+  <text x="72" y="388" class="body">USB + Android identity</text>
+  <text x="72" y="414" class="small">Enabled only after verification</text>
+  <path d="M322 212H384" class="line"/>
+  <path d="M322 374H351V302H384" class="line"/>
+
+  <rect x="390" y="155" width="374" height="276" rx="18" fill="#164653" stroke="#76d9e6" stroke-width="2"/>
+  <text x="416" y="195" class="label">Host manager</text>
+  <text x="416" y="232" class="body">One lock across each transaction</text>
+  <text x="416" y="264" class="body">Current USB node discovery</text>
+  <text x="416" y="296" class="body">Unique serial + identity checks</text>
+  <path d="M414 319H739" stroke="#397281"/>
+  <text x="416" y="350" class="body">New boot → bounded recovery</text>
+  <text x="416" y="382" class="body">Same boot → leave sleep alone</text>
+  <text x="416" y="412" class="small">A protected lock screen stops recovery</text>
+
+  <rect x="830" y="155" width="322" height="114" rx="16" fill="#35315c" stroke="#9c8ed8"/>
+  <text x="854" y="194" class="label">Recovery checkpoints</text>
+  <text x="854" y="227" class="body">Private, durable, per alias</text>
+  <text x="854" y="253" class="small">Preserved during migration</text>
+  <path d="M764 212H824" class="line"/>
+  <rect x="830" y="317" width="322" height="114" rx="16" fill="#35315c" stroke="#9c8ed8"/>
+  <text x="854" y="355" class="label">Existing ADB keys</text>
+  <text x="854" y="388" class="body">Read-only bind mount</text>
+  <text x="854" y="414" class="small">Private keys stay outside Git</text>
+
+  <path d="M577 431V478" class="line"/>
+  <path d="M991 431V458H700V478" class="line"/>
+  <rect x="390" y="485" width="374" height="180" rx="18" fill="#18564d" stroke="#60d8ad" stroke-width="2"/>
+  <text x="416" y="526" class="label">One foreground ADB server</text>
+  <text x="416" y="558" class="body">No network · no capabilities</text>
+  <text x="416" y="590" class="body">Read-only root · exact USB nodes</text>
+  <path d="M414 607H739" stroke="#397b6d"/>
+  <text x="416" y="631" class="small">RAM + swap ≤ 256 MiB total</text>
+  <text x="416" y="653" class="small">CPU shares 128 · healthcheck off</text>
+
+  <rect x="48" y="485" width="274" height="134" rx="16" fill="#554527" stroke="#dfb865"/>
+  <text x="72" y="525" class="label">Unverified / absent</text>
+  <text x="72" y="558" class="body">Disabled registry entries</text>
+  <text x="72" y="588" class="small">No mapping. No device action.</text>
+  <path d="M764 552H824" class="line"/>
+  <rect x="830" y="485" width="322" height="134" rx="16" fill="#18564d" stroke="#60d8ad"/>
+  <text x="854" y="525" class="label">Verified USB tablet</text>
+  <text x="854" y="558" class="body">Read, install, CDP, recover</text>
+  <text x="854" y="590" class="small">Commands stay with the chosen alias</text>
+
+  <path d="M48 710H1152" stroke="#3b506b"/>
+  <text x="48" y="750" class="body">Application boundary</text>
+  <text x="48" y="782" class="small">Home-plan, Alexa, cast and other NAS services retain their own lifecycles.</text>
+  <text x="1152" y="782" text-anchor="end" class="small">Boot recovery ≠ video watchdog</text>
+</svg>
