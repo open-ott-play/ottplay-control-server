@@ -54,6 +54,8 @@ def config_read(path):
                 raise ManagerError('Invalid USB VID/PID')
         if type(target.get('sdk')) is not int or not 16 <= target['sdk'] <= 100:
             raise ManagerError('Invalid Android SDK')
+        if type(target.get('max_attempts', 3)) is not int or not 1 <= target.get('max_attempts', 3) <= 10:
+            raise ManagerError('Invalid recovery attempt bound')
         if type(target.get('auto_recover', False)) is not bool:
             raise ManagerError('Invalid recovery policy')
         if type(target.get('forward_port')) is not int or not 1024 <= target['forward_port'] <= 65535:
@@ -247,6 +249,11 @@ def serve(config, root, key_root='/keys', home_root='/tmp/adb-home'):
 
 
 def desired_spec(config, config_path, nodes):
+    if not re.fullmatch(r'(?:[^\s]+@)?sha256:[a-f0-9]{64}', config.get('image', '')):
+        raise ManagerError('An immutable image digest is required')
+    for key in ('key_dir', 'state_dir'):
+        if not Path(config[key]).is_absolute() or ',' in config[key]:
+            raise ManagerError('Use absolute mount paths without commas')
     return {'image': config['image'], 'keys': str(Path(config['key_dir']).resolve()),
             'state': str(Path(config['state_dir']).resolve()),
             'config': str(Path(config_path).resolve()),
@@ -271,7 +278,7 @@ def runtime_matches(details, spec):
             and not host.get('VolumesFrom') and not host.get('PortBindings')
             and host.get('PidMode', '') in ('', 'private') and host.get('IpcMode', '') in ('', 'private')
             and host.get('CpuShares') == 128 and host.get('Memory') == 268435456
-            and host.get('MemorySwap') == 268435456 and host.get('PidsLimit') == 128
+            and host.get('MemorySwap') == 268435456 and host.get('PidsLimit') in (None, 0)
             and mounts == desired_mounts
             and len([m for m in details.get('Mounts', []) if m.get('Type') == 'bind']) == 3
             and not any(m.get('Type') != 'bind' and (m.get('Type'), m.get('Destination')) != ('tmpfs', '/tmp') for m in details.get('Mounts', []))
@@ -304,7 +311,7 @@ def reconcile(config, config_path):
                 '--label', 'org.ottplay.android-manager.spec=' + signature,
                 '--restart', 'no', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
                 '--security-opt', 'no-new-privileges', '--memory', '256m', '--memory-swap', '256m',
-                '--cpu-shares', '128', '--pids-limit', '128', '--user', '0:0',
+                '--cpu-shares', '128', '--user', '0:0',
                 '--tmpfs', '/tmp:rw,nosuid,nodev,size=134217728,mode=1777',
                 '--mount', f'type=bind,src={spec["keys"]},dst=/keys,readonly',
                 '--mount', f'type=bind,src={spec["state"]},dst=/state',

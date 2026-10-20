@@ -57,9 +57,9 @@ The runtime has no network, published port, Docker socket, added capability,
 privileged mode or writable root filesystem. It runs as root with all
 capabilities dropped because Synology's USB nodes are root-only. Access is
 restricted to currently matched USB nodes. Memory is 256 MiB, CPU shares 128;
-`/tmp` is a 128 MiB tmpfs. A requested PID cap is advisory on older DSM
-kernels that do not implement the PIDs cgroup; check the Docker warning and
-do not treat it as enforced on those hosts. The host service holds the same filesystem lock as
+`/tmp` is a 128 MiB tmpfs. The target DSM kernel has no PIDs controller, so no PID cap is requested or
+claimed. Process isolation comes from the container; this is not a defense
+against malicious authorized ADB operators. The host service holds the same filesystem lock as
 maintenance and recovery, so hotplug recreation waits for a current command.
 ADB forwards are ephemeral and disappear on a USB-set change. Clients must
 create a fresh forward for each CDP session and remove it afterwards.

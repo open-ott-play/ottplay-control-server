@@ -114,7 +114,7 @@ class IdentityTests(unittest.TestCase):
 
     @unittest.skipIf(sys.platform == 'win32', 'flock runtime is Linux-only')
     def test_unrelated_container_is_never_removed(self):
-        self.config.update(docker_path='docker', image='approved@sha256:abc',
+        self.config.update(docker_path='docker', image='approved@sha256:'+'a'*64,
                            key_dir=str(self.root/'keys'), state_dir=str(self.root/'state'))
         path = self.root/'config.json'; path.write_text(json.dumps(self.config))
         calls=[]
@@ -125,6 +125,15 @@ class IdentityTests(unittest.TestCase):
         with patch.object(m, 'usb_inventory', return_value={}), patch.object(m, 'run', side_effect=run):
             with self.assertRaises(m.ManagerError): m.reconcile(self.config, path)
         self.assertFalse(any('rm' in c or 'stop' in c for c in calls))
+
+    def test_dsm_without_pids_controller_matches_without_recreate_loop(self):
+        spec={'image':'image@sha256:abc','keys':'/keys','state':'/state','config':'/config','nodes':{'tablet':'/dev/bus/usb/001/099'}}
+        details={'Config':{'Image':spec['image'],'User':'0:0','Entrypoint':['python3','/app/manager.py'],'Cmd':['--config','/config.json','--state-root','/state','serve']},
+                 'HostConfig':{'NetworkMode':'none','ReadonlyRootfs':True,'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges'],'CpuShares':128,'Memory':268435456,'MemorySwap':268435456,'PidsLimit':None,'RestartPolicy':{'Name':'no'},'Tmpfs':{'/tmp':'rw,nosuid,nodev,size=134217728,mode=1777'},'Devices':[{'PathOnHost':'/dev/bus/usb/001/099','PathInContainer':'/dev/bus/usb/001/099','CgroupPermissions':'rw'}]},
+                 'Mounts':[{'Type':'bind','Source':spec[key],'Destination':dest,'RW':rw} for key,dest,rw in [('keys','/keys',False),('state','/state',True),('config','/config.json',False)]]}
+        self.assertTrue(m.runtime_matches(details,spec))
+        details['HostConfig']['NetworkMode']='host'
+        self.assertFalse(m.runtime_matches(details,spec))
 
 
 class LifecycleTests(unittest.TestCase):
@@ -174,7 +183,7 @@ class LifecycleTests(unittest.TestCase):
 
     @unittest.skipIf(sys.platform == 'win32', 'flock runtime is Linux-only')
     def test_hotplug_recreates_only_owned_name_with_exact_new_nodes(self):
-        self.config.update(docker_path='docker', image='image@sha256:abc', key_dir=str(self.root/'keys'), state_dir=str(self.root/'state'))
+        self.config.update(docker_path='docker', image='image@sha256:'+'a'*64, key_dir=str(self.root/'keys'), state_dir=str(self.root/'state'))
         path = self.root/'config.json'; path.write_text(json.dumps(self.config))
         calls=[]
         def run(args, **kwargs):
