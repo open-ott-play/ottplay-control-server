@@ -11,6 +11,28 @@ import tempfile
 from version_plan import projected_value, validate_plan
 
 ROOT = Path(__file__).resolve().parents[1]
+ANDROID_USB_TOOLS = (
+    "android_usb_manager.py",
+    "android_usb_supervisor.py",
+    "android_usb_transaction.py",
+    "android_usb_manager_remote.py",
+    "android_usb_legacy_redirect.py",
+    "android_usb_remote.py",
+)
+
+
+def stage_android_tools(root: Path, destination: Path) -> None:
+    """Ship the host runtime and wrappers without local device state or keys."""
+    tools = root / "tools"
+    if tools.is_symlink() or not tools.is_dir():
+        raise ValueError("Missing or non-regular Android USB tools directory")
+    sources = [tools / name for name in ANDROID_USB_TOOLS]
+    for source in sources:
+        if source.is_symlink() or not source.is_file():
+            raise ValueError(f"Missing or non-regular Android USB tool: {source.name}")
+    destination.mkdir()
+    for source in sources:
+        shutil.copy2(source, destination / source.name)
 
 
 def package(root: Path, plan: dict, output: Path) -> None:
@@ -21,6 +43,7 @@ def package(root: Path, plan: dict, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="control-deployment-") as temporary:
         stage = Path(temporary)
+        stage_android_tools(root, stage / "tools")
         chart = stage / "ottplay-control-server"
         shutil.copytree(root / "charts/ottplay-control-server", chart)
         values = chart / "values.yaml"
@@ -41,7 +64,7 @@ def package(root: Path, plan: dict, output: Path) -> None:
             else:
                 shutil.copy2(source, stage / name)
         with tarfile.open(output / "ottplay-control-server-deployment.tar.gz", "w:gz") as archive:
-            for name in ["deploy", *names]:
+            for name in ["deploy", "tools", *names]:
                 archive.add(stage / name, arcname=name)
 
 

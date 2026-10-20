@@ -12,6 +12,9 @@ import subprocess
 import time
 
 
+UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
+
+
 class RecoveryError(RuntimeError):
     pass
 
@@ -203,7 +206,9 @@ class Supervisor:
         current = self.docker('ps', '-a', '--filter', 'name=^/' + name + '$', '--format', '{{.Names}}')
         if current:
             details = json.loads(self.docker('inspect', name))[0]
-            if details.get('Config', {}).get('Labels', {}).get('org.ottplay.usb-supervisor') != name:
+            configuration = details.get('Config')
+            labels = configuration.get('Labels') if isinstance(configuration, dict) else None
+            if not isinstance(labels, dict) or labels.get('org.ottplay.usb-supervisor') != name:
                 raise RecoveryError('Container name occupied by unrelated owner')
             host = details.get('HostConfig', {})
             devices = host.get('Devices', [])
@@ -256,7 +261,7 @@ class Supervisor:
 
     def boot(self):
         value = self.shell('cat', '/proc/sys/kernel/random/boot_id')
-        if not re.fullmatch('[0-9a-f-]{36}', value):
+        if not UUID.fullmatch(value):
             raise RecoveryError('Boot identity unavailable')
         return value
 
@@ -272,6 +277,19 @@ class Supervisor:
             raise RecoveryError('Invalid or unreadable recovery state') from None
         if not isinstance(state, dict):
             raise RecoveryError('Recovery state must be an object')
+        allowed = {'observed_boot', 'completed_boot', 'attempts', 'result'}
+        if set(state) - allowed or 'observed_boot' not in state:
+            raise RecoveryError('Unknown or incomplete recovery state fields')
+        for key in ('observed_boot', 'completed_boot'):
+            if key in state and (not isinstance(state[key], str) or not UUID.fullmatch(state[key])):
+                raise RecoveryError('Invalid recovery boot identity')
+        if 'attempts' in state and (type(state['attempts']) is not int or not 0 <= state['attempts'] <= 10):
+            raise RecoveryError('Invalid recovery attempts')
+        if 'result' in state and (
+            not isinstance(state['result'], str) or not state['result']
+            or any(ord(character) < 32 for character in state['result'])
+        ):
+            raise RecoveryError('Invalid recovery result')
         return state
 
     def save_state(self, state):

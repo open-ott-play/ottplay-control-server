@@ -153,6 +153,27 @@ class WorkbenchTest(unittest.TestCase):
         text = out.getvalue()
         return code, json.loads(text), text
 
+    def test_lane_help_matches_each_commands_accepted_choices_and_default(self):
+        for words, choices, default in (
+            (["operation", "a" * 32], ("web", "native"), "web"),
+            (["doctor"], ("auto", "web", "native"), "auto"),
+            (["inspect"], ("auto", "web", "native"), "auto"),
+            (["bundle", "--out", "unused"], ("auto", "web", "native"), "auto"),
+            (["test", "list"], ("auto", "web", "native"), "auto"),
+        ):
+            with self.subTest(command=words[0]):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as stopped:
+                    wb.arguments([words[0], "--help"], False)
+                self.assertEqual(stopped.exception.code, 0)
+                self.assertIn("--lane {" + ",".join(choices) + "}", out.getvalue())
+                if words[0] == "operation":
+                    self.assertNotIn("--lane {auto", out.getvalue())
+                self.assertEqual(wb.arguments(words, False).lane, default)
+                for choice in choices:
+                    self.assertEqual(wb.arguments([*words, "--lane", choice], False).lane, choice)
+        self.assertEqual(self.client.calls, [])
+
     def test_doctor_combines_separate_read_only_lanes(self):
         code, result, text = self.execute(["doctor", "--json"])
         self.assertEqual(code, 0)
