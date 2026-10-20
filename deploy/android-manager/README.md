@@ -15,8 +15,8 @@ boot, and only a verified foreground application marks that boot recovered.
 
 ## Build and provision
 
-Build this directory as the Docker context. The base is an immutable Debian
-Bookworm **amd64** manifest; Debian package repositories provide signed package
+Build this directory as the Docker context. The base is an immutable CPython 3.12.14 / Debian
+Trixie **amd64** manifest; Debian package repositories provide signed package
 metadata and security updates. Record the resulting image digest and package
 inventory, scan it, and deploy that exact digest. A fresh build can include
 newer Debian security packages; it must be qualified as a new image.
@@ -57,7 +57,9 @@ The runtime has no network, published port, Docker socket, added capability,
 privileged mode or writable root filesystem. It runs as root with all
 capabilities dropped because Synology's USB nodes are root-only. Access is
 restricted to currently matched USB nodes. Memory is 256 MiB, CPU shares 128;
-`/tmp` is a 128 MiB tmpfs. The host service holds the same filesystem lock as
+`/tmp` is a 128 MiB tmpfs. A requested PID cap is advisory on older DSM
+kernels that do not implement the PIDs cgroup; check the Docker warning and
+do not treat it as enforced on those hosts. The host service holds the same filesystem lock as
 maintenance and recovery, so hotplug recreation waits for a current command.
 ADB forwards are ephemeral and disappear on a USB-set change. Clients must
 create a fresh forward for each CDP session and remove it afterwards.
@@ -101,3 +103,5 @@ boot wrapper, and start the old host service. It resolves k8a's current USB node
 and reuses its preserved identity. The three old onboarding containers may have
 stale USB paths; do not blindly start them. Their writable layers and keys are
 retained as evidence/recovery material, not as an automatic fallback.
+
+ADB targeting and key handling follow the [official ADB manual](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/docs/user/adb.1.md).
