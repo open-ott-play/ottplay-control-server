@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- Share one hardened USB ADB container across an explicit Android registry,
+  with persistent authorized keys, serialized maintenance and per-device boot
+  recovery state. Protect shared forwarding ports from cross-device rebinding
+  and use verified unique serials so ADB restarts cannot retarget commands.
+- Provide Synology/systemd installation, SSH commands and a legacy-path redirect.
+  Unknown identities and duplicate serials remain blocked; normal screen sleep
+  does not trigger automatic wake or playback recovery.
+
 ### Changed
 
 - Show `standby` and `go` in player controls. `go` wakes the player using the

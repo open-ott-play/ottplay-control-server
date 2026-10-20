@@ -301,6 +301,7 @@ credentials do not grant diagnostic access.
 
 ## Deployment packages
 
+- [Shared Android USB management and boot recovery](docs/android-usb-manager.md)
 - [Docker / Compose, Kubernetes, k3s, systemd, macOS and Windows](docs/deployment.md)
 - [Configuration, delivery semantics and limits](docs/api.md)
 - [Release and validation process](docs/development.md)

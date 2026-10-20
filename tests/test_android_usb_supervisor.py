@@ -1,8 +1,12 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+
+if os.name != 'posix':
+    raise unittest.SkipTest('USB host supervision requires POSIX file locks')
 
 SPEC = importlib.util.spec_from_file_location('usb_supervisor', Path(__file__).parents[1] / 'tools/android_usb_supervisor.py')
 mod = importlib.util.module_from_spec(SPEC)
