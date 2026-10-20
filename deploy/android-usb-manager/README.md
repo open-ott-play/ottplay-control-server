@@ -10,6 +10,17 @@ device registry or recovery daemon. See the
 [operator guide](../../docs/android-usb-manager.md) for provisioning,
 commands, migration, recovery limits and rollback.
 
+Without a Git checkout, download `ottplay-control-server-deployment.tar.gz`
+and `release-manifest.json` from the same
+[release](https://github.com/open-ott-play/ottplay-control-server/releases).
+Verify the archive digest and extract it into a new directory as described in
+[Get the deployment package](../../docs/android-usb-manager.md#get-the-deployment-package).
+The package includes this recipe and the six host/remote scripts under
+`tools/`; keep its directory structure. Older packages, including
+`v0.1.5-beta.6`, lack those scripts and require the matching source archive
+instead. The package does not include a built USB transport image. The
+control-server OCI release asset serves a different purpose.
+
 ## Source and artifact provenance
 
 The base is `python:3.12.14-slim-trixie`, pinned to
@@ -47,7 +58,8 @@ needs the qualified image, not package downloads or a build toolchain.
 When reusing an already prepared local builder, first verify that the exact
 base image is available and that the APT and wheel-install layers are cached.
 Loading only the final PR 128 image does not establish either condition.
-From the repository root, a deliberately offline attempt is:
+From the repository root or the extracted deployment directory, a deliberately
+offline attempt is:
 
 ```sh
 docker image inspect python:3.12.14-slim-trixie@sha256:44ff437bba879d4941b710a369a8f19266aea34b29002807f0c487fabc9eec9b

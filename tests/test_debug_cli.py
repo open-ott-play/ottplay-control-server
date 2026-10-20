@@ -61,6 +61,18 @@ class DebugCLITest(unittest.TestCase):
         self.assertEqual(ott.parse_command(["play", "debug"]), ("play", {"query": "debug"}))
         self.assertEqual(ott.capabilities_metadata(self.client.capabilities)["inspect"], capabilities()["inspect"])
 
+    def test_debug_help_advertises_only_the_supported_web_lane(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as stopped:
+            wb.run(ott, self.client, "web", ["debug", "--help"], 20)
+        self.assertEqual(stopped.exception.code, 0)
+        self.assertIn("--lane {web}", out.getvalue())
+        self.assertNotIn("--lane {auto", out.getvalue())
+        self.assertNotIn("--lane {web,native}", out.getvalue())
+        self.assertEqual(self.client.calls, [])
+        self.assertEqual(wb.arguments(["debug"], False).lane, "web")
+        self.assertEqual(wb.arguments(["debug", "--lane", "web"], False).lane, "web")
+
     def test_capability_is_strict_and_absence_never_probes(self):
         del self.client.capabilities["debug"]
         code, result = self.run_debug(["debug"])
@@ -161,7 +173,7 @@ class DebugCLITest(unittest.TestCase):
         self.assertEqual(self.clock.value, 1020)
         self.assertEqual(len(self.client.calls), 2)
         self.client.calls.clear()
-        for words in (["debug", "enable"], ["debug", "--lane", "native"]):
+        for words in (["debug", "enable"], ["debug", "--lane", "native"], ["debug", "--lane", "auto"]):
             code, result = self.run_debug(words)
             self.assertEqual((code, result["reason"]), (1, "invalid_arguments"))
         self.assertEqual(self.client.calls, [])

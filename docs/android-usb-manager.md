@@ -7,6 +7,31 @@ an explicit device registry. A host service manages USB hotplug and, for
 selected tablets, restores OTT after a new Android boot. Ordinary playback and
 the remote OTT protocol continue to run independently.
 
+## Get the deployment package
+
+Download `ottplay-control-server-deployment.tar.gz` and `release-manifest.json`
+from the same [release](https://github.com/open-ott-play/ottplay-control-server/releases).
+Verify the archive's SHA-256 against its manifest entry, then extract it into
+a new directory:
+
+```sh
+mkdir ott-android-release
+tar -xzf ottplay-control-server-deployment.tar.gz -C ott-android-release
+cd ott-android-release
+python3 -B tools/android_usb_manager_remote.py --help
+```
+
+The archive preserves `tools/`, `deploy/` and `docs/`, including all six
+shared and legacy USB scripts listed below. Follow the host layout and
+provisioning steps in this guide; extraction alone does not install a service.
+Keep the manager, supervisor and transaction adapter together at one release
+revision. The transport Dockerfile is a build recipe; the control-server OCI
+release asset is not the USB transport image.
+
+Older deployment archives, including `v0.1.5-beta.6`, omit `tools/`. For those
+versions use the matching source archive, or choose a newer release containing
+the complete deployment package. Do not mix scripts from different versions.
+
 The implementation consists of:
 
 - [`tools/android_usb_manager.py`](../tools/android_usb_manager.py): registry,
@@ -17,6 +42,8 @@ The implementation consists of:
   SSH command wrapper with binary-preserving output.
 - [`tools/android_usb_legacy_redirect.py`](../tools/android_usb_legacy_redirect.py):
   optional redirect for an already installed per-tablet command path.
+- [`tools/android_usb_remote.py`](../tools/android_usb_remote.py):
+  the legacy SSH wrapper, retained for existing per-tablet callers.
 - [`tools/android_usb_transaction.py`](../tools/android_usb_transaction.py):
   atomic file transfer, APK staging and CDP operations for trusted maintenance
   helpers.
@@ -273,7 +300,9 @@ accepts one JSON request on standard input, with `--config` pointing to the
 same private registry, and returns raw operation output on standard output.
 The supported requests are:
 
-- `pull`: `alias` and an absolute `device_path`; returns the file bytes.
+- `pull`: `alias` and an absolute `device_path`; returns one regular file's
+  bytes, up to 128 MiB. Directories and device files are refused. A hard
+  destination file-size limit also stops a source that grows during transfer.
 - `staged_adb`: `alias`, base64 `data` and `arguments`, such as
   `["install", "-r", "@staged"]` or
   `["push", "@staged", "/sdcard/example.json"]`.
@@ -283,7 +312,9 @@ The supported requests are:
 
 Each request verifies the device and retains one manager lock across setup,
 use and cleanup. File operations use unique temporary names; staged files
-are created exclusively with mode `0600`. Auxiliary Docker commands address
+are reserved exclusively with mode `0600` before cleanup is armed. A name
+collision leaves the existing file untouched. The staging writer opens only
+its empty regular reservation without following symlinks. Auxiliary Docker commands address
 the observed container ID. CDP resolves exactly one application process and
 its debugging socket, allocates `tcp:0`, substitutes the allocated port in
 the client source, and removes only that forwarding entry on completion or

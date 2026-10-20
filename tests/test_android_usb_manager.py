@@ -541,6 +541,10 @@ class ManagerTests(unittest.TestCase):
             "{", "[]", "{}", '{"observed_boot":"invalid"}',
             json.dumps({"observed_boot": BOOT_A, "attempts": -1}),
             json.dumps({"observed_boot": BOOT_A, "attempts": True}),
+            json.dumps({"observed_boot": BOOT_A, "attempts": "1"}),
+            json.dumps({"observed_boot": BOOT_A, "attempts": 11}),
+            json.dumps({"observed_boot": BOOT_A, "completed_boot": "a" * 36}),
+            json.dumps({"observed_boot": BOOT_A, "result": "\n"}),
             json.dumps({"observed_boot": BOOT_A, "unknown": "field"}),
         )
         for raw in invalid:
@@ -554,6 +558,19 @@ class ManagerTests(unittest.TestCase):
                         with self.assertRaises(mod.RecoveryError):
                             self.manager.recover("alpha")
                     self.assertEqual(self.docker.device_mutations(), [])
+
+    def test_unlabelled_foreign_container_is_refused_without_device_or_container_actions(self):
+        self.attach()
+        self.manager.reconcile()
+        self.docker.details["Config"]["Labels"] = None
+        for action in (self.manager.reconcile, self.manager.status):
+            with self.subTest(action=action.__name__):
+                self.docker.commands.clear()
+                with self.assertRaisesRegex(mod.RecoveryError, "unrelated owner"):
+                    action()
+                self.assertEqual(self.docker.container_mutations(), [])
+                self.assertEqual(self.docker.device_mutations(), [])
+                self.assertIsNone(self.docker.details["Config"]["Labels"])
 
     def test_device_checkpoint_syncs_the_alias_directory_after_replace(self):
         device = self.manager.target("alpha")
@@ -637,6 +654,104 @@ class ManagerTests(unittest.TestCase):
         command = self.docker.commands[-1]
         self.assertEqual(command[4:], ["-s", "SERIAL-A", "exec-out", "screencap", "-p"])
         self.assertNotIn("-t", command)
+
+    def test_limited_adb_client_keeps_verified_serial_and_enforces_private_file_limit(self):
+        self.attach()
+        commands = []
+        limit = 8192
+        output = self.root / "limited-download"
+
+        def runner(argv):
+            if argv[1:5] == ["exec", self.config["container_name"], "python3", "-c"]:
+                commands.append(argv)
+                return b"limited-client"
+            return self.docker(argv)
+
+        self.manager.runner = runner
+        with self.manager.locked():
+            self.manager._reconcile()
+            self.manager.target("alpha").connect()
+            result = self.manager._device_adb(
+                "alpha", ("pull", "/sdcard/source", str(output)), file_size_limit=limit
+            )
+        self.assertEqual(result, b"limited-client")
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][6:], [
+            str(limit), "-s", "SERIAL-A", "pull", "/sdcard/source", str(output),
+        ])
+
+        # Execute the actual launcher against a local fake adb. This verifies the
+        # kernel file-size limit survives exec and ADB-style creat(0666) stays 0600.
+        executable = self.root / "adb"
+        executable.write_text(
+            "#!" + sys.executable + "\n"
+            "import errno,json,os,resource,sys\n"
+            "limits=resource.getrlimit(resource.RLIMIT_FSIZE)\n"
+            "fd=os.open(sys.argv[-1],os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o666)\n"
+            "try:\n"
+            " with os.fdopen(fd,'wb',buffering=0) as stream:\n"
+            "  while True:stream.write(b'x'*4096)\n"
+            "except OSError as error:\n"
+            " if error.errno!=errno.EFBIG:raise\n"
+            "info=os.stat(sys.argv[-1])\n"
+            "print(json.dumps({'args':sys.argv[1:],'limits':limits,"
+            "'size':info.st_size,'mode':info.st_mode&0o777}))\n"
+        )
+        executable.chmod(0o700)
+        process = subprocess.run(
+            [sys.executable, *commands[0][4:]], capture_output=True, text=True,
+            env={**os.environ, "PATH": str(self.root) + os.pathsep + os.environ.get("PATH", "")},
+            timeout=5, check=True,
+        )
+        observed = json.loads(process.stdout)
+        self.assertEqual(observed["args"], commands[0][7:])
+        self.assertEqual(observed["limits"], [limit, limit])
+        self.assertEqual(observed["size"], limit)
+        self.assertEqual(observed["mode"], 0o600)
+
+    def test_invalid_adb_file_limit_fails_before_host_operations(self):
+        for limit in (0, -1, True, "1024", mod.MEMORY_BYTES // 2 + 1):
+            with self.subTest(limit=limit), self.manager.locked():
+                with self.assertRaisesRegex(mod.RecoveryError, "file size limit"):
+                    self.manager._device_adb(
+                        "alpha", ("pull", "/sdcard/source", "/tmp/output"), file_size_limit=limit
+                    )
+        self.assertEqual(self.docker.commands, [])
+
+    def test_pinned_adb_uses_only_reserved_container_identity_without_name_fallback(self):
+        self.attach()
+        container = "c" * 64
+        with self.manager.locked():
+            self.manager._reconcile()
+            self.manager.target("alpha").connect()
+            for limit in (None, 8192):
+                with self.subTest(limit=limit):
+                    self.docker.commands.clear()
+                    # A replacement may now own the configured name. The old
+                    # reserved container must fail instead of using that name.
+                    with mock.patch.object(
+                        self.manager, "docker", side_effect=mod.RecoveryError("No such container")
+                    ) as docker:
+                        with self.assertRaisesRegex(mod.RecoveryError, "No such container"):
+                            self.manager._device_adb(
+                                "alpha", ("pull", "/sdcard/source", "/tmp/reserved"),
+                                file_size_limit=limit, container_id=container,
+                            )
+                    docker.assert_called_once()
+                    command = docker.call_args.args
+                    self.assertEqual(command[:2], ("exec", container))
+                    selector = command.index("-s")
+                    self.assertEqual(command[selector:selector + 2], ("-s", "SERIAL-A"))
+                    self.assertNotIn(self.config["container_name"], command)
+
+    def test_invalid_pinned_container_identity_fails_before_host_operations(self):
+        for container in ("", "name", "c" * 63, "C" * 64, "sha256:" + "c" * 64, 123):
+            with self.subTest(container=container), self.manager.locked():
+                with self.assertRaisesRegex(mod.RecoveryError, "container identity"):
+                    self.manager._device_adb(
+                        "alpha", ("pull", "/sdcard/source", "/tmp/reserved"), container_id=container
+                    )
+        self.assertEqual(self.docker.commands, [])
 
     def test_server_restart_cannot_redirect_a_verified_alias_to_reused_transport_id(self):
         self.attach(transport=1)
