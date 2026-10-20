@@ -160,8 +160,10 @@ There are three separate controls to understand:
 
 The repository includes [OTT Home source and build instructions](../native/android-home/README.md),
 package `play.ott.home`, for the standard `play.ott.foss` player on API 22. It
-forwards Home entry to `play.ott.foss/.MainActivity`. Its boot receiver opens the
-companion only when Android already resolves it as the default Home app; mere
+forwards Home entry to `play.ott.foss/.MainActivity`. Version 0.2.0 also provides
+**OTT Startup → Start OTT after reboot**, an explicit
+opt-in for firmware without a Home picker. Its boot receiver opens the companion
+when that switch is enabled or Android resolves it as default Home. Mere
 installation does not take over startup. It does not request root, device-admin
 or device-owner access, and has no background polling timer.
 
@@ -173,6 +175,11 @@ adb -s SERIAL install -r /PRIVATE/verified-ott-home.apk
 adb -s SERIAL shell am start -n play.ott.home/.HomeActivity
 adb -s SERIAL shell input keyevent 3
 ```
+
+On older Fire firmware without Home selection, open
+`play.ott.home/.StartupActivity` and enable **Start OTT after reboot**. Keep the
+stock launcher enabled. The switch does not change the Home button or grant
+system kiosk privileges. See the [Plex/strict-kiosk setup runbook](android-kiosk-setup.md).
 
 Retain its local signing identity privately for future companion updates. The
 player continues to use its independent official signing key and update path.

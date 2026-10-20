@@ -12,6 +12,8 @@ macOS Intel/Apple Silicon и Windows amd64/arm64. Контейнеры подд�
 amd64/arm64, для Kubernetes/k3s есть Helm chart. Полный справочник параметров,
 платформ и старых команд находится в [английском README](README.md).
 
+- [Android: строгий киоск Plex и автозапуск](docs/android-kiosk-setup.ru.md)
+
 ## Запуск
 
 Скачайте подходящий архив из [Releases](https://github.com/open-ott-play/ottplay-control-server/releases),

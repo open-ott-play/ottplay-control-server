@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- OTT Home 0.2.0 adds a visible, persistent boot-start opt-in for dedicated
+  Android tablets whose firmware does not offer a third-party Home picker.
+  Existing default-Home behavior is preserved, fresh installs remain opt-out,
+  and blocked launches are recorded without claiming playback recovery.
+- Document repeatable Plex strict-kiosk setup, local connectivity checks,
+  separate boot/wake acceptance and rollback in English and Russian.
+
 ## [0.1.5] - 2026-10-20
 
 ### Added

@@ -32,7 +32,7 @@ chmod 600 private/signing-password private/ott-home.p12
 "$BT/zipalign" -f 4 build/unsigned.apk build/aligned.apk
 "$BT/apksigner" sign --ks private/ott-home.p12 --ks-key-alias ott-home \
     --ks-pass file:private/signing-password --min-sdk-version 22 \
-    --out build/ott-home-0.1.0.apk build/aligned.apk
-"$BT/apksigner" verify --verbose --print-certs build/ott-home-0.1.0.apk
-"$BT/aapt" dump badging build/ott-home-0.1.0.apk
-shasum -a 256 build/ott-home-0.1.0.apk
+    --out build/ott-home-0.2.0.apk build/aligned.apk
+"$BT/apksigner" verify --verbose --print-certs build/ott-home-0.2.0.apk
+"$BT/aapt" dump badging build/ott-home-0.2.0.apk
+shasum -a 256 build/ott-home-0.2.0.apk
