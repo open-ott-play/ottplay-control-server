@@ -82,6 +82,10 @@ class TransactionDocker(manager_tests.FakeDocker):
                 return b"1 file pulled"
             if request[:1] == ["install"]:
                 self.commands.append(argv)
+                # ADB's legacy install path requires an .apk argument before
+                # it will push a file or invoke PackageManager on the device.
+                if not request[-1].lower().endswith(".apk"):
+                    raise manager_tests.mod.RecoveryError("need APK file on command line")
                 if request[-1] not in self.files:
                     raise AssertionError("APK file must exist until install finishes")
                 self.events.append(("install", request[-1], self.files[request[-1]]))
@@ -308,6 +312,22 @@ class TransactionTests(unittest.TestCase):
         # reservation, reading, staging and cleanup.
         self.assertEqual(self.docker.files, {})
 
+    def test_staged_install_is_accepted_by_adb_apk_argument_check(self):
+        payload = b"verified-apk-bytes"
+        result = self.transaction.staged_adb("alpha", payload, ["install", "-r", "@staged"])
+        self.assertEqual(result, b"Success\n")
+        events = self.docker.events
+        self.assertEqual(
+            [event[0] for event in events], ["reserve", "stage", "install", "cleanup"],
+        )
+        self.assertRegex(events[0][1], r"^/tmp/ott-transaction-[a-f0-9]{32}\.apk$")
+        self.assertTrue(all(event[1] == events[0][1] for event in events))
+        self.assertEqual(events[2][2], payload)
+        install = next(command for command in self.docker.commands if "install" in command)
+        self.assertEqual(install[-3:], ["install", "-r", events[0][1]])
+        self.assertEqual(self.docker.files, {})
+        self.assertEqual(self.manager._lock_depth, 0)
+
     def test_staging_uses_unique_files_and_retains_bytes_until_adb_finishes(self):
         for payload, arguments in (
             (b"apk-one", ["install", "-r", "@staged"]),
@@ -320,6 +340,8 @@ class TransactionTests(unittest.TestCase):
         )
         staged = [event[1] for event in self.docker.events if event[0] == "stage"]
         self.assertEqual(len(set(staged)), 2)
+        self.assertTrue(staged[0].endswith(".apk"))
+        self.assertFalse(staged[1].endswith(".apk"))
         self.assertEqual(self.docker.device_files["/sdcard/copied.bin"], b"apk-two")
         self.assertEqual(self.docker.files, {})
 
@@ -333,13 +355,40 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(self.docker.files, {})
 
     def test_staging_reservation_collision_does_not_write_install_or_delete(self):
-        existing = "/tmp/ott-transaction-existing"
-        self.docker.files[existing] = b"preserve unrelated file"
-        with mock.patch.object(self.transaction, "_temporary", return_value=existing):
-            with self.assertRaises(transaction.TransactionError):
-                self.transaction.staged_adb("alpha", b"apk", ["install", "@staged"])
-        self.assertEqual([event[0] for event in self.docker.events], ["reserve"])
-        self.assertEqual(self.docker.files, {existing: b"preserve unrelated file"})
+        basename = "/tmp/ott-transaction-existing"
+        for suffix, arguments in (
+            (".apk", ["install", "@staged"]),
+            ("", ["push", "@staged", "/sdcard/output"]),
+        ):
+            with self.subTest(arguments=arguments):
+                self.docker.events.clear()
+                existing = basename + suffix
+                self.docker.files = {existing: b"preserve unrelated file"}
+                with mock.patch.object(self.transaction, "_temporary", return_value=basename):
+                    with self.assertRaises(transaction.TransactionError):
+                        self.transaction.staged_adb("alpha", b"apk", arguments)
+                self.assertEqual([event[0] for event in self.docker.events], ["reserve"])
+                self.assertEqual(self.docker.files, {existing: b"preserve unrelated file"})
+                self.assertEqual(self.manager._lock_depth, 0)
+
+    def test_install_failure_cleans_up_reserved_apk_without_retry(self):
+        original = self.docker.__call__
+        installs = []
+
+        def fail_install(argv):
+            if "install" in argv:
+                installs.append(argv)
+                self.assertTrue(argv[-1].endswith(".apk"))
+                self.assertEqual(self.docker.files[argv[-1]], b"apk")
+                raise manager_tests.mod.RecoveryError("installation failed")
+            return original(argv)
+
+        with mock.patch.object(self.manager, "runner", side_effect=fail_install):
+            with self.assertRaisesRegex(manager_tests.mod.RecoveryError, "installation failed"):
+                self.transaction.staged_adb("alpha", b"apk", ["install", "-r", "@staged"])
+        self.assertEqual(len(installs), 1)
+        self.assertEqual(self.docker.events[-1], ("cleanup", installs[0][-1]))
+        self.assertEqual(self.docker.files, {})
         self.assertEqual(self.manager._lock_depth, 0)
 
     def test_staging_writer_streams_bounded_chunks_into_private_exclusive_file(self):

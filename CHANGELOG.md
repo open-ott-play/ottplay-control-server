@@ -46,6 +46,9 @@
 
 ### Fixed
 
+- Preserve the `.apk` suffix on files staged for Android USB installation,
+  including API 22 devices. ADB can recognize the package before transfer;
+  unique private staging and cleanup remain unchanged.
 - Include the six Android USB runtime scripts in the deployment archive and
   test the unpacked entry points independently of a source checkout.
 - Share strict recovery-checkpoint validation between legacy and shared USB

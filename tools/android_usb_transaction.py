@@ -59,8 +59,8 @@ class Transactions:
     def _temporary(self):
         return "/tmp/ott-transaction-" + uuid.uuid4().hex
 
-    def _reserve_temporary(self, container):
-        temporary = self._temporary()
+    def _reserve_temporary(self, container, suffix=""):
+        temporary = self._temporary() + suffix
         source = (
             "import os,sys\n"
             "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
@@ -160,7 +160,9 @@ class Transactions:
 
         def action(device):
             container = self._container()
-            temporary = self._reserve_temporary(container)
+            # ADB selects APK arguments by extension, including legacy push
+            # installs. Keep the suffix on the file reserved before staging.
+            temporary = self._reserve_temporary(container, ".apk" if install else "")
             source = (
                 "import os,sys,shutil,stat\n"
                 "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_NOFOLLOW)\n"

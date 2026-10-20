@@ -312,7 +312,8 @@ The supported requests are:
 
 Each request verifies the device and retains one manager lock across setup,
 use and cleanup. File operations use unique temporary names; staged files
-are reserved exclusively with mode `0600` before cleanup is armed. A name
+are reserved exclusively with mode `0600` before cleanup is armed. APK installs
+retain the `.apk` suffix required by ADB's package argument parser. A name
 collision leaves the existing file untouched. The staging writer opens only
 its empty regular reservation without following symlinks. Auxiliary Docker commands address
 the observed container ID. CDP resolves exactly one application process and
