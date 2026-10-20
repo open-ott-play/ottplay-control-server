@@ -23,7 +23,10 @@ ANDROID_USB_TOOLS = (
 
 def stage_android_tools(root: Path, destination: Path) -> None:
     """Ship the host runtime and wrappers without local device state or keys."""
-    sources = [root / "tools" / name for name in ANDROID_USB_TOOLS]
+    tools = root / "tools"
+    if tools.is_symlink() or not tools.is_dir():
+        raise ValueError("Missing or non-regular Android USB tools directory")
+    sources = [tools / name for name in ANDROID_USB_TOOLS]
     for source in sources:
         if source.is_symlink() or not source.is_file():
             raise ValueError(f"Missing or non-regular Android USB tool: {source.name}")

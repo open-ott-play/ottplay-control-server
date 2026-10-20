@@ -51,6 +51,20 @@ class AndroidToolStagingTests(unittest.TestCase):
             self.assertFalse((root / "stage").exists())
 
     @unittest.skipIf(sys.platform == "win32", "Creating symlinks needs extra Windows privileges")
+    def test_symlinked_tools_directory_cannot_substitute_external_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "checkout"
+            root.mkdir()
+            external = Path(temporary) / "external"
+            external.mkdir()
+            for name in EXPECTED_USB_TOOLS:
+                (external / name).write_text("must not be published")
+            (root / "tools").symlink_to(external, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "tools directory"):
+                stage_android_tools(root, root / "stage")
+            self.assertFalse((root / "stage").exists())
+
+    @unittest.skipIf(sys.platform == "win32", "Creating symlinks needs extra Windows privileges")
     def test_symlink_cannot_substitute_private_data_for_a_tool(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
