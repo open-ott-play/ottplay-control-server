@@ -33,6 +33,8 @@ OWNER_LABEL = "org.ottplay.android-manager"
 # binds loopback; the client socket below may still use 127.0.0.1 explicitly.
 SERVER_COMMAND = ["-L", "tcp:5037", "nodaemon", "server"]
 TMPFS_OPTIONS = "rw,noexec,nosuid,nodev,size=256m"
+MEMORY_BYTES = 256 * 1024 * 1024
+CPU_SHARES = 128
 UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 ALIAS = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,59}")
 PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
@@ -354,11 +356,15 @@ class Manager:
             and not host.get("Binds") and not host.get("PortBindings")
             and host.get("PidMode", "") in ("", "private") and host.get("IpcMode", "") in ("", "private")
             and host.get("UTSMode", "") in ("", "private") and not host.get("UsernsMode")
+            and host.get("Memory") == MEMORY_BYTES and host.get("MemorySwap") == MEMORY_BYTES
+            and host.get("CpuShares") == CPU_SHARES and host.get("PidsLimit") in (None, 0, -1)
+            and host.get("CpuQuota", 0) in (0, -1) and not host.get("NanoCpus")
             and set(host.get("SecurityOpt") or []) in ({"no-new-privileges"}, {"no-new-privileges:true"})
             and tmpfs == {"/tmp": TMPFS_OPTIONS}
             and mount_ok and config.get("Image") == self.c["image"]
             and config.get("User", "") in ("0", "0:0", "root")
             and config.get("Entrypoint") == ["adb"] and config.get("Cmd") == SERVER_COMMAND
+            and (config.get("Healthcheck") or {}).get("Test") == ["NONE"]
             and environment.get("ADB_VENDOR_KEYS") == "/root/.android/vendor"
             and environment.get("ADB_LIBUSB") == "0"
             and environment.get("ADB_SERVER_SOCKET") == "tcp:127.0.0.1:5037"
@@ -381,6 +387,8 @@ class Manager:
                 "--label", OWNER_LABEL + "=" + self.c["container_name"],
                 "--network", "none", "--user", "0:0", "--read-only",
                 "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--memory", str(MEMORY_BYTES), "--memory-swap", str(MEMORY_BYTES),
+                "--cpu-shares", str(CPU_SHARES), "--no-healthcheck",
                 "--restart", "unless-stopped", "--tmpfs", "/tmp:" + TMPFS_OPTIONS,
                 "--env", "ADB_VENDOR_KEYS=/root/.android/vendor", "--env", "ADB_LIBUSB=0",
                 "--env", "ADB_SERVER_SOCKET=tcp:127.0.0.1:5037", "--env", "HOME=/root",

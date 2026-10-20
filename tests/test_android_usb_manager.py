@@ -154,7 +154,7 @@ class FakeDocker:
         value_flags = {
             "--name", "--label", "--network", "--user", "--cap-drop",
             "--security-opt", "--restart", "--tmpfs", "--env", "--mount",
-            "--entrypoint", "--device",
+            "--entrypoint", "--device", "--memory", "--memory-swap", "--cpu-shares",
         }
         while position < len(args):
             flag = args[position]
@@ -166,6 +166,10 @@ class FakeDocker:
                 continue
             if flag == "--read-only":
                 host["ReadonlyRootfs"] = True
+                position += 1
+                continue
+            if flag == "--no-healthcheck":
+                config["Healthcheck"] = {"Test": ["NONE"]}
                 position += 1
                 continue
             if flag not in value_flags:
@@ -206,6 +210,10 @@ class FakeDocker:
                     "PathOnHost": source, "PathInContainer": destination,
                     "CgroupPermissions": permissions,
                 })
+            elif flag in ("--memory", "--memory-swap", "--cpu-shares"):
+                key = {"--memory": "Memory", "--memory-swap": "MemorySwap",
+                       "--cpu-shares": "CpuShares"}[flag]
+                host[key] = int(value)
             position += 2
         return {
             "Config": config, "HostConfig": host, "Mounts": mounts,
@@ -309,6 +317,12 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(details["HostConfig"]["NetworkMode"], "none")
         self.assertTrue(details["HostConfig"]["ReadonlyRootfs"])
         self.assertEqual(details["HostConfig"]["CapDrop"], ["ALL"])
+        self.assertEqual(details["HostConfig"]["Memory"], 256 * 1024 * 1024)
+        self.assertEqual(details["HostConfig"]["MemorySwap"], 256 * 1024 * 1024)
+        self.assertEqual(details["HostConfig"]["CpuShares"], 128)
+        self.assertNotIn("PidsLimit", details["HostConfig"])
+        self.assertNotIn("CpuQuota", details["HostConfig"])
+        self.assertEqual(details["Config"]["Healthcheck"]["Test"], ["NONE"])
         self.assertEqual(details["Mounts"], [{
             "Source": self.config["adb_key_dir"], "Destination": "/root/.android",
             "RW": False, "Type": "bind",
@@ -394,6 +408,8 @@ class ManagerTests(unittest.TestCase):
             ("Binds", ["/:/host"]), ("PortBindings", {"5037/tcp": [{}]}),
             ("SecurityOpt", ["no-new-privileges", "seccomp=unconfined"]),
             ("Tmpfs", {"/tmp": "rw,nosuid"}),
+            ("Memory", 0), ("MemorySwap", -1), ("CpuShares", 1024),
+            ("PidsLimit", 100), ("CpuQuota", 50000), ("NanoCpus", 500000000),
         )
         for key, value in unsafe_host_settings:
             with self.subTest(key=key):
@@ -409,6 +425,30 @@ class ManagerTests(unittest.TestCase):
         self.docker.commands.clear()
         self.manager.reconcile()
         self.assertEqual([cmd[1] for cmd in self.docker.container_mutations()], ["rm", "run"])
+
+    def test_inherited_image_healthcheck_is_disabled(self):
+        self.attach()
+        self.manager.reconcile()
+        inherited = {
+            "Test": ["CMD", "python3", "/app/manager.py", "--config", "/config.json", "health"],
+        }
+        for healthcheck in (inherited, None, {}):
+            with self.subTest(healthcheck=healthcheck):
+                self.docker.details["Config"]["Healthcheck"] = healthcheck
+                self.docker.commands.clear()
+                self.manager.reconcile()
+                self.assertEqual([cmd[1] for cmd in self.docker.container_mutations()], ["rm", "run"])
+                self.assertEqual(self.docker.details["Config"]["Healthcheck"]["Test"], ["NONE"])
+
+    def test_unavailable_pids_controller_does_not_cause_recreate_loop(self):
+        self.attach()
+        self.manager.reconcile()
+        for value in (None, 0, -1):
+            with self.subTest(pids_limit=value):
+                self.docker.details["HostConfig"]["PidsLimit"] = value
+                self.docker.commands.clear()
+                self.manager.reconcile()
+                self.assertEqual(self.docker.container_mutations(), [])
 
     def test_missing_keys_refused_before_deleting_owned_container(self):
         self.attach()

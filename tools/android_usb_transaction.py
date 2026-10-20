@@ -96,9 +96,9 @@ class Transactions:
         def action(device):
             container, temporary = self._container(), self._temporary()
             source = (
-                "import os,sys\n"
+                "import os,sys,shutil\n"
                 "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
-                "with os.fdopen(fd,'wb') as f:f.write(sys.stdin.buffer.read())\n"
+                "with os.fdopen(fd,'wb') as f:shutil.copyfileobj(sys.stdin.buffer,f,1024*1024)\n"
             )
             try:
                 self._aux(container, ["python3", "-c", source, temporary], payload)

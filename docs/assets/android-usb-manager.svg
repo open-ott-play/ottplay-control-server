@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="830" viewBox="0 0 1200 830" role="img" aria-labelledby="title desc">
   <title id="title">One Android USB manager, explicit device ownership</title>
-  <desc id="desc">A host manager serializes SSH commands and boot recovery through one ADB container. Existing keys are read only. Only verified enabled USB devices are mapped. Unprovisioned devices remain disabled. Four former transport containers become one; application services remain separate.</desc>
+  <desc id="desc">A host manager serializes SSH commands and boot recovery through one ADB container. Existing keys are read only. Only verified enabled USB devices are mapped. Unprovisioned devices remain disabled. Four former transport containers become one; application services remain separate. The container has a combined memory and swap limit of 256 MiB, CPU shares of 128, and no Docker healthcheck.</desc>
   <defs>
     <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101d36"/><stop offset="1" stop-color="#192d48"/></linearGradient>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#76d9e6"/></marker>
@@ -11,7 +11,7 @@
       .line{stroke:#76d9e6;stroke-width:3;fill:none;marker-end:url(#arrow)}
     </style>
   </defs>
-  <rect width="1200" height="780" rx="24" fill="url(#bg)"/>
+  <rect width="1200" height="830" rx="24" fill="url(#bg)"/>
   <text x="48" y="63" class="heading">Android USB management</text>
   <text x="48" y="96" class="body" fill="#b7cce3">One owner · verified devices · durable recovery state</text>
   <rect x="963" y="35" width="189" height="79" rx="16" fill="#214743"/>
@@ -51,10 +51,13 @@
 
   <path d="M577 431V478" class="line"/>
   <path d="M991 431V458H700V478" class="line"/>
-  <rect x="390" y="485" width="374" height="134" rx="18" fill="#18564d" stroke="#60d8ad" stroke-width="2"/>
+  <rect x="390" y="485" width="374" height="180" rx="18" fill="#18564d" stroke="#60d8ad" stroke-width="2"/>
   <text x="416" y="526" class="label">One foreground ADB server</text>
   <text x="416" y="558" class="body">No network · no capabilities</text>
   <text x="416" y="590" class="body">Read-only root · exact USB nodes</text>
+  <path d="M414 607H739" stroke="#397b6d"/>
+  <text x="416" y="631" class="small">RAM + swap ≤ 256 MiB total</text>
+  <text x="416" y="653" class="small">CPU shares 128 · healthcheck off</text>
 
   <rect x="48" y="485" width="274" height="134" rx="16" fill="#554527" stroke="#dfb865"/>
   <text x="72" y="525" class="label">Unverified / absent</text>
@@ -66,8 +69,8 @@
   <text x="854" y="558" class="body">Read, install, CDP, recover</text>
   <text x="854" y="590" class="small">Commands stay with the chosen alias</text>
 
-  <path d="M48 663H1152" stroke="#3b506b"/>
-  <text x="48" y="703" class="body">Application boundary</text>
-  <text x="48" y="735" class="small">Home-plan, Alexa, cast and other NAS services retain their own lifecycles.</text>
-  <text x="1152" y="735" text-anchor="end" class="small">Boot recovery ≠ video watchdog</text>
+  <path d="M48 710H1152" stroke="#3b506b"/>
+  <text x="48" y="750" class="body">Application boundary</text>
+  <text x="48" y="782" class="small">Home-plan, Alexa, cast and other NAS services retain their own lifecycles.</text>
+  <text x="1152" y="782" text-anchor="end" class="small">Boot recovery ≠ video watchdog</text>
 </svg>

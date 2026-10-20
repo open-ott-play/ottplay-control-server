@@ -21,7 +21,8 @@ The implementation consists of:
   atomic file transfer, APK staging and CDP operations for trusted maintenance
   helpers.
 - [`deploy/android-usb-manager`](../deploy/android-usb-manager): example
-  configuration, systemd service and Synology DSM boot script.
+  configuration, systemd service, Synology DSM boot script and a
+  [transport image recipe](../deploy/android-usb-manager/README.md).
 
 ![Shared USB manager architecture and isolation boundaries](assets/android-usb-manager.svg)
 
@@ -45,6 +46,22 @@ loopback only. The container has `--network none`, no published ports, a
 read-only root filesystem, all capabilities dropped, no-new-privileges and a
 bounded writable `/tmp`. It has no Docker socket and no broad `/dev` or
 `/dev/bus/usb` mount. The image must be pinned by SHA-256.
+
+The manager enforces 256 MiB of container memory, 256 MiB of combined memory
+and swap, and CPU shares of 128. The equal memory/swap settings permit no
+additional swap. CPU shares lower relative priority under contention without
+imposing a hard CPU quota. There is no PID hard limit because the target DSM
+kernel does not support that controller. `/tmp` is a 256 MiB tmpfs ceiling,
+allocated on demand and charged against the same memory limit, not an extra
+memory allowance. APK staging accepts at most 128 MiB and writes in 1 MiB
+chunks to avoid retaining another entire APK in the container's Python heap.
+The host-side request still buffers its payload.
+
+The foreground ADB process is supervised by Docker and the host manager.
+The container explicitly disables inherited image health checks: a check for
+another manager's heartbeat or configuration cannot describe this process.
+These resource and health-check settings are part of reconciliation, so
+drift causes the owned container to be replaced under the manager lock.
 
 The foreground command uses `adb -L tcp:5037 nodaemon server`. ADB 29 rejects
 an explicit hostname in the listener argument (`tcp:127.0.0.1:5037`); omitting
@@ -293,6 +310,27 @@ compatibility is installed.
 For rollback, stop and disable the new host service, retire its boot wrapper,
 and stop its container. Restore the old key/state snapshots and old host
 service. Confirm that only one manager owns each USB device before resuming.
+
+## Release players without CDP
+
+A production APK can intentionally disable WebView debugging. In that case
+the transaction adapter reports `Application debugging socket is unavailable`;
+a working ADB connection does not create that socket. The manager does not
+enable debugging, change player settings or replace the APK.
+
+For a player already connected to the OTT controller, use its supported
+read-only diagnostics. Replace `lobby` with its configured OTT alias:
+
+```sh
+ott -t 20 lobby debug -j
+ott -t 20 lobby inspect -j
+```
+
+These commands return observations reported by the player, including the
+available runtime and media state. They do not provide arbitrary JavaScript
+evaluation, direct DOM inspection or a CDP attachment. Both commands were
+verified on the connected API 22 release player while its CDP socket was
+absent; availability on another player depends on its supported capabilities.
 
 ## Acceptance and limits
 

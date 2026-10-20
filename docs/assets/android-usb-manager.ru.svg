@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="830" viewBox="0 0 1200 830" role="img" aria-labelledby="title desc">
+  <title id="title">Один менеджер Android USB с явным назначением устройств</title>
+  <desc id="desc">Менеджер на хосте последовательно выполняет SSH-команды и восстановление после загрузки через один контейнер ADB. Ключи доступны только для чтения. Подключаются только проверенные устройства с включённой записью реестра. Четыре прежних контейнера заменены одним; прикладные сервисы работают отдельно. Общий лимит оперативной памяти и подкачки — 256 МиБ, вес CPU — 128, проверка состояния Docker отключена.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101d36"/><stop offset="1" stop-color="#192d48"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#76d9e6"/></marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#edf5ff}
+      .heading{font-size:30px;font-weight:700}.label{font-size:22px;font-weight:700}
+      .body{font-size:18px}.small{font-size:16px;fill:#b7cce3}
+      .line{stroke:#76d9e6;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="830" rx="24" fill="url(#bg)"/>
+  <text x="48" y="63" class="heading">Управление Android по USB</text>
+  <text x="48" y="96" class="body" fill="#b7cce3">Один владелец · проверенные устройства · сохранённое состояние</text>
+  <rect x="963" y="35" width="189" height="79" rx="16" fill="#214743"/>
+  <text x="1058" y="70" text-anchor="middle" font-size="32" font-weight="700">4 → 1</text>
+  <text x="1058" y="96" text-anchor="middle" class="small">Контейнеры ADB</text>
+
+  <rect x="48" y="155" width="274" height="114" rx="16" fill="#25436a" stroke="#4879aa"/>
+  <text x="72" y="193" class="label">Оператор / скрипт</text>
+  <text x="72" y="226" class="body">SSH · имя · команда</text>
+  <text x="72" y="252" class="small">Транзакции CDP и файлов</text>
+  <rect x="48" y="317" width="274" height="114" rx="16" fill="#25436a" stroke="#4879aa"/>
+  <text x="72" y="355" class="label">Закрытый реестр</text>
+  <text x="72" y="388" class="body">Сверка USB и Android</text>
+  <text x="72" y="414" class="small">Включение после проверки</text>
+  <path d="M322 212H384" class="line"/>
+  <path d="M322 374H351V302H384" class="line"/>
+
+  <rect x="390" y="155" width="374" height="276" rx="18" fill="#164653" stroke="#76d9e6" stroke-width="2"/>
+  <text x="416" y="195" class="label">Менеджер на хосте</text>
+  <text x="416" y="232" class="body">Блокировка на всю транзакцию</text>
+  <text x="416" y="264" class="body">Поиск текущих USB-узлов</text>
+  <text x="416" y="296" class="body">Проверка серийного номера и ID</text>
+  <path d="M414 319H739" stroke="#397281"/>
+  <text x="416" y="350" class="body">Новая загрузка → восстановить</text>
+  <text x="416" y="382" class="body">Та же загрузка → не будить</text>
+  <text x="416" y="412" class="small">Защищённый экран запрещает запуск</text>
+
+  <rect x="830" y="155" width="322" height="114" rx="16" fill="#35315c" stroke="#9c8ed8"/>
+  <text x="854" y="194" class="label">Точки восстановления</text>
+  <text x="854" y="227" class="body">Хранение по псевдониму</text>
+  <text x="854" y="253" class="small">Сохраняются при миграции</text>
+  <path d="M764 212H824" class="line"/>
+  <rect x="830" y="317" width="322" height="114" rx="16" fill="#35315c" stroke="#9c8ed8"/>
+  <text x="854" y="355" class="label">Прежние ключи ADB</text>
+  <text x="854" y="388" class="body">Подключены только для чтения</text>
+  <text x="854" y="414" class="small">Закрытые ключи не попадают в Git</text>
+
+  <path d="M577 431V478" class="line"/>
+  <path d="M991 431V458H700V478" class="line"/>
+  <rect x="390" y="485" width="374" height="180" rx="18" fill="#18564d" stroke="#60d8ad" stroke-width="2"/>
+  <text x="416" y="526" class="label">Один активный сервер ADB</text>
+  <text x="416" y="558" class="body">Без сети · capabilities отключены</text>
+  <text x="416" y="590" class="body">Корневая ФС RO · нужные USB</text>
+  <path d="M414 607H739" stroke="#397b6d"/>
+  <text x="416" y="631" class="small">RAM + подкачка ≤ 256 МиБ всего</text>
+  <text x="416" y="653" class="small">Вес CPU 128 · healthcheck: выкл.</text>
+
+  <rect x="48" y="485" width="274" height="134" rx="16" fill="#554527" stroke="#dfb865"/>
+  <text x="72" y="525" class="label">Нет проверки / USB</text>
+  <text x="72" y="558" class="body">Запись реестра отключена</text>
+  <text x="72" y="588" class="small">Нет USB-доступа и команд</text>
+  <path d="M764 552H824" class="line"/>
+  <rect x="830" y="485" width="322" height="134" rx="16" fill="#18564d" stroke="#60d8ad"/>
+  <text x="854" y="525" class="label">Проверенный планшет</text>
+  <text x="854" y="558" class="body">Чтение · APK · CDP · запуск</text>
+  <text x="854" y="590" class="small">Команды выбранному устройству</text>
+
+  <path d="M48 710H1152" stroke="#3b506b"/>
+  <text x="48" y="750" class="body">Граница прикладных сервисов</text>
+  <text x="48" y="782" class="small">План дома, Alexa и cast работают независимо.</text>
+  <text x="1152" y="782" text-anchor="end" class="small">Восстановление загрузки ≠ контроль видео</text>
+</svg>

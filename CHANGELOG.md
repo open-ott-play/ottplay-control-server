@@ -11,6 +11,9 @@
 - Provide Synology/systemd installation, SSH commands and a legacy-path redirect.
   Unknown identities and duplicate serials remain blocked; normal screen sleep
   does not trigger automatic wake or playback recovery.
+- Provide a maintained ADB/Python transport image, English/Russian guides and
+  architecture diagrams. Bound container memory and swap, disable inherited
+  health checks and stream APK staging to avoid a second full in-memory copy.
 
 ### Changed
 

@@ -1,9 +1,12 @@
 """Verify that temporary device resources remain inside one host transaction."""
 import importlib.util
+import io
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -168,6 +171,33 @@ class TransactionTests(unittest.TestCase):
             self.transaction.staged_adb("alpha", b"apk", ["install", "@staged"])
         self.assertEqual([event[0] for event in self.docker.events], ["stage", "cleanup"])
         self.assertEqual(self.docker.files, {})
+
+    def test_staging_writer_streams_bounded_chunks_into_private_exclusive_file(self):
+        self.transaction.staged_adb("alpha", b"capture-source", ["install", "@staged"])
+        command = next(command for command in self.aux_commands if "-c" in command)
+        source = command[command.index("-c") + 1]
+        payload = b"\x00\xff" * (1024 * 1024 + 19)
+        reads = []
+
+        class BoundedReader(io.BytesIO):
+            def read(inner, size=-1):
+                self.assertGreater(size, 0, "staging must not read the whole APK into RAM")
+                self.assertLessEqual(size, 1024 * 1024)
+                reads.append(size)
+                return super().read(size)
+
+        path = self.root / "streamed-apk"
+        with mock.patch.object(sys, "stdin", SimpleNamespace(buffer=BoundedReader(payload))), \
+                mock.patch.object(sys, "argv", ["staging", str(path)]):
+            exec(compile(source, "<staging-writer>", "exec"), {})
+        self.assertEqual(path.read_bytes(), payload)
+        self.assertGreater(len(reads), 2)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        with mock.patch.object(sys, "stdin", SimpleNamespace(buffer=BoundedReader(b"overwrite"))), \
+                mock.patch.object(sys, "argv", ["staging", str(path)]):
+            with self.assertRaises(FileExistsError):
+                exec(compile(source, "<staging-writer>", "exec"), {})
+        self.assertEqual(path.read_bytes(), payload)
 
     def test_cdp_allocates_uses_and_removes_forward_inside_one_lock(self):
         result = self.transaction.cdp(
