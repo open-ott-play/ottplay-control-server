@@ -27,6 +27,10 @@
 
 ### Changed
 
+- Include capability-advertised Capacitor update commands in bare player help
+  and label their RPC receipts as `app_update`. Accept case-insensitive update
+  subcommands while preserving APK URLs and hashes. Installer acceptance remains
+  separate from confirmed installation.
 - Show `standby` and `go` in player controls. `go` wakes the player using the
   existing lifecycle operation; `stop`, `start` and `wake` remain compatible
   aliases. Document acknowledgement, remote connectivity and reserved channel

@@ -223,7 +223,7 @@ RECEIPT_ACTIONS = frozenset((
     "status", "capabilities", "screenshot", "inspect", "providers", "profiles",
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
-    "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider",
+    "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "favorites", "aspect",
     "settings_compare", "playback_handoff_export", "playback_handoff_import",
 ))
@@ -844,7 +844,7 @@ def select_programme(programs):
 
 
 def parse_app_update(words):
-    op = words[0] if words else "status"
+    op = words[0].casefold() if words else "status"
     if op == "status" and len(words) <= 1:
         return {"operation": "status"}
     if op == "install" and len(words) == 2 and re.fullmatch(r"[a-f0-9]{64}", words[1]):
@@ -2722,8 +2722,16 @@ def print_player_status(data, name):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
     if "set" in aspect.get("operations", []):
         print(f"  {prefix} aspect " + " / ".join(aspect["modes"]) + "  — request an aspect mode")
+    update = controls.get("app_update", {}).get("operations", [])
+    if update:
+        print(f"  {prefix} update status  — read installed and pending APK versions")
+        print(f"  {prefix} update --variant api22 --prepare-only  — verify and stage for Android 5.1/6")
+        print(f"  {prefix} update --variant full --prepare-only  — verify and stage for Android 7+")
+        print(f"  {prefix} update prepare HTTPS_APK_URL SHA256  — stage a specific APK")
+        print(f"  {prefix} update install SHA256  — request installation of the staged APK")
+        print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not libraries and not favorites and not aspect.get("operations")):
+            and shot.get("state") != "ready" and not queue and not libraries and not favorites and not aspect.get("operations") and not update):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:

@@ -73,6 +73,25 @@ class StatusCliTest(unittest.TestCase):
                 self.assertEqual('ott tv go  —' in out, 'wake' in operations)
                 self.assertEqual('aliases: start, wake' in out, 'wake' in operations)
 
+    def test_update_controls_are_discovered_only_when_the_plugin_is_advertised(self):
+        for supported in (False, True):
+            with self.subTest(supported=supported):
+                caps = self.capabilities()
+                caps.update(lifecycle=[], input=[], playback=[])
+                caps["app_update"] = ({"version": 1, "operations": ["status", "prepare", "install"]}
+                                      if supported else None)
+                code, out, err, _ = self.run_cli([], {"ready": True}, caps)
+                self.assertEqual((code, err), (0, ""))
+                for example in ("update status", "update --variant api22 --prepare-only",
+                                "update --variant full --prepare-only",
+                                "update prepare HTTPS_APK_URL SHA256", "update install SHA256"):
+                    self.assertEqual("ott tv " + example in out, supported)
+                self.assertEqual("No controls are currently advertised" in out, not supported)
+                if supported:
+                    self.assertIn("Android confirmation", out)
+                    self.assertIn("does not confirm installation", out)
+                    self.assertNotIn("api22|full", out)
+
     def test_standby_snapshot_is_retained_without_comparing_caps_activity(self):
         for state, pending in [('running', 0), ('suspending', 3), ('suspending', None),
                                ('suspended', 0), ('unsupported', None), ('error', 2147483647)]:

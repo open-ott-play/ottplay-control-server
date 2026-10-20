@@ -25,7 +25,7 @@ def high_level(words):
 def options(words, error):
     result = {"version": None, "variant": None, "prepare_only": False, "wait": 300.0}
     tail = list(words[1:])
-    if tail and tail[0] == "beta":
+    if tail and tail[0].casefold() == "beta":
         tail.pop(0)
     while tail:
         name = tail.pop(0)
