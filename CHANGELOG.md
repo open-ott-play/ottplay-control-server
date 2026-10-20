@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Consolidate legacy USB Android maintenance into one identity-verified manager,
+  preserving authorized ADB keys and per-device OTT boot recovery.
+
 - Show `standby` and `go` in player controls. `go` wakes the player using the
   existing lifecycle operation; `stop`, `start` and `wake` remain compatible
   aliases. Document acknowledgement, remote connectivity and reserved channel
