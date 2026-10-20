@@ -34,7 +34,6 @@ SERVER_COMMAND = ["-L", "tcp:5037", "nodaemon", "server"]
 TMPFS_OPTIONS = "rw,noexec,nosuid,nodev,size=256m"
 MEMORY_BYTES = 256 * 1024 * 1024
 CPU_SHARES = 128
-UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 ALIAS = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,59}")
 PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
 FORBIDDEN_ADB = {
@@ -139,35 +138,6 @@ class DeviceSupervisor(Supervisor):
 
     def adb(self, *args):
         return _text(self.manager._device_adb(self.alias, args))
-
-    def read_state(self):
-        path = self.root / "state.json"
-        if path.is_symlink():
-            raise RecoveryError("Recovery state must not be a symlink")
-        if not path.exists():
-            return {}
-        try:
-            state = json.loads(path.read_text())
-        except (OSError, ValueError):
-            raise RecoveryError("Invalid recovery state: " + self.alias) from None
-        if not isinstance(state, dict):
-            raise RecoveryError("Invalid recovery state: " + self.alias)
-        allowed = {"observed_boot", "completed_boot", "attempts", "result"}
-        if set(state) - allowed or "observed_boot" not in state:
-            raise RecoveryError("Unknown recovery state fields: " + self.alias)
-        for key in ("observed_boot", "completed_boot"):
-            if key in state and (not isinstance(state[key], str) or not UUID.fullmatch(state[key])):
-                raise RecoveryError("Invalid recovery boot identity: " + self.alias)
-        if "completed_boot" in state and "observed_boot" not in state:
-            raise RecoveryError("Incomplete recovery state: " + self.alias)
-        if "attempts" in state and (type(state["attempts"]) is not int or not 0 <= state["attempts"] <= 10):
-            raise RecoveryError("Invalid recovery attempts: " + self.alias)
-        if "result" in state and not _string(state["result"]):
-            raise RecoveryError("Invalid recovery result: " + self.alias)
-        return state
-
-    def save_state(self, state):
-        _recovery.save_recovery_state(self.root, state)
 
 
 class Manager:
@@ -314,7 +284,9 @@ class Manager:
                 raise ValueError()
         except (ValueError, IndexError, TypeError):
             raise RecoveryError("Invalid container inspection") from None
-        if details.get("Config", {}).get("Labels", {}).get(OWNER_LABEL) != name:
+        configuration = details.get("Config")
+        labels = configuration.get("Labels") if isinstance(configuration, dict) else None
+        if not isinstance(labels, dict) or labels.get(OWNER_LABEL) != name:
             raise RecoveryError("Container name occupied by unrelated owner")
         return details
 
@@ -436,8 +408,16 @@ class Manager:
                 self.sleep(0.5)
         raise RecoveryError("ADB target not authorized or ready")
 
-    def _device_adb(self, alias, args):
+    def _device_adb(self, alias, args, *, file_size_limit=None, container_id=None):
         self._require_lock()
+        if container_id is not None and (
+            not isinstance(container_id, str) or not re.fullmatch(r"[0-9a-f]{64}", container_id)
+        ):
+            raise RecoveryError("Invalid pinned container identity")
+        if file_size_limit is not None and (
+            type(file_size_limit) is not int or not 1 <= file_size_limit <= MEMORY_BYTES // 2
+        ):
+            raise RecoveryError("Invalid transport file size limit")
         if alias not in self.transports:
             raise RecoveryError("ADB target not bound")
         if self.scan_usb().get(alias) != self.present.get(alias):
@@ -447,7 +427,23 @@ class Manager:
         # unique USB serial instead: ADB rejects an ambiguous serial itself,
         # including ambiguity introduced after our inventory check.
         serial = self.c["devices"][alias]["target"]["serial"]
-        return self.docker("exec", self.c["container_name"], "adb", "-s", serial, *args)
+        command = ["adb", "-s", serial, *args]
+        if file_size_limit is not None:
+            # Limit the receiving ADB client, not the shared server. ADB recreates
+            # pull destinations, so retain owner-only permissions with its umask.
+            launcher = (
+                "import os,resource,sys\n"
+                "limit=int(sys.argv[1])\n"
+                "resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit))\n"
+                "os.umask(0o077)\n"
+                "os.execvp('adb',['adb',*sys.argv[2:]])\n"
+            )
+            command = ["python3", "-c", launcher, str(file_size_limit), *command[1:]]
+        # Reserved transaction files belong to one instance, even if an external
+        # process recreates the configured container name while our lock is held.
+        return self.docker(
+            "exec", container_id if container_id is not None else self.c["container_name"], *command
+        )
 
     def target(self, alias):
         device = self.c["devices"].get(alias)

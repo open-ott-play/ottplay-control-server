@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.1.5] - 2026-10-20
+
 ### Added
 
 - Share one hardened USB ADB container across an explicit Android registry,
@@ -16,6 +18,12 @@
   health checks and stream APK staging to avoid a second full in-memory copy.
 - Confine USB screenshots to private capture directories, persist recovery
   checkpoints durably and support both legacy and modern Android process lists.
+
+- Local videos (`offline`) profile save/load and portable export/import in the
+  CLI, with capability-aware examples in `ott PLAYER`, strict request/reply
+  validation and independent operator scopes. Exports use private, atomic new
+  files and never include videos, absolute filesystem paths or device access grants.
+  Same-installation bindings may be reused; other devices require local binding.
 
 ### Changed
 
@@ -36,18 +44,24 @@
   direct VPortal updates require the VPortal provider. Existing device values
   are preserved. Update the controller, CLI and player together.
 
-## [0.1.5] - 2026-10-19
+### Fixed
 
-### Added
-
-- Local videos (`offline`) profile save/load and portable export/import in the
-  CLI, with capability-aware examples in `ott PLAYER`, strict request/reply
-  validation and independent operator scopes. Exports use private, atomic new
-  files and never include videos, absolute filesystem paths or device access grants.
-  Same-installation bindings may be reused; other devices require local binding.
+- Include the six Android USB runtime scripts in the deployment archive and
+  test the unpacked entry points independently of a source checkout.
+- Share strict recovery-checkpoint validation between legacy and shared USB
+  supervisors; malformed counters and boot IDs fail safely before recovery.
+  Unlabelled containers occupying the configured name are refused cleanly.
+- Bound USB file pulls to one regular file of at most 128 MiB with a kernel
+  file-size limit, and clean up only temporary files owned by that transaction.
+- Advertise only supported diagnostic lanes for `debug` and `operation`.
 
 ### Upgrade
 
+- The deployment archive includes the Android USB manager source and transport
+  image recipe. Install all manager modules from the same release, preserve
+  existing authorized ADB keys, and disable old per-tablet recovery services
+  before enabling the shared service. Device registration and USB-host setup
+  remain explicit local operations; publication does not reconfigure tablets.
 - Update the controller, CLI and a matching Local videos-capable player together
   for `profile_save`, `profile_export` and `profile_import`. Existing profile
   selectors and M3U/VPortal settings remain compatible. Import into an inactive

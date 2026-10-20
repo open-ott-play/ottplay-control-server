@@ -5,6 +5,7 @@ import base64
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import uuid
@@ -58,6 +59,18 @@ class Transactions:
     def _temporary(self):
         return "/tmp/ott-transaction-" + uuid.uuid4().hex
 
+    def _reserve_temporary(self, container):
+        temporary = self._temporary()
+        source = (
+            "import os,sys\n"
+            "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+            "os.close(fd)\n"
+        )
+        # Ownership begins only after exclusive creation succeeds. A collision
+        # must not reach an operation's cleanup and remove somebody else's file.
+        self._aux(container, ["python3", "-c", source, temporary])
+        return temporary
+
     def _processes(self, alias):
         """Prefer all processes; old toolbox ps may reject -A or return only a header."""
         def probe(all_processes):
@@ -102,9 +115,22 @@ class Transactions:
             raise TransactionError("An absolute device file path is required")
 
         def action(device):
-            container, temporary = self._container(), self._temporary()
+            container = self._container()
+            probe = (
+                "if [ -f " + shlex.quote(device_path) + " ]; then "
+                "echo __OTT_REGULAR_FILE__; else echo __OTT_NOT_REGULAR__; fi"
+            )
+            kind = self.manager._device_adb(alias, ("shell", probe), container_id=container)
+            if kind.strip() != b"__OTT_REGULAR_FILE__":
+                raise TransactionError("Pull requires one readable regular device file")
+            # An existing non-directory destination makes ADB reject a source
+            # changed into a directory after the probe instead of recursing.
+            temporary = self._reserve_temporary(container)
             try:
-                self.manager._device_adb(alias, ("pull", device_path, temporary))
+                self.manager._device_adb(
+                    alias, ("pull", device_path, temporary),
+                    file_size_limit=MAX_PAYLOAD, container_id=container,
+                )
                 return self._aux(container, ["cat", temporary])
             finally:
                 self._aux(container, ["rm", "-f", temporary])
@@ -133,16 +159,20 @@ class Transactions:
             raise TransactionError("Only an APK install or device push may consume staged data")
 
         def action(device):
-            container, temporary = self._container(), self._temporary()
+            container = self._container()
+            temporary = self._reserve_temporary(container)
             source = (
-                "import os,sys,shutil\n"
-                "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
-                "with os.fdopen(fd,'wb') as f:shutil.copyfileobj(sys.stdin.buffer,f,1024*1024)\n"
+                "import os,sys,shutil,stat\n"
+                "fd=os.open(sys.argv[1],os.O_WRONLY|os.O_NOFOLLOW)\n"
+                "with os.fdopen(fd,'wb') as f:\n"
+                " s=os.fstat(f.fileno())\n"
+                " if not stat.S_ISREG(s.st_mode) or s.st_size:raise ValueError('Invalid staging file')\n"
+                " shutil.copyfileobj(sys.stdin.buffer,f,1024*1024)\n"
             )
             try:
                 self._aux(container, ["python3", "-c", source, temporary], payload)
                 command = [temporary if value == "@staged" else value for value in arguments]
-                return self.manager._device_adb(alias, command)
+                return self.manager._device_adb(alias, command, container_id=container)
             finally:
                 self._aux(container, ["rm", "-f", temporary])
 

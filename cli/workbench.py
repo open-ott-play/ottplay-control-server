@@ -589,18 +589,17 @@ class Parser(argparse.ArgumentParser):
 
 
 def arguments(words, json_output):
-    parser = Parser(prog="ott PLAYER " + words[0], add_help=True)
-    parser.add_argument("-j", "--json", action="store_true", default=json_output)
-    parser.add_argument("--lane", choices=("auto", "web", "native"), default="auto")
     command = words[0]
+    parser = Parser(prog="ott PLAYER " + command, add_help=True)
+    parser.add_argument("-j", "--json", action="store_true", default=json_output)
+    lanes = {"debug": ("web",), "operation": ("web", "native")}.get(command, ("auto", "web", "native"))
+    parser.add_argument("--lane", choices=lanes, default="web" if command in ("debug", "operation") else "auto")
     if command == "debug":
-        parser.set_defaults(lane="web")
         parser.add_argument("--engine", action="store_true", help="request debug v2 attached-engine evidence (requires updated player and controller)")
     if command == "inspect":
         parser.add_argument("--view", default="ui,media")
     elif command == "operation":
         parser.add_argument("operation_id")
-        parser.set_defaults(lane="web")
     elif command == "bundle":
         parser.add_argument("--out", required=True)
     elif command == "test":
@@ -609,9 +608,7 @@ def arguments(words, json_output):
         parser.add_argument("--duration", type=float, default=5)
         parser.add_argument("--report")
     parsed = parser.parse_args(words[1:])
-    if command == "debug" and parsed.lane != "web":
-        raise ObservationError("invalid_arguments")
-    if command == "operation" and (not REQUEST.fullmatch(parsed.operation_id) or parsed.lane not in ("web", "native")):
+    if command == "operation" and not REQUEST.fullmatch(parsed.operation_id):
         raise ObservationError("invalid_arguments")
     if command == "inspect":
         views = parsed.view.split(",")

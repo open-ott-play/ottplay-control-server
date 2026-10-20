@@ -78,6 +78,16 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual([a[1] for a in self.commands], ['ps', 'inspect'])
         self.assertFalse(any(a[1] == 'rm' for a in self.commands))
 
+    def test_unlabelled_container_is_refused_without_changing_it(self):
+        self.usb_node()
+        def runner(argv):
+            self.commands.append(argv)
+            return 'owned-target' if argv[1] == 'ps' else json.dumps([{'Config': {'Labels': None}}])
+        self.s.runner = runner
+        with self.assertRaisesRegex(mod.RecoveryError, 'unrelated owner'):
+            self.s.connect()
+        self.assertEqual([command[1] for command in self.commands], ['ps', 'inspect'])
+
     def test_matching_container_is_reused_without_recreation(self):
         self.usb_node()
         details = {
@@ -121,6 +131,15 @@ class SupervisorTests(unittest.TestCase):
         for raw in ['{"secure":true,"locked":false}', '{"locked":false}', '{"secure":"false","locked":true}', '{}']:
             with self.assertRaises(mod.RecoveryError):
                 mod.probe_keyguard('Broadcast completed: result=0, data=' + raw)
+
+    def test_boot_identity_uses_the_same_format_as_persisted_checkpoints(self):
+        for value in ('a' * 36, '-' * 36, BOOT_A):
+            with self.subTest(value=value), mock.patch.object(self.s, 'shell', return_value=value):
+                if value == BOOT_A:
+                    self.assertEqual(self.s.boot(), BOOT_A)
+                else:
+                    with self.assertRaises(mod.RecoveryError):
+                        self.s.boot()
 
     def test_initial_arm_does_not_unlock(self):
         self.s.connect = lambda: None
@@ -224,6 +243,51 @@ class SupervisorTests(unittest.TestCase):
                 self.assertNotIn('PRIVATE_SENTINEL', str(failure.exception))
                 self.assertEqual(self.commands, [])
                 self.assertEqual(path.read_text(), contents)
+
+    def test_invalid_checkpoint_fields_refuse_tick_and_recovery(self):
+        path = self.s.root / 'state.json'
+        invalid_states = [
+            {},
+            {'completed_boot': BOOT_A},
+            {'observed_boot': 'a' * 36},
+            {'observed_boot': BOOT_B, 'completed_boot': 1},
+            *[
+                {'observed_boot': BOOT_B, 'completed_boot': BOOT_A, 'attempts': attempts}
+                for attempts in ('1', None, True, -1, 11, 1.5)
+            ],
+            {'observed_boot': BOOT_B, 'result': ''},
+            {'observed_boot': BOOT_B, 'result': 'private\nvalue'},
+            {'observed_boot': BOOT_B, 'extra': True},
+        ]
+        for state in invalid_states:
+            for action in ('tick', 'recover'):
+                with self.subTest(state=state, action=action):
+                    contents = json.dumps(state)
+                    path.write_text(contents)
+                    with mock.patch.object(self.s, 'connect'), \
+                            mock.patch.object(self.s, 'boot', return_value=BOOT_B), \
+                            mock.patch.object(self.s, 'shell') as shell:
+                        with self.assertRaises(mod.RecoveryError):
+                            getattr(self.s, action)()
+                    shell.assert_not_called()
+                    self.assertEqual(path.read_text(), contents)
+
+    def test_legacy_checkpoint_formats_keep_their_existing_boot_policy(self):
+        for state in (
+            {'observed_boot': BOOT_A, 'completed_boot': BOOT_A},
+            {'observed_boot': BOOT_A, 'completed_boot': BOOT_A, 'attempts': 0,
+             'result': 'armed_existing_boot'},
+            {'observed_boot': BOOT_A, 'completed_boot': BOOT_A, 'attempts': 0,
+             'result': 'recovered'},
+        ):
+            with self.subTest(state=state):
+                self.s.save_state(state)
+                with mock.patch.object(self.s, 'connect'), \
+                        mock.patch.object(self.s, 'boot', return_value=BOOT_A), \
+                        mock.patch.object(self.s, 'shell') as shell:
+                    self.assertEqual(self.s.tick(), {'result': 'same_boot_no_action'})
+                shell.assert_not_called()
+                self.assertEqual(self.s.read_state(), state)
 
     def test_state_symlinks_and_unreadable_files_are_not_missing_state(self):
         path = self.s.root / 'state.json'
