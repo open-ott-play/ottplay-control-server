@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="play.ott.home" android:versionCode="1" android:versionName="0.1.0">
+    package="play.ott.home" android:versionCode="2" android:versionName="0.2.0">
     <uses-sdk android:minSdkVersion="22" android:targetSdkVersion="24" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application android:label="OTT Home" android:allowBackup="false"
@@ -11,6 +11,9 @@
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+        </activity>
+        <activity android:name=".StartupActivity" android:label="OTT Startup"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
