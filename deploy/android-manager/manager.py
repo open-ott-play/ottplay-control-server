@@ -273,7 +273,7 @@ def runtime_matches(details, spec):
             and host.get('NetworkMode') == 'none' and host.get('ReadonlyRootfs')
             and not host.get('Privileged') and not host.get('CapAdd')
             and 'ALL' in (host.get('CapDrop') or [])
-            and any(v in ('no-new-privileges', 'no-new-privileges:true') for v in (host.get('SecurityOpt') or []))
+            and (host.get('SecurityOpt') or []) in (['no-new-privileges'], ['no-new-privileges:true'])
             and not host.get('DeviceCgroupRules') and not host.get('DeviceRequests')
             and not host.get('VolumesFrom') and not host.get('PortBindings')
             and host.get('PidMode', '') in ('', 'private') and host.get('IpcMode', '') in ('', 'private')
@@ -282,7 +282,7 @@ def runtime_matches(details, spec):
             and mounts == desired_mounts
             and len([m for m in details.get('Mounts', []) if m.get('Type') == 'bind']) == 3
             and not any(m.get('Type') != 'bind' and (m.get('Type'), m.get('Destination')) != ('tmpfs', '/tmp') for m in details.get('Mounts', []))
-            and set(host.get('Tmpfs', {})) == {'/tmp'}
+            and host.get('Tmpfs') == {'/tmp': 'rw,nosuid,nodev,size=134217728,mode=1777'}
             and devices == {(n, n, 'rw') for n in spec['nodes'].values()}
             and host.get('RestartPolicy', {}).get('Name') == 'no')
 
