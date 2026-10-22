@@ -120,7 +120,7 @@ func validCategoryResult(raw json.RawMessage, status string, expected *categoryR
 	}
 	if status != "ok" {
 		return inspectEnum(m["op"], expected.Op) && inspectEnum(m["state"], "error") &&
-			inspectEnum(m["error"], "invalid_request", "runtime_mismatch", "catalog_changed", "category_not_found", "restricted", "unsupported", "unavailable")
+			inspectEnum(m["error"], "invalid_request", "runtime_mismatch", "catalog_changed", "catalog_incomplete", "category_not_found", "restricted", "unsupported", "unavailable")
 	}
 	var catalog string
 	if json.Unmarshal(m["catalog"], &catalog) != nil || !categoryCatalogPattern.MatchString(catalog) {

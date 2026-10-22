@@ -374,7 +374,7 @@ pages across receipts or treat a partial title search as complete.
 
 Rejected `categories` and paged `channels` requests return
 `{version:1,runtime,op:"list"|"select"|"channels",state:"error",error:CODE}`
-with a code from `invalid_request`, `runtime_mismatch`, `catalog_changed`,
+with a code from `invalid_request`, `runtime_mismatch`, `catalog_changed`, `catalog_incomplete`,
 `category_not_found`, `restricted`, `unsupported`, `unavailable`. The
 controller validates the requested runtime and operation, and echoed receipt
 metadata in successful results. The player checks source freshness and

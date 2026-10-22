@@ -908,6 +908,10 @@ Troubleshooting:
   current UI; do not disable kiosk merely to inspect a catalogue.
 - Catalogue changed or expired: wait for discovery to settle, list again,
   and use the newly returned ID. Do not reuse an old numeric position.
+- Catalogue discovery failed: check the provider connection and reload its
+  catalogue. Already loaded videos can remain available in the player, but
+  remote category commands reject the failed partial scan rather than treat
+  missing videos as absent.
 - Plex queue controls still navigate a previous queue: browsing preserves
   that queue deliberately; start the intended video or use the explicit
   [Plex queue commands](#ordered-plex-queues).

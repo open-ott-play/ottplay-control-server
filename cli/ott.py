@@ -271,6 +271,7 @@ MAX_CATEGORY_PAGE_SIZE = 200
 MAX_CATEGORY_TOTAL = 1000000
 CATEGORY_ERRORS = {
     "catalog_changed": "The catalog changed. Run categories again before selecting.",
+    "catalog_incomplete": "Catalog discovery failed before completing. Check the provider connection and reload its catalog before retrying.",
     "runtime_mismatch": "The player restarted. Run categories again before selecting.",
     "category_not_found": "The category is no longer available. Run categories again.",
     "restricted": "Current player policy does not allow this category operation.",

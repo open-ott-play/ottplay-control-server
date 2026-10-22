@@ -6,7 +6,7 @@
   "max_item_id_bytes": 2048,
   "max_name_bytes": 512,
   "max_result_bytes": 1048576,
-  "errors": ["invalid_request", "runtime_mismatch", "catalog_changed", "category_not_found", "restricted", "unsupported", "unavailable"],
+  "errors": ["invalid_request", "runtime_mismatch", "catalog_changed", "catalog_incomplete", "category_not_found", "restricted", "unsupported", "unavailable"],
   "capability": {"version":1,"operations":["list","select"],"maxPageSize":200},
   "list_request": {"action":"categories","params":{"op":"list","runtime":"page-123","offset":0,"limit":200}},
   "list_result": {"version":1,"runtime":"page-123","op":"list","catalog":"media-catalog-1","provider":"plex","selected":"all","offset":0,"total":2,"has_more":false,"loading":false,"categories":[{"id":"all","name":"All","count":3},{"id":"plex:16","name":"Три кота","count":3}]},

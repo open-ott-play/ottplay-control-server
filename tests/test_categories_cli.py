@@ -202,6 +202,15 @@ class CategoriesCliTest(unittest.TestCase):
             self.assertEqual((code, out, len(calls)), (1, '', 1))
             self.assertIn('updated player', err)
 
+    def test_failed_partial_catalog_never_selects_or_plays(self):
+        error = {'version': 1, 'runtime': 'page-one', 'op': 'list', 'state': 'error', 'error': 'catalog_incomplete'}
+        for command in (['cats'], ['cat', 'all'], ['s'], ['Три кота']):
+            with self.subTest(command=command):
+                code, out, err, calls = self.run_cli(command, [capabilities(), ott.PlayerRejected('private-token', error)])
+                self.assertEqual((code, out, len(calls)), (1, '', 2))
+                self.assertIn('Catalog discovery failed', err)
+                self.assertNotIn('private-token', err)
+
     def test_stale_select_error_is_safe_and_never_retried(self):
         error = {'version': 1, 'runtime': 'page-one', 'op': 'select', 'state': 'error', 'error': 'catalog_changed'}
         for response in (ott.PlayerRejected('private-server-token', error), ott.TransportError('Connection lost')):
