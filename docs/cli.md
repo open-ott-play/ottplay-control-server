@@ -650,7 +650,7 @@ ott tv play s               # channel named s, which is also a command
 ott tv s                    # selected media category; full catalogue on legacy players
 ott tv s HD                 # filter by channel name
 ott tv categories           # media categories; selected category marked
-ott tv cat "Три кота"        # browse a category without starting playback
+ott tv cat "Tom and Jerry"  # browse a category without starting playback
 ott tv cat all               # browse all videos
 ott tv p                    # channel — current programme
 ott tv p news               # list programme matches and play a random matching channel
@@ -851,8 +851,8 @@ not a reason to retry a command using a different protocol.
 ```sh
 ott tv cats                         # short form: list categories
 ott tv categories list              # explicit long form
-ott tv category "Три кота"           # select one unambiguous category name
-ott tv categories select "Три кота"  # equivalent long form
+ott tv category "Tom and Jerry"      # select one unambiguous category name
+ott tv categories select "Tom and Jerry"  # equivalent long form
 ott tv category all                 # return to All
 ott --json tv categories            # inspect opaque category IDs
 ott tv category id:CATEGORY_ID      # use the exact ID returned above

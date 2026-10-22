@@ -185,7 +185,7 @@ Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n
 Only these exact aliases are expanded; use play TITLE for a reserved channel name.
 Category names match without case: exact name first, then a unique substring. Use id:ID for duplicates.
 Use category select NAME for a category named List, Status, Select or Set.
-Example: ott NAME cat "Три кота"; ott NAME s; ott NAME 12; ott NAME next.
+Example: ott NAME cat "Tom and Jerry"; ott NAME s; ott NAME 12; ott NAME next.
 Numbers in s are catalog numbers, even when the selected category has fewer rows.
 Signed channel offsets are nonzero whole numbers from -9007199254740991 to
 +9007199254740991; each offset sends one request. Unsigned 15 selects channel 15.
