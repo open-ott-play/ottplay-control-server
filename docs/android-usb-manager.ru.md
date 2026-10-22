@@ -1,6 +1,12 @@
 # Общий менеджер Android по USB
 
-[English](android-usb-manager.md) · [Русский](android-usb-manager.ru.md)
+<!-- language-navigation:start -->
+<p dir="ltr">
+<a href="android-usb-manager.md" lang="en" dir="ltr">English</a> · <a href="android-usb-manager.ar.md" lang="ar" dir="rtl">العربية</a> · <a href="android-usb-manager.bn.md" lang="bn" dir="ltr">বাংলা</a> · <a href="android-usb-manager.cs.md" lang="cs" dir="ltr">Čeština</a> · <a href="android-usb-manager.de.md" lang="de" dir="ltr">Deutsch</a> · <a href="android-usb-manager.es.md" lang="es" dir="ltr">Español</a> · <a href="android-usb-manager.fa.md" lang="fa" dir="rtl">فارسی</a> · <a href="android-usb-manager.fr.md" lang="fr" dir="ltr">Français</a><br>
+<a href="android-usb-manager.he.md" lang="he" dir="rtl">עברית</a> · <a href="android-usb-manager.hi.md" lang="hi" dir="ltr">हिन्दी</a> · <a href="android-usb-manager.id.md" lang="id" dir="ltr">Bahasa Indonesia</a> · <a href="android-usb-manager.it.md" lang="it" dir="ltr">Italiano</a> · <a href="android-usb-manager.ja.md" lang="ja" dir="ltr">日本語</a> · <a href="android-usb-manager.ko.md" lang="ko" dir="ltr">한국어</a> · <a href="android-usb-manager.nl.md" lang="nl" dir="ltr">Nederlands</a> · <a href="android-usb-manager.pl.md" lang="pl" dir="ltr">Polski</a><br>
+<a href="android-usb-manager.pt.md" lang="pt" dir="ltr">Português</a> · <a href="android-usb-manager.ru.md" lang="ru" dir="ltr">Русский</a> · <a href="android-usb-manager.th.md" lang="th" dir="ltr">ไทย</a> · <a href="android-usb-manager.tr.md" lang="tr" dir="ltr">Türkçe</a> · <a href="android-usb-manager.uk.md" lang="uk" dir="ltr">Українська</a> · <a href="android-usb-manager.vi.md" lang="vi" dir="ltr">Tiếng Việt</a> · <a href="android-usb-manager.zh-Hans.md" lang="zh-Hans" dir="ltr">简体中文</a> · <a href="android-usb-manager.zh-Hant.md" lang="zh-Hant" dir="ltr">繁體中文</a>
+</p>
+<!-- language-navigation:end -->
 
 Менеджер заменяет отдельные ADB-контейнеры для планшетов одним сервером ADB
 и явным реестром устройств. Служба на USB-хосте отслеживает переподключения
@@ -68,8 +74,9 @@ flowchart LR
 
 ## Изоляция и проверка устройства
 
-ADB работает основным процессом контейнера. Порт прослушивается только
-на loopback-интерфейсе внутри контейнера. Используются `--network none`,
+ADB работает основным процессом контейнера, а не фоновым демоном
+в контейнере с бездействующим основным процессом `sleep`. Порт прослушивается
+только на loopback-интерфейсе внутри контейнера. Используются `--network none`,
 корневая файловая система только для чтения, сброс всех Linux capabilities,
 `no-new-privileges` и ограниченный writable-каталог `/tmp`.
 Опубликованных портов, Docker socket и общего доступа к `/dev` либо
@@ -174,8 +181,9 @@ digest образа; оба примера устройств выключены
 
 Сохраните действующие ключи перед выводом старых контейнеров из эксплуатации.
 Для поиска дубликатов сравнивайте отпечатки публичных ключей, не выводя
-приватные ключи. Генерация нового ключа ради объединения контейнеров может
-потребовать нового подтверждения на планшетах, которые сейчас недоступны.
+приватные ключи. Не заменяйте действующий ключ новым только ради
+объединения контейнеров: это может потребовать нового подтверждения
+на планшетах, которые сейчас недоступны.
 
 Для каждой включённой записи нужна полная идентичность, снятая при проверке
 реального устройства. UUID устройства в OTT, MAC-адрес и предположение
@@ -317,7 +325,7 @@ bootstrap может копировать ключи из старого кон�
 на протяжении всей операции. Не запускайте внутри этой секции
 второй процесс, ожидающий ту же блокировку: используйте совместимый
 вызов внутри текущего процесса либо оформите всю операцию одной транзакцией.
-Для временных перенаправлений портов предусматривайте удаление после работы.
+Выделяйте временные порты перенаправления и удаляйте перенаправления после работы.
 
 ### Атомарные операции с файлами и CDP
 
@@ -345,7 +353,7 @@ bootstrap может копировать ключи из старого кон�
 для распознавания аргумента пакета. При совпадении имени существующий файл
 сохраняется. Запись данных
 открывает только пустой обычный зарезервированный файл, не следуя symlink.
-Вспомогательные команды Docker обращаются к установленному ID контейнера.
+Вспомогательные команды Docker обращаются к фактически обнаруженному ID контейнера.
 CDP находит ровно один процесс приложения и его отладочный сокет,
 выделяет порт через `tcp:0`, подставляет его в код клиента
 и удаляет только это перенаправление после завершения или ошибки.
@@ -425,7 +433,7 @@ ott -t 20 lobby inspect -j
 
 - Появление ранее авторизованного USB-устройства через общий сервер.
 - Отсутствие команд на неизвестных, отсутствующих, выключенных
-  и неоднозначных устройствах.
+  и неоднозначных устройствах, включая дубликаты serial.
 - Выполнение команды чтения и получение бинарного скриншота
   именно с выбранного планшета.
 - Восстановление после новой загрузки на устройстве,
