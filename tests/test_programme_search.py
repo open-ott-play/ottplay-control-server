@@ -190,15 +190,17 @@ class LaunchTest(unittest.TestCase):
         target = {"catalog": "fresh", "id": "cats", "title": "Cats", "start": NOW - 600, "end": NOW - 300}
         client = Mock()
         client.device.return_value = "tv"
-        client.call.side_effect = [{"channels": []}, {"dispatched": True,
+        client.call.side_effect = [ott.PlayerUnsupported("Legacy player"), {"channels": []}, {"dispatched": True,
             "channel": {"number": 1, "name": "Channel", "id": "cats"}, "start": NOW - 600, "end": NOW - 300}]
         with patch.object(ott, "read_json", return_value={"epg": SETTINGS}), patch.object(ott, "Client", return_value=client), \
              patch.object(ott.time, "time", return_value=NOW), \
              patch.object(ott, "server_programs", return_value=({"programs": [program]}, {(1, NOW - 600): target})) as epg, \
              contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(ott.main(["tv", "cats"]), 0)
+            # The category-list alias is reserved; explicit play preserves title search.
+            self.assertEqual(ott.main(["tv", "play", "cats"]), 0)
+        self.assertEqual(client.call.call_args_list[0].args, ("tv", "capabilities", {}))
         self.assertEqual(client.call.call_args_list[-1].args, ("tv", "play_archive_catalog", target))
-        self.assertEqual(client.call.call_count, 2)
+        self.assertEqual(client.call.call_count, 3)
         self.assertEqual(epg.call_args.args[3], "cats")
         self.assertIn("3 consecutive programmes", output.getvalue())
 
