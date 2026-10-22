@@ -647,8 +647,11 @@ ott tv news                 # list name matches and play a random matching chann
 ott tv "РЕН"                # short case-insensitive channel-name fragment
 ott tv "РЕН ТВ HD"          # longer channel-name query; same matching rules
 ott tv play s               # channel named s, which is also a command
-ott tv s                    # all channels from the active provider
+ott tv s                    # selected media category; full catalogue on legacy players
 ott tv s HD                 # filter by channel name
+ott tv categories           # media categories; selected category marked
+ott tv cat "Три кота"        # browse a category without starting playback
+ott tv cat all               # browse all videos
 ott tv p                    # channel — current programme
 ott tv p news               # list programme matches and play a random matching channel
 ott tv p --list news        # filter programme titles without switching channels
@@ -700,6 +703,7 @@ Global flags before `PLAYER` also have standard short forms:
 
 - `status` / `st`
 - `s` / `channels`
+- `categories` / `cats`, and `category` / `cat`
 - `p` / `programs` / `programmes`
 - `prev` / `previous`; `next`
 - `v` / `vol` / `volume`
@@ -755,9 +759,11 @@ must confirm the selected number, ID and name before the CLI reports success.
 A failed or uncertain switch exits with code 1 and is never retried automatically.
 Keep the provider/catalogue unchanged between search and playback; a mismatching
 acknowledgement reports an error but cannot undo a switch that already happened.
-The numbers used by `s` and `play` refer to the provider's full catalogue,
-regardless of the category currently open. `random` retains the existing
-behaviour of using the current playback list.
+The numbers used by `s` and numeric `play` refer to the provider's full
+catalogue, including when a media category filters the displayed rows.
+Category positions are not channel numbers. `random` uses the current
+playback list. Updated media catalogues use the stable selection described
+below; the legacy compatibility path retains the number-based switch.
 
 `p` includes only programmes with a title and `start <= now < end`. Channels
 without current EPG are omitted. Plain `p` only lists programmes. `p TEXT`
@@ -826,6 +832,85 @@ visit resolves a fresh stream URL; an unavailable next item stops playback inste
 of being silently skipped. The command's in-memory queue is not restored after
 restarting the player. With the standalone VPortal provider selected, use
 [`kiosk on`](#kiosk-mode) after playback starts to persist and repeat that selection.
+
+## Media categories and stable video selection
+
+On compatible Plex and standalone VPortal players, videos are available in
+the **All** category without first choosing folders. Libraries, sections,
+folders and series also appear as categories. A video can belong to several
+categories; **All** contains it once. This does not add VPortal to the M3U
+provider.
+
+Update the controller, CLI and player together. Check `ott tv caps` for the
+`categories` capability; the historical installation revision shown earlier
+in this guide predates this extension. Unsupported players retain their
+existing `s` and name-play behavior. Category commands explain when an update
+is needed. A network failure or invalid capability response is an error,
+not a reason to retry a command using a different protocol.
+
+```sh
+ott tv cats                         # short form: list categories
+ott tv categories list              # explicit long form
+ott tv category "Три кота"           # select one unambiguous category name
+ott tv categories select "Три кота"  # equivalent long form
+ott tv category all                 # return to All
+ott --json tv categories            # inspect opaque category IDs
+ott tv category id:CATEGORY_ID      # use the exact ID returned above
+ott tv s                            # list videos in the browsing category
+ott tv s "Пикник"                    # filter that category without playing
+ott tv play "Пикник"                 # choose among matching titles and play
+ott --json tv s                      # inspect opaque stable video IDs
+ott tv play id:VIDEO_ID              # exact ID from this category's list
+```
+
+Replace `CATEGORY_ID` and `VIDEO_ID` with returned values, retaining their
+case and punctuation. Names support case-insensitive Unicode matching:
+an exact name takes precedence, otherwise a unique name fragment selects
+the category.
+Duplicate or ambiguous category names require an exact ID. A category
+named `List` or `Status` can be addressed as `category select List` or by ID;
+use an ID for a real category named `All`. `play cat` still plays a video
+whose title is the command name `cat`.
+
+Selecting a category only changes browsing. It does not start a video,
+replace an explicit Plex queue, or change the category currently playing.
+`next`, `prev`, signed offsets and `random` continue to use their existing
+playback context. Starting a video from the selected category enters that
+category through the normal player admission and resume path. Local kiosk,
+parental and busy-state restrictions still apply. Listing is read-only;
+category selection does not unlock a restricted player.
+
+The CLI reads pages from one catalogue snapshot. A title-based switch uses
+the returned video ID and snapshot receipt, so a provider/profile change,
+reload or catalogue edit cannot redirect the switch to a different video.
+Receipts expire: repeat the listing after a stale-catalogue error. Failed or
+uncertain switches are never repeated automatically. Numeric commands such
+as `ott tv 12` keep their existing global-number behavior. On updated media
+players, a number belonging to the browsing category starts there, so
+subsequent `next`/`prev` stay in that category. A global number outside it
+can still select a video through the normal catalogue fallback.
+
+Catalogue discovery can continue while videos are already available. A
+listing marked incomplete reports only loaded items and exits with code 3;
+repeat it after discovery finishes. Name-based category selection and
+title-based playback reject incomplete results. An explicit loaded ID can
+be used without guessing from a partial name search. A changed snapshot
+during pagination requires a fresh listing rather than mixing old and new
+pages. No matches in an incomplete result does not prove the video is absent.
+
+Troubleshooting:
+
+- No category controls: check the active provider and `caps`, then update
+  the player, controller and installed CLI. Reload the player after updating.
+- Unexpected videos in `s`: inspect the selected category in `categories`,
+  or select `category all`.
+- A category switch is rejected: inspect `kiosk status` and the player's
+  current UI; do not disable kiosk merely to inspect a catalogue.
+- Catalogue changed or expired: wait for discovery to settle, list again,
+  and use the newly returned ID. Do not reuse an old numeric position.
+- Plex queue controls still navigate a previous queue: browsing preserves
+  that queue deliberately; start the intended video or use the explicit
+  [Plex queue commands](#ordered-plex-queues).
 
 ## Programme search configuration and archives
 

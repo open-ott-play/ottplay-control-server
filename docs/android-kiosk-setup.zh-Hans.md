@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 验证库 ID、标题和项目数。管理员电脑请求成功，不能证明平板连通。请求失败时，检查平板保存的地址、路由、TLS 支持和凭据。优先使用服务器有效的 HTTPS 端点。若旧固件必须使用私有 LAN HTTP，仅在此安装中使用，记录令牌和媒体未经加密传输的事实，不要重写共享预设或全局禁用证书验证。切勿在诊断或文档中公开令牌或私有媒体 URL。
 
+较新的播放器如果在 `caps` 中提供 `categories`，Plex 会直接打开所有视频，无需先选择文件夹。使用 `ott TABLET categories` 和 `ott TABLET category all`；参见[媒体分类](cli.md#media-categories-and-stable-video-selection)。下面的文件夹选择步骤适用于明确标注的旧版播放器。
+
 更改 Plex 服务器地址会清除所选库根目录。选择 **Plex** 提供商，打开 **Plex settings → Folders**，勾选目标库行（而不只是 **Browse folders**），选择 **Ok**，再选 **Save and open library**。播放器 `1.1.58-beta.19` 中，只有服务器凭据可能打开文件夹选择器，而 `ready` 仍为 false；执行队列命令前完成文件夹选择。不要只为获得 `ready: true` 而改用 M3U：Plex 队列虽可能在那里播放，但 `kiosk on --strict` 可能保存没有绑定媒体的等待中 M3U 策略，它不能锁定或恢复 Plex 队列。
 
 ## 启动并锁定队列

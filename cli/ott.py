@@ -22,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from types import SimpleNamespace
 import urllib.error
 import urllib.parse
@@ -71,6 +72,11 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME TITLE                     search channels, current EPG, then archives within 144 hours
   ott NAME play s                    play a channel whose name is reserved
   ott NAME s [TEXT]                  list channels, optionally matching TEXT
+  ott NAME categories [list]         list media categories; * marks the selected category
+  ott NAME category NAME             select a category without starting playback (alias: cat)
+  ott NAME categories select id:ID   select the exact category ID shown by categories
+  ott NAME category all              return to all videos; s lists the selected category
+  ott NAME play id:VIDEO_ID           play an exact video ID shown by ott --json NAME s
   ott NAME p                         list channel — current programme
   ott NAME p TEXT                    search current programmes, then available archives
   ott NAME p --list [TEXT]           list programmes without switching channels
@@ -170,13 +176,17 @@ Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
-provider/prov; providers/provs; capabilities/caps; input/key; prev/previous; screenshot/shot;
+provider/prov; providers/provs; categories/cats; category/cat; capabilities/caps; input/key; prev/previous; screenshot/shot;
 fav/favs/favorite/favorites/favourite/favourites; aspect/aspect-ratio; stop/standby; go/start/wake.
 Aspect modes also accept "Fit to screen" and "Fill screen".
 Use -l or --list with p/vp/vpr. Input aliases include enter/ok, return/back,
 ch+/channel_up, ch-/channel_down, vol+/volume_up, vol-/volume_down, fs/fullscreen.
 Profile fields: url/playlist, history/history-hours/history_hours, vp/vportal, n/name.
 Only these exact aliases are expanded; use play TITLE for a reserved channel name.
+Category names match without case: exact name first, then a unique substring. Use id:ID for duplicates.
+Use category select NAME for a category named List, Status, Select or Set.
+Example: ott NAME cat "Три кота"; ott NAME s; ott NAME 12; ott NAME next.
+Numbers in s are catalog numbers, even when the selected category has fewer rows.
 Signed channel offsets are nonzero whole numbers from -9007199254740991 to
 +9007199254740991; each offset sends one request. Unsigned 15 selects channel 15.
 """
@@ -187,6 +197,7 @@ COMMAND_ALIASES = {
     "vol": "v", "volume": "v", "vportal": "vp", "vportal-random": "vpr",
     "message": "msg", "prof": "profile", "profs": "profiles",
     "prov": "provider", "provs": "providers",
+    "cats": "categories", "cat": "category",
     "caps": "capabilities", "key": "input", "quit": "exit", "close": "exit",
     "previous": "prev", "shot": "screenshot",
     "stop": "standby", "start": "wake", "go": "wake",
@@ -224,7 +235,7 @@ RECEIPT_ACTIONS = frozenset((
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
-    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "favorites", "aspect",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "categories", "favorites", "aspect",
     "settings_compare", "playback_handoff_export", "playback_handoff_import",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
@@ -254,6 +265,18 @@ PLEX_LIBRARY_ERRORS = {
     "too_many_libraries": "The Plex server has more than 1000 libraries; the result is incomplete.",
     "too_many_items": "The Plex library exceeds the 500-item queue limit; no partial queue was started.",
     "incomplete_library": "The complete Plex library could not be verified; no partial queue was started.",
+}
+CATEGORIES_OPERATIONS = frozenset(("list", "select"))
+MAX_CATEGORY_PAGE_SIZE = 200
+MAX_CATEGORY_TOTAL = 1000000
+CATEGORY_ERRORS = {
+    "catalog_changed": "The catalog changed. Run categories again before selecting.",
+    "runtime_mismatch": "The player restarted. Run categories again before selecting.",
+    "category_not_found": "The category is no longer available. Run categories again.",
+    "restricted": "Current player policy does not allow this category operation.",
+    "unsupported": "Media categories are not supported by the active provider.",
+    "unavailable": "The media catalog is unavailable; check player status.",
+    "invalid_request": "The player could not accept the category request; update the player and controller.",
 }
 
 
@@ -777,11 +800,24 @@ def channel_identity(value):
     return None
 
 
-def play_channel(client, device, params):
+def play_channel(client, device, params, timeout=45):
+    previous_timeout = client.timeout
+    try:
+        return _play_channel(client, device, params, time.monotonic() + timeout)
+    finally:
+        client.timeout = previous_timeout
+
+
+def _play_channel(client, device, params, deadline):
     text = params["query"].strip()
     if not text or re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
         return client.call(device, "play", params), None
-    response = client.call(device, "channels", {"search": text})
+    exact_id = text[3:] if text.casefold().startswith("id:") else None
+    if exact_id is not None and not media_text(exact_id, 2048):
+        raise Error("Use play id:VIDEO_ID with an exact nonempty ID from the selected category")
+    response = read_media_channels(client, device, "" if exact_id is not None else text, deadline,
+                                   require_modern=exact_id is not None)
+    modern = response.get("version") == 1 if isinstance(response, dict) else False
     matches = response.get("channels") if isinstance(response, dict) else None
     invalid = "The player returned an invalid channel list; no switch was requested"
     if not isinstance(matches, list):
@@ -791,16 +827,22 @@ def play_channel(client, device, params):
         if not isinstance(row, dict):
             raise Error(invalid)
         number, name = row.get("number"), row.get("name")
-        identity = channel_identity(row.get("id"))
+        identity = row.get("id") if modern and media_text(row.get("id"), 2048) else channel_identity(row.get("id"))
         if (type(number) is not int or not previous < number <= 9007199254740991
                 or identity is None or identity in identities
                 or not epg_text(name, 16384) or not name.strip()
-                or text.casefold() not in name.casefold()):
+                or (exact_id is None and (media_search_key(text) not in media_search_key(name) if modern
+                                          else text.casefold() not in name.casefold()))):
             raise Error(invalid)
         previous = number
         identities.add(identity)
-        rows.append({key: row[key] for key in ("id", "number", "name")})
-    data = {"channels": rows}
+        if exact_id is None or row["id"] == exact_id:
+            rows.append({key: row[key] for key in ("id", "number", "name")})
+    data = dict(response, channels=rows) if modern else {"channels": rows}
+    if modern and response["loading"] and exact_id is None:
+        error = Error("The media catalog is still loading; no playback was requested. List categories again when loading finishes.")
+        data["playback"] = {"error": str(error)}
+        return data, error
     if not rows:
         error = Error("No channels match the search; no switch was requested")
         data["playback"] = {"error": str(error)}
@@ -808,11 +850,17 @@ def play_channel(client, device, params):
     selected = secrets.choice(rows) if len(rows) > 1 else rows[0]
     try:
         # One mutation follows the complete read-only search. Never replay it.
-        result = client.call(device, "play", {"query": str(selected["number"])})
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Channel search exceeded --timeout; no playback was requested")
+        client.timeout = remaining
+        result = (media_request(client, device, "play_catalog", {"catalog": response["catalog"], "id": selected["id"]}, deadline)
+                  if modern else client.call(device, "play", {"query": str(selected["number"])}))
         channel = result.get("channel") if isinstance(result, dict) else None
         if (not isinstance(channel, dict) or result.get("dispatched") is not True
                 or type(channel.get("number")) is not int or channel["number"] != selected["number"]
-                or channel_identity(channel.get("id")) != channel_identity(selected["id"])
+                or (channel.get("id") != selected["id"] if modern
+                    else channel_identity(channel.get("id")) != channel_identity(selected["id"]))
                 or channel.get("name") != selected["name"]):
             raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
         data["playback"] = {"dispatched": True, "channel": {key: channel[key] for key in ("id", "number", "name")}}
@@ -898,6 +946,8 @@ def parse_command(words):
         return "playback", {"operation": "step_channel", "offset": offset}
     if verb == "favorites":
         return "favorites", parse_favorites(tail)
+    if verb in ("category", "categories"):
+        return "categories", parse_categories(tail, singular=verb == "category")
     if verb == "update":
         return "app_update", parse_app_update(tail)
     if verb == "kiosk":
@@ -2127,6 +2177,230 @@ def print_favorites(data):
         print("The saved profile was loaded and the item resolved; visible playback has not been confirmed.")
 
 
+def parse_categories(words, singular=False):
+    if not words or (len(words) == 1 and words[0].casefold() in ("list", "status")):
+        return {"op": "list"}
+    values = words
+    if words[0].casefold() in ("select", "set"):
+        values = words[1:]
+    elif not singular:
+        raise Error("Use categories [list] or categories select NAME|id:ID; category/cat NAME also selects")
+    query = " ".join(values).strip()
+    if query.casefold() == "all":
+        return {"op": "select", "category_id": "all"}
+    if query.casefold().startswith("id:"):
+        identity = query[3:]
+        if not media_text(identity, 1024):
+            raise Error("Use id:ID with the exact nonempty category ID shown by categories")
+        return {"op": "select", "category_id": identity}
+    if not media_text(query, 512):
+        raise Error("A category name must contain 1–512 UTF-8 bytes without control characters")
+    return {"op": "select", "query": query}
+
+
+def media_text(value, maximum):
+    return (plex_library_text(value, maximum)
+            and not any(127 <= ord(char) <= 159 for char in value))
+
+
+def media_search_key(value):
+    # Match the player's canonical, locale-independent Unicode search keys.
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFD", value).casefold())
+
+
+def media_request(client, device, action, params, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise Error("Media catalog request exceeded --timeout; no further request was sent")
+    client.timeout = remaining
+    try:
+        data = client.call(device, action, params)
+    except PlayerRejected as exc:
+        detail = "The media catalog request was rejected; the catalog, provider or profile may have changed."
+        error = exc.data
+        if (isinstance(error, dict) and set(error) == {"version", "runtime", "op", "state", "error"}
+                and type(error["version"]) is int and error["version"] == 1
+                and error["runtime"] == params.get("runtime")
+                and error["op"] == params.get("op", action) and error["state"] == "error"
+                and isinstance(error["error"], str) and error["error"] in CATEGORY_ERRORS):
+            detail = CATEGORY_ERRORS[error["error"]]
+        raise Error(detail + " The request was not repeated.") from None
+    except PlayerUnsupported:
+        raise Error("This player or controller does not support media catalog requests. Update both; the request was not repeated.") from None
+    if time.monotonic() >= deadline:
+        raise Error("Media catalog response exceeded --timeout. A change may have executed; inspect categories before retrying. The request was not repeated.")
+    return data
+
+
+def media_capabilities(client, device, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise Error("Capability discovery exceeded --timeout; no catalog request was sent")
+    client.timeout = remaining
+    try:
+        data = client.call(device, "capabilities", {})
+    except PlayerUnsupported:
+        return None
+    except PlayerRejected:
+        raise Error("Capability discovery was rejected; no catalog or playback request was sent") from None
+    controls = capabilities_metadata(data)
+    return controls if "categories" in controls else None
+
+
+def media_page_metadata(data, runtime, kind, offset, limit, catalog=None, category=None):
+    invalid = "The player returned invalid media catalog metadata; no further request was sent"
+    common = {"version", "runtime", "catalog", "offset", "total", "has_more", "loading"}
+    expected = common | ({"op", "provider", "selected", "categories"} if kind == "categories"
+                         else {"category", "channels"})
+    if (not isinstance(data, dict) or set(data) != expected
+            or type(data["version"]) is not int or data["version"] != 1 or data["runtime"] != runtime
+            or not isinstance(data["catalog"], str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", data["catalog"])
+            or (catalog is not None and data["catalog"] != catalog)
+            or type(data["offset"]) is not int or data["offset"] != offset
+            or type(data["total"]) is not int or not offset <= data["total"] <= MAX_CATEGORY_TOTAL
+            or type(data["has_more"]) is not bool or type(data["loading"]) is not bool):
+        raise Error(invalid)
+    if kind == "categories":
+        if (data["op"] != "list" or not isinstance(data["provider"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", data["provider"])
+                or not media_text(data["selected"], 1024)):
+            raise Error(invalid)
+    elif data["category"] != category or not media_text(data["category"], 1024):
+        raise Error(invalid)
+    rows = data[kind]
+    if (not isinstance(rows, list) or len(rows) > limit or offset + len(rows) > data["total"]
+            or data["has_more"] != (offset + len(rows) < data["total"])
+            or (data["has_more"] and not rows)):
+        raise Error(invalid)
+    identities, previous = set(), 0
+    for row in rows:
+        number_key = "count" if kind == "categories" else "number"
+        if (not isinstance(row, dict) or set(row) != {"id", "name", number_key}
+                or not media_text(row["id"], 1024 if kind == "categories" else 2048)
+                or row["id"] in identities or not media_text(row["name"], 512)
+                or type(row[number_key]) is not int
+                or not (0 if kind == "categories" else previous + 1) <= row[number_key] <= MAX_CATEGORY_TOTAL):
+            raise Error(invalid)
+        identities.add(row["id"])
+        previous = row[number_key]
+    return dict(data, **{kind: [dict(row) for row in rows]})
+
+
+def read_categories(client, device, controls, deadline):
+    runtime = controls["player"]["runtime"]
+    limit = controls["categories"]["maxPageSize"]
+    result, rows, identities = None, [], set()
+    while True:
+        params = {"op": "list", "runtime": runtime, "offset": len(rows), "limit": limit}
+        if result is not None:
+            params["catalog"] = result["catalog"]
+        page = media_page_metadata(media_request(client, device, "categories", params, deadline), runtime,
+                                   "categories", len(rows), limit, params.get("catalog"))
+        if result is not None and any(page[key] != result[key] for key in ("provider", "selected", "total", "loading")):
+            raise Error("The media category catalog changed between pages; no selection was sent")
+        if any(row["id"] in identities for row in page["categories"]):
+            raise Error("The player returned duplicate category IDs; no selection was sent")
+        identities.update(row["id"] for row in page["categories"])
+        rows.extend(page["categories"])
+        result = page
+        if not page["has_more"]:
+            break
+    if not result["loading"] and ("all" not in identities or result["selected"] not in identities):
+        raise Error("The complete media catalog omitted All or the selected category; no selection was sent")
+    return dict(result, offset=0, categories=rows)
+
+
+def categories_command(client, device, params, timeout):
+    previous_timeout = client.timeout
+    deadline = time.monotonic() + timeout
+    try:
+        controls = media_capabilities(client, device, deadline)
+        if (controls is None or "list" not in controls["categories"]["operations"]
+                or params["op"] not in controls["categories"]["operations"]):
+            raise Error("Category commands require an updated player and controller advertising categories; no category request was sent")
+        result = read_categories(client, device, controls, deadline)
+        if params["op"] == "list":
+            return result
+        if "category_id" in params:
+            matches = [row for row in result["categories"] if row["id"] == params["category_id"]]
+        else:
+            if result["loading"]:
+                raise Error("The category catalog is still loading; name selection is incomplete and no selection was sent")
+            query = media_search_key(params["query"])
+            matches = [row for row in result["categories"] if media_search_key(row["name"]) == query]
+            if not matches:
+                matches = [row for row in result["categories"] if query in media_search_key(row["name"])]
+        if not matches:
+            raise Error("No category matches. Run categories to see available names and IDs; no selection was sent")
+        if len(matches) != 1:
+            choices = ", ".join(shlex.quote("id:" + row["id"]) for row in matches[:20])
+            raise Error("Several categories have that name. Select an exact ID: " + choices + "; no selection was sent")
+        selected = matches[0]
+        request = {"op": "select", "runtime": result["runtime"], "catalog": result["catalog"], "category": selected["id"]}
+        response = media_request(client, device, "categories", request, deadline)
+        expected = {"version": 1, "runtime": result["runtime"], "op": "select", "catalog": result["catalog"],
+                    "provider": result["provider"], "selected": selected["id"], "dispatched": True}
+        if (not isinstance(response, dict) or response != expected or type(response.get("version")) is not int
+                or response.get("dispatched") is not True):
+            raise Error("The player did not confirm the category selection. It may have executed; inspect categories before retrying. The request was not repeated.")
+        return dict(expected)
+    finally:
+        client.timeout = previous_timeout
+
+
+def read_media_channels(client, device, search, deadline, require_modern=False):
+    controls = media_capabilities(client, device, deadline)
+    if controls is None:
+        if require_modern:
+            raise Error("Playing an exact video ID requires a player and controller advertising categories; no playback was requested")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Capability discovery exceeded --timeout; no catalog request was sent")
+        client.timeout = remaining
+        return client.call(device, "channels", {"search": search})
+    if "list" not in controls["categories"]["operations"]:
+        raise Error("Media category listing is unavailable in the current player state; no legacy fallback or playback was requested")
+    categories = read_categories(client, device, controls, deadline)
+    runtime, category = categories["runtime"], categories["selected"]
+    limit = controls["categories"]["maxPageSize"]
+    result, rows, identities = None, [], set()
+    while True:
+        params = {"runtime": runtime, "catalog": result["catalog"] if result else categories["catalog"],
+                  "category": category, "offset": len(rows), "limit": limit}
+        if search:
+            params["search"] = search
+        page = media_page_metadata(media_request(client, device, "channels", params, deadline), runtime,
+                                   "channels", len(rows), limit, result["catalog"] if result else None, category)
+        if result is not None and any(page[key] != result[key] for key in ("total", "loading")):
+            raise Error("The video catalog changed between pages; no playback was requested")
+        if (any(row["id"] in identities for row in page["channels"])
+                or (rows and page["channels"] and page["channels"][0]["number"] <= rows[-1]["number"])
+                or any(media_search_key(search) not in media_search_key(row["name"]) for row in page["channels"])):
+            raise Error("The player returned an inconsistent video catalog; no playback was requested")
+        identities.update(row["id"] for row in page["channels"])
+        rows.extend(page["channels"])
+        result = page
+        if not page["has_more"]:
+            break
+    return dict(result, offset=0, loading=result["loading"] or categories["loading"], channels=rows)
+
+
+def channels_command(client, device, params, timeout):
+    previous_timeout = client.timeout
+    try:
+        return read_media_channels(client, device, params["search"], time.monotonic() + timeout)
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_categories(data):
+    if data["op"] == "select":
+        print("Category selected: " + shlex.quote("id:" + data["selected"]) + ". Playback was not started.")
+        return
+    for row in data["categories"]:
+        print(f"{'*' if row['id'] == data['selected'] else ' '} {shlex.quote('id:' + row['id'])}  {clean(row['name'])} ({row['count']})")
+
+
 def parse_plex_library(words):
     operation = words[0].casefold()
     if operation == "libraries":
@@ -2546,6 +2820,18 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_library"] = {"version": 1, "operations": list(operations), "max_items": library["max_items"]}
+    if "categories" in data:
+        categories = data["categories"]
+        operations = categories.get("operations") if isinstance(categories, dict) else None
+        if (not isinstance(categories, dict) or set(categories) != {"version", "operations", "maxPageSize"}
+                or type(categories.get("version")) is not int or categories["version"] != 1
+                or type(categories.get("maxPageSize")) is not int
+                or not 1 <= categories["maxPageSize"] <= MAX_CATEGORY_PAGE_SIZE
+                or not isinstance(operations, list) or len(operations) > len(CATEGORIES_OPERATIONS)
+                or any(not isinstance(op, str) or op not in CATEGORIES_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["categories"] = dict(categories, operations=list(operations))
     if "inspect" in data:
         inspection = data["inspect"]
         sections = inspection.get("sections") if isinstance(inspection, dict) else None
@@ -2709,6 +2995,12 @@ def print_player_status(data, name):
         print(f'  {prefix} plex shuffle "NAME" / plex library "NAME"  — play a whole library (or id:NUMBER)')
     if "preview" in libraries:
         print(f'  {prefix} plex library --preview "NAME"  — check a whole library without playing')
+    categories = controls.get("categories", {}).get("operations", [])
+    if "list" in categories:
+        print(f"  {prefix} categories / cats  — list media categories; * marks the selected category")
+    if "select" in categories:
+        print(f'  {prefix} category "NAME" / cat id:ID  — select a category without starting playback')
+        print(f"  {prefix} cat all  — show all videos again; use s to list the selected category")
     favorites = controls.get("favorites", {}).get("operations", [])
     for operation, command, description in (
             ("list", "fav", "list this player's saved favorites"),
@@ -2731,7 +3023,7 @@ def print_player_status(data, name):
         print(f"  {prefix} update install SHA256  — request installation of the staged APK")
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not libraries and not favorites and not aspect.get("operations") and not update):
+            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not update):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:
@@ -3600,6 +3892,10 @@ def main(argv=None):
             data = plex_queue_command(client, device, params, args.timeout)
         elif action == "plex_library":
             data = plex_library_command(client, device, params, args.timeout)
+        elif action == "categories":
+            data = categories_command(client, device, params, args.timeout)
+        elif action == "channels":
+            data = channels_command(client, device, params, args.timeout)
         elif action == "favorites":
             data = favorites_command(client, device, params, args.timeout)
         elif action == "aspect":
@@ -3607,8 +3903,8 @@ def main(argv=None):
         elif action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
         elif action == "play":
-            data, playback_error = play_channel(client, device, params)
-            if data.get("channels") == [] and "epg" in config:
+            data, playback_error = play_channel(client, device, params, args.timeout)
+            if data.get("channels") == [] and "epg" in config and data.get("version") != 1:
                 print("No channel matches. Searching current EPG and available archives...", file=sys.stderr)
                 query = params["query"]
                 data, catalog_play = server_programs(client, device, config["epg"], query, refresh=args.refresh)
@@ -3707,6 +4003,8 @@ def main(argv=None):
             print_plex_queue(data, preview=params["op"] == "preview")
         elif action == "plex_library":
             print_plex_library(data)
+        elif action == "categories":
+            print_categories(data)
         elif action == "favorites":
             print_favorites(data)
         elif action == "aspect":
@@ -3811,9 +4109,11 @@ def main(argv=None):
         if action == "programs" and data.get("partial"):
             print(f"Programme search is incomplete: checked {data['checked']} of {data['total']} channels on the player. "
                   "Unchecked channels may contain matches. This is search coverage, not EPG download progress.", file=sys.stderr)
+        if action in ("categories", "channels", "play") and data.get("loading"):
+            print("The media catalog is still loading; this listing is incomplete. Run the listing again when loading finishes.", file=sys.stderr)
         if playback_error:
             raise playback_error
-        return 3 if action == "programs" and data.get("partial") else 0
+        return 3 if (action == "programs" and data.get("partial")) or (action in ("categories", "channels") and data.get("loading")) else 0
     except (Error, KeyError, TypeError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         print("Error: " + (str(exc) if isinstance(exc, Error) else "Check the configuration; the operation did not complete"), file=sys.stderr)
         return 1

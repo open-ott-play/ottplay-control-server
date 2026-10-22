@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 Sprawdź ID biblioteki, tytuł i liczbę elementów. Udane żądanie z komputera administratora nie potwierdza połączenia tabletu. Przy błędach sprawdź na tablecie zapisany adres, routing, obsługę TLS i dane uwierzytelniające. Preferuj prawidłowy adres HTTPS serwera. Jeżeli stary firmware wymaga HTTP w prywatnej LAN, ogranicz zmianę do tej instalacji, odnotuj niezaszyfrowany przesył tokenów i multimediów, nie zmieniaj wspólnego presetu ani globalnie nie wyłączaj weryfikacji certyfikatów. Nigdy nie publikuj tokenów ani prywatnych adresów multimediów w diagnostyce lub dokumentacji.
 
+W nowszych odtwarzaczach udostępniających `categories` w `caps` Plex otwiera wszystkie filmy bez konieczności wyboru folderów. Użyj `ott TABLET categories` i `ott TABLET category all`; zobacz [kategorie multimediów](cli.md#media-categories-and-stable-video-selection). Poniższe kroki wyboru folderów dotyczą wyraźnie wskazanej starszej wersji odtwarzacza.
+
 Zmiana adresu serwera Plex usuwa wybrane korzenie bibliotek. Wybierz dostawcę **Plex**, otwórz **Plex settings → Folders**, zaznacz wiersz właściwej biblioteki (nie tylko **Browse folders**), wybierz **Ok**, następnie **Save and open library**. W odtwarzaczu `1.1.58-beta.19` same dane serwera mogą otworzyć wybór folderów, gdy `ready` pozostaje false; zakończ wybór przed poleceniami kolejki. Nie przełączaj na M3U tylko dla `ready: true`: kolejka Plex może tam grać, lecz `kiosk on --strict` może zapisać oczekującą zasadę M3U bez powiązanych mediów. Nie blokuje ona ani nie przywraca kolejki Plex.
 
 ## Uruchomienie i zablokowanie kolejki

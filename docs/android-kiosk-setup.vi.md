@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 Kiểm tra ID, tiêu đề và số mục thư viện. Yêu cầu thành công từ máy quản trị không chứng minh kết nối máy tính bảng. Khi lỗi, kiểm tra địa chỉ đã lưu, định tuyến, TLS và thông tin xác thực trên máy tính bảng. Ưu tiên endpoint HTTPS hợp lệ của máy chủ. Nếu firmware cũ cần HTTP trong LAN riêng, giới hạn ở cài đặt này, ghi nhận token và media truyền không mã hóa, không sửa preset chung hay tắt xác minh chứng chỉ toàn cục. Không công bố token hoặc URL media riêng trong chẩn đoán hay tài liệu.
 
+Trên các trình phát mới có `categories` trong `caps`, Plex mở tất cả video mà không yêu cầu chọn thư mục. Dùng `ott TABLET categories` và `ott TABLET category all`; xem [danh mục nội dung](cli.md#media-categories-and-stable-video-selection). Các bước chọn thư mục bên dưới dành cho phiên bản trình phát cũ được nêu rõ.
+
 Đổi địa chỉ máy chủ Plex xóa gốc thư viện đã chọn. Chọn nhà cung cấp **Plex**, mở **Plex settings → Folders**, đánh dấu hàng thư viện cần dùng (không chỉ **Browse folders**), chọn **Ok**, rồi **Save and open library**. Với trình phát `1.1.58-beta.19`, chỉ thông tin máy chủ có thể mở bộ chọn thư mục trong khi `ready` vẫn false; hoàn tất chọn trước lệnh hàng đợi. Không đổi sang M3U chỉ để có `ready: true`: hàng đợi Plex có thể phát ở đó, nhưng `kiosk on --strict` có thể lưu chính sách M3U chờ không gắn media. Điều đó không khóa hay khôi phục hàng đợi Plex.
 
 ## Khởi chạy và khóa hàng đợi

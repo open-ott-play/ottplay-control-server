@@ -19,6 +19,7 @@ type requestResult struct {
 	expires           time.Time
 	inspect           *inspectRequest
 	aspect            *aspectRequest
+	category          *categoryRequest
 	plexLibrary       *plexLibraryRequest
 	favorites         *favoritesRequest
 	handoff           *handoffRequest
@@ -138,6 +139,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = validScreenshotRequest(params)
 	case "aspect":
 		ok = parseAspectRequest(params) != nil
+	case "categories":
+		ok = parseCategoryRequest(action, params) != nil
 	case "inspect":
 		ok = parseInspectRequest(params) != nil
 	case "plex_queue":
@@ -197,6 +200,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 			var search string
 			ok = json.Unmarshal(params["search"], &search) == nil && len(search) <= 1024
 		}
+		if action == "channels" && !ok {
+			ok = parseCategoryRequest(action, params) != nil
+		}
 	case "command":
 		_, err = validateCommand(m["params"])
 		ok = err == nil
@@ -253,6 +259,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "aspect" {
 		e.aspect = parseAspectRequest(params)
+	}
+	if action == "categories" || action == "channels" {
+		e.category = parseCategoryRequest(action, params)
 	}
 	if action == "plex_queue" {
 		e.plexQueue = parsePlexQueueRequest(params)
@@ -376,6 +385,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var offlineProfile *offlineProfileRequest
 	var inspect *inspectRequest
 	var aspect *aspectRequest
+	var category *categoryRequest
 	playbackOperation := ""
 	for _, pending := range d.queue {
 		if pending.rpc && pending.id == id {
@@ -388,6 +398,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			playbackOperation = pending.playbackOperation
 			inspect = pending.inspect
 			aspect = pending.aspect
+			category = pending.category
 			break
 		}
 	}
@@ -396,6 +407,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if aspect == nil {
 		aspect = d.results[id].aspect
+	}
+	if category == nil {
+		category = d.results[id].category
 	}
 	if plexLibrary == nil {
 		plexLibrary = d.results[id].plexLibrary
@@ -422,6 +436,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	// An unbound or stale negative response must not consume another page's work.
 	if aspect != nil && !validAspectResult(m["data"], status, aspect) {
 		failure(w, 400, "invalid aspect result")
+		return
+	}
+	if category != nil && !validCategoryResult(m["data"], status, category) {
+		failure(w, 400, "invalid category result")
 		return
 	}
 	if screenshotRuntime != "" && status == "ok" && !validScreenshotResult(m["data"], screenshotRuntime) {
@@ -477,7 +495,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, category: e.category, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

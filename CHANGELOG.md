@@ -4,6 +4,15 @@
 
 ### Added
 
+- Capability-gated media categories in `ott`: list with `categories`/`cats`,
+  browse with `category`/`cat`, and select opaque category/video IDs. Updated
+  Plex and standalone VPortal players supply category-scoped, paginated
+  catalogues; legacy players retain their existing channel commands.
+- Bind media title playback to a runtime/source/catalogue snapshot and stable
+  video ID. Reject stale pages and incomplete name searches without retrying
+  playback. Browsing preserves the active playback category and explicit queue.
+- Validate category requests and receipts in the controller, including scoped
+  operator permissions, pagination bounds and read-only inspection access.
 - OTT Home 0.2.0 adds a visible, persistent boot-start opt-in for dedicated
   Android tablets whose firmware does not offer a third-party Home picker.
   Existing default-Home behavior is preserved, fresh installs remain opt-out,
