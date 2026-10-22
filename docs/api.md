@@ -364,8 +364,10 @@ category IDs 1,024 bytes and video IDs 2,048 bytes. Receipts are opaque ASCII
 tokens of at most 128 characters. Do not reconstruct them from source URLs
 or expose provider credentials.
 
-Receipts are bounded, expire after 120 seconds and belong to a player
-runtime, source/profile and catalogue revision. A category receipt cannot
+Receipts are bounded, expire after 120 seconds of inactivity and belong to a
+player runtime, provider, source/profile and catalogue revision. Successful,
+validated category-list and channel-page reads renew the same receipt token.
+Category selection, playback and rejected access do not renew it. A category receipt cannot
 be used as a channel-play receipt. A reload, source change, append or
 membership/order edit invalidates a prior snapshot. Ordinary browsing does
 not. Pagination reports a fixed loaded snapshot; `loading:true` separately

@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shlex
 import unittest
 from unittest import mock
 
@@ -46,8 +47,8 @@ def selected(category='folder-42'):
 
 
 class CategoriesCliTest(unittest.TestCase):
-    def run_cli(self, words, replies, machine=False):
-        client = mock.Mock(timeout=45)
+    def run_cli(self, words, replies, machine=False, timeout=45, player='tv'):
+        client = mock.Mock(timeout=timeout)
         client.device.return_value = 'dev_tv'
         client.call.side_effect = replies
         out, err = io.StringIO(), io.StringIO()
@@ -55,8 +56,8 @@ class CategoriesCliTest(unittest.TestCase):
                 mock.patch.object(ott, 'read_json', return_value={}), \
                 mock.patch.object(ott.secrets, 'choice', side_effect=lambda rows: rows[-1]), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = ott.main((['--json'] if machine else []) + ['tv'] + words)
-        self.assertEqual(client.timeout, 45)
+            code = ott.main((['--json'] if machine else []) + (['-t', str(timeout)] if timeout != 45 else []) + [player] + words)
+        self.assertEqual(client.timeout, timeout)
         return code, out.getvalue(), err.getvalue(), client.call.call_args_list
 
     def test_shared_contract_bounds_capability_and_results(self):
@@ -95,6 +96,7 @@ class CategoriesCliTest(unittest.TestCase):
             with contextlib.redirect_stdout(output):
                 ott.print_player_status({'capabilities': caps}, 'Living room')
             self.assertEqual("ott 'Living room' categories" in output.getvalue(), advertised)
+            self.assertEqual("ott 'Living room' s --limit 200" in output.getvalue(), advertised)
             self.assertEqual('No controls are currently advertised' in output.getvalue(), not advertised)
 
     def test_malformed_capabilities_reject_private_or_inconsistent_fields(self):
@@ -241,6 +243,231 @@ class CategoriesCliTest(unittest.TestCase):
         self.assertEqual(calls[-1], mock.call('dev_tv', 'channels', {
             'runtime': 'page-one', 'catalog': 'source-one', 'category': 'folder-42', 'offset': 0, 'limit': 200}))
         self.assertEqual(len(calls), 3)
+
+    def test_paging_parser_preserves_query_and_validates_bounds_before_requests(self):
+        for words in (['s', '--limit', '20', '--offset', '40', 'Три', 'кота'],
+                      ['s', '--offset', '40', '--limit', '20', '--', 'Три кота']):
+            self.assertEqual(ott.parse_command(words),
+                             ('channels', {'limit': 20, 'offset': 40, 'search': 'Три кота'}))
+        self.assertEqual(ott.parse_command(['s', '--limit', '1', '--', '--offset Три кота']),
+                         ('channels', {'limit': 1, 'offset': 0, 'search': '--offset Три кота'}))
+        self.assertEqual(ott.parse_command(['s', '--', '--limit']), ('channels', {'search': '--limit'}))
+        self.assertEqual(ott.parse_command(['s', '--limit', '200', '--offset', '0']),
+                         ('channels', {'limit': 200, 'offset': 0, 'search': ''}))
+        for query, expected in (('  Три кота  ', 'Три кота'), ('   ', '')):
+            self.assertEqual(ott.parse_command(['s', query]), ('channels', {'search': expected}))
+            self.assertEqual(ott.parse_command(['s', '--limit', '1', query]),
+                             ('channels', {'limit': 1, 'offset': 0, 'search': expected}))
+        for words in (['--limit'], ['--limit', '0'], ['--limit', '201'], ['--limit', '-1'],
+                      ['--limit', '1.5'], ['--limit', '２'], ['--limit', '9' * 4000],
+                      ['--offset', '0'], ['--limit', '1', '--offset', '-1'],
+                      ['--limit', '1', '--offset', '1000001'], ['--limit', '1', '--offset'],
+                      ['--limit', '1', '--limit', '2'], ['--limit', '1', '--offset', '0', '--offset', '1']):
+            with self.subTest(words=words):
+                code, out, _, calls = self.run_cli(['s'] + words, [])
+                self.assertEqual((code, out, calls), (1, '', []))
+
+    def test_video_queries_need_only_first_category_page_even_if_selected_is_later(self):
+        first = category_page([{'id': 'all', 'name': 'All', 'count': 40069}], total=2052, has_more=True)
+        rows = channel_page()
+        ack = {'dispatched': True, 'channel': rows['channels'][-1]}
+        for words, extra in ((['s'], []), (['play', 'Три кота'], [ack])):
+            with self.subTest(words=words):
+                code, _, _, calls = self.run_cli(words, [capabilities(), first, rows] + extra)
+                self.assertEqual(code, 0)
+                self.assertEqual([call.args[1] for call in calls].count('categories'), 1)
+                self.assertEqual(calls[2].args[2]['category'], 'folder-42')
+
+    def test_first_bounded_page_reports_total_and_roundtrippable_continuation(self):
+        query = '--offset Три кота'
+        row = {'id': 'video-72', 'number': 72, 'name': query}
+        page = channel_page([row], total=40069, has_more=True)
+        code, out, err, calls = self.run_cli(['s', '--limit', '1', '--', query],
+                                           [capabilities(), category_page(), page], timeout=90, player='Living room')
+        self.assertEqual((code, err, len(calls)), (0, '', 3))
+        self.assertIn('72: ' + query, out)
+        self.assertIn('Showing 1 of 40069 matching videos (offset 0); more: yes.', out)
+        command = out.split('Next page (current catalog): ')[1].strip()
+        self.assertEqual(shlex.split(command), ['ott', '-t', '90', 'Living room', 's', '--limit', '1', '--offset', '1', '--', query])
+
+    def test_nonzero_page_uses_primer_receipt_and_returns_only_requested_global_rows(self):
+        primer = channel_page(channel_page()['channels'][:1], total=40069, has_more=True)
+        rows = [{'id': 'later', 'number': 901, 'name': 'Три кота'},
+                {'id': 'last', 'number': 1200, 'name': 'Три кота'}]
+        page = channel_page(rows, offset=200, total=40069, has_more=True)
+        code, out, err, calls = self.run_cli(['s', '--limit', '2', '--offset', '200', 'Три кота'],
+                                           [capabilities(), category_page(), primer, page], True)
+        self.assertEqual((code, err), (0, ''))
+        data = json.loads(out)
+        self.assertEqual((data['offset'], data['total'], data['has_more'], data['channels']),
+                         (200, 40069, True, rows))
+        self.assertEqual(calls[2], mock.call('dev_tv', 'channels', {
+            'runtime': 'page-one', 'catalog': 'source-one', 'category': 'folder-42',
+            'offset': 0, 'limit': 1, 'search': 'Три кота'}))
+        self.assertEqual(calls[3], mock.call('dev_tv', 'channels', {
+            'runtime': 'page-one', 'catalog': 'category-one', 'category': 'folder-42',
+            'offset': 200, 'limit': 2, 'search': 'Три кота'}))
+
+    def test_bounded_page_rejects_changed_or_inconsistent_primer_snapshot(self):
+        primer = channel_page(channel_page()['channels'][:1], total=3, has_more=True)
+        page = channel_page(channel_page()['channels'][1:], offset=1, total=3, has_more=True)
+        variants = [dict(page, **change) for change in (
+            {'catalog': 'changed'}, {'runtime': 'changed'}, {'category': 'all'}, {'total': 4},
+            {'loading': True}, {'offset': 2}, {'channels': primer['channels']})]
+        variants.append(ott.PlayerRejected('stale', {'version': 1, 'runtime': 'page-one',
+                        'op': 'channels', 'state': 'error', 'error': 'catalog_changed'}))
+        for response in variants:
+            with self.subTest(response=response):
+                code, out, _, calls = self.run_cli(['s', '--limit', '1', '--offset', '1'],
+                    [capabilities(), category_page(), primer, response])
+                self.assertEqual((code, out, len(calls)), (1, '', 4))
+                self.assertTrue(all(call.args[1] in ('capabilities', 'categories', 'channels') for call in calls))
+
+    def test_offset_at_end_is_empty_and_beyond_end_does_not_send_page(self):
+        primer = channel_page(channel_page()['channels'][:1], total=3, has_more=True)
+        code, out, err, calls = self.run_cli(['s', '--limit', '1', '--offset', '3'],
+            [capabilities(), category_page(), primer, channel_page([], offset=3, total=3)])
+        self.assertEqual((code, err, len(calls)), (0, '', 4))
+        self.assertIn('Showing 0 of 3 matching videos (offset 3); more: no.', out)
+        self.assertNotIn('Next page', out)
+        code, out, err, calls = self.run_cli(['s', '--limit', '1', '--offset', '4'],
+            [capabilities(), category_page(), primer])
+        self.assertEqual((code, out, len(calls)), (1, '', 3))
+        self.assertIn('--offset exceeds the 3 matching videos', err)
+
+    def test_paging_requires_modern_capability_and_obeys_advertised_page_size(self):
+        old = capabilities()
+        del old['categories']
+        small = capabilities()
+        small['categories']['maxPageSize'] = 1
+        for caps, limit in ((old, 1), (ott.PlayerUnsupported('unsupported', {}), 1), (small, 2)):
+            with self.subTest(caps=caps):
+                code, out, _, calls = self.run_cli(['s', '--limit', str(limit)], [caps])
+                self.assertEqual((code, out, len(calls)), (1, '', 1))
+        code, out, err, calls = self.run_cli(['s'], [old, {'channels': []}], True)
+        self.assertEqual((code, err, json.loads(out)), (0, '', {'channels': []}))
+        self.assertEqual(calls[-1], mock.call('dev_tv', 'channels', {'search': ''}))
+
+    def test_default_listing_still_reads_all_201_pages(self):
+        total = 40069
+        clock, retained, completed = [0], [], []
+        categories = category_page([{'id': 'all', 'name': 'All', 'count': total}],
+                                   total=2052, has_more=True)
+        def respond(device, action, params):
+            retained[:] = [stamp for stamp in retained if stamp > clock[0] - 60]
+            if len(retained) >= 50:
+                raise ott.HTTPError(429)
+            retained.append(clock[0])
+            completed.append(action)
+            clock[0] += 0.8
+            if action == 'capabilities':
+                return capabilities()
+            if action == 'categories':
+                return categories
+            self.assertEqual(action, 'channels')
+            offset = params['offset']
+            rows = [{'id': str(i), 'number': i + 1, 'name': 'Video'}
+                    for i in range(offset, min(offset + 200, total))]
+            self.assertEqual(params['catalog'], 'source-one' if offset == 0 else 'category-one')
+            return channel_page(rows, offset=offset, total=total, has_more=offset + len(rows) < total)
+        def sleep(seconds):
+            clock[0] += seconds
+        with mock.patch.object(ott.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(ott.time, 'sleep', side_effect=sleep):
+            code, out, err, calls = self.run_cli(['s'], respond, True, timeout=300)
+        self.assertEqual((code, err, len(completed)), (0, '', 203))
+        self.assertGreater(len(calls), 203)
+        self.assertGreater(clock[0], 240)
+        self.assertLess(clock[0], 300)
+        data = json.loads(out)
+        self.assertEqual((len(data['channels']), data['offset'], data['has_more']), (total, 0, False))
+        self.assertEqual(data['channels'][-1]['number'], total)
+
+    def test_capability_preflight_429_waits_then_preserves_modern_or_legacy_listing(self):
+        for caps, replies, actions in (
+                (capabilities(), [category_page(), channel_page()], ['categories', 'channels']),
+                (ott.PlayerUnsupported('old player', {}), [{'channels': []}], ['channels'])):
+            clock = [0]
+            def sleep(seconds):
+                clock[0] += seconds
+            with mock.patch.object(ott.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    mock.patch.object(ott.time, 'sleep', side_effect=sleep):
+                code, _, err, calls = self.run_cli(['s'], [ott.HTTPError(429), caps] + replies)
+            self.assertEqual((code, err, clock[0]), (0, '', 1))
+            self.assertEqual([call.args[1] for call in calls], ['capabilities', 'capabilities'] + actions)
+            self.assertEqual(calls[0], calls[1])
+
+    def test_capability_retry_preserves_rejection_and_total_deadline(self):
+        for outcome, expected_calls, elapsed in ((ott.HTTPError(429), 2, 2.5),
+                                                 (ott.PlayerRejected('denied', {}), 2, 1)):
+            client = mock.Mock(timeout=2.5)
+            client.call.side_effect = [ott.HTTPError(429), outcome]
+            clock = [0]
+            def sleep(seconds):
+                clock[0] += seconds
+            with mock.patch.object(ott.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    mock.patch.object(ott.time, 'sleep', side_effect=sleep):
+                with self.assertRaises(ott.Error):
+                    ott.media_capabilities(client, 'tv', 2.5)
+            self.assertEqual((client.call.call_count, clock[0]), (expected_calls, elapsed))
+
+    def test_accepted_capability_receipt_error_does_not_resubmit(self):
+        client = object.__new__(ott.Client)
+        client.timeout = 45
+        request_id = 'a' * 32
+        client.api = mock.Mock(side_effect=[(202, {'id': request_id}), ott.HTTPError(429)])
+        with mock.patch.object(ott.time, 'monotonic', return_value=0), \
+                mock.patch.object(ott.time, 'sleep'):
+            with self.assertRaisesRegex(ott.Error, 'receipt could not be read'):
+                ott.media_capabilities(client, 'tv', 45)
+        self.assertEqual(client.api.call_count, 2)
+        self.assertEqual(client.api.call_args_list[0].args[1], {'action': 'capabilities', 'params': {}})
+        self.assertIn('&id=' + request_id, client.api.call_args_list[1].args[0])
+
+    def test_read_429_retry_keeps_parameters_and_shared_deadline(self):
+        for action, params in (('categories', {'op': 'list', 'catalog': 'pinned'}),
+                               ('channels', {'catalog': 'pinned', 'offset': 200})):
+            client = mock.Mock(timeout=45)
+            clock = [0]
+            def sleep(seconds):
+                clock[0] += seconds
+            client.call.side_effect = [ott.HTTPError(429), ott.HTTPError(429), {'ok': True}]
+            with mock.patch.object(ott.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    mock.patch.object(ott.time, 'sleep', side_effect=sleep) as wait:
+                self.assertEqual(ott.media_request(client, 'tv', action, params, 10), {'ok': True})
+            self.assertEqual(client.call.call_args_list, [mock.call('tv', action, params)] * 3)
+            self.assertEqual(wait.call_args_list, [mock.call(1), mock.call(2)])
+            self.assertEqual(client.timeout, 7)
+
+    def test_read_429_retry_stops_at_deadline_without_further_requests(self):
+        client = mock.Mock(timeout=45)
+        client.call.side_effect = ott.HTTPError(429)
+        clock = [0]
+        def sleep(seconds):
+            clock[0] += seconds
+        with mock.patch.object(ott.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(ott.time, 'sleep', side_effect=sleep) as wait:
+            with self.assertRaisesRegex(ott.Error, 'exceeded --timeout'):
+                ott.media_request(client, 'tv', 'channels', {'catalog': 'pinned'}, 2.5)
+        self.assertEqual(client.call.call_count, 2)
+        self.assertEqual(wait.call_args_list, [mock.call(1), mock.call(1.5)])
+        self.assertEqual(clock[0], 2.5)
+
+    def test_rate_limit_never_retries_mutations_or_other_failures(self):
+        for action, params, error in (
+                ('categories', {'op': 'select'}, ott.HTTPError(429)),
+                ('play_catalog', {'catalog': 'pinned', 'id': '72'}, ott.HTTPError(429)),
+                ('channels', {}, ott.HTTPError(503)),
+                ('categories', {'op': 'list'}, ott.TransportError('lost response'))):
+            with self.subTest(action=action, error=error):
+                client = mock.Mock(timeout=45)
+                client.call.side_effect = error
+                with mock.patch.object(ott.time, 'monotonic', return_value=0), \
+                        mock.patch.object(ott.time, 'sleep') as wait:
+                    with self.assertRaises(ott.Error):
+                        ott.media_request(client, 'tv', action, params, 45)
+                self.assertEqual(client.call.call_count, 1)
+                wait.assert_not_called()
 
     def test_paged_title_search_uses_category_bound_stable_id_once(self):
         caps = capabilities(); caps['categories']['maxPageSize'] = 2
