@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 Kitaplık kimliğini, başlığını ve öğe sayısını doğrulayın. Yönetici bilgisayarından başarılı istek, tablet bağlantısını kanıtlamaz. Başarısızlıkta tablette kayıtlı adresi, yönlendirmeyi, TLS desteğini ve kimlik bilgilerini kontrol edin. Sunucunun geçerli HTTPS uç noktasını tercih edin. Eski firmware özel LAN HTTP gerektiriyorsa yalnızca bu kurulumla sınırlayın, tokenların ve medyanın şifrelenmeden taşındığını kaydedin; ortak ön ayarı değiştirmeyin veya sertifika doğrulamasını genel olarak kapatmayın. Tanılama veya belgelerde token ya da özel medya URL'si yayımlamayın.
 
+Yeni oynatıcılarda `caps` içinde `categories` varsa Plex, klasör seçimini zorunlu tutmadan tüm videoları açar. `ott TABLET categories` ve `ott TABLET category all` kullanın; [medya kategorilerine](cli.md#media-categories-and-stable-video-selection) bakın. Aşağıdaki klasör seçme adımları, açıkça belirtilen eski oynatıcı sürümüne aittir.
+
 Plex sunucu adresini değiştirmek seçili kitaplık köklerini temizler. **Plex** sağlayıcısını seçin, **Plex settings → Folders** açın, istenen kitaplık satırını işaretleyin (yalnızca **Browse folders** değil), **Ok** ve sonra **Save and open library** seçin. `1.1.58-beta.19` oynatıcıda sunucu bilgileri tek başına klasör seçiciyi açabilirken `ready` false kalır; kuyruk komutlarından önce seçimi tamamlayın. Sırf `ready: true` için M3U'ya geçmeyin: Plex kuyruğu orada oynayabilir ama `kiosk on --strict`, bağlı medyası olmayan bekleyen M3U ilkesi kaydedebilir. Bu, Plex kuyruğunu kilitlemez veya geri yüklemez.
 
 ## Kuyruğu başlatma ve kilitleme

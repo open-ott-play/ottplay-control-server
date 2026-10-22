@@ -40,13 +40,24 @@ class AliasDispatchTest(unittest.TestCase):
     def run_cli(self, words, responses, json_output=False):
         client = mock.Mock()
         client.device.return_value = 'dev_tv'
-        client.call.side_effect = responses
+        try:
+            action, params = ott.parse_command(words)
+            query = params.get('query', '').strip()
+            discovery = action == 'channels' or (action == 'play' and query and
+                not ott.re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', query))
+        except ott.Error:
+            discovery = False
+        client.call.side_effect = ([ott.PlayerUnsupported('Legacy player')] if discovery else []) + responses
         output, errors = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'Client', return_value=client), mock.patch.object(ott, 'read_json', return_value={}), \
                 mock.patch.object(ott.secrets, 'choice', side_effect=lambda rows: rows[-1]) as choice, \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             code = ott.main((['--json'] if json_output else []) + ['tv'] + words)
-        return code, output.getvalue(), errors.getvalue(), client.call.call_args_list, choice.call_args_list
+        calls = client.call.call_args_list
+        if discovery:
+            self.assertEqual(calls[0], mock.call('dev_tv', 'capabilities', {}))
+            calls = calls[1:]
+        return code, output.getvalue(), errors.getvalue(), calls, choice.call_args_list
 
     def test_volume_read_aliases_share_projection_and_format(self):
         for command in ['v', 'V', 'vol', 'VOL', 'volume', 'VoLuMe']:

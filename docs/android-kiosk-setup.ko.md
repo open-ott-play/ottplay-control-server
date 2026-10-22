@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 라이브러리 ID, 제목과 항목 수를 확인하세요. 관리자 컴퓨터의 요청 성공이 태블릿 연결을 입증하지는 않습니다. 실패하면 태블릿의 저장 주소, 라우팅, TLS 지원과 자격 증명을 확인하세요. 서버의 유효한 HTTPS 엔드포인트를 권장합니다. 구형 펌웨어에 개인 LAN의 HTTP가 필요하다면 해당 설치에만 한정하고, 토큰과 미디어가 암호화되지 않은 LAN으로 전송됨을 기록하세요. 공유 프리셋을 수정하거나 인증서 검증을 전역으로 끄지 마세요. 진단이나 문서에 토큰 또는 비공개 미디어 URL을 공개하지 마세요.
 
+새 플레이어의 `caps`에 `categories`가 표시되면 Plex는 폴더 선택 없이 모든 동영상을 엽니다. `ott TABLET categories`와 `ott TABLET category all`을 사용하세요. [미디어 카테고리](cli.md#media-categories-and-stable-video-selection)를 참고하세요. 아래 폴더 선택 절차는 명시된 이전 플레이어 버전에 해당합니다.
+
 Plex 서버 주소를 바꾸면 선택된 라이브러리 루트가 지워집니다. **Plex** 공급자를 고르고 **Plex settings → Folders**를 열어 원하는 라이브러리 행을 체크하세요(**Browse folders**만으로는 부족합니다). **Ok**, 이어서 **Save and open library**를 선택하세요. 플레이어 `1.1.58-beta.19`에서는 서버 자격 증명만으로 폴더 선택기가 열려도 `ready`가 false일 수 있습니다. 대기열 명령 전에 폴더 선택을 완료하세요. `ready: true`를 얻기 위해 M3U로 바꾸지 마세요. Plex 대기열이 거기서 재생돼도 `kiosk on --strict`가 미디어 없는 대기 중 M3U 정책을 저장할 수 있습니다. 이는 Plex 대기열을 잠그거나 복원하지 않습니다.
 
 ## 대기열 시작 및 잠금

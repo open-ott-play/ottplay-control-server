@@ -45,6 +45,8 @@ media use unencrypted LAN transport, and do not rewrite a shared preset or
 disable certificate verification globally. Never publish tokens or private
 media URLs in diagnostics or documentation.
 
+On newer players advertising `categories` in `caps`, Plex opens All videos without requiring folder selection. Use `ott TABLET categories` and `ott TABLET category all`; see [media categories](cli.md#media-categories-and-stable-video-selection). The folder-selection steps below describe the older player version explicitly named there.
+
 Changing the Plex server address clears selected library roots. Select the
 **Plex** provider, open **Plex settings → Folders**, check the intended library
 row (not just **Browse folders**), choose **Ok**, then **Save and open library**.

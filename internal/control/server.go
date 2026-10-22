@@ -38,6 +38,7 @@ type entry struct {
 	playbackOperation string
 	inspect           *inspectRequest
 	aspect            *aspectRequest
+	category          *categoryRequest
 }
 type bucket struct {
 	start time.Time

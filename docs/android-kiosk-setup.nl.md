@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 Controleer bibliotheek-ID, titel en aantal items. Een geslaagd verzoek vanaf de beheercomputer bewijst geen verbinding van de tablet. Controleer bij fouten op de tablet opgeslagen adres, routering, TLS en inloggegevens. Geef de voorkeur aan het geldige HTTPS-eindpunt van de server. Vereist oude firmware HTTP op het privénetwerk, beperk dit dan tot deze installatie, leg vast dat tokens en media onversleuteld over LAN gaan en wijzig geen gedeelde preset of globale certificaatcontrole. Publiceer nooit tokens of privémedia-URL’s in diagnostiek of documentatie.
 
+Op nieuwere spelers die `categories` in `caps` tonen, opent Plex alle videos zonder verplichte mapselectie. Gebruik `ott TABLET categories` en `ott TABLET category all`; zie [mediacategorieën](cli.md#media-categories-and-stable-video-selection). De onderstaande stappen voor mapselectie gelden voor de expliciet genoemde oudere spelerversie.
+
 Wijziging van het Plex-serveradres wist geselecteerde bibliotheekbasismappen. Kies aanbieder **Plex**, open **Plex settings → Folders**, vink de bedoelde bibliotheekrij aan (niet alleen **Browse folders**), kies **Ok** en dan **Save and open library**. In speler `1.1.58-beta.19` kunnen alleen servergegevens de mapkiezer openen terwijl `ready` false blijft; voltooi de selectie vóór wachtrijopdrachten. Schakel niet alleen voor `ready: true` over op M3U: een Plex-wachtrij kan daar spelen, maar `kiosk on --strict` kan een wachtend M3U-beleid zonder gekoppelde media opslaan. Dat vergrendelt of herstelt de Plex-wachtrij niet.
 
 ## Wachtrij starten en vergrendelen

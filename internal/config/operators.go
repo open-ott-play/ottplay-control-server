@@ -25,6 +25,7 @@ var CommandOperations = map[string]string{
 	"plex_queue": "status preview play next previous stop", "plex_library": "list preview play",
 	"favorites": "list add play remove", "vportal_queue": "status next previous restart stop play",
 	"maintenance": "health logs recover_video update", "app_update": "status prepare install",
+	"categories": "list select",
 }
 
 func ValidCommandAction(action string) bool {
