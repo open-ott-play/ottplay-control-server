@@ -4,6 +4,10 @@
 
 ### Added
 
+- Explicit media pages with `ott PLAYER s --limit N [--offset N] [TEXT]`,
+  totals and next-page commands. Complete listings and title selection remain
+  complete, skip unnecessary category pages, and wait within their deadline
+  when read submissions are rejected because retained request results fill the queue.
 - Capability-gated media categories in `ott`: list with `categories`/`cats`,
   browse with `category`/`cat`, and select opaque category/video IDs. Updated
   Plex and standalone VPortal players supply category-scoped, paginated

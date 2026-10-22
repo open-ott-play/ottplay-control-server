@@ -863,6 +863,41 @@ ott --json tv s                      # inspect opaque stable video IDs
 ott tv play id:VIDEO_ID              # exact ID from this category's list
 ```
 
+For a large library, request a bounded page or narrow the title filter:
+
+```sh
+ott tv s --limit 200                      # first page in the selected category
+ott tv s --limit 200 --offset 200         # skip the first 200 matching videos
+ott tv s --limit 50 "Tom and Jerry"       # one page of matching titles
+ott tv s --limit 50 -- "--special title" # -- ends option parsing
+ott -t 300 tv s                          # allow up to five minutes for the complete list
+```
+
+`s` without `--limit` still reads the complete matching list. The default
+timeout is 45 seconds and the maximum is 300; a large list can take several
+minutes. If that budget is insufficient, use bounded pages or a narrower
+search. Long reads need an updated player that keeps an actively read catalog
+receipt valid. The CLI waits within the same timeout when the controller's
+retained request results temporarily fill its queue; it retries only rejected
+read submissions, never category changes or playback.
+
+`--limit` accepts 1–200, subject to the player's advertised maximum.
+`--offset` accepts 0–1000000, defaults to zero, and requires `--limit`.
+Offsets count matching rows in the selected category, not global channel
+numbers. Returned channel numbers remain global. Text output reports the
+number returned, total matches and whether more exist, then prints a next-page
+command. JSON preserves `offset`, `total`, `has_more` and only the requested
+`channels` page. An intentional page is successful even when `has_more` is
+true; `loading` still marks incomplete discovery and exits with code 3.
+
+Each invocation reads the current catalog. A nonzero page request first
+obtains a category-bound receipt, then reads the requested offset using that
+same snapshot. Separate next-page commands may see catalog edits or a changed
+browsing category; do not combine them as if they were one frozen export.
+Use the complete listing for a single-snapshot export. Legacy players reject
+explicit paging with update guidance, while their ordinary `s` stays unchanged.
+Title-based playback always reads all matching pages before choosing a video.
+
 Replace `CATEGORY_ID` and `VIDEO_ID` with returned values, retaining their
 case and punctuation. Names support case-insensitive Unicode matching:
 an exact name takes precedence, otherwise a unique name fragment selects

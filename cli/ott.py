@@ -72,6 +72,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME TITLE                     search channels, current EPG, then archives within 144 hours
   ott NAME play s                    play a channel whose name is reserved
   ott NAME s [TEXT]                  list channels, optionally matching TEXT
+  ott NAME s --limit N [--offset N] [TEXT]  list one media page (N: 1–200)
+  ott -t 300 NAME s                  allow more time for a complete large catalog
   ott NAME categories [list]         list media categories; * marks the selected category
   ott NAME category NAME             select a category without starting playback (alias: cat)
   ott NAME categories select id:ID   select the exact category ID shown by categories
@@ -930,6 +932,30 @@ def app_update_metadata(data, params):
     return {key: data[key] for key in keys}
 
 
+def parse_channel_list(words):
+    options = {}
+    while words:
+        if words[0] == "--":
+            words = words[1:]
+            break
+        if words[0] not in ("--limit", "--offset"):
+            break
+        key = words[0][2:]
+        if key in options or len(words) < 2 or not re.fullmatch(r"[0-9]{1,7}", words[1]):
+            raise Error("Use s --limit N [--offset N] [TEXT] with each whole-number option once")
+        value = int(words[1])
+        minimum, maximum = (1, MAX_CATEGORY_PAGE_SIZE) if key == "limit" else (0, MAX_CATEGORY_TOTAL)
+        if not minimum <= value <= maximum:
+            raise Error(f"--{key} must be between {minimum} and {maximum}")
+        options[key] = value
+        words = words[2:]
+    if "offset" in options and "limit" not in options:
+        raise Error("Use --offset together with --limit to request one media page")
+    if "limit" in options:
+        options.setdefault("offset", 0)
+    return dict(options, search=" ".join(words))
+
+
 def parse_command(words):
     if not words:
         return "status", {}
@@ -1089,10 +1115,11 @@ def parse_command(words):
             raise Error("Use vp TEXT, vpr TEXT or vp --list TEXT; the search must contain 1–1024 UTF-8 bytes")
         action = "vportal_search" if listing else "vportal_random" if verb == "vpr" else "vportal"
         return action, {"query": text}
-    if verb in ("s", "p"):
-        if verb == "p":
-            text = " ".join(tail[1:] if listing_option(words) else tail).strip()
-        return ("channels" if verb == "s" else "programs"), {"search": text}
+    if verb == "s":
+        return "channels", parse_channel_list(tail)
+    if verb == "p":
+        text = " ".join(tail[1:] if listing_option(words) else tail).strip()
+        return "programs", {"search": text}
     if verb == "v":
         if not tail:
             return "status", {}
@@ -2210,12 +2237,27 @@ def media_search_key(value):
 
 
 def media_request(client, device, action, params, deadline):
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise Error("Media catalog request exceeded --timeout; no further request was sent")
-    client.timeout = remaining
+    read_only = action == "channels" or (action == "categories" and params.get("op") == "list")
+    delay = 1
     try:
-        data = client.call(device, action, params)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Error("Media catalog request exceeded --timeout; no further request was sent")
+            client.timeout = remaining
+            try:
+                data = client.call(device, action, params)
+                break
+            except HTTPError as exc:
+                # A 429 submission was rejected before being queued. Retrying
+                # reads can wait out retained results without replaying writes
+                # or refreshing the snapshot/deadline after a failure.
+                if not read_only or exc.code != 429:
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(delay, remaining))
+                    delay = min(delay * 2, 8)
     except PlayerRejected as exc:
         detail = "The media catalog request was rejected; the catalog, provider or profile may have changed."
         error = exc.data
@@ -2287,7 +2329,7 @@ def media_page_metadata(data, runtime, kind, offset, limit, catalog=None, catego
     return dict(data, **{kind: [dict(row) for row in rows]})
 
 
-def read_categories(client, device, controls, deadline):
+def read_categories(client, device, controls, deadline, first_page_only=False):
     runtime = controls["player"]["runtime"]
     limit = controls["categories"]["maxPageSize"]
     result, rows, identities = None, [], set()
@@ -2304,9 +2346,9 @@ def read_categories(client, device, controls, deadline):
         identities.update(row["id"] for row in page["categories"])
         rows.extend(page["categories"])
         result = page
-        if not page["has_more"]:
+        if first_page_only or not page["has_more"]:
             break
-    if not result["loading"] and ("all" not in identities or result["selected"] not in identities):
+    if not result["loading"] and not result["has_more"] and ("all" not in identities or result["selected"] not in identities):
         raise Error("The complete media catalog omitted All or the selected category; no selection was sent")
     return dict(result, offset=0, categories=rows)
 
@@ -2349,9 +2391,11 @@ def categories_command(client, device, params, timeout):
         client.timeout = previous_timeout
 
 
-def read_media_channels(client, device, search, deadline, require_modern=False):
+def read_media_channels(client, device, search, deadline, require_modern=False, page_limit=None, page_offset=0):
     controls = media_capabilities(client, device, deadline)
     if controls is None:
+        if page_limit is not None:
+            raise Error("Paged listing requires a player and controller advertising categories; no channel request was sent. Use s [TEXT] for legacy listing")
         if require_modern:
             raise Error("Playing an exact video ID requires a player and controller advertising categories; no playback was requested")
         remaining = deadline - time.monotonic()
@@ -2361,35 +2405,54 @@ def read_media_channels(client, device, search, deadline, require_modern=False):
         return client.call(device, "channels", {"search": search})
     if "list" not in controls["categories"]["operations"]:
         raise Error("Media category listing is unavailable in the current player state; no legacy fallback or playback was requested")
-    categories = read_categories(client, device, controls, deadline)
+    maximum = controls["categories"]["maxPageSize"]
+    if page_limit is not None and page_limit > maximum:
+        raise Error(f"This player supports --limit up to {maximum}; no catalog request was sent")
+    # The first page carries the selected category and its source receipt even
+    # when the selected category's row is on a later page.
+    categories = read_categories(client, device, controls, deadline, first_page_only=True)
     runtime, category = categories["runtime"], categories["selected"]
-    limit = controls["categories"]["maxPageSize"]
+    limit = maximum if page_limit is None else page_limit
     result, rows, identities = None, [], set()
+    previous_number = 0
+    # Only offset zero may exchange a source receipt for a category/query
+    # receipt. A one-row primer binds nonzero page requests to that snapshot.
+    priming = page_limit is not None and page_offset > 0
     while True:
+        offset = 0 if priming else page_offset + len(rows)
+        request_limit = 1 if priming else limit
         params = {"runtime": runtime, "catalog": result["catalog"] if result else categories["catalog"],
-                  "category": category, "offset": len(rows), "limit": limit}
+                  "category": category, "offset": offset, "limit": request_limit}
         if search:
             params["search"] = search
         page = media_page_metadata(media_request(client, device, "channels", params, deadline), runtime,
-                                   "channels", len(rows), limit, result["catalog"] if result else None, category)
+                                   "channels", offset, request_limit, result["catalog"] if result else None, category)
         if result is not None and any(page[key] != result[key] for key in ("total", "loading")):
             raise Error("The video catalog changed between pages; no playback was requested")
         if (any(row["id"] in identities for row in page["channels"])
-                or (rows and page["channels"] and page["channels"][0]["number"] <= rows[-1]["number"])
+                or (page["channels"] and page["channels"][0]["number"] <= previous_number)
                 or any(media_search_key(search) not in media_search_key(row["name"]) for row in page["channels"])):
             raise Error("The player returned an inconsistent video catalog; no playback was requested")
         identities.update(row["id"] for row in page["channels"])
-        rows.extend(page["channels"])
+        if page["channels"]:
+            previous_number = page["channels"][-1]["number"]
         result = page
-        if not page["has_more"]:
+        if priming:
+            if page_offset > page["total"]:
+                raise Error(f"--offset exceeds the {page['total']} matching videos; no page request was sent")
+            priming = False
+            continue
+        rows.extend(page["channels"])
+        if page_limit is not None or not page["has_more"]:
             break
-    return dict(result, offset=0, loading=result["loading"] or categories["loading"], channels=rows)
+    return dict(result, offset=page_offset, loading=result["loading"] or categories["loading"], channels=rows)
 
 
 def channels_command(client, device, params, timeout):
     previous_timeout = client.timeout
     try:
-        return read_media_channels(client, device, params["search"], time.monotonic() + timeout)
+        return read_media_channels(client, device, params["search"], time.monotonic() + timeout,
+                                   page_limit=params.get("limit"), page_offset=params.get("offset", 0))
     finally:
         client.timeout = previous_timeout
 
@@ -2999,6 +3062,8 @@ def print_player_status(data, name):
     categories = controls.get("categories", {}).get("operations", [])
     if "list" in categories:
         print(f"  {prefix} categories / cats  — list media categories; * marks the selected category")
+        page_size = controls["categories"]["maxPageSize"]
+        print(f"  {prefix} s --limit {page_size} [--offset {page_size}] [TEXT]  — list one page of matching videos")
     if "select" in categories:
         print(f'  {prefix} category "NAME" / cat id:ID  — select a category without starting playback')
         print(f"  {prefix} cat all  — show all videos again; use s to list the selected category")
@@ -4013,6 +4078,15 @@ def main(argv=None):
         elif action == "channels" or (action == "play" and "channels" in data):
             for row in data["channels"]:
                 print(f"{row['number']}: {clean(row['name'])}")
+            if action == "channels" and "limit" in params:
+                print(f"Showing {len(data['channels'])} of {data['total']} matching videos "
+                      f"(offset {data['offset']}); more: {'yes' if data['has_more'] else 'no'}.")
+                if data["has_more"]:
+                    command = ["ott", *argv[:len(argv) - len(args.words)], args.words[0], "s",
+                               "--limit", str(params["limit"]), "--offset", str(data["offset"] + len(data["channels"]))]
+                    if params["search"]:
+                        command.extend(["--", params["search"]])
+                    print("Next page (current catalog): " + clean(shlex.join(command)))
         elif action == "programs":
             for row in data["programs"]:
                 detail = ""
