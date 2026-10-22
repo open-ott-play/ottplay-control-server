@@ -254,6 +254,10 @@ class CategoriesCliTest(unittest.TestCase):
         self.assertEqual(ott.parse_command(['s', '--', '--limit']), ('channels', {'search': '--limit'}))
         self.assertEqual(ott.parse_command(['s', '--limit', '200', '--offset', '0']),
                          ('channels', {'limit': 200, 'offset': 0, 'search': ''}))
+        for query, expected in (('  Три кота  ', 'Три кота'), ('   ', '')):
+            self.assertEqual(ott.parse_command(['s', query]), ('channels', {'search': expected}))
+            self.assertEqual(ott.parse_command(['s', '--limit', '1', query]),
+                             ('channels', {'limit': 1, 'offset': 0, 'search': expected}))
         for words in (['--limit'], ['--limit', '0'], ['--limit', '201'], ['--limit', '-1'],
                       ['--limit', '1.5'], ['--limit', '２'], ['--limit', '9' * 4000],
                       ['--offset', '0'], ['--limit', '1', '--offset', '-1'],
@@ -378,6 +382,47 @@ class CategoriesCliTest(unittest.TestCase):
         data = json.loads(out)
         self.assertEqual((len(data['channels']), data['offset'], data['has_more']), (total, 0, False))
         self.assertEqual(data['channels'][-1]['number'], total)
+
+    def test_capability_preflight_429_waits_then_preserves_modern_or_legacy_listing(self):
+        for caps, replies, actions in (
+                (capabilities(), [category_page(), channel_page()], ['categories', 'channels']),
+                (ott.PlayerUnsupported('old player', {}), [{'channels': []}], ['channels'])):
+            clock = [0]
+            def sleep(seconds):
+                clock[0] += seconds
+            with mock.patch.object(ott.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    mock.patch.object(ott.time, 'sleep', side_effect=sleep):
+                code, _, err, calls = self.run_cli(['s'], [ott.HTTPError(429), caps] + replies)
+            self.assertEqual((code, err, clock[0]), (0, '', 1))
+            self.assertEqual([call.args[1] for call in calls], ['capabilities', 'capabilities'] + actions)
+            self.assertEqual(calls[0], calls[1])
+
+    def test_capability_retry_preserves_rejection_and_total_deadline(self):
+        for outcome, expected_calls, elapsed in ((ott.HTTPError(429), 2, 2.5),
+                                                 (ott.PlayerRejected('denied', {}), 2, 1)):
+            client = mock.Mock(timeout=2.5)
+            client.call.side_effect = [ott.HTTPError(429), outcome]
+            clock = [0]
+            def sleep(seconds):
+                clock[0] += seconds
+            with mock.patch.object(ott.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    mock.patch.object(ott.time, 'sleep', side_effect=sleep):
+                with self.assertRaises(ott.Error):
+                    ott.media_capabilities(client, 'tv', 2.5)
+            self.assertEqual((client.call.call_count, clock[0]), (expected_calls, elapsed))
+
+    def test_accepted_capability_receipt_error_does_not_resubmit(self):
+        client = object.__new__(ott.Client)
+        client.timeout = 45
+        request_id = 'a' * 32
+        client.api = mock.Mock(side_effect=[(202, {'id': request_id}), ott.HTTPError(429)])
+        with mock.patch.object(ott.time, 'monotonic', return_value=0), \
+                mock.patch.object(ott.time, 'sleep'):
+            with self.assertRaisesRegex(ott.Error, 'receipt could not be read'):
+                ott.media_capabilities(client, 'tv', 45)
+        self.assertEqual(client.api.call_count, 2)
+        self.assertEqual(client.api.call_args_list[0].args[1], {'action': 'capabilities', 'params': {}})
+        self.assertIn('&id=' + request_id, client.api.call_args_list[1].args[0])
 
     def test_read_429_retry_keeps_parameters_and_shared_deadline(self):
         for action, params in (('categories', {'op': 'list', 'catalog': 'pinned'}),

@@ -953,7 +953,7 @@ def parse_channel_list(words):
         raise Error("Use --offset together with --limit to request one media page")
     if "limit" in options:
         options.setdefault("offset", 0)
-    return dict(options, search=" ".join(words))
+    return dict(options, search=" ".join(words).strip())
 
 
 def parse_command(words):
@@ -2236,28 +2236,31 @@ def media_search_key(value):
     return unicodedata.normalize("NFC", unicodedata.normalize("NFD", value).casefold())
 
 
-def media_request(client, device, action, params, deadline):
-    read_only = action == "channels" or (action == "categories" and params.get("op") == "list")
+def media_call(client, device, action, params, deadline):
+    read_only = action in ("capabilities", "channels") or (action == "categories" and params.get("op") == "list")
     delay = 1
-    try:
-        while True:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Media catalog request exceeded --timeout; no further request was sent")
+        client.timeout = remaining
+        try:
+            return client.call(device, action, params)
+        except HTTPError as exc:
+            # A 429 submission was rejected before being queued. Retrying
+            # reads can wait out retained results without replaying writes
+            # or refreshing the snapshot/deadline after a failure.
+            if not read_only or exc.code != 429:
+                raise
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise Error("Media catalog request exceeded --timeout; no further request was sent")
-            client.timeout = remaining
-            try:
-                data = client.call(device, action, params)
-                break
-            except HTTPError as exc:
-                # A 429 submission was rejected before being queued. Retrying
-                # reads can wait out retained results without replaying writes
-                # or refreshing the snapshot/deadline after a failure.
-                if not read_only or exc.code != 429:
-                    raise
-                remaining = deadline - time.monotonic()
-                if remaining > 0:
-                    time.sleep(min(delay, remaining))
-                    delay = min(delay * 2, 8)
+            if remaining > 0:
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 8)
+
+
+def media_request(client, device, action, params, deadline):
+    try:
+        data = media_call(client, device, action, params, deadline)
     except PlayerRejected as exc:
         detail = "The media catalog request was rejected; the catalog, provider or profile may have changed."
         error = exc.data
@@ -2276,12 +2279,8 @@ def media_request(client, device, action, params, deadline):
 
 
 def media_capabilities(client, device, deadline):
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise Error("Capability discovery exceeded --timeout; no catalog request was sent")
-    client.timeout = remaining
     try:
-        data = client.call(device, "capabilities", {})
+        data = media_call(client, device, "capabilities", {}, deadline)
     except PlayerUnsupported:
         return None
     except PlayerRejected:
