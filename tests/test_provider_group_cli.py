@@ -66,12 +66,15 @@ class ProviderGroupTest(unittest.TestCase):
 
     def test_aliases_and_uuid_deduplicate_exact_device_ids(self):
         client = self.make_client({'t1': 'dev_1', 'living': 'dev_1', 't2': 'dev_2', 'upper': 'DEV_1'})
+        client.call.side_effect = lambda device, action, params: (
+            {'providers': [{'id': 'm3u', 'index': 0, 'name': 'Мой провайдер'}]} if action == 'providers'
+            else {'dispatched': True, 'provider': 'm3u'})
         code, out, err, _ = self.run_cli(['--json', 'T1, living ,DEV_2,t2,upper', 'prov', 'Мой', 'провайдер'], client)
         self.assertEqual((code, err), (0, ''))
         result = json.loads(out)
         self.assertEqual([row['player'] for row in result['results']], ['T1', 'DEV_2', 'upper'])
-        self.assertEqual(client.call.call_args_list, [mock.call(device, 'provider', {'query': 'Мой провайдер'})
-            for device in ('dev_1', 'dev_2', 'DEV_1')])
+        self.assertEqual(client.call.call_args_list, [request for device in ('dev_1', 'dev_2', 'DEV_1')
+            for request in (mock.call(device, 'providers', {}), mock.call(device, 'provider', {'query': 'Мой провайдер'}))])
         self.assertEqual((result['succeeded'], result['failed']), (3, 0))
 
     def test_single_target_and_exact_comma_alias_keep_existing_output(self):
