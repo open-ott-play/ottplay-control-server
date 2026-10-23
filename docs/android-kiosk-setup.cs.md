@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 Ověřte ID, název a počet položek knihovny. Úspěšný požadavek z počítače správce nedokládá připojení tabletu. Při selhání zkontrolujte v tabletu uloženou adresu, směrování, podporu TLS a přihlašovací údaje. Upřednostněte platný HTTPS endpoint serveru. Vyžaduje-li starý firmware HTTP v soukromé LAN, omezte jej na tuto instalaci, zaznamenejte nešifrovaný přenos tokenů a médií a nepřepisujte sdílenou předvolbu ani globálně nevypínejte ověřování certifikátů. Nikdy nezveřejňujte tokeny ani soukromé adresy médií v diagnostice či dokumentaci.
 
+V novějších přehrávačích s funkcí `categories` v `caps` otevře Plex všechna videa bez povinného výběru složek. Použijte `ott TABLET categories` a `ott TABLET category all`; viz [kategorie médií](cli.md#media-categories-and-stable-video-selection). Níže uvedený výběr složek platí pro výslovně uvedenou starší verzi přehrávače.
+
 Změna adresy serveru Plex vymaže vybrané kořeny knihoven. Zvolte poskytovatele **Plex**, otevřete **Plex settings → Folders**, zaškrtněte řádek správné knihovny (nejen **Browse folders**), zvolte **Ok** a poté **Save and open library**. V přehrávači `1.1.58-beta.19` mohou samotné údaje serveru otevřít výběr složek, zatímco `ready` zůstává false; dokončete výběr před příkazy fronty. Nepřepínejte na M3U pouze kvůli `ready: true`: fronta Plex se tam může přehrát, ale `kiosk on --strict` může uložit čekající zásadu M3U bez navázaných médií. Ta frontu Plex nezamkne ani neobnoví.
 
 ## Spuštění a uzamčení fronty

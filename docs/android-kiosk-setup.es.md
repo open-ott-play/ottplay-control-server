@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 Compruebe ID, título y número de elementos de la biblioteca. Una solicitud correcta desde el ordenador del administrador no prueba la conectividad de la tableta. Ante fallos, revise en ella dirección guardada, rutas, TLS y credenciales. Prefiera el endpoint HTTPS válido del servidor. Si el firmware antiguo requiere HTTP en la LAN privada, limítelo a esta instalación, documente que tokens y medios viajan sin cifrar y no cambie un preajuste compartido ni desactive globalmente la verificación de certificados. Nunca publique tokens ni URL de medios privados en diagnósticos o documentación.
 
+En los reproductores más recientes que anuncian `categories` en `caps`, Plex abre todos los vídeos sin exigir seleccionar carpetas. Utilice `ott TABLET categories` y `ott TABLET category all`; consulte [categorías multimedia](cli.md#media-categories-and-stable-video-selection). Los pasos siguientes de selección de carpetas corresponden a la versión anterior indicada expresamente.
+
 Cambiar la dirección del servidor Plex borra las raíces de biblioteca seleccionadas. Elija el proveedor **Plex**, abra **Plex settings → Folders**, marque la fila de la biblioteca deseada (no solo **Browse folders**), elija **Ok** y luego **Save and open library**. En el reproductor `1.1.58-beta.19`, las credenciales por sí solas pueden abrir el selector mientras `ready` sigue siendo false; complete la selección antes de usar comandos de cola. No cambie a M3U solo para obtener `ready: true`: una cola Plex puede reproducirse allí, pero `kiosk on --strict` puede guardar una política M3U en espera sin medios vinculados. Eso no bloquea ni restaura la cola Plex.
 
 ## Iniciar y bloquear la cola

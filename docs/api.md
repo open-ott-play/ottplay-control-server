@@ -299,6 +299,93 @@ TTL and result limits as the other typed actions. They do not grant native
 device privileges or bypass local controls. See the
 [CLI examples](cli.md#aspect-ratio-fit-and-fill).
 
+### Media categories and bound channel pages
+
+This additive extension is advertised by compatible Plex and standalone
+VPortal players:
+
+```json
+{"categories":{"version":1,"operations":["list","select"],"maxPageSize":200}}
+```
+
+Read `runtime` from `capabilities.player.runtime`. Category operations use
+the authenticated request route and retain local player admission controls.
+Category selection changes browsing only: it does not start playback or
+replace the currently playing category or explicit queue.
+
+Scoped operators need `capabilities` for CLI discovery, `categories.list`
+for category reads, and `channels` for video pages. Grant
+`categories.select` separately for browsing changes and `play_catalog` for
+stable-ID playback. The CLI now discovers capabilities before legacy `s`
+and title searches too; update existing operator grants accordingly. An
+authorization failure does not trigger a fallback to another protocol.
+
+```json
+{"action":"categories","params":{"op":"list","runtime":"page-123","offset":0,"limit":200}}
+{"action":"categories","params":{"op":"list","runtime":"page-123","catalog":"CATEGORY_RECEIPT","offset":200,"limit":200}}
+{"action":"categories","params":{"op":"select","runtime":"page-123","catalog":"CATEGORY_RECEIPT","category":"CATEGORY_ID"}}
+{"action":"channels","params":{"runtime":"page-123","catalog":"CATEGORY_RECEIPT","category":"CATEGORY_ID","offset":0,"limit":200,"search":"picnic"}}
+{"action":"channels","params":{"runtime":"page-123","catalog":"CHANNEL_RECEIPT","category":"CATEGORY_ID","offset":200,"limit":200,"search":"picnic"}}
+{"action":"play_catalog","params":{"catalog":"CHANNEL_RECEIPT","id":"VIDEO_ID"}}
+```
+
+`categories list` accepts exactly `op`, `runtime`, `offset`, `limit` and an
+optional `catalog` on the first page; subsequent pages require the receipt.
+Its successful data is
+`{version:1,runtime,op:"list",catalog,provider,selected,offset,total,has_more,loading,categories:[{id,name,count}]}`.
+`selected` is always a stable category ID. The external ID `all` denotes
+the player's virtual All category, independent of its translated label.
+Category names are display text, not identity; videos may belong to several
+categories while All is deduplicated.
+
+`categories select` accepts exactly `op`, `runtime`, `catalog`, `category`.
+Success is
+`{version:1,runtime,op:"select",catalog,provider,selected,dispatched:true}`.
+A successful selection receipt confirms the browsing mutation, not playback.
+Read-only listing remains available in kiosk mode; mutations still require
+the player's permission.
+
+Modern `channels` requires `runtime`, `catalog`, `category`, `offset`, `limit`
+and accepts optional `search`. Data is
+`{version:1,runtime,catalog,category,offset,total,has_more,loading,channels:[{id,name,number}]}`.
+The first page exchanges a category-list receipt for a category/search-bound
+channel receipt. Use that returned receipt on every subsequent page and on
+`play_catalog`. Preserve the same category and search. `number` remains the
+one-based number in the full provider catalogue, not the filtered page or
+category position. `id` is an opaque stable video ID and need not be numeric.
+Legacy `channels {}` and `channels {search}` responses are unchanged.
+
+Page limits are integers from 1 to 200; returned pages contain at most that
+many rows. Category and paged-channel result data is limited to 1 MiB.
+Offsets, totals and category counts are nonnegative integers
+at most 1,000,000. IDs are unique within a page; `has_more` must agree with
+the offset, returned row count and total. Names are at most 512 UTF-8 bytes,
+category IDs 1,024 bytes and video IDs 2,048 bytes. Receipts are opaque ASCII
+tokens of at most 128 characters. Do not reconstruct them from source URLs
+or expose provider credentials.
+
+Receipts are bounded, expire after 120 seconds of inactivity and belong to a
+player runtime, provider, source/profile and catalogue revision. Successful,
+validated category-list and channel-page reads renew the same receipt token.
+Category selection, playback and rejected access do not renew it. A category receipt cannot
+be used as a channel-play receipt. A reload, source change, append or
+membership/order edit invalidates a prior snapshot. Ordinary browsing does
+not. Pagination reports a fixed loaded snapshot; `loading:true` separately
+signals that provider discovery is incomplete. Clients must not combine
+pages across receipts or treat a partial title search as complete.
+
+Rejected `categories` and paged `channels` requests return
+`{version:1,runtime,op:"list"|"select"|"channels",state:"error",error:CODE}`
+with a code from `invalid_request`, `runtime_mismatch`, `catalog_changed`, `catalog_incomplete`,
+`category_not_found`, `restricted`, `unsupported`, `unavailable`. The
+controller validates the requested runtime and operation, and echoed receipt
+metadata in successful results. The player checks source freshness and
+category membership before selection or playback. `play_catalog` retains
+its existing success and rejection envelopes. A rejected or
+uncertain playback must not be repeated automatically or downgraded to a
+numeric switch. Existing peers may return the legacy unsupported envelope;
+clients require the capability before using this extension.
+
 ### Ordered Plex queue extension
 
 `plex_queue` uses the administrator-authenticated request lane. Player device

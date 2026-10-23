@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 Verificare ID, titolo e numero di elementi della libreria. Una richiesta riuscita dal computer dell’amministratore non prova la connettività del tablet. In caso di errore controllare sul tablet indirizzo salvato, instradamento, supporto TLS e credenziali. Preferire l’endpoint HTTPS valido del server. Se un vecchio firmware richiede HTTP sulla LAN privata, limitarlo a questa installazione, registrare che token e contenuti transitano senza cifratura e non modificare preset condivisi né disabilitare globalmente la verifica dei certificati. Non pubblicare token o URL di contenuti privati in diagnostica o documentazione.
 
+Nei lettori più recenti che espongono `categories` in `caps`, Plex apre tutti i video senza richiedere la selezione delle cartelle. Usare `ott TABLET categories` e `ott TABLET category all`; vedere [categorie multimediali](cli.md#media-categories-and-stable-video-selection). I passaggi di selezione delle cartelle riportati sotto riguardano la versione precedente indicata esplicitamente.
+
 Cambiare l’indirizzo del server Plex cancella le radici delle librerie selezionate. Scegliere il fornitore **Plex**, aprire **Plex settings → Folders**, selezionare la riga della libreria desiderata (non solo **Browse folders**), scegliere **Ok**, poi **Save and open library**. Nel lettore `1.1.58-beta.19` le sole credenziali possono aprire il selettore mentre `ready` resta false; completare la selezione prima dei comandi della coda. Non passare a M3U solo per ottenere `ready: true`: una coda Plex può riprodursi lì, ma `kiosk on --strict` può salvare una politica M3U in attesa senza media associati. Non blocca né ripristina la coda Plex.
 
 ## Avviare e bloccare la coda

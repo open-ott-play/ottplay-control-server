@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "max_page_size": 200,
+  "max_items": 1000000,
+  "max_category_id_bytes": 1024,
+  "max_item_id_bytes": 2048,
+  "max_name_bytes": 512,
+  "max_result_bytes": 1048576,
+  "errors": ["invalid_request", "runtime_mismatch", "catalog_changed", "catalog_incomplete", "category_not_found", "restricted", "unsupported", "unavailable"],
+  "capability": {"version":1,"operations":["list","select"],"maxPageSize":200},
+  "list_request": {"action":"categories","params":{"op":"list","runtime":"page-123","offset":0,"limit":200}},
+  "list_result": {"version":1,"runtime":"page-123","op":"list","catalog":"media-catalog-1","provider":"plex","selected":"all","offset":0,"total":2,"has_more":false,"loading":false,"categories":[{"id":"all","name":"All","count":3},{"id":"plex:16","name":"Три кота","count":3}]},
+  "select_request": {"action":"categories","params":{"op":"select","runtime":"page-123","catalog":"media-catalog-1","category":"plex:16"}},
+  "select_result": {"version":1,"runtime":"page-123","op":"select","catalog":"media-catalog-1","provider":"plex","selected":"plex:16","dispatched":true},
+  "channels_request": {"action":"channels","params":{"runtime":"page-123","catalog":"media-catalog-1","category":"plex:16","offset":0,"limit":2,"search":""}},
+  "channels_result": {"version":1,"runtime":"page-123","catalog":"media-rows-1","category":"plex:16","offset":0,"total":3,"has_more":true,"loading":false,"channels":[{"id":"plex:78777","name":"One","number":4},{"id":"plex:78776","name":"Two","number":8}]},
+  "channels_next_request": {"action":"channels","params":{"runtime":"page-123","catalog":"media-rows-1","category":"plex:16","offset":2,"limit":2,"search":""}},
+  "channels_next_result": {"version":1,"runtime":"page-123","catalog":"media-rows-1","category":"plex:16","offset":2,"total":3,"has_more":false,"loading":false,"channels":[{"id":"plex:78775","name":"Three","number":9}]},
+  "play_request": {"action":"play_catalog","params":{"catalog":"media-rows-1","id":"plex:78775"}},
+  "play_result": {"dispatched":true,"channel":{"id":"plex:78775","name":"Three","number":9}},
+  "error_result": {"version":1,"runtime":"page-123","op":"select","state":"error","error":"catalog_changed"}
+}

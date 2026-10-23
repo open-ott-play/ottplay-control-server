@@ -26,7 +26,9 @@ class ChannelPlayTest(unittest.TestCase):
     def run_play(self, words, replies, json_output=False):
         client = mock.Mock()
         client.device.return_value = 'dev_iphone'
-        client.call.side_effect = replies
+        query = ' '.join(words[1:] if words[0] == 'play' else words).strip()
+        discovery = bool(query and not ott.re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', query))
+        client.call.side_effect = ([ott.PlayerUnsupported('Legacy player')] if discovery else []) + replies
         stdout, stderr = io.StringIO(), io.StringIO()
         args = (['--json'] if json_output else []) + ['iphone'] + words
         with mock.patch.object(ott, 'Client', return_value=client), \
@@ -35,7 +37,11 @@ class ChannelPlayTest(unittest.TestCase):
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             status = ott.main(args)
         self.choice = choice
-        return status, stdout.getvalue(), stderr.getvalue(), client.call.call_args_list
+        calls = client.call.call_args_list
+        if discovery:
+            self.assertEqual(calls[0], mock.call('dev_iphone', 'capabilities', {}))
+            calls = calls[1:]
+        return status, stdout.getvalue(), stderr.getvalue(), calls
 
     def test_text_lists_every_match_and_plays_random_nonfirst_channel_once(self):
         for words in [['РЕН'], ['рЕн'], ['play', ' РЕН '], ['РЕН', 'ТВ']]:

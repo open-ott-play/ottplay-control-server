@@ -27,6 +27,8 @@ ott TABLET plex library --preview 'LIBRARY NAME'
 
 Periksa ID pustaka, judul dan jumlah item. Permintaan berhasil dari komputer administrator tidak membuktikan konektivitas tablet. Saat gagal, periksa alamat tersimpan, perutean, dukungan TLS dan kredensial pada tablet. Utamakan endpoint HTTPS server yang valid. Jika firmware lama memerlukan HTTP LAN privat, batasi pada instalasi ini, catat bahwa token dan media ditransfer tanpa enkripsi, serta jangan ubah preset bersama atau nonaktifkan verifikasi sertifikat secara global. Jangan pernah terbitkan token atau URL media privat dalam diagnostik atau dokumentasi.
 
+Pada pemutar baru yang menampilkan `categories` di `caps`, Plex membuka semua video tanpa mewajibkan pemilihan folder. Gunakan `ott TABLET categories` dan `ott TABLET category all`; lihat [kategori media](cli.md#media-categories-and-stable-video-selection). Langkah pemilihan folder di bawah berlaku untuk versi pemutar lama yang disebutkan secara eksplisit.
+
 Mengubah alamat server Plex menghapus akar pustaka yang dipilih. Pilih penyedia **Plex**, buka **Plex settings → Folders**, centang baris pustaka yang dimaksud (bukan hanya **Browse folders**), pilih **Ok**, lalu **Save and open library**. Pada pemutar `1.1.58-beta.19`, kredensial server saja dapat membuka pemilih folder sementara `ready` tetap false; selesaikan pemilihan sebelum perintah antrean. Jangan beralih ke M3U hanya demi `ready: true`: antrean Plex dapat diputar di sana, tetapi `kiosk on --strict` dapat menyimpan kebijakan M3U menunggu tanpa media terikat. Itu tidak mengunci atau memulihkan antrean Plex.
 
 ## Mulai dan kunci antrean
