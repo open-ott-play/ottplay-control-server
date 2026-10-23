@@ -92,6 +92,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME aspect fit / fill         request Fit to screen / Fill screen
   ott NAME providers                 list providers (zero-based indices)
   ott NAME provider m3u              select a provider by ID, index or name
+  ott t1,t2,t3,t4 provider m3u        switch each listed player (alias: prov)
   ott NAME provider offline          select Local videos (if listed in providers)
   ott NAME provider-config FILE      update active provider settings from JSON
   ott NAME plex setup URL [TOKEN]    set Plex address and token (hidden prompt if omitted)
@@ -175,6 +176,10 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 --receipt writes one safe JSON request receipt to stderr per player RPC; stdout is unchanged.
+Comma-separated player lists support provider/prov; each distinct player runs once, in order.
+All player names are checked first. A player failure does not stop the remaining players.
+--timeout applies to each player; completed switches are not rolled back or automatically retried.
+An exact saved player name containing commas retains its existing single-player meaning.
 Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
@@ -3013,6 +3018,7 @@ def print_player_status(data, name):
             print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
             print(f"  {prefix} provider offline  — request Local videos (when listed in providers)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
+            print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request each player in order")
         if provider in ("m3u", "vportal") or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", [])):
             print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
             if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):
@@ -3870,6 +3876,80 @@ def handoff_command(client, source, target):
     return {"source": source_id, "target": target_id, "dispatched": True, "kind": handoff["kind"], "source_stopped": False}
 
 
+def provider_group_targets(client, selector):
+    """Resolve a comma list locally before any provider request can be sent."""
+    if "," not in selector:
+        return None
+    aliases = client.config.get("players", {})
+    devices = client.credentials.get("devices", [])
+    if (not isinstance(aliases, dict) or any(not isinstance(name, str) for name in aliases)
+            or not isinstance(devices, list) or any(not isinstance(row, dict)
+                or not isinstance(row.get("id"), str) for row in devices)):
+        raise Error("Check the configured player names and device UUIDs")
+    # Hand-edited configurations can contain commas. Preserve their exact
+    # single-player meaning, including ambiguous names rejected by device().
+    if (any(name.casefold() == selector.casefold() for name in aliases)
+            or any(row["id"].casefold() == selector.casefold() for row in devices)):
+        return None
+    names = [name.strip() for name in selector.split(",")]
+    if any(not name for name in names):
+        raise Error("Player lists require a name between every comma; use t1,t2,t3,t4")
+    targets = []
+    seen = set()
+    for name in names:
+        device = client.device(name)
+        if not isinstance(device, str) or not device:
+            raise Error("Check the configured player UUIDs")
+        # Device IDs are case-sensitive on the server; device() resolves aliases
+        # and case-insensitive UUID lookups to their configured identity.
+        if device not in seen:
+            seen.add(device)
+            targets.append((name, device))
+    return targets
+
+
+def provider_group_command(client, targets, words, json_output):
+    if command_verb(words) != "provider":
+        raise Error("Player lists support provider/prov only; use ott t1,t2,t3,t4 provider m3u")
+    action, params = parse_command(words)
+    if not params["query"].strip():
+        raise Error("provider requires a provider ID, index or name")
+    results = []
+    on_receipt = getattr(client, "on_receipt", None)
+    for name, device in targets:
+        row = {"player": name, "ok": False}
+        try:
+            if callable(on_receipt):
+                client.on_receipt = lambda receipt, name=name: on_receipt({**receipt, "player": name})
+            data = client.call(device, action, params)
+            provider = data.get("provider") if isinstance(data, dict) else None
+            if (not isinstance(data, dict) or data.get("dispatched") is not True
+                    or not isinstance(provider, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", provider)):
+                raise Error("The player did not confirm the provider switch. The request may have executed; "
+                            "check its status before another change. The request was not repeated.")
+            row.update(ok=True, data={"dispatched": True, "provider": provider})
+        except (PlayerRejected, PlayerUnsupported) as exc:
+            reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+            row["error"] = (f"The provider request was {reason}; check its allowed providers and local restrictions. "
+                            "The request was not repeated.")
+        except Error as exc:
+            row["error"] = clean(str(exc))
+        except (KeyError, TypeError, ValueError, OSError):
+            row["error"] = "The provider request did not complete; inspect this player before another change."
+        finally:
+            client.on_receipt = on_receipt
+        results.append(row)
+        if not json_output:
+            message = ("Provider switch requested: " + row["data"]["provider"] if row["ok"]
+                       else "Error: " + row["error"])
+            print(f"{clean(name)}: {message}", flush=True)
+    succeeded = sum(row["ok"] for row in results)
+    if json_output:
+        print(json.dumps({"action": action, "results": results, "succeeded": succeeded,
+                          "failed": len(results) - succeeded}, ensure_ascii=False, indent=2))
+    return 0 if succeeded == len(results) else 1
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "resolve":
@@ -3934,6 +4014,9 @@ def main(argv=None):
             return 0
         if args.words[0].casefold() in TOP_LEVEL_COMMANDS:
             raise Error(f"The name {args.words[0]!r} is reserved for a CLI command. Run ott --help for its syntax; use another player alias or the device UUID")
+        targets = provider_group_targets(client, args.words[0])
+        if targets is not None:
+            return provider_group_command(client, targets, args.words[1:], args.json)
         device = client.device(args.words[0])
         words = args.words[1:]
         if (words and words[0].casefold() == "update" and

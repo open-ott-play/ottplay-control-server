@@ -4,6 +4,9 @@
 
 ### Added
 
+- Switch providers on an explicit group with `ott t1,t2,t3,t4 provider m3u`
+  (or `prov`). Validate target names before sending changes, coalesce duplicate
+  device IDs, and report each acknowledgement or failure without retrying.
 - Explicit media pages with `ott PLAYER s --limit N [--offset N] [TEXT]`,
   totals and next-page commands. Complete listings and title selection remain
   complete, skip unnecessary category pages, and wait within their deadline
