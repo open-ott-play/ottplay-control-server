@@ -18,6 +18,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Disconnect, deregister or revoke a player](#disconnect-deregister-or-revoke-a-player)
 - [Help, options and output](#help-options-and-output)
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
+- [Switch provider and start playback](#switch-provider-and-start-playback)
 - [Switch providers on several players](#switch-providers-on-several-players)
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
@@ -73,14 +74,15 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 reviewed source revision
-[`2ee4b51150ad0b27711f697a4d26cf4e89590a60`](https://github.com/open-ott-play/ottplay-control-server/commit/2ee4b51150ad0b27711f697a4d26cf4e89590a60).
+[`ddfcd0f28423b1c501133f43d367be37139f77ae`](https://github.com/open-ott-play/ottplay-control-server/commit/ddfcd0f28423b1c501133f43d367be37139f77ae).
 It contains the complete CLI module set, including the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
 OTA workflow (`app_update.py`), Local videos profile save/load/import/export, and
 `standby` / `go` controls. It also includes media categories, stable-ID playback
 and bounded catalogue pages (`s --limit` / `--offset`), plus group provider
-changes such as `ott t1,t2,t3,t4 provider m3u`. Update the controller
-and player too; confirm support with `ott PLAYER caps`.
+changes such as `ott t1,t2,t3,t4 provider m3u`, with optional channel numbers,
+`R` / `random` or title selection after switching. Update the controller and
+player too; confirm support with `ott PLAYER caps`.
 
 The pinned revision is an exact installation example, not a moving latest
 version. Older CLI revisions may lack `go`, Local videos profile commands or
@@ -101,8 +103,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_revision=2ee4b51150ad0b27711f697a4d26cf4e89590a60
-  ott_source="$HOME/.local/share/ottplay-control-server-2ee4b511"
+  ott_revision=ddfcd0f28423b1c501133f43d367be37139f77ae
+  ott_source="$HOME/.local/share/ottplay-control-server-ddfcd0f2"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -121,7 +123,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-2ee4b511/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-ddfcd0f2/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -135,7 +137,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-2ee4b511/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-ddfcd0f2/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -157,8 +159,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRevision = '2ee4b51150ad0b27711f697a4d26cf4e89590a60'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-2ee4b511'
+$ottRevision = 'ddfcd0f28423b1c501133f43d367be37139f77ae'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-ddfcd0f2'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -201,12 +203,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-2ee4b511/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-ddfcd0f2/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-2ee4b511\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-ddfcd0f2\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -235,7 +237,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-2ee4b511`, stages the replacement beside it, then switches atomically.
+`ott.before-ddfcd0f2`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -247,9 +249,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-2ee4b511")
-staged = launcher.with_name("ott.switch-2ee4b511")
-reviewed = Path.home() / ".local/share/ottplay-control-server-2ee4b511/cli/ott.py"
+backup = launcher.with_name("ott.before-ddfcd0f2")
+staged = launcher.with_name("ott.switch-ddfcd0f2")
+reviewed = Path.home() / ".local/share/ottplay-control-server-ddfcd0f2/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -685,6 +687,9 @@ ott tv v -5
 ott tv providers            # active provider marked *, zero-based indices
 ott tv provider xtream      # provider ID, index or name fragment
 ott t1 provider m3u         # switch one player
+ott t4 provider m3u 1       # switch, then play channel number 1
+ott t4 provider m3u random  # switch, then choose a random channel (alias: R)
+ott t4 provider m3u РЕН     # prefer an exact title, otherwise random partial match
 ott t1,t2,t3,t4 provider m3u # switch four players, with one result per player
 ott t1,t2,t3,t4 prov m3u     # equivalent short command
 ott tv provider-config ~/private/xtream.json
@@ -1488,6 +1493,57 @@ For example, `* 1: Home 1` means profile 1 named Home 1 is already active;
 `playlist: set` means a URL is saved, not that its channels loaded successfully.
 Provider changes remain subject to the player's settings lock and platform policy.
 
+## Switch provider and start playback
+
+Add a channel selector after the provider to switch and then request playback:
+
+```sh
+ott t4 provider m3u              # switch only
+ott t4 provider m3u 1            # play channel number 1 after loading
+ott t4 provider m3u R            # choose a random channel
+ott t4 provider m3u random       # same as R or r
+ott t4 provider m3u РЕН          # exact title first, otherwise random partial match
+ott t4 prov m3u "РЕН ТВ HD"      # short command, complete channel title
+ott t1,t2,t3,t4 provider m3u 1    # apply independently to all four players
+```
+
+The selector works with each configured provider's playable catalogue, not only
+M3U. It searches the provider's complete eligible catalogue; for Plex and VPortal
+this uses **All**, even if a narrower category was previously selected. Profiles
+and provider credentials remain unchanged. A positive integer selects the
+catalogue's channel number, as shown by `s` with All selected;
+provider indices shown by `providers` remain zero-based. `R`, `r` and `random`
+are case-insensitive aliases for random selection. A title selects a complete,
+case-insensitive name match in preference to partial matches. If several exact
+matches exist, one is chosen at random; if no exact match exists, one of the
+partial matches is chosen at random. No match is an error and sends no playback
+request.
+
+The command waits for the requested provider and its complete catalogue within
+`--timeout`, then sends playback once using the catalogue's identity. If the player
+is in standby, the explicit playback selector wakes it after the provider switch;
+a provider-only command keeps its existing standby behavior. It stops
+if the provider or catalogue changes during selection. A provider switch can
+already have succeeded when loading or playback fails; the command does not
+roll it back or replay an uncertain request. Playback acknowledgement means
+the player dispatched the request, not that a picture has appeared.
+
+The player and controller must support catalogue-bound playback. Older versions
+that lack it are reported as unsupported; the CLI does not substitute an
+unbound channel number. The legacy TV/Local videos catalogue API is limited to
+10,000 entries and its response-size limit; larger catalogues fail explicitly.
+Plex/VPortal use the paginated media catalogue. Increase the per-player budget
+with `-t 300` before the player names when a configured provider loads slowly.
+
+Complete provider names and unambiguous name fragments keep their existing
+meaning. Use `--` to make the boundary explicit when a provider name could be
+confused with a provider plus a channel selector:
+
+```sh
+ott t4 provider "Local videos" -- random
+ott t4 provider m3u -- "РЕН ТВ HD"
+```
+
 ## Switch providers on several players
 
 Put the player names in one comma-separated argument. The single-player command
@@ -1497,6 +1553,7 @@ and the `prov` alias remain available:
 ott t1 provider m3u
 ott t1,t2,t3,t4 provider m3u
 ott t1,t2,t3,t4 prov m3u
+ott t1,t2,t3,t4 provider m3u random
 ott -t 10 --receipt t1,t2,t3,t4 provider m3u
 ott --json t1,t2,t3,t4 provider m3u
 ```
@@ -1508,14 +1565,23 @@ in the list. A complete, literal alias containing a comma in an existing manual
 configuration keeps its single-player meaning; use separate aliases or device
 IDs to address a group in that case.
 
-Requests run in order. `--timeout` applies separately to each distinct player,
+Requests run in order. `--timeout` applies separately to the complete operation
+on each distinct player (including optional catalogue loading and playback),
 so four unresponsive players can take up to four response timeouts. Text output
 identifies each player's result as it completes; `--json` returns one aggregate
 object with `action`, ordered `results`, `succeeded` and `failed`. Each result has
-`player` and `ok`, followed by acknowledged `data` or an `error`. A runtime failure
-on one player does not prevent requests to the remaining players. Exit status is zero only when every distinct target returns a valid
-provider-switch acknowledgement; otherwise it is one. Requests are not retried
-and successful changes are not rolled back after another target fails.
+`player` and `ok`, with acknowledged `data` and/or an `error`. When a provider
+switch succeeds but the following step fails, both fields are present: `data`
+retains the provider acknowledgement and `playback` reports the failed `stage`,
+`error`, and whether playback was dispatched (`false` if not sent or explicitly
+rejected, `null` if its outcome is unknown). Successful playback has
+`stage:"completed"`, `dispatched:true` and the selected channel.
+
+A runtime failure on one player does not prevent requests to the remaining
+players. Exit status is zero only when every distinct target acknowledges the
+provider switch and, when requested, playback; otherwise it is one. Requests
+are not retried and successful changes are not rolled back after another target
+fails.
 
 An acknowledgement confirms that the change was dispatched, not that a playlist
 loaded or playback started. Check the individual player's status and profiles
