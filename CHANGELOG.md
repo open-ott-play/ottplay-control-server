@@ -24,6 +24,15 @@
 - Document repeatable Plex strict-kiosk setup, local connectivity checks,
   separate boot/wake acceptance and rollback in English and Russian.
 
+### Fixed
+
+- Reject player aliases that conflict with top-level CLI commands before writing
+  configuration or provisioning credentials. Preserve recovery of an unfinished
+  registration under its original name and journal. Existing mappings remain
+  intact; register another alias for the same device UUID to control it normally.
+- Guide unbound Local videos profile imports through loading the profile before
+  connecting and binding sources, then reloading it after scanning completes.
+
 ## [0.1.5] - 2026-10-20
 
 ### Added
