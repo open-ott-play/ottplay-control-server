@@ -18,6 +18,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Disconnect, deregister or revoke a player](#disconnect-deregister-or-revoke-a-player)
 - [Help, options and output](#help-options-and-output)
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
+- [Switch providers on several players](#switch-providers-on-several-players)
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles), [Local videos profiles](#local-videos-profiles) and [named setups](#named-setups)
@@ -72,12 +73,13 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 reviewed source revision
-[`19b4739b6bce4ee979a4bf391547f861ad9844a7`](https://github.com/open-ott-play/ottplay-control-server/commit/19b4739b6bce4ee979a4bf391547f861ad9844a7).
+[`2ee4b51150ad0b27711f697a4d26cf4e89590a60`](https://github.com/open-ott-play/ottplay-control-server/commit/2ee4b51150ad0b27711f697a4d26cf4e89590a60).
 It contains the complete CLI module set, including the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
 OTA workflow (`app_update.py`), Local videos profile save/load/import/export, and
 `standby` / `go` controls. It also includes media categories, stable-ID playback
-and bounded catalogue pages (`s --limit` / `--offset`). Update the controller
+and bounded catalogue pages (`s --limit` / `--offset`), plus group provider
+changes such as `ott t1,t2,t3,t4 provider m3u`. Update the controller
 and player too; confirm support with `ott PLAYER caps`.
 
 The pinned revision is an exact installation example, not a moving latest
@@ -99,8 +101,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_revision=19b4739b6bce4ee979a4bf391547f861ad9844a7
-  ott_source="$HOME/.local/share/ottplay-control-server-19b4739b"
+  ott_revision=2ee4b51150ad0b27711f697a4d26cf4e89590a60
+  ott_source="$HOME/.local/share/ottplay-control-server-2ee4b511"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -119,7 +121,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-19b4739b/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-2ee4b511/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -133,7 +135,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-19b4739b/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-2ee4b511/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -155,8 +157,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRevision = '19b4739b6bce4ee979a4bf391547f861ad9844a7'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-19b4739b'
+$ottRevision = '2ee4b51150ad0b27711f697a4d26cf4e89590a60'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-2ee4b511'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -199,12 +201,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-19b4739b/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-2ee4b511/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-19b4739b\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-2ee4b511\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -233,7 +235,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-19b4739b`, stages the replacement beside it, then switches atomically.
+`ott.before-2ee4b511`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -245,9 +247,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-19b4739b")
-staged = launcher.with_name("ott.switch-19b4739b")
-reviewed = Path.home() / ".local/share/ottplay-control-server-19b4739b/cli/ott.py"
+backup = launcher.with_name("ott.before-2ee4b511")
+staged = launcher.with_name("ott.switch-2ee4b511")
+reviewed = Path.home() / ".local/share/ottplay-control-server-2ee4b511/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -584,10 +586,11 @@ ott --receipt tv restart
 - `--refresh`: bypass EPG history/search and archive-probe caches on the
   configured central EPG path. It does not reload the player or playlist.
 - `--receipt`: write one safe JSON line to stderr for every completed or failed
-  player RPC, preserving the command's normal stdout. Each line contains only
+  player RPC, preserving the command's normal stdout. Its base fields are
   `action`, `request_id`, and `status` (`ok`, `rejected`, `unsupported`, or
   `unknown`). A lost submit reply has `request_id:null` and `status:"unknown"`;
   the CLI does not resend the POST. Multi-step commands emit one line per RPC.
+  Group provider commands also include `player` to identify the target alias.
   Existing human-readable stderr diagnostics may accompany these JSON lines.
 - `-h` / `--help`: display the command summary.
 
@@ -681,6 +684,9 @@ ott tv v +5                 # relative change applied by the player
 ott tv v -5
 ott tv providers            # active provider marked *, zero-based indices
 ott tv provider xtream      # provider ID, index or name fragment
+ott t1 provider m3u         # switch one player
+ott t1,t2,t3,t4 provider m3u # switch four players, with one result per player
+ott t1,t2,t3,t4 prov m3u     # equivalent short command
 ott tv provider-config ~/private/xtream.json
 ott tv playlist https://example.com/list.m3u
 ott tv random               # random channel from the current playback list
@@ -1481,6 +1487,40 @@ and select/configure the intended profile instead of repeatedly switching provid
 For example, `* 1: Home 1` means profile 1 named Home 1 is already active;
 `playlist: set` means a URL is saved, not that its channels loaded successfully.
 Provider changes remain subject to the player's settings lock and platform policy.
+
+## Switch providers on several players
+
+Put the player names in one comma-separated argument. The single-player command
+and the `prov` alias remain available:
+
+```sh
+ott t1 provider m3u
+ott t1,t2,t3,t4 provider m3u
+ott t1,t2,t3,t4 prov m3u
+ott -t 10 --receipt t1,t2,t3,t4 provider m3u
+ott --json t1,t2,t3,t4 provider m3u
+```
+
+The CLI resolves every name before sending any provider change. An unknown name
+or an empty member such as `t1,,t2` stops the group without sending a command.
+Aliases that resolve to the same device are sent only once, using the first name
+in the list. A complete, literal alias containing a comma in an existing manual
+configuration keeps its single-player meaning; use separate aliases or device
+IDs to address a group in that case.
+
+Requests run in order. `--timeout` applies separately to each distinct player,
+so four unresponsive players can take up to four response timeouts. Text output
+identifies each player's result as it completes; `--json` returns one aggregate
+object with `action`, ordered `results`, `succeeded` and `failed`. Each result has
+`player` and `ok`, followed by acknowledged `data` or an `error`. A runtime failure
+on one player does not prevent requests to the remaining players. Exit status is zero only when every distinct target returns a valid
+provider-switch acknowledgement; otherwise it is one. Requests are not retried
+and successful changes are not rolled back after another target fails.
+
+An acknowledgement confirms that the change was dispatched, not that a playlist
+loaded or playback started. Check the individual player's status and profiles
+if M3U has no channels. Group syntax currently supports `provider` / `prov`;
+other commands keep their existing single-player syntax.
 
 ## Local videos profiles
 
