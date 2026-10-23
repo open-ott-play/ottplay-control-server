@@ -193,6 +193,13 @@ Signed channel offsets are nonzero whole numbers from -9007199254740991 to
 +9007199254740991; each offset sends one request. Unsigned 15 selects channel 15.
 """
 
+# Top-level commands take precedence over player names, including saved aliases.
+TOP_LEVEL_COMMANDS = frozenset((
+    "add", "alias", "approve", "devices", "diagnostics", "discover", "handoff",
+    "help", "pair", "pending", "presets", "report", "resolve", "server",
+))
+
+
 COMMAND_ALIASES = {
     "st": "status",
     "channels": "s", "programs": "p", "programmes": "p",
@@ -3173,12 +3180,14 @@ def vportal_metadata(data, playing, shuffled=False):
     return result
 
 
-def provision_kubernetes(client, config_path, name, device):
+def provision_kubernetes(client, config_path, name, device, *, resume_only=False):
     kube = client.config["kubernetes"]
     journal_path = Path(config_path).expanduser().with_name(Path(config_path).name + ".pending-add.json")
     identity = {"name": name.casefold(), "device": device, "kubernetes": kube, "server": client.server,
                 "server_config": str(Path(client.config["server_config"]).expanduser().resolve())}
     resuming = journal_path.exists()
+    if resume_only and not resuming:
+        raise Error("The pending-add.json is missing; a new addition with a reserved name was not started")
     journal = read_json(journal_path) if resuming else None
     if resuming:
         if (not isinstance(journal, dict) or set(journal) != {"version", "identity", "before", "after"}
@@ -3351,8 +3360,14 @@ def management(client, config_path, words, json_output=False):
         return True
     if verb in ("alias", "add") and len(words) == 3:
         name, device = words[1:]
-        if not re.fullmatch(r"[a-zA-Z0-9\u0430-\u044f\u0410-\u042f\u0451\u0401_-]{1,32}", name) or name.casefold() in {"devices", "alias", "add", "pair", "help", "discover", "pending", "approve"}:
+        if not re.fullmatch(r"[a-zA-Z0-9\u0430-\u044f\u0410-\u042f\u0451\u0401_-]{1,32}", name):
             raise Error("Choose a name of up to 32 letters/digits, underscores or hyphens, without spaces")
+        reserved = name.casefold() in TOP_LEVEL_COMMANDS
+        journal_path = Path(config_path).expanduser().with_name(Path(config_path).name + ".pending-add.json")
+        # Old CLIs permitted some reserved names. Recovery must validate the
+        # existing journal, and must never start a fresh addition if it vanished.
+        if reserved and not (verb == "add" and client.config.get("kubernetes") and journal_path.exists()):
+            raise Error(f"The name {name!r} is reserved for a CLI command. Choose another player alias")
         if not re.fullmatch(r"[a-zA-Z0-9._:-]{1,128}", device):
             raise Error("Invalid device UUID")
         aliases = client.config.setdefault("players", {})
@@ -3360,11 +3375,10 @@ def management(client, config_path, words, json_output=False):
         if existing in aliases and aliases[existing] != device:
             raise Error("The name is already bound to another UUID; edit cli.json to reassign it")
         registered = any(x["id"] == device for x in client.credentials["devices"])
-        journal_path = Path(config_path).expanduser().with_name(Path(config_path).name + ".pending-add.json")
-        if verb == "add" and client.config.get("kubernetes") and (not registered or journal_path.exists()):
+        if verb == "add" and client.config.get("kubernetes") and (reserved or not registered or journal_path.exists()):
             if not registered and len(client.credentials["devices"]) >= 64:
                 raise Error("The limit of 64 devices has been reached")
-            provision_kubernetes(client, config_path, existing, device)
+            provision_kubernetes(client, config_path, existing, device, resume_only=reserved)
             print(f"{existing} → {device}. Connection settings: ott pair {existing}")
             return True
         elif not registered:
@@ -3906,7 +3920,7 @@ def main(argv=None):
             print(json.dumps({"presets": names}, indent=2) if args.json else "\n".join(names))
             return 0
         if (len(args.words) > 1 and args.words[1].casefold() == "load"
-                and args.words[0].casefold() not in ("alias", "add", "approve", "pair", "devices", "discover", "pending")):
+                and args.words[0].casefold() not in TOP_LEVEL_COMMANDS):
             return preset_command(config, args.words, args.timeout, args.json,
                                   print_request_receipt if args.receipt else None)
         client = Client(config, args.timeout)
@@ -3918,6 +3932,8 @@ def main(argv=None):
             return 0
         if management(client, args.config, args.words, json_output=args.json):
             return 0
+        if args.words[0].casefold() in TOP_LEVEL_COMMANDS:
+            raise Error(f"The name {args.words[0]!r} is reserved for a CLI command. Run ott --help for its syntax; use another player alias or the device UUID")
         device = client.device(args.words[0])
         words = args.words[1:]
         if (words and words[0].casefold() == "update" and
@@ -4108,7 +4124,9 @@ def main(argv=None):
         elif action in ("profile_save", "profile_import"):
             print(f"Local videos profile saved: {data['profile']['number']}: {clean(data['profile']['name'])}. Playback was not started.")
             if data["binding_required"]:
-                print("Local binding required: connect the source on this player and bind it in Local videos settings, then load the profile.")
+                print(f"Local binding required: first load profile {data['profile']['number']}. In Settings → Provider → Local videos, "
+                      "connect the original sources, wait for scanning to finish, and choose Bind loaded profile to connected sources. "
+                      "Then load the same profile again.")
         elif action == "profiles":
             for row in data["profiles"]:
                 if data["provider"] == "offline":

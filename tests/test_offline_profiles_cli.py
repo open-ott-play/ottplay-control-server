@@ -109,6 +109,30 @@ class OfflineProfileTest(unittest.TestCase):
             self.assertIn('Local binding required', output)
             self.assertEqual(client.call.call_args_list[-1], mock.call('dev_tv', 'profile_import', {'number': 1, 'profile': document()}))
 
+    def test_unbound_import_guides_loading_before_local_binding(self):
+        imported = {'provider': 'offline', 'profile': row(number=3, active=False, binding=True),
+                    'saved': True, 'binding_required': True}
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'profile.json'
+            target.write_text(json.dumps(document()), encoding='utf-8')
+            status, output, error, client = self.run_cli(
+                ['profile', 'import', '3', str(target)], [caps(), imported])
+        self.assertEqual((status, error), (0, ''))
+        self.assertLess(output.index('first load profile 3'),
+                        output.index('Bind loaded profile to connected sources'))
+        self.assertIn('wait for scanning to finish', output)
+        self.assertIn('Then load the same profile again', output)
+        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}),
+                         mock.call('dev_tv', 'profile_import', {'number': 3, 'profile': document()})])
+
+        loaded = {'provider': 'offline', 'profile': row(number=3, binding=True),
+                  'dispatched': True, 'binding_required': True}
+        status, output, error, client = self.run_cli(['profile', 'load', '3'], [loaded])
+        self.assertEqual((status, error), (0, ''))
+        self.assertIn('Profile switch requested: 3', output)
+        self.assertIn('Playback has not been confirmed', output)
+        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'profile', {'number': 3})])
+
     def test_export_is_validated_atomic_private_and_never_overwrites(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'export.json'

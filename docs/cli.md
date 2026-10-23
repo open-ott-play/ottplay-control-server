@@ -72,12 +72,13 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 reviewed source revision
-[`dd0a26bfaaa91792662374dec780c9c9c8423a22`](https://github.com/open-ott-play/ottplay-control-server/commit/dd0a26bfaaa91792662374dec780c9c9c8423a22).
+[`19b4739b6bce4ee979a4bf391547f861ad9844a7`](https://github.com/open-ott-play/ottplay-control-server/commit/19b4739b6bce4ee979a4bf391547f861ad9844a7).
 It contains the complete CLI module set, including the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
 OTA workflow (`app_update.py`), Local videos profile save/load/import/export, and
-`standby` / `go` controls. Update the controller and player too; confirm support
-with `ott PLAYER caps`.
+`standby` / `go` controls. It also includes media categories, stable-ID playback
+and bounded catalogue pages (`s --limit` / `--offset`). Update the controller
+and player too; confirm support with `ott PLAYER caps`.
 
 The pinned revision is an exact installation example, not a moving latest
 version. Older CLI revisions may lack `go`, Local videos profile commands or
@@ -98,8 +99,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_revision=dd0a26bfaaa91792662374dec780c9c9c8423a22
-  ott_source="$HOME/.local/share/ottplay-control-server-dd0a26bf"
+  ott_revision=19b4739b6bce4ee979a4bf391547f861ad9844a7
+  ott_source="$HOME/.local/share/ottplay-control-server-19b4739b"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -118,7 +119,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-dd0a26bf/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-19b4739b/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -132,7 +133,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-dd0a26bf/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-19b4739b/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -154,8 +155,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRevision = 'dd0a26bfaaa91792662374dec780c9c9c8423a22'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-dd0a26bf'
+$ottRevision = '19b4739b6bce4ee979a4bf391547f861ad9844a7'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-19b4739b'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -198,12 +199,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-dd0a26bf/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-19b4739b/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-dd0a26bf\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-19b4739b\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -232,7 +233,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-dd0a26bf`, stages the replacement beside it, then switches atomically.
+`ott.before-19b4739b`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -244,9 +245,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-dd0a26bf")
-staged = launcher.with_name("ott.switch-dd0a26bf")
-reviewed = Path.home() / ".local/share/ottplay-control-server-dd0a26bf/cli/ott.py"
+backup = launcher.with_name("ott.before-19b4739b")
+staged = launcher.with_name("ott.switch-19b4739b")
+reviewed = Path.home() / ".local/share/ottplay-control-server-19b4739b/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -374,7 +375,15 @@ For a UUID already present in `server_config`, `ott alias tv DEVICE_UUID` assign
 an alias without changing server credentials. Adding the same UUID again also
 keeps its existing token; `add` is not token rotation. Aliases are case-insensitive,
 up to 32 Latin/Cyrillic letters, digits, underscores or hyphens. Use distinct names
-such as `a1` and `living_room`, avoiding command names such as `devices` or `presets`.
+such as `a1` and `living_room`. Top-level command names are reserved, regardless of
+case: `add`, `alias`, `approve`, `devices`, `diagnostics`, `discover`, `handoff`,
+`help`, `pair`, `pending`, `presets`, `report`, `resolve` and `server`. New `add`
+and `alias` operations reject these names. Top-level commands take precedence
+over player aliases, including before `load PRESET`.
+
+Existing aliases are preserved. If an older CLI accepted a reserved name, use
+the device UUID for player commands or add another name with
+`ott alias living_room DEVICE_UUID`; the existing access code is unchanged.
 An existing alias cannot be reassigned to another UUID without editing `cli.json`.
 
 `pair` prints the device access code, so use it in a private terminal. Enter that
@@ -432,6 +441,13 @@ succeeds. Concurrent changes to other aliases and fields in `cli.json` are
 preserved. Changes to the target alias, server address or
 `kubernetes`/`server_config` settings require reconciliation; the journal remains
 even if the rollout has already completed.
+
+If an older CLI started an unfinished `add` with a now-reserved name, keep the
+journal and repeat `ott add ORIGINAL_NAME UUID` with that original name and the
+same configuration. This exception only resumes an existing matching journal;
+it does not permit a new registration under a reserved name. Do not change the
+name to work around the error or delete the journal. After recovery succeeds,
+add a usable alias with `ott alias living_room UUID` for player commands.
 
 `pair` displays the existing device token, **not the admin_token**. It does not
 register a device or change its credentials. Open
@@ -842,10 +858,10 @@ categories; **All** contains it once. This does not add VPortal to the M3U
 provider.
 
 Update the controller, CLI and player together. Check `ott tv caps` for the
-`categories` capability; the historical installation revision shown earlier
-in this guide predates this extension. Unsupported players retain their
-existing `s` and name-play behavior. Category commands explain when an update
-is needed. A network failure or invalid capability response is an error,
+`categories` capability; the pinned CLI installation above includes these
+commands. Unsupported players retain their existing `s` and name-play behavior.
+Category commands explain when an update is needed. A network failure or invalid
+capability response is an error,
 not a reason to retry a command using a different protocol.
 
 ```sh
@@ -1487,7 +1503,8 @@ ott d1 prof load 1
 ```
 
 Connect a folder or files in **Local videos** on the player and select the desired
-video before `profile save`. Save captures the connected sources and selected file
+video before `profile save`. Wait for folder scanning to finish before saving or
+binding a profile. Save captures the connected sources and selected file
 in a numbered slot without starting playback. The optional name replaces the slot
 name. Load selects that saved configuration; it is a playback request, not proof
 that frames are rendering. Loading follows player settings and local access state.
@@ -1507,10 +1524,15 @@ access. Source/selected names themselves may be personal information.
 Import saves into an **inactive** slot and does not start playback. On the same
 installation, the original binding can be reused only while its matching sources
 and local permissions still exist. On another device, browser profile or origin,
-connect the original files/folder locally and use **Bind active profile** in Local
-videos settings. An import never guesses a folder by name or recreates an OS or
-browser permission. Browser permission prompts require local interaction. After
-binding, load the saved profile again; the exact selected file must still exist.
+first run `ott PLAYER profile load N` for the imported slot. This selects the
+profile and opens local recovery when its binding is unavailable. In
+**Settings → Provider → Local videos**, connect the original files/folder,
+wait for scanning to finish, then choose
+**Bind loaded profile to connected sources**.
+The binding action is available only for a loaded profile. An import never guesses
+a folder by name or recreates an OS or browser permission. Browser permission
+prompts require local interaction. After binding, load the same profile again;
+the exact selected file must still exist.
 
 Portable documents are version 1, at most 12 KiB compact JSON, with at most 32
 sources. Unknown fields, credentials/access objects, absolute or traversal paths,
@@ -2492,6 +2514,9 @@ operation after resolving connectivity or rollout problems. It reconciles the
 recorded before/after state and preserves the generated token. If another
 operator changed the configuration, reconcile those changes before retrying;
 deleting the journal or adding a second credential can lose the recovery path.
+Keep the original name even if the updated CLI reserves it for a command: a
+matching legacy journal can still be resumed, but a different name cannot resume
+that operation. Add a usable alias only after recovery finishes.
 Check context, namespace, Secret, Deployment and Pod events. Connect the player
 only after registration finishes successfully.
 

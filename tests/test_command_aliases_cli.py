@@ -1,5 +1,6 @@
 """Exercise aliases through CLI dispatch/output, not just token replacement."""
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -190,6 +191,88 @@ class AliasDispatchTest(unittest.TestCase):
                              ('profile_settings', {'number': 2, 'settings': {field: value}}))
         for alias in ['history', 'history-hours', 'history_hours']:
             with self.assertRaises(ott.Error): ott.parse_command(['profile', '2', alias, '8761'])
+
+
+class PlayerAliasTest(unittest.TestCase):
+    def client(self, registered=True):
+        client = object.__new__(ott.Client)
+        client.config = {'players': {}, 'server_config': 'server.json'}
+        client.credentials = {'devices': [{'id': 'dev_tv', 'token': 'fixture'}] if registered else []}
+        return client
+
+    def test_reserved_names_fail_before_config_writes_or_provisioning(self):
+        names = ['devices', 'alias', 'add', 'pair', 'help', 'discover', 'pending', 'approve',
+                 'server', 'presets', 'handoff', 'report', 'resolve', 'diagnostics']
+        for operation in ['alias', 'add']:
+            for reserved in names:
+                for name in [reserved, reserved.upper()]:
+                    for registered in [False, True]:
+                        with self.subTest(operation=operation, name=name, registered=registered):
+                            client = self.client(registered)
+                            client.config['kubernetes'] = {'context': 'fixture'}
+                            before = copy.deepcopy((client.config, client.credentials))
+                            with mock.patch.object(ott, 'write_private') as write, \
+                                    mock.patch.object(ott, 'provision_kubernetes') as provision, \
+                                    self.assertRaisesRegex(ott.Error, 'reserved.*CLI command'):
+                                ott.management(client, 'cli.json', [operation, name, 'dev_tv'])
+                            self.assertEqual((client.config, client.credentials), before)
+                            write.assert_not_called()
+                            provision.assert_not_called()
+
+    def test_normal_names_and_command_prefixes_still_register(self):
+        for operation in ['alias', 'add']:
+            for name in ['TV', 'Ресивер_2', 'server_tv', 'reporting', 'diag']:
+                with self.subTest(operation=operation, name=name):
+                    client = self.client(registered=operation == 'alias')
+                    with mock.patch.object(ott, 'write_private') as write, \
+                            contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        self.assertTrue(ott.management(client, 'cli.json', [operation.upper(), name, 'dev_tv']))
+                    self.assertEqual(client.config['players'], {name: 'dev_tv'})
+                    self.assertEqual(write.call_count, 1 if operation == 'alias' else 2)
+                    self.assertEqual(client.device(name.swapcase()), 'dev_tv')
+
+    def test_existing_reserved_alias_is_preserved_when_adding_a_usable_name(self):
+        client = self.client()
+        client.config['players'] = {'server': 'dev_tv'}
+        with mock.patch.object(ott, 'write_private') as write, contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(ott.management(client, 'cli.json', ['alias', 'living_room', 'dev_tv']))
+        self.assertEqual(client.config['players'], {'server': 'dev_tv', 'living_room': 'dev_tv'})
+        self.assertEqual(client.device('SERVER'), 'dev_tv')  # Explicit pair/handoff arguments still resolve.
+        self.assertEqual(client.device('dev_tv'), 'dev_tv')
+        self.assertEqual(client.device('living_room'), 'dev_tv')
+        write.assert_called_once_with('cli.json', client.config)
+
+    def test_reserved_top_level_names_never_fall_through_to_player_or_preset(self):
+        for name in ['devices', 'alias', 'add', 'pair', 'help', 'discover', 'pending', 'approve',
+                     'server', 'presets', 'handoff', 'resolve', 'diagnostics']:
+            for spelling in [name, name.upper()]:
+                with self.subTest(name=spelling):
+                    client = mock.Mock()
+                    config = {'players': {name: 'dev_tv'}}
+                    before = copy.deepcopy(config)
+                    with mock.patch.object(ott, 'Client', return_value=client), \
+                            mock.patch.object(ott, 'read_json', return_value=config), \
+                            mock.patch.object(ott, 'preset_command') as preset, \
+                            contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        # A global option keeps the standalone resolve/diagnostics parsers out of this path.
+                        words = [spelling] if name == 'pair' else [spelling, 'load']
+                        self.assertEqual(ott.main(['--json'] + words), 1)
+                    preset.assert_not_called()
+                    client.device.assert_not_called()
+                    client.call.assert_not_called()
+                    self.assertEqual(config, before)
+
+    def test_uppercase_builtin_and_ordinary_player_keep_their_routes(self):
+        client = mock.Mock()
+        config = {'players': {'presets': 'dev_tv', 'server': 'dev_tv'}}
+        with mock.patch.object(ott, 'Client', return_value=client), \
+                mock.patch.object(ott, 'read_json', return_value=config), \
+                mock.patch.object(ott, 'preset_command', return_value=0) as preset, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ott.main(['--json', 'PRESETS']), 0)
+            client.device.assert_not_called()
+            self.assertEqual(ott.main(['tv', 'load', 'news']), 0)
+        preset.assert_called_once_with(config, ['tv', 'load', 'news'], 45, False, None)
 
 
 if __name__ == '__main__':

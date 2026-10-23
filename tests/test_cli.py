@@ -638,6 +638,92 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(ott.read_json(self.server_path), self.credentials)
         self.assert_recovered(self.live['devices'][0]['token'])
 
+    def legacy_reserved_pending_add(self, failure='restart'):
+        # Older CLIs allowed this name. Exercise their unchanged provisioning path.
+        self.failure = failure
+        client = ott.Client(ott.read_json(self.config_path))
+        with self.assertRaisesRegex(ott.Error, 'Retry ott add server dev_tv'):
+            ott.provision_kubernetes(client, self.config_path, 'server', 'dev_tv')
+        return self.live['devices'][0]['token']
+
+    def assert_reserved_recovered(self, token, name='server'):
+        self.add(name)
+        self.assertFalse(self.journal_path.exists())
+        self.assertEqual(self.replaces, 1)
+        self.assertEqual(self.live, ott.read_json(self.server_path))
+        self.assertEqual(self.live['devices'], [{'id': 'dev_tv', 'token': token}])
+        self.assertEqual(self.live['allowed_origins'], self.credentials['allowed_origins'])
+        config = ott.read_json(self.config_path)
+        self.assertEqual(config['players'], {'other': 'existing', 'server': 'dev_tv'})
+        self.assertEqual(config['unrelated'], 'preserved')
+
+    def test_reserved_alias_recovers_legacy_restart_failure_with_same_token(self):
+        token = self.legacy_reserved_pending_add()
+        self.assert_reserved_recovered(token, 'SERVER')
+        self.assertEqual(self.restarts, 2)
+
+    def test_reserved_alias_recovers_legacy_lost_replace_without_replacing_again(self):
+        token = self.legacy_reserved_pending_add('replace_response')
+        self.assertEqual(ott.read_json(self.server_path), self.credentials)
+        self.assert_reserved_recovered(token)
+        self.assertEqual(self.restarts, 1)
+
+    def test_reserved_alias_recovery_rejects_malformed_or_foreign_journal_before_io(self):
+        self.legacy_reserved_pending_add()
+        journal = ott.read_json(self.journal_path)
+        invalid = [(value, 'Invalid pending-add.json') for value in (None, [], {}, {'version': 2})]
+        for field, value in [('name', 'other'), ('device', 'dev_other'), ('server', 'https://other.example'),
+                             ('server_config', '/other/server.json'), ('kubernetes', {'context': 'other'})]:
+            foreign = copy.deepcopy(journal)
+            foreign['identity'][field] = value
+            invalid.append((foreign, 'unfinished ott add'))
+        foreign = copy.deepcopy(journal)
+        foreign['before']['allowed_origins'] = foreign['after']['allowed_origins'] = ['https://other.example']
+        invalid.append((foreign, 'unfinished ott add'))
+        for document, message in invalid:
+            with self.subTest(document=document):
+                ott.write_private(self.journal_path, document)
+                before = [path.read_bytes() for path in (self.config_path, self.server_path, self.journal_path)]
+                with mock.patch.object(ott.subprocess, 'check_output') as get, \
+                        mock.patch.object(ott.subprocess, 'run') as run, \
+                        mock.patch.object(ott, 'write_private') as write, \
+                        self.assertRaisesRegex(ott.Error, message):
+                    self.add('server')
+                get.assert_not_called()
+                run.assert_not_called()
+                write.assert_not_called()
+                self.assertEqual([path.read_bytes() for path in (self.config_path, self.server_path, self.journal_path)], before)
+
+    def test_reserved_alias_recovery_rejects_changed_alias_and_alias_command(self):
+        self.legacy_reserved_pending_add()
+        self.edit_config(lambda config: config['players'].update(server='dev_other'))
+        with mock.patch.object(ott.subprocess, 'check_output') as get, \
+                mock.patch.object(ott, 'write_private') as write:
+            with self.assertRaisesRegex(ott.Error, 'already bound to another UUID'):
+                self.add('server')
+            client = ott.Client(ott.read_json(self.config_path))
+            with self.assertRaisesRegex(ott.Error, 'reserved.*CLI command'):
+                ott.management(client, self.config_path, ['alias', 'server', 'dev_tv'])
+        get.assert_not_called()
+        write.assert_not_called()
+        self.assertTrue(self.journal_path.exists())
+
+    def test_reserved_alias_cannot_start_fresh_if_pending_journal_disappears(self):
+        self.legacy_reserved_pending_add()
+        before = self.server_path.read_bytes()
+        provision = ott.provision_kubernetes
+        def remove_before_provision(*args, **kwargs):
+            self.journal_path.unlink()
+            return provision(*args, **kwargs)
+        with mock.patch.object(ott, 'provision_kubernetes', side_effect=remove_before_provision), \
+                mock.patch.object(ott.subprocess, 'check_output') as get, \
+                mock.patch.object(ott, 'write_private') as write, \
+                self.assertRaisesRegex(ott.Error, 'pending-add.json is missing'):
+            self.add('server')
+        get.assert_not_called()
+        write.assert_not_called()
+        self.assertEqual(self.server_path.read_bytes(), before)
+
     def test_local_save_failure_preserves_token_for_reconciliation(self):
         original = ott.write_private
         def fail_save(path, *args, **kwargs):
