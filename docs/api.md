@@ -527,10 +527,10 @@ an 80% chance and the remaining numbers 20%, uniformly within each pool;
 an empty pool gives its chance to the other. An explicit range instead samples
 uniformly within that range and never falls back outside it.
 
-The player owns eligibility: normal random selection excludes AceStream names,
-provider/category adult classifications and manually protected channels even
-when parental control is temporarily unlocked. It checks eligibility and local
-playback admission again before dispatch. Manual exact-ID playback retains its
+The player owns eligibility: random selection excludes AceStream names and
+applies the configured selection restrictions, including during an active local
+access session. It checks eligibility and local playback admission again before dispatch.
+Manual exact-ID playback retains its
 existing policy. An empty eligible set is rejected without starting a channel.
 
 Success is exactly `{dispatched:true,channel:{id,number,name}}`; `id` is a

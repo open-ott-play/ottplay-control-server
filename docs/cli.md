@@ -879,10 +879,10 @@ The numbers used by `s` and numeric `play` refer to the provider's full
 catalogue, including when a media category filters the displayed rows.
 Category positions are not channel numbers. `R`, `r` and `random` use the
 provider's complete **All** catalogue, regardless of the displayed category.
-The player excludes names containing `[AceStream]` and all channels classified
-as adult or parental-protected, even when protection is currently disabled or
-temporarily unlocked. This does not remove them from the catalogue or alter
-manual exact-name, number or ID selection.
+The player excludes names containing `[AceStream]` and applies its configured
+selection restrictions, including during an active local access session. This
+does not remove entries from the catalogue or alter manual exact-name, number
+or ID selection.
 
 When both eligible pools are nonempty, random selection chooses numbers 1–1000
 with 80% probability and higher numbers with 20%, uniformly within the chosen
@@ -891,7 +891,7 @@ pool. If only one pool is available, it supplies every choice. An explicit
 weighting or any fallback outside that range. No eligible channel means an
 error without playback. Eligibility and source identity are checked again by
 the player when playback is admitted; the CLI does not infer protection from
-channel names or cache private parental settings.
+channel names or cache private access settings.
 
 Random selection, including partial or ambiguous channel-name selection, needs
 `capabilities.random.version = 1` and an updated controller. Older versions fail
