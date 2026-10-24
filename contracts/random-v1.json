@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "capability": {"random": {"version": 1}},
+  "request": {"action": "play_catalog", "params": {"catalog": "source-123", "random": {}}},
+  "search_request": {"action": "play_catalog", "params": {"catalog": "source-123", "random": {"search": "РЕН"}}},
+  "range_request": {"action": "play_catalog", "params": {"catalog": "source-123", "random": {"range": [1, 1000]}}},
+  "protected_request": {"action": "play_catalog", "params": {"catalog": "source-123", "random": {"mode": "adult"}}},
+  "result": {"dispatched": true, "channel": {"id": "ren", "number": 23, "name": "РЕН ТВ"}},
+  "legacy_request": {"action": "play_catalog", "params": {"catalog": "source-123", "id": "ren"}}
+}

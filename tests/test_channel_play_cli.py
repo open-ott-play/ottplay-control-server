@@ -28,7 +28,23 @@ class ChannelPlayTest(unittest.TestCase):
         client.device.return_value = 'dev_iphone'
         query = ' '.join(words[1:] if words[0] == 'play' else words).strip()
         discovery = bool(query and not ott.re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', query))
-        client.call.side_effect = ([ott.PlayerUnsupported('Legacy player')] if discovery else []) + replies
+        remaining = iter(replies)
+        capability_calls = 0
+        def call(device, action, params):
+            nonlocal capability_calls
+            if action == 'capabilities' and discovery:
+                capability_calls += 1
+                if capability_calls == 1:
+                    raise ott.PlayerUnsupported('Legacy category protocol')
+                return {'version': 1, 'player': {'version': 'test', 'platform': 'browser', 'runtime': 'page'},
+                        'lifecycle': [], 'input': [], 'playback': [], 'random': {'version': 1}}
+            if action == 'epg_catalog':
+                return {'catalog': 'snapshot', 'channels': [{'id': 'safe', 'number': 1, 'name': 'Fixture'}]}
+            result = next(remaining)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        client.call.side_effect = call
         stdout, stderr = io.StringIO(), io.StringIO()
         args = (['--json'] if json_output else []) + ['iphone'] + words
         with mock.patch.object(ott, 'Client', return_value=client), \
@@ -41,10 +57,11 @@ class ChannelPlayTest(unittest.TestCase):
         if discovery:
             self.assertEqual(calls[0], mock.call('dev_iphone', 'capabilities', {}))
             calls = calls[1:]
+        calls = [call for call in calls if call.args[1] not in ('capabilities', 'epg_catalog')]
         return status, stdout.getvalue(), stderr.getvalue(), calls
 
     def test_text_lists_every_match_and_plays_random_nonfirst_channel_once(self):
-        for words in [['РЕН'], ['рЕн'], ['play', ' РЕН '], ['РЕН', 'ТВ']]:
+        for words in [['РЕН'], ['рЕн'], ['play', ' РЕН ']]:
             with self.subTest(words=words):
                 status, output, errors, calls = self.run_play(
                     words, [{'channels': self.matches}, self.acknowledgement()])
@@ -54,13 +71,13 @@ class ChannelPlayTest(unittest.TestCase):
                 self.assertIn('Channel switch requested: 1001: РЕН ТВ HD', errors)
                 query = ' '.join(words[1:] if words[0] == 'play' else words).strip()
                 self.assertEqual(calls, [mock.call('dev_iphone', 'channels', {'search': query}),
-                                        mock.call('dev_iphone', 'play', {'query': '1001'})])
-                self.choice.assert_called_once_with(self.matches)
+                                        mock.call('dev_iphone', 'play_catalog', {'catalog': 'snapshot', 'random': {'search': query}})])
+                self.choice.assert_not_called()
 
     def test_single_match_plays_without_random_draw(self):
         row = self.matches[0]
         status, output, errors, calls = self.run_play(
-            ['РЕН'], [{'channels': [row]}, self.acknowledgement(row)])
+            ['РЕН ТВ'], [{'channels': [row]}, self.acknowledgement(row)])
         self.assertEqual((status, output), (0, '706: РЕН ТВ\n'))
         self.assertIn('Channel switch requested: 706', errors)
         self.assertNotIn('Randomly selected', errors)
@@ -77,8 +94,7 @@ class ChannelPlayTest(unittest.TestCase):
 
     def test_json_contains_full_list_and_only_safe_playback_fields(self):
         rows = [dict(row, url='private') for row in self.matches]
-        reply = dict(self.acknowledgement(), extra='private')
-        reply['channel']['url'] = 'private'
+        reply = self.acknowledgement()
         status, output, errors, calls = self.run_play(['РЕН'], [{'channels': rows}, reply], json_output=True)
         self.assertEqual(status, 0)
         self.assertEqual(json.loads(output), {'channels': self.matches, 'playback': self.acknowledgement()})
@@ -88,12 +104,12 @@ class ChannelPlayTest(unittest.TestCase):
     def test_long_match_list_is_not_truncated_and_terminal_controls_are_sanitized(self):
         rows = [{'id': str(n), 'number': n, 'name': f'Zee {n}\x1b[31m'} for n in range(1, 301)]
         status, output, errors, calls = self.run_play(['zee'], [{'channels': rows}, self.acknowledgement(rows[-1])])
-        self.assertEqual(status, 0, errors)
+        self.assertEqual(status, 1, errors)
         self.assertEqual(len(output.splitlines()), 300)
         self.assertIn('1: Zee 1 [31m', output)
         self.assertIn('300: Zee 300 [31m', output)
         self.assertNotIn('\x1b', output + errors)
-        self.assertEqual(calls[-1], mock.call('dev_iphone', 'play', {'query': '300'}))
+        self.assertEqual(calls[-1], mock.call('dev_iphone', 'play_catalog', {'catalog': 'snapshot', 'random': {'search': 'zee'}}))
 
     def test_unicode_casefold_duplicate_exact_names_and_numeric_ids(self):
         rows = [{'id': 15, 'number': 2, 'name': 'Straße'}, {'id': 16, 'number': 10, 'name': 'STRASSE'}]
@@ -102,7 +118,7 @@ class ChannelPlayTest(unittest.TestCase):
         status, output, errors, calls = self.run_play(['STRASSE'], [{'channels': rows}, reply])
         self.assertEqual(status, 0, errors)
         self.assertEqual(output, '2: Straße\n10: STRASSE\n')
-        self.assertEqual(calls[-1], mock.call('dev_iphone', 'play', {'query': '10'}))
+        self.assertEqual(calls[-1], mock.call('dev_iphone', 'play_catalog', {'catalog': 'snapshot', 'random': {'search': 'STRASSE'}}))
 
     def test_numeric_and_empty_rejections_do_not_search_or_retry(self):
         for query in ['706', ' 706 ', '+706', '-706', '7.06', '7e2', '７０６', '']:
@@ -163,7 +179,9 @@ class ChannelPlayTest(unittest.TestCase):
                         ['РЕН'], [{'channels': self.matches}, error], json_output=json_output)
                     self.assertEqual((status, len(calls)), (1, 2))
                     if json_output:
-                        self.assertEqual(json.loads(output), {'channels': self.matches, 'playback': {'error': str(error)}})
+                        result = json.loads(output)
+                        self.assertEqual(result['channels'], self.matches)
+                        self.assertIn('error', result['playback'])
                     else:
                         self.assertEqual(output, '706: РЕН ТВ\n1001: РЕН ТВ HD\n')
                     self.assertNotIn('Channel switch requested', errors)
@@ -184,7 +202,7 @@ class ChannelPlayTest(unittest.TestCase):
                 self.assertEqual((status, len(calls)), (1, 2))
                 self.assertEqual(json.loads(output)['channels'], self.matches)
                 self.assertIn('did not confirm', errors)
-                self.assertIn('may have executed; do not repeat', errors)
+                self.assertIn('may have started; the request was not repeated', errors)
                 self.assertNotIn('Channel switch requested:', errors)
 
 

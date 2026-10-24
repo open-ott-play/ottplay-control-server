@@ -48,6 +48,41 @@
 - Guide unbound Local videos profile imports through loading the profile before
   connecting and binding sources, then reloading it after scanning completes.
 
+## [0.1.6] - 2026-10-24
+
+### Changes
+
+- Make `R`, `r` and `random` select through the player's complete, source-bound
+  catalogue. Prefer eligible channel numbers 1–1000 with 80% probability and
+  higher numbers with 20%; use the available pool when the other is empty.
+  Explicit inclusive ranges remain uniformly sampled.
+- Keep random channel policy on the player so AceStream sources, adult
+  categories and manually protected channels are excluded consistently.
+  Partial or ambiguous channel names use the same policy; unique exact names,
+  numbers and IDs retain manual playback behavior.
+- Refresh destination capabilities after a provider switch, so random playback
+  works across playlist and paged media providers without downloading their
+  complete channel lists. Validate the selected channel and never retry a
+  rejected or uncertain playback mutation automatically.
+
+### Upgrade
+
+- Update the controller first, then participating players and the local `ott`
+  CLI. Random selection requires the version-1 `random` capability and fails
+  explicitly on older players; existing manual playback requests remain
+  compatible. Keep device registrations and local player profiles.
+- The CLI now uses All for random playback regardless of the displayed media
+  category. Use `ott PLAYER random FROM TO` to choose an explicit number range.
+
+### Security
+
+- Eligibility is evaluated on the player and checked again before admission.
+  Catalogue/runtime fences, parental PIN checks and local restrictions remain
+  authoritative. Random selection does not export private parental settings
+  or grant permission to bypass protected channels.
+- Reject malformed selectors and unexpected acknowledgement fields, including
+  out-of-range or unsafe numbers, before reporting a successful dispatch.
+
 ## [0.1.5] - 2026-10-20
 
 ### Added
