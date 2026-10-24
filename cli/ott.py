@@ -92,6 +92,10 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME aspect fit / fill         request Fit to screen / Fill screen
   ott NAME providers                 list providers (zero-based indices)
   ott NAME provider m3u              select a provider by ID, index or name
+  ott NAME provider m3u 1            select M3U, wait for loading, play channel 1
+  ott NAME provider m3u R            select M3U, play a random channel (r/random)
+  ott NAME provider m3u РЕН          exact channel name first, else random match
+  ott t1,t2,t3,t4 provider m3u        switch each listed player (alias: prov)
   ott NAME provider offline          select Local videos (if listed in providers)
   ott NAME provider-config FILE      update active provider settings from JSON
   ott NAME plex setup URL [TOKEN]    set Plex address and token (hidden prompt if omitted)
@@ -175,6 +179,13 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 --receipt writes one safe JSON request receipt to stderr per player RPC; stdout is unchanged.
+Comma-separated player lists support provider/prov; each distinct player runs once, in order.
+Add a channel number, R/random or name to switch and play from the provider's complete All catalog.
+Use provider "Local videos" -- NAME to separate a multiword provider from a channel explicitly.
+An exact full channel name wins; otherwise a random partial-name match is selected. Playback wakes standby.
+All player names are checked first. A player failure does not stop the remaining players.
+--timeout applies to each player; completed switches are not rolled back or automatically retried.
+An exact saved player name containing commas retains its existing single-player meaning.
 Player, channel, programme, VPortal and provider searches are case-insensitive.
 Command aliases: status/st; s/channels; p/programs/programmes; v/vol/volume;
 vp/vportal; vpr/vportal-random; msg/message; profile/prof; profiles/profs;
@@ -2397,8 +2408,10 @@ def categories_command(client, device, params, timeout):
         client.timeout = previous_timeout
 
 
-def read_media_channels(client, device, search, deadline, require_modern=False, page_limit=None, page_offset=0):
-    controls = media_capabilities(client, device, deadline)
+def read_media_channels(client, device, search, deadline, require_modern=False, page_limit=None, page_offset=0,
+                        expected_provider=None, controls=None, category_override=None,
+                        source_categories=None, complete_only=False):
+    controls = media_capabilities(client, device, deadline) if controls is None else controls
     if controls is None:
         if page_limit is not None:
             raise Error("Paged listing requires a player and controller advertising categories; no channel request was sent. Use s [TEXT] for legacy listing")
@@ -2416,8 +2429,11 @@ def read_media_channels(client, device, search, deadline, require_modern=False, 
         raise Error(f"This player supports --limit up to {maximum}; no catalog request was sent")
     # The first page carries the selected category and its source receipt even
     # when the selected category's row is on a later page.
-    categories = read_categories(client, device, controls, deadline, first_page_only=True)
-    runtime, category = categories["runtime"], categories["selected"]
+    categories = (read_categories(client, device, controls, deadline, first_page_only=True)
+                  if source_categories is None else source_categories)
+    if expected_provider is not None and categories["provider"] != expected_provider:
+        raise Error("The provider changed before its catalog was read; no playback was requested")
+    runtime, category = categories["runtime"], category_override or categories["selected"]
     limit = maximum if page_limit is None else page_limit
     result, rows, identities = None, [], set()
     previous_number = 0
@@ -2433,6 +2449,8 @@ def read_media_channels(client, device, search, deadline, require_modern=False, 
             params["search"] = search
         page = media_page_metadata(media_request(client, device, "channels", params, deadline), runtime,
                                    "channels", offset, request_limit, result["catalog"] if result else None, category)
+        if complete_only and page["loading"]:
+            return dict(page, channels=[])
         if result is not None and any(page[key] != result[key] for key in ("total", "loading")):
             raise Error("The video catalog changed between pages; no playback was requested")
         if (any(row["id"] in identities for row in page["channels"])
@@ -3013,6 +3031,8 @@ def print_player_status(data, name):
             print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
             print(f"  {prefix} provider offline  — request Local videos (when listed in providers)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
+            print(f"  {prefix} provider m3u 1 / R / NAME  — wait for loading, then play by number, random or name")
+            print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request each player in order")
         if provider in ("m3u", "vportal") or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", [])):
             print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
             if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):
@@ -3870,6 +3890,279 @@ def handoff_command(client, source, target):
     return {"source": source_id, "target": target_id, "dispatched": True, "kind": handoff["kind"], "source_stopped": False}
 
 
+def provider_request(client, device, action, params, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise Error("Provider operation exceeded --timeout; no further request was sent")
+    client.timeout = remaining
+    return client.call(device, action, params)
+
+
+def provider_identifier(value):
+    return (isinstance(value, str) and 1 <= len(value) <= 64
+            and re.fullmatch(r"[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+)*", value) is not None)
+
+
+def provider_play_plan(client, device, words, deadline):
+    """Keep existing whole-name queries; split only an unambiguous provider prefix."""
+    tail = words[1:]
+    query = " ".join(tail).strip()
+    if not query:
+        raise Error("provider requires a provider ID, index or name")
+    if len(tail) == 1 and tail[0] != "--":
+        return {"query": query}, None, None
+    boundary = tail.index("--") if "--" in tail else None
+    if boundary is not None and (boundary == 0 or boundary == len(tail) - 1 or tail.count("--") != 1):
+        raise Error("Use provider ID_OR_NAME -- CHANNEL, R or NAME")
+    data = provider_request(client, device, "providers", {}, deadline)
+    rows = data.get("providers") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows or len(rows) > 1000:
+        raise Error("The player returned an invalid provider list; no provider change was requested")
+    ids, indices = set(), set()
+    for row in rows:
+        if (not isinstance(row, dict) or not provider_identifier(row.get("id"))
+                or row["id"] in ids or type(row.get("index")) is not int or row["index"] < 0
+                or row["index"] in indices or not media_text(row.get("name"), 1024)):
+            raise Error("The player returned an invalid provider list; no provider change was requested")
+        ids.add(row["id"])
+        indices.add(row["index"])
+
+    def resolve(value):
+        key = value.strip().casefold()
+        exact = [row for row in rows if row["id"].casefold() == key or str(row["index"]) == key]
+        exact = exact or [row for row in rows if media_search_key(row["name"]) == media_search_key(key)]
+        matches = exact or [row for row in rows if media_search_key(key) in media_search_key(row["name"])]
+        if len(matches) > 1:
+            raise Error("Several providers match; use an exact provider ID or index. No provider change was requested")
+        return matches[0] if matches else None
+
+    if boundary is None:
+        if resolve(query) is not None:
+            return {"query": query}, None, None
+        prefixes = range(len(tail) - 1, 0, -1)
+    else:
+        prefixes = [boundary]
+    for count in prefixes:
+        provider = resolve(" ".join(tail[:count]))
+        if provider is None:
+            continue
+        playback = " ".join(tail[count + (boundary is not None):]).strip()
+        if not media_text(playback, 1024):
+            raise Error("A channel number, R or channel name is required; no provider change was requested")
+        return {"query": provider["id"]}, provider["id"], playback
+    raise Error("No provider matches; use providers to see IDs and names. No provider change was requested")
+
+
+def provider_switch_metadata(data, expected=None):
+    provider = data.get("provider") if isinstance(data, dict) else None
+    if (not isinstance(data, dict) or data.get("dispatched") is not True
+            or not provider_identifier(provider)
+            or (expected is not None and provider != expected)):
+        raise Error("The player did not confirm the provider switch. The request may have executed; "
+                    "check its status before another change. The request was not repeated.")
+    return {"dispatched": True, "provider": provider}
+
+
+def provider_ready(client, device, expected, deadline, wait, wake_report=None):
+    wake_sent = False
+    while True:
+        data = provider_request(client, device, "status", {}, deadline)
+        if (not isinstance(data, dict) or not isinstance(data.get("provider"), str)
+                or type(data.get("ready")) is not bool or not isinstance(data.get("player", {}), dict)
+                or ("standby" in data.get("player", {}) and type(data["player"]["standby"]) is not bool)):
+            raise Error("The player returned invalid provider readiness; no playback was requested")
+        standby = data.get("player", {}).get("standby", False)
+        if standby and wake_report is not None and not wake_sent:
+            wake_sent = True
+            params = {"operation": "wake"}
+            try:
+                wake_report["wake"] = deferred_control_metadata(
+                    provider_request(client, device, "lifecycle", params, deadline), "lifecycle", params)
+            except (PlayerRejected, PlayerUnsupported):
+                raise Error("Wake was rejected or unsupported; no playback was requested. The wake request was not repeated") from None
+            except Error as exc:
+                raise Error("Wake was not confirmed; no playback was requested. " + str(exc)) from None
+        if data["provider"] == expected and data["ready"] and not standby:
+            return
+        if not wait:
+            raise Error("The provider changed or is no longer ready; no playback was requested")
+        time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+
+
+def provider_play_catalog(client, device, provider, deadline):
+    controls = media_capabilities(client, device, deadline)
+    if controls is not None:
+        while True:
+            categories = read_categories(client, device, controls, deadline, first_page_only=True)
+            if categories["provider"] != provider:
+                raise Error("The provider changed before its catalog was read; no playback was requested")
+            if not categories["loading"]:
+                data = read_media_channels(client, device, "", deadline, require_modern=True,
+                                           expected_provider=provider, controls=controls, category_override="all",
+                                           source_categories=categories, complete_only=True)
+                if not data["loading"]:
+                    return data
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+            provider_ready(client, device, provider, deadline, wait=False)
+    data = provider_request(client, device, "epg_catalog", {}, deadline)
+    invalid = "The player returned an invalid complete channel catalog; no playback was requested"
+    if (not isinstance(data, dict) or not media_text(data.get("catalog"), 128)
+            or not isinstance(data.get("channels"), list) or len(data["channels"]) > 10000):
+        raise Error(invalid)
+    rows, identities, previous = [], set(), 0
+    for row in data["channels"]:
+        if (not isinstance(row, dict) or not epg_text(row.get("id"), 512) or not row["id"].strip()
+                or row["id"] in identities or not media_text(row.get("name"), 16384)
+                or type(row.get("number")) is not int or not previous < row["number"] <= 9007199254740991):
+            raise Error(invalid)
+        rows.append({key: row[key] for key in ("id", "number", "name")})
+        identities.add(row["id"])
+        previous = row["number"]
+    return {"catalog": data["catalog"], "channels": rows}
+
+
+def provider_play_selection(rows, query):
+    if query.casefold() in ("r", "random"):
+        matches = rows
+    elif re.fullmatch(r"[0-9]+", query):
+        matches = [row for row in rows if str(row["number"]) == query.lstrip("0")]
+    else:
+        key = media_search_key(query)
+        matches = [row for row in rows if media_search_key(row["name"]) == key]
+        if not matches:
+            matches = [row for row in rows if key in media_search_key(row["name"])]
+    if not matches:
+        raise Error("No channels match in the selected provider's catalog; no playback was requested")
+    return secrets.choice(matches) if len(matches) > 1 else matches[0]
+
+
+def provider_command(client, device, words, project=False):
+    previous_timeout = client.timeout
+    deadline = time.monotonic() + previous_timeout
+    try:
+        params, provider, playback = provider_play_plan(client, device, words, deadline)
+        data = provider_request(client, device, "provider", params, deadline)
+        if playback is None:
+            return provider_switch_metadata(data) if project else data, None
+        data = provider_switch_metadata(data, provider)
+        stage, dispatched = "waiting", False
+        try:
+            provider_ready(client, device, provider, deadline, wait=True, wake_report=data)
+            stage = "catalog"
+            catalog = provider_play_catalog(client, device, provider, deadline)
+            stage = "selection"
+            selected = provider_play_selection(catalog["channels"], playback)
+            provider_ready(client, device, provider, deadline, wait=False)
+            if time.monotonic() >= deadline:
+                raise Error("Provider operation exceeded --timeout; no playback was requested")
+            stage, dispatched = "playback", None
+            result = provider_request(client, device, "play_catalog",
+                                      {"catalog": catalog["catalog"], "id": selected["id"]}, deadline)
+            channel = result.get("channel") if isinstance(result, dict) else None
+            if (not isinstance(result, dict) or result.get("dispatched") is not True
+                    or not isinstance(channel, dict) or type(channel.get("number")) is not int
+                    or any(channel.get(key) != value for key, value in selected.items())):
+                raise Error("The player did not confirm the requested channel; playback may have started. The request was not repeated")
+            data["playback"] = {"stage": "completed", "dispatched": True, "channel": selected}
+            return data, None
+        except (PlayerRejected, PlayerUnsupported) as exc:
+            dispatched = False
+            reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+            error = Error(f"The provider playback step was {reason}; check its catalog and local restrictions. The request was not repeated")
+        except Error as exc:
+            error = exc
+        except (KeyError, TypeError, ValueError, OSError):
+            error = Error("The provider playback step did not complete; inspect this player before another change")
+        data["playback"] = {"stage": stage, "dispatched": dispatched, "error": clean(str(error))}
+        return data, error
+    except (PlayerRejected, PlayerUnsupported) as exc:
+        reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+        raise Error(f"The provider request was {reason}; check its allowed providers and local restrictions. "
+                    "The request was not repeated.") from None
+    finally:
+        client.timeout = previous_timeout
+
+
+def provider_group_targets(client, selector):
+    """Resolve a comma list locally before any provider request can be sent."""
+    if "," not in selector:
+        return None
+    aliases = client.config.get("players", {})
+    devices = client.credentials.get("devices", [])
+    if (not isinstance(aliases, dict) or any(not isinstance(name, str) for name in aliases)
+            or not isinstance(devices, list) or any(not isinstance(row, dict)
+                or not isinstance(row.get("id"), str) for row in devices)):
+        raise Error("Check the configured player names and device UUIDs")
+    # Hand-edited configurations can contain commas. Preserve their exact
+    # single-player meaning, including ambiguous names rejected by device().
+    if (any(name.casefold() == selector.casefold() for name in aliases)
+            or any(row["id"].casefold() == selector.casefold() for row in devices)):
+        return None
+    names = [name.strip() for name in selector.split(",")]
+    if any(not name for name in names):
+        raise Error("Player lists require a name between every comma; use t1,t2,t3,t4")
+    targets = []
+    seen = set()
+    for name in names:
+        device = client.device(name)
+        if not isinstance(device, str) or not device:
+            raise Error("Check the configured player UUIDs")
+        # Device IDs are case-sensitive on the server; device() resolves aliases
+        # and case-insensitive UUID lookups to their configured identity.
+        if device not in seen:
+            seen.add(device)
+            targets.append((name, device))
+    return targets
+
+
+def provider_group_command(client, targets, words, json_output):
+    if command_verb(words) != "provider":
+        raise Error("Player lists support provider/prov only; use ott t1,t2,t3,t4 provider m3u")
+    action, params = parse_command(words)
+    if not params["query"].strip():
+        raise Error("provider requires a provider ID, index or name")
+    results = []
+    on_receipt = getattr(client, "on_receipt", None)
+    for name, device in targets:
+        row = {"player": name, "ok": False}
+        try:
+            if callable(on_receipt):
+                client.on_receipt = lambda receipt, name=name: on_receipt({**receipt, "player": name})
+            data, playback_error = provider_command(client, device, words, project=True)
+            row["data"] = provider_switch_metadata(data)
+            if "playback" in data:
+                row["data"]["playback"] = data["playback"]
+            if "wake" in data:
+                row["data"]["wake"] = data["wake"]
+            if playback_error:
+                raise playback_error
+            row["ok"] = True
+        except (PlayerRejected, PlayerUnsupported) as exc:
+            reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+            row["error"] = (f"The provider request was {reason}; check its allowed providers and local restrictions. "
+                            "The request was not repeated.")
+        except Error as exc:
+            row["error"] = clean(str(exc))
+        except (KeyError, TypeError, ValueError, OSError):
+            row["error"] = "The provider request did not complete; inspect this player before another change."
+        finally:
+            client.on_receipt = on_receipt
+        results.append(row)
+        if not json_output:
+            message = ("Provider switch requested: " + row["data"]["provider"] if row["ok"]
+                       else "Error: " + row["error"])
+            if "playback" in row.get("data", {}):
+                message = "Provider switch acknowledged: " + row["data"]["provider"] + "; "
+                message += ("channel requested: " + clean(row["data"]["playback"]["channel"]["name"]) if row["ok"]
+                            else "Error: " + row["error"])
+            print(f"{clean(name)}: {message}", flush=True)
+    succeeded = sum(row["ok"] for row in results)
+    if json_output:
+        print(json.dumps({"action": action, "results": results, "succeeded": succeeded,
+                          "failed": len(results) - succeeded}, ensure_ascii=False, indent=2))
+    return 0 if succeeded == len(results) else 1
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "resolve":
@@ -3934,6 +4227,9 @@ def main(argv=None):
             return 0
         if args.words[0].casefold() in TOP_LEVEL_COMMANDS:
             raise Error(f"The name {args.words[0]!r} is reserved for a CLI command. Run ott --help for its syntax; use another player alias or the device UUID")
+        targets = provider_group_targets(client, args.words[0])
+        if targets is not None:
+            return provider_group_command(client, targets, args.words[1:], args.json)
         device = client.device(args.words[0])
         words = args.words[1:]
         if (words and words[0].casefold() == "update" and
@@ -3963,7 +4259,9 @@ def main(argv=None):
         catalog_play = None
         playback_error = None
         plex_settings = action == "provider_settings" and params.get("provider") == "plex"
-        if action in ("profile_save", "profile_export", "profile_import"):
+        if action == "provider" and (len(words) > 2 or "--" in words[1:]):
+            data, playback_error = provider_command(client, device, words)
+        elif action in ("profile_save", "profile_export", "profile_import"):
             data = offline_profile_command(client, device, action, params, args.timeout)
         elif action == "profile_settings" and "vportal" in params["settings"]:
             data = vportal_profile_command(client, device, params, args.timeout)
