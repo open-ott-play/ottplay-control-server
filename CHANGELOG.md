@@ -56,8 +56,8 @@
   catalogue. Prefer eligible channel numbers 1–1000 with 80% probability and
   higher numbers with 20%; use the available pool when the other is empty.
   Explicit inclusive ranges remain uniformly sampled.
-- Keep random channel policy on the player so AceStream sources, adult
-  categories and manually protected channels are excluded consistently.
+- Keep random channel eligibility on the player and apply the configured
+  source and access restrictions consistently.
   Partial or ambiguous channel names use the same policy; unique exact names,
   numbers and IDs retain manual playback behavior.
 - Refresh destination capabilities after a provider switch, so random playback
@@ -77,9 +77,9 @@
 ### Security
 
 - Eligibility is evaluated on the player and checked again before admission.
-  Catalogue/runtime fences, parental PIN checks and local restrictions remain
-  authoritative. Random selection does not export private parental settings
-  or grant permission to bypass protected channels.
+  Catalogue/runtime fences and local access restrictions remain
+  authoritative. Random selection does not export private access settings
+  or grant permission to bypass local restrictions.
 - Reject malformed selectors and unexpected acknowledgement fields, including
   out-of-range or unsafe numbers, before reporting a successful dispatch.
 
