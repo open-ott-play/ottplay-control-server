@@ -13,12 +13,18 @@ import (
 // HomeAssistant is an opt-in, outbound-only event bridge. Credentials are never
 // included in its status: TokenFile is read by the worker on each connection.
 type HomeAssistant struct {
-	Enabled            bool                `json:"enabled"`
-	URL                string              `json:"url"`
-	TokenFile          string              `json:"token_file"`
-	Rules              []HomeAssistantRule `json:"rules"`
-	MaxPerMinute       int                 `json:"max_per_minute,omitempty"`
-	EventMaxAgeSeconds int                 `json:"event_max_age_seconds,omitempty"`
+	Enabled            bool                           `json:"enabled"`
+	URL                string                         `json:"url"`
+	TokenFile          string                         `json:"token_file"`
+	Rules              []HomeAssistantRule            `json:"rules"`
+	MaxPerMinute       int                            `json:"max_per_minute,omitempty"`
+	EventMaxAgeSeconds int                            `json:"event_max_age_seconds,omitempty"`
+	Cameras            map[string]HomeAssistantCamera `json:"cameras,omitempty"`
+}
+
+type HomeAssistantCamera struct {
+	EntityID string `json:"entity_id"`
+	Label    string `json:"label"`
 }
 
 type HomeAssistantRule struct {
@@ -34,11 +40,13 @@ type HomeAssistantRule struct {
 	TTLSeconds      int      `json:"ttl_seconds,omitempty"`
 	CooldownSeconds int      `json:"cooldown_seconds,omitempty"`
 	Targets         []string `json:"targets,omitempty"`
+	CameraKey       string   `json:"camera_key,omitempty"`
 }
 
 var haIdentifier = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 var haEntity = regexp.MustCompile(`^[a-z0-9_]+\.[a-z0-9_]+$`)
 var haTemplate = regexp.MustCompile(`\{\{\s*([a-z_]+)\s*\}\}`)
+var haCameraKey = regexp.MustCompile(`^[a-z0-9_]{1,48}$`)
 
 func (c *HomeAssistant) Defaults() {
 	if c.MaxPerMinute == 0 {
@@ -57,6 +65,9 @@ func (c *HomeAssistant) Defaults() {
 		}
 		if r.TTLSeconds == 0 {
 			r.TTLSeconds = 15
+			if r.CameraKey != "" {
+				r.TTLSeconds = 30
+			}
 		}
 		if r.CooldownSeconds == 0 {
 			r.CooldownSeconds = 60
@@ -86,12 +97,32 @@ func (c HomeAssistant) Validate() error {
 	if len(c.Rules) == 0 || len(c.Rules) > 64 {
 		return errors.New("home_assistant.rules must contain 1..64 entries")
 	}
+	if len(c.Cameras) > 16 {
+		return errors.New("home_assistant.cameras must contain at most 16 entries")
+	}
+	for key, camera := range c.Cameras {
+		if !haCameraKey.MatchString(key) || !strings.HasPrefix(camera.EntityID, "camera.") || len(camera.EntityID) > 255 || !haEntity.MatchString(camera.EntityID) || !validHATemplate(camera.Label, 120) || strings.Contains(camera.Label, "{{") {
+			return errors.New("home_assistant.cameras requires fixed camera entity ids and bounded plain labels")
+		}
+	}
 	ids := map[string]bool{}
+	cameraRules := map[string]bool{}
 	for _, r := range c.Rules {
 		if !haIdentifier.MatchString(r.ID) || ids[r.ID] || !haIdentifier.MatchString(r.EventType) {
 			return errors.New("home_assistant rules require unique ids and explicit event_type identifiers")
 		}
 		ids[r.ID] = true
+		if r.CameraKey != "" {
+			if _, ok := c.Cameras[r.CameraKey]; !ok || r.EventType != "cisco_motion_snapshot_requested" {
+				return errors.New("home_assistant camera rules require an allowlisted camera_key and cisco_motion_snapshot_requested event")
+			}
+			if cameraRules[r.CameraKey] {
+				return errors.New("home_assistant permits one rule per camera_key; combine its targets")
+			}
+			cameraRules[r.CameraKey] = true
+		} else if r.EventType == "cisco_motion_snapshot_requested" {
+			return errors.New("home_assistant motion snapshot rules require a fixed camera_key")
+		}
 		if !validHATemplate(r.Title, 120) || !validHATemplate(r.Message, 512) {
 			return errors.New("home_assistant rule title/message must be bounded text with only supported placeholders")
 		}

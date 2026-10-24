@@ -35,6 +35,10 @@ func (b *Bridge) processEvent(raw json.RawMessage, subscribedType string) {
 		b.dropped()
 		return
 	}
+	if ev.EventType == "cisco_motion_snapshot_requested" {
+		b.processCameraEvent(ev, now)
+		return
+	}
 	for k, expiry := range b.seen {
 		if !now.Before(expiry) {
 			delete(b.seen, k)
