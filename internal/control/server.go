@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
+	"github.com/open-ott-play/ottplay-control-server/internal/homeassistant"
 	"github.com/open-ott-play/ottplay-control-server/internal/wire"
 )
 
@@ -57,12 +58,13 @@ func (b *bucket) allow(now time.Time, limit int) bool {
 }
 
 type device struct {
-	id       string
-	token    [32]byte
-	queue    []entry
-	lastSeen time.Time
-	rate     bucket
-	results  map[string]requestResult
+	id            string
+	token         [32]byte
+	queue         []entry
+	lastSeen      time.Time
+	rate          bucket
+	results       map[string]requestResult
+	notifications notificationPresence
 }
 
 type Server struct {
@@ -86,6 +88,8 @@ type Server struct {
 	pairTokens             map[string]string
 	pairRates              map[string]*bucket
 	publicRate, createRate bucket
+	notificationStats      notificationCounters
+	homeAssistantStatus    func() homeassistant.Snapshot
 }
 
 func New(c config.Config) (*Server, error) {
@@ -277,7 +281,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if path == "/api/pairings/approve" {
 			methods = "POST"
 		}
-	case "/healthz", "/readyz", "/api/devices", "/api/debug", "/api/operations", wire.LegacyPollPath:
+	case "/healthz", "/readyz", "/api/devices", "/api/debug", "/api/operations", "/api/notifications", "/api/home-assistant/status", wire.LegacyPollPath:
 		methods = "GET"
 	case wire.CommandPath:
 		methods = "GET,POST"
@@ -295,7 +299,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if intendedMethod == http.MethodOptions {
 		intendedMethod = r.Header.Get("Access-Control-Request-Method")
 	}
-	deviceRoute := path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
+	deviceRoute := path == "/api/notifications" || path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
 	if path == "/api/discovery" || (path == "/api/pairings" && (intendedMethod == "POST" || r.URL.Query().Has("id"))) {
 		deviceRoute = true
 	}
@@ -336,8 +340,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
-	operatorRoute := operator != nil && (path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
+	requiresAdmin := path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
+	operatorRoute := operator != nil && (path == "/api/home-assistant/status" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
 	if (!operatorRoute && requiresAdmin != admin) || (operator != nil && !operatorRoute) {
 		failure(w, 403, "credential role is not allowed")
 		return
@@ -359,6 +363,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/operations" {
 		s.operation(w, r)
+		return
+	}
+	if path == "/api/notifications" {
+		s.pollNotifications(w, r, d, now)
+		return
+	}
+	if path == "/api/home-assistant/status" {
+		s.notificationStatus(w, r, now)
 		return
 	}
 	if path == "/api/devices" {

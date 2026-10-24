@@ -16,6 +16,12 @@
 
 A small self-hosted server that delivers remote commands to OTT-play players. Players make outbound HTTP requests, so a TV does not need to expose a listening port. Each player has its own queue and access token; a separate administrator token submits commands.
 
+Optional [Home Assistant event banners](docs/home-assistant.md) use a private
+long-lived token and one controller WebSocket connection to notify active
+players. The guide covers filtered rules, automation YAML, Docker/Helm token
+mounts, `ott ha status`, illustrated delivery flow and recovery. Notifications
+respect standby and visibility; queued or polled does not mean visibly displayed.
+
 Optional [reliable control](docs/reliable-control.md) adds scoped integration
 credentials, bounded durable command outcomes, resumable Local/Home application
 with exact settings verification, and explicit live/archive playback handoff.

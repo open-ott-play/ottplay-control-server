@@ -4,3 +4,6 @@ under the MIT license in LICENSES/venus-os-ci-toolkit.txt.
 
 The legacy command API is compatible with the optional webhook example in
 open-ott-play/ottplay-foss/local_proxy.py. This server is an independent Go implementation.
+
+Home Assistant WebSocket transport uses github.com/coder/websocket v1.8.15,
+under the ISC license in LICENSES/coder-websocket.txt.

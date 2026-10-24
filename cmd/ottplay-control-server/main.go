@@ -16,6 +16,7 @@ import (
 
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
 	"github.com/open-ott-play/ottplay-control-server/internal/control"
+	"github.com/open-ott-play/ottplay-control-server/internal/homeassistant"
 )
 
 var version = "dev"
@@ -133,6 +134,17 @@ func run(args []string, out, errOut io.Writer) int {
 	server := &http.Server{Addr: c.Listen, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192, TLSConfig: tlsConfig, ErrorLog: log.New(io.Discard, "", 0)}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if c.HomeAssistant != nil && c.HomeAssistant.Enabled {
+		bridge := homeassistant.New(*c.HomeAssistant, h.DeliverNotification)
+		h.SetHomeAssistantStatus(func() homeassistant.Snapshot { return bridge.Snapshot() })
+		bridgeCtx, cancelBridge := context.WithCancel(ctx)
+		bridgeDone := make(chan struct{})
+		go func() {
+			defer close(bridgeDone)
+			bridge.Run(bridgeCtx)
+		}()
+		defer func() { cancelBridge(); <-bridgeDone }()
+	}
 	done := make(chan error, 1)
 	go func() {
 		if cert != "" {

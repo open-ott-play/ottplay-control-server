@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title description">
+  <title id="title">OTT-play Home Assistant event lifecycle and failure recovery</title>
+  <desc id="description">An event passes authenticated subscription, freshness and rule matching, then active-runtime routing before a player polls and checks its local activity. Old events, inactive runtimes and expired queue entries are dropped. Network failures reconnect with bounded backoff. A rejected token is not retried until the file changes.</desc>
+  <defs>
+    <linearGradient id="header" x2="1" y2="1"><stop stop-color="#12304c"/><stop offset="1" stop-color="#174f65"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#39728a" stroke-width="2"/></marker>
+    <style>
+      text { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; fill:#19364c; }
+      .title { font-size:32px; font-weight:700; fill:white; }
+      .subtitle { font-size:17px; fill:#d8eaf2; }
+      .heading { font-size:20px; font-weight:700; }
+      .body { font-size:16px; }
+      .small { font-size:15px; fill:#4b6475; }
+      .number { font-size:17px; font-weight:700; fill:white; }
+      .line { fill:none; stroke:#39728a; stroke-width:2.5; marker-end:url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1200" height="800" rx="20" fill="#f1f6fa"/>
+  <path d="M20 0H1180Q1200 0 1200 20V126H0V20Q0 0 20 0Z" fill="url(#header)"/>
+  <text x="44" y="55" class="title">A fresh event has a short journey.</text>
+  <text x="44" y="88" class="subtitle">Progress is observable. Stale notifications stop here instead of following a player into tomorrow.</text>
+
+  <path d="M138 173V578" stroke="#b7cddb" stroke-width="4"/>
+  <g>
+    <rect x="177" y="157" width="557" height="98" rx="13" fill="white" stroke="#cadce7"/>
+    <circle cx="138" cy="190" r="22" fill="#285d79"/><text x="138" y="196" class="number" text-anchor="middle">1</text>
+    <text x="198" y="187" class="heading">Authenticate and confirm subscriptions</text>
+    <text x="198" y="214" class="body">auth_required → auth → auth_ok → matching result id</text>
+    <text x="198" y="239" class="small">Selected event types only · no historical snapshot playback</text>
+  </g>
+  <g>
+    <rect x="177" y="275" width="557" height="112" rx="13" fill="white" stroke="#cadce7"/>
+    <circle cx="138" cy="308" r="22" fill="#285d79"/><text x="138" y="314" class="number" text-anchor="middle">2</text>
+    <text x="198" y="305" class="heading">Accept a live event and apply rules</text>
+    <text x="198" y="333" class="body">Timestamp · exact entity/state · duplicate suppression</text>
+    <text x="198" y="359" class="small">Cooldown + rate budget · bounded plain-text template</text>
+    <text x="198" y="379" class="small">Missing state / unchanged state / stale event → discard</text>
+  </g>
+  <g>
+    <rect x="177" y="407" width="557" height="112" rx="13" fill="white" stroke="#cadce7"/>
+    <circle cx="138" cy="440" r="22" fill="#285d79"/><text x="138" y="446" class="number" text-anchor="middle">3</text>
+    <text x="198" y="437" class="heading">Route to the current active runtime</text>
+    <text x="198" y="465" class="body">Registered target IDs, or all eligible active players</text>
+    <text x="198" y="491" class="small">At most 4 queued / device · TTL 15 s by default</text>
+    <text x="198" y="511" class="small">Inactive / stale / queue full → skip</text>
+  </g>
+  <g>
+    <rect x="177" y="539" width="557" height="112" rx="13" fill="#e9f6ef" stroke="#afd5c0"/>
+    <circle cx="138" cy="572" r="22" fill="#327858"/><text x="138" y="578" class="number" text-anchor="middle">4</text>
+    <text x="198" y="569" class="heading">Poll, recheck activity, show the banner</text>
+    <text x="198" y="597" class="body">GET /api/notifications · approximately every 5 s</text>
+    <text x="198" y="623" class="small">No stream start · no provider change · no screen wake</text>
+    <text x="198" y="643" class="small">Polled is not a screen acknowledgement</text>
+  </g>
+
+  <rect x="798" y="157" width="360" height="230" rx="15" fill="#e8f0f8" stroke="#bfd1e2"/>
+  <text x="820" y="191" class="heading">Connection recovery</text>
+  <text x="820" y="225" class="body">Ping every 20 s · pong within 10 s</text>
+  <text x="820" y="258" class="body">Network failure</text>
+  <text x="820" y="283" class="small">Backoff 1–30 s + bounded jitter</text>
+  <text x="820" y="318" class="body">Authentication rejected</text>
+  <text x="820" y="343" class="small">Wait for token-file content to change</text>
+  <text x="820" y="368" class="small">Check file every 5 s; no retry storm</text>
+  <path d="M737 200H792" class="line"/>
+
+  <rect x="798" y="407" width="360" height="244" rx="15" fill="#fff1e5" stroke="#e1c6ae"/>
+  <text x="820" y="441" class="heading">Expiration is intentional</text>
+  <text x="820" y="477" class="body">Hidden, standby or changed runtime</text>
+  <text x="820" y="503" class="small">Drop pending notifications.</text>
+  <text x="820" y="542" class="body">HA or player reconnects</text>
+  <text x="820" y="568" class="small">No event history is replayed.</text>
+  <text x="820" y="608" class="body">Player becomes active again</text>
+  <text x="820" y="634" class="small">Only new eligible events can appear.</text>
+  <path d="M737 459H792" class="line"/>
+
+  <rect x="42" y="687" width="1116" height="73" rx="14" fill="#163e54"/>
+  <text x="65" y="717" font-size="18" font-weight="700" style="fill:white">Acceptance = connection evidence + delivery evidence + actual screen observation</text>
+  <text x="65" y="743" font-size="15" style="fill:#d8eaf2">Test an active player, then standby / hidden / reconnect. Record each installed platform separately.</text>
+</svg>

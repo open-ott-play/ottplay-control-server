@@ -1,5 +1,11 @@
 # Deployment
 
+The optional [Home Assistant bridge](home-assistant.md) needs an outbound HA
+WebSocket route and a private token file readable by the service. Its guide
+includes [Compose mounts](home-assistant.md#docker-compose) and the existing
+[Helm Secret layout](home-assistant.md#helm--k3s). Install updated players as well
+as the controller to receive event banners; keep one controller replica.
+
 Optional durable operation outcomes require a writable, persistent private
 directory mounted at the configured `journal.path` parent. Use one controller
 replica and one writer per journal; it is not shared HA storage. Keep this path

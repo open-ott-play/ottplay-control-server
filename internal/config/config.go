@@ -36,12 +36,16 @@ type Config struct {
 	Diagnostics         *Diagnostics      `json:"diagnostics,omitempty"`
 	Operators           []CommandOperator `json:"operators,omitempty"`
 	Journal             *CommandJournal   `json:"journal,omitempty"`
+	HomeAssistant       *HomeAssistant    `json:"home_assistant,omitempty"`
 }
 
 var deviceID = regexp.MustCompile(wire.DeviceIdPattern)
 var token = regexp.MustCompile(wire.TokenPattern)
 
 func (c *Config) Defaults() {
+	if c.HomeAssistant != nil {
+		c.HomeAssistant.Defaults()
+	}
 	if c.Journal != nil {
 		c.Journal.Defaults()
 	}
@@ -63,6 +67,24 @@ func (c *Config) Defaults() {
 }
 
 func (c Config) Validate() error {
+	if c.HomeAssistant != nil {
+		if err := c.HomeAssistant.Validate(); err != nil {
+			return err
+		}
+		if c.HomeAssistant.Enabled {
+			configured := map[string]bool{}
+			for _, d := range c.Devices {
+				configured[d.ID] = true
+			}
+			for _, r := range c.HomeAssistant.Rules {
+				for _, id := range r.Targets {
+					if !configured[id] {
+						return errors.New("home_assistant rule target must name a configured device")
+					}
+				}
+			}
+		}
+	}
 	if c.Journal != nil {
 		if err := c.Journal.Validate(); err != nil {
 			return err
