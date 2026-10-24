@@ -2,6 +2,7 @@
 // Real controller + fake HA WebSocket + production player + CLI, entirely local.
 // Prerequisite: npm ci && npm run build in the supplied player repository.
 // Run: node scripts/smoke_home_assistant.cjs /path/to/ottplay-foss
+// Add --camera for the shared switch and private JPEG cross-stack scenario.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -13,8 +14,9 @@ const execFile = promisify(execFileCallback);
 
 const root = path.resolve(__dirname, "..");
 const player = process.argv[2] && path.resolve(process.argv[2]);
-if (!player || process.argv.length !== 3) {
-    console.error("Usage: node scripts/smoke_home_assistant.cjs /path/to/built/ottplay-foss");
+const cameraMode = process.argv[3] === "--camera";
+if (!player || (process.argv.length !== 3 && !(cameraMode && process.argv.length === 4))) {
+    console.error("Usage: node scripts/smoke_home_assistant.cjs /path/to/built/ottplay-foss [--camera]");
     process.exit(2);
 }
 for (const file of ["dist/index.html", "dist/player.js", "tests/helpers/device-browser-server.cjs"]) {
@@ -67,6 +69,9 @@ import (
     "context"
     "encoding/json"
     "flag"
+    "image"
+    "image/color"
+    "image/jpeg"
     "net/http"
     "os"
     "strings"
@@ -85,12 +90,21 @@ func main() {
     if err != nil { os.Exit(1) }
     token := strings.TrimSpace(string(raw))
     var mu sync.Mutex
-    clients := map[*websocket.Conn]float64{}
+    clients := map[*websocket.Conn]map[string]float64{}
+    cameraRequests := 0
     mux := http.NewServeMux()
     mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-        mu.Lock(); count := len(clients); mu.Unlock()
+        mu.Lock(); count, requests := len(clients), cameraRequests; mu.Unlock()
         w.Header().Set("Content-Type", "application/json")
-        _ = json.NewEncoder(w).Encode(map[string]any{"clients": count})
+        _ = json.NewEncoder(w).Encode(map[string]any{"clients": count,"camera_requests":requests})
+    })
+    mux.HandleFunc("/api/camera_proxy_stream/camera.fixture", func(w http.ResponseWriter, r *http.Request) {
+        if r.Header.Get("Authorization") != "Bearer "+token { w.WriteHeader(401); return }
+        mu.Lock(); cameraRequests++; mu.Unlock()
+        frame := image.NewRGBA(image.Rect(0,0,320,180))
+        for y:=0;y<180;y++ { for x:=0;x<320;x++ { frame.SetRGBA(x,y,color.RGBA{uint8(x%256),uint8(y),90,255}) } }
+        w.Header().Set("Content-Type","image/jpeg")
+        _ = jpeg.Encode(w,frame,&jpeg.Options{Quality:75})
     })
     mux.HandleFunc("/api/websocket", func(w http.ResponseWriter, r *http.Request) {
         c, err := websocket.Accept(w, r, nil)
@@ -109,15 +123,17 @@ func main() {
             return
         }
         if wsjson.Write(handshake, c, map[string]any{"type":"auth_ok"}) != nil { return }
-        var sub map[string]any
-        if wsjson.Read(handshake, c, &sub) != nil || sub["type"] != "subscribe_events" || sub["event_type"] != "ottplay_notification" { return }
-        id, ok := sub["id"].(float64)
-        if !ok || id < 1 { return }
-        if wsjson.Write(handshake, c, map[string]any{"id":id,"type":"result","success":true}) != nil { return }
-        mu.Lock(); clients[c] = id; mu.Unlock()
+        mu.Lock(); clients[c] = map[string]float64{}; mu.Unlock()
         for {
             var command map[string]any
             if wsjson.Read(ctx, c, &command) != nil { return }
+            if command["type"] == "subscribe_events" {
+                eventType, ok := command["event_type"].(string)
+                id, validID := command["id"].(float64)
+                if !ok || !validID || id<1 || (eventType!="ottplay_notification" && eventType!="cisco_motion_snapshot_requested") { return }
+                mu.Lock(); clients[c][eventType]=id; mu.Unlock()
+                if wsjson.Write(ctx,c,map[string]any{"id":id,"type":"result","success":true}) != nil { return }
+            }
             if command["type"] == "ping" {
                 writeCtx, done := context.WithTimeout(ctx, 2*time.Second)
                 err := wsjson.Write(writeCtx, c, map[string]any{"id":command["id"],"type":"pong"})
@@ -128,12 +144,15 @@ func main() {
     })
     mux.HandleFunc("/emit", func(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodPost { w.WriteHeader(405); return }
-        var data map[string]string
+        var data map[string]any
         if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&data) != nil { w.WriteHeader(400); return }
-        event := map[string]any{"event_type":"ottplay_notification","time_fired":time.Now().UTC().Format(time.RFC3339Nano),"data":data}
+        eventType := "ottplay_notification"
+        if selected,ok:=data["fixture_type"].(string);ok { eventType=selected;delete(data,"fixture_type") }
+        event := map[string]any{"event_type":eventType,"time_fired":time.Now().UTC().Format(time.RFC3339Nano),"data":data}
         sent := 0
         mu.Lock()
-        for client, id := range clients {
+        for client, subscriptions := range clients {
+            id,ok:=subscriptions[eventType]; if !ok { continue }
             ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
             if wsjson.Write(ctx, client, map[string]any{"id":id,"type":"event","event":event}) == nil { sent++ }
             cancel()
@@ -228,7 +247,7 @@ async function smoke() {
     const configFile = path.join(temp, "server.json");
     const cliFile = path.join(temp, "cli.json");
     fs.writeFileSync(tokenFile, haToken + "\n", { mode: 0o600 });
-    fs.writeFileSync(configFile, JSON.stringify({
+    const config = {
         admin_token: adminToken,
         allowed_origins: [playerURL],
         listen: "127.0.0.1:" + controlPort,
@@ -237,7 +256,12 @@ async function smoke() {
             enabled: true, url: haURL, token_file: tokenFile,
             rules: [{ id: "smoke", event_type: "ottplay_notification", title: "{{title}}", message: "{{message}}", severity: "warning", cooldown_seconds: 1, duration_ms: 15000, ttl_seconds: 15 }],
         },
-    }), { mode: 0o600 });
+    };
+    if (cameraMode) {
+        config.home_assistant.cameras = { fixture: { entity_id: "camera.fixture", label: "Fixture camera" } };
+        config.home_assistant.rules.push({ id: "camera", event_type: "cisco_motion_snapshot_requested", camera_key: "fixture", title: "Motion", message: "Fixture camera: motion detected", cooldown_seconds: 1, duration_ms: 15000, ttl_seconds: 15 });
+    }
+    fs.writeFileSync(configFile, JSON.stringify(config), { mode: 0o600 });
     fs.writeFileSync(cliFile, JSON.stringify({ server: controlURL, server_config: configFile, players: { smoke: "smoke_player" } }), { mode: 0o600 });
     fixture(path.join(temp, "fake-ha"), ["--listen", "127.0.0.1:" + haPort, "--token-file", tokenFile]);
     fixture(path.join(temp, "controller"), ["serve", "--config", configFile]);
@@ -278,7 +302,13 @@ async function smoke() {
 
     await emit(text);
     const banner = page.locator(".remote-notify");
-    await banner.waitFor({ state: "visible", timeout: 7500 });
+    try {
+        await banner.waitFor({ state: "visible", timeout: 7500 });
+    } catch (error) {
+        const snapshot = await status();
+        console.error("First banner diagnostics:", JSON.stringify({ bridge: snapshot.bridge, delivery: snapshot.delivery, players: snapshot.players, errors }));
+        throw error;
+    }
     await assertPlaintextBanner(banner, "Fixture home", text);
     assert.equal(await page.evaluate(() => window.__haInjected), undefined);
     console.log("PASS real HA authentication/subscription -> Go queue -> production player plaintext banner");
@@ -309,6 +339,50 @@ async function smoke() {
     for (const secret of [haToken, adminToken, deviceToken, tokenFile, text]) assert(!cli.stdout.includes(secret), "CLI exposed a fixture credential or notification body");
     assert.deepEqual(errors, [], "production player reported a JavaScript error");
     console.log("PASS fresh post-wake notification and real ott ha status counters without credentials/content");
+
+    if (cameraMode) {
+        const preference = async (operation) => {
+            const result = await execFile(process.env.PYTHON || "python3", [path.join(root, "cli/ott.py"), "-c", cliFile, "-t", "10", "-j", "smoke", "notifications", operation], { cwd: root, timeout: 15000 });
+            assert(!result.stdout.includes(deviceToken) && !result.stderr.includes(deviceToken));
+            return JSON.parse(result.stdout);
+        };
+        let sequence = 0;
+        const emitCamera = async () => {
+            await pause(Math.max(0, 1100 - (Date.now() - lastEmit)));
+            const result = await json(haURL + "/emit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fixture_type: "cisco_motion_snapshot_requested", camera_key: "fixture", event_id: "fixture_camera_" + ++sequence, event_at: String(Date.now()/1000) }) });
+            lastEmit = Date.now();
+            assert.equal(result.sent, 1);
+        };
+        // Reset the view through the real CLI; notification preference must not
+        // change standby, primary playback, or the remote control connection.
+        const primaryBefore = await page.evaluate(() => ({ standby: window.__ottStandby.blocked(), sources: Array.from(document.querySelectorAll("video")).map(v => v.currentSrc || v.src) }));
+        await preference("off");
+        assert.equal(await banner.count(), 0, "off clears existing text immediately");
+        await waitFor(async () => !(await status()).players[0].active, "disabled notification presence");
+        const requestsBefore = (await json(haURL + "/healthz")).camera_requests;
+        await emitCamera();
+        await pause(1200);
+        assert.equal((await json(haURL + "/healthz")).camera_requests, requestsBefore, "disabled player must not trigger camera acquisition");
+        assert.equal(await banner.count(), 0);
+        const setting = await preference("status");
+        assert.equal(setting.enabled, false, "CLI confirms disabled persistent preference");
+        await preference("on");
+        await waitFor(async () => (await status()).players[0].active, "enabled notification presence");
+        assert.equal(await banner.count(), 0, "reenabling must not replay disabled events");
+        await emitCamera();
+        const image = page.locator(".remote-notify img");
+        await image.waitFor({ state: "visible", timeout: 10000 });
+        await waitFor(async () => image.evaluate(i => i.complete && i.naturalWidth > 0), "decoded camera image");
+        assert.equal((await json(haURL + "/healthz")).camera_requests, requestsBefore + 1, "one event acquires exactly one frame");
+        assert.equal(await image.count(), 1);
+        assert.match(await image.getAttribute("src"), /^(blob:|data:image\/jpeg;base64,)/, "camera credentials/URLs cannot enter DOM");
+        await preference("off");
+        assert.equal(await image.count(), 0, "off clears camera image and text together");
+        const primaryAfter = await page.evaluate(() => ({ standby: window.__ottStandby.blocked(), sources: Array.from(document.querySelectorAll("video")).map(v => v.currentSrc || v.src) }));
+        assert.deepEqual(primaryAfter, primaryBefore, "notification preference cannot affect primary playback");
+        assert.deepEqual(errors, []);
+        console.log("PASS real CLI shared switch, camera fetch suppression, one JPEG, no replay, primary playback unchanged");
+    }
 }
 
 (async () => {
@@ -323,7 +397,7 @@ async function smoke() {
         const started = Date.now();
         await Promise.race([
             smoke(),
-            new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Cross-stack smoke exceeded 30 seconds after build")), 30000); }),
+            new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Cross-stack smoke exceeded its bounded runtime")), cameraMode ? 90000 : 30000); }),
         ]);
         console.log("Home Assistant cross-stack smoke passed in " + ((Date.now() - started) / 1000).toFixed(1) + "s; no real HA/device contacted");
     } catch (error) {
