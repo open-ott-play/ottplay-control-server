@@ -24,7 +24,7 @@ class StatusCliTest(unittest.TestCase):
         output, errors = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'Client', return_value=client), mock.patch.object(ott, 'read_json', return_value={}), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            code = ott.main((['--json'] if machine else []) + [alias] + words)
+            code = ott.main(([machine if isinstance(machine, str) else '--json'] if machine else []) + [alias] + words)
         expected = [mock.call('dev_tv', 'status', {})]
         if not isinstance(status, ott.Error):
             expected.append(mock.call('dev_tv', 'capabilities', {}))
@@ -37,7 +37,10 @@ class StatusCliTest(unittest.TestCase):
             status = {'ready': True, 'volume': 100, 'player': caps['player']}
             code, out, err, client = self.run_cli(words, status, caps)
             self.assertEqual((code, err), (0, ''))
-            self.assertIn('"ready": true', out)
+            self.assertTrue(out.startswith('Available controls now:\n'))
+            self.assertIn('Not reported (catalog ready)', out)
+            self.assertNotIn('"ready": true', out)
+            self.assertLess(out.index('Request IDs:'), out.index('Player summary:'))
             self.assertIn('ott tv restart  — reload the player', out)
             self.assertIn('ott tv standby', out)
             self.assertIn('alias: stop', out)
@@ -56,10 +59,11 @@ class StatusCliTest(unittest.TestCase):
         caps = self.capabilities()
         status = {'ready': True, 'volume': 55, 'player': dict(caps['player'])}
         for words in ([], ['status'], ['st']):
-            code, out, err, _ = self.run_cli(words, status, dict(caps, private='do-not-print'), True)
-            self.assertEqual((code, err), (0, ''))
-            self.assertEqual(json.loads(out), dict(status, capabilities=caps))
-            self.assertNotIn('do-not-print', out)
+            for flag in ('-j', '--json'):
+                code, out, err, _ = self.run_cli(words, status, dict(caps, private='do-not-print'), flag)
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(out, json.dumps(dict(status, capabilities=caps), ensure_ascii=False, indent=2) + '\n')
+                self.assertNotIn('do-not-print', out)
 
     def test_standby_and_go_help_follow_independent_wire_capabilities(self):
         for operations in ([], ['standby'], ['wake'], ['standby', 'wake']):
@@ -108,16 +112,16 @@ class StatusCliTest(unittest.TestCase):
                     self.assertEqual(json.loads(out)['player'], status['player'])
                     self.assertNotIn('background', json.loads(out)['capabilities']['player'])
                 else:
-                    self.assertIn('background ' + state, out)
-                    self.assertIn('pending ' + (str(pending) if pending is not None else 'unknown'), out)
+                    self.assertIn('Background:   ' + state + ' (' +
+                                  (str(pending) if pending is not None else 'unknown') + ' pending)', out)
 
     def test_older_status_with_only_standby_never_claims_background_suspended(self):
         caps = self.capabilities()
         status = {'player': dict(caps['player'], standby=True)}
         code, out, err, _ = self.run_cli([], status, caps)
         self.assertEqual((code, err), (0, ''))
-        self.assertIn('background not reported; pending unknown', out)
-        self.assertNotIn('background suspended', out)
+        self.assertIn('Background:   Not reported (unknown pending)', out)
+        self.assertNotIn('suspended', out)
 
     def test_malformed_activity_snapshot_rejected_before_capability_request(self):
         invalid = [{'standby': value} for value in (None, 1, 'yes', [])]
@@ -193,6 +197,8 @@ class StatusCliTest(unittest.TestCase):
                 self.assertEqual("ott 'Living room' " + command in out, section in sections)
             self.assertIn("ott --receipt 'Living room' COMMAND", out)
             self.assertIn("Local diagnostic help: ott 'Living room' test list", out)
+            self.assertLess(out.index('Available diagnostics now:'), out.index('Player summary:'))
+            self.assertLess(out.index('Request IDs:'), out.index('Player summary:'))
         code, out, err, _ = self.run_cli([], {'ready': True}, self.capabilities())
         self.assertEqual((code, err), (0, ''))
         self.assertNotIn('Available diagnostics now', out)
@@ -210,13 +216,94 @@ class StatusCliTest(unittest.TestCase):
                     code, out, err, client = self.run_cli([], {'ready': True}, failure, machine)
                     self.assertEqual((code, err, len(client.call.call_args_list)), (0, '', 2))
                     self.assertNotIn('private-token', out)
-                    self.assertIn('"ready": true', out)
                     self.assertNotIn('ott tv restart', out)
                     if machine:
+                        self.assertIn('"ready": true', out)
                         value = json.loads(out)
                         self.assertIsNone(value['capabilities'])
                         self.assertTrue(value['capabilities_error'])
+                    else:
+                        self.assertIn('Not reported (catalog ready)', out)
+                        self.assertNotIn('"ready": true', out)
+                        self.assertLess(out.index('Local diagnostic help:'), out.index('Player summary:'))
                     self.assertEqual(client.timeout, 45)
+
+    def test_standby_summary_is_last_and_does_not_confuse_catalog_with_playback(self):
+        caps = self.capabilities()
+        status = {'ready': False, 'channels': 0, 'provider': 'm3u', 'volume': 100,
+                  'player': dict(caps['player'], standby=True,
+                                 background={'state': 'suspended', 'pending': 0}),
+                  'kiosk': {'enabled': False}}
+        code, out, err, _ = self.run_cli([], status, caps, alias='d1')
+        self.assertEqual((code, err), (0, ''))
+        self.assertTrue(out.endswith(
+            '\nPlayer summary:\n'
+            '  Player:       d1\n'
+            '  Status:       Standby\n'
+            '  Now playing:  Nothing (standby)\n'
+            '  Provider:     M3U\n'
+            '  Volume:       100%\n'
+            '  Channels:     0 (catalog not ready)\n'
+            '  Platform:     browser\n'
+            '  Version:      1.1.52-beta.48\n'
+            '  Background:   suspended (0 pending)\n'
+            '  Kiosk:        Off\n'))
+        self.assertLess(out.index('Request IDs:'), out.index('Player summary:'))
+
+    def test_awake_and_local_video_catalog_never_claim_confirmed_playback_or_disconnection(self):
+        for standby in (False, None):
+            caps = self.capabilities()
+            player = dict(caps['player'])
+            if standby is not None:
+                player['standby'] = standby
+            status = {'player': player, 'ready': True, 'channels': 7, 'provider': 'offline', 'volume': 37.5}
+            code, out, err, _ = self.run_cli([], status, caps)
+            self.assertEqual((code, err), (0, ''))
+            self.assertIn('Status:       ' + ('Awake' if standby is False else 'Connected (standby not reported)'), out)
+            self.assertIn('Now playing:  Not reported', out)
+            self.assertIn('Provider:     Local videos (offline)', out)
+            self.assertIn('Channels:     7 (catalog ready)', out)
+            self.assertIn('Volume:       37.5%', out)
+            self.assertNotIn('Status:       Offline', out)
+
+    def test_invalid_or_private_metadata_is_not_dumped_or_inferred(self):
+        for invalid in (None, True, 'secret-value', {}, [], -1, 10 ** 400, float('nan'), float('inf')):
+            with self.subTest(invalid=type(invalid).__name__):
+                status = {'ready': 'secret-value', 'channels': invalid, 'volume': invalid,
+                          'provider': 'https://example.invalid/?token=secret-token',
+                          'uuid': 'private-device-uuid', 'diagnostics': {'password': 'secret-value'},
+                          'title': 'unconfirmed-title'}
+                code, out, err, _ = self.run_cli([], status, self.capabilities())
+                self.assertEqual((code, err), (0, ''))
+                self.assertIn('Volume:       Not reported', out)
+                self.assertIn('Channels:     Not reported (catalog readiness not reported)', out)
+                self.assertIn('Provider:     Not reported', out)
+                for private in ('secret-value', 'secret-token', 'private-device-uuid', 'unconfirmed-title', 'example.invalid'):
+                    self.assertNotIn(private, out)
+        code, out, err, _ = self.run_cli([], {'provider': 'm3u', 'channels': False}, self.capabilities())
+        self.assertEqual((code, err), (0, ''))
+        self.assertNotIn('No channels loaded:', out)
+
+    def test_kiosk_target_is_bounded_plain_text_and_never_current_playback(self):
+        for source in ('channel', 'media'):
+            for enabled in (True, False):
+                status = {'kiosk': {'enabled': enabled, 'strict': True,
+                                    source: {'name' if source == 'channel' else 'title': 'РЕН\u2028ТВ\u202e\x00 HD'}}}
+                code, out, err, _ = self.run_cli([], status, self.capabilities())
+                self.assertEqual((code, err), (0, ''))
+                self.assertIn('Now playing:  Not reported', out)
+                self.assertEqual('Kiosk target: РЕН ТВ HD' in out, enabled)
+                self.assertEqual('Kiosk:        On (strict)' in out, enabled)
+                self.assertNotIn('\u2028', out)
+                self.assertNotIn('\u202e', out)
+                self.assertNotIn('\x00', out)
+        for target in ({'token': 'secret-value'}, 'x' * 513, 'https://host.invalid/?token=secret-value'):
+            code, out, err, _ = self.run_cli([], {'kiosk': {'enabled': True, 'channel': {'name': target}}},
+                                            self.capabilities())
+            self.assertEqual((code, err), (0, ''))
+            self.assertIn('Kiosk target: Not reported', out)
+            self.assertNotIn('secret-value', out)
+            self.assertNotIn('x' * 513, out)
 
     def test_changed_runtime_or_invalid_identity_does_not_show_stale_controls(self):
         caps = self.capabilities()
