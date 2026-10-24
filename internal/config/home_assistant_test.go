@@ -2,12 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func validHAConfig() HomeAssistant {
-	c := HomeAssistant{Enabled: true, URL: "https://ha.example/house", TokenFile: "/run/secrets/ha-token", Rules: []HomeAssistantRule{{ID: "door", EventType: "state_changed", EntityIDs: []string{"binary_sensor.front_door"}, Title: "Home", Message: "{{name}}: {{state}}", Targets: []string{"tv"}}}}
+func validHAConfig(t *testing.T) HomeAssistant {
+	t.Helper()
+	c := HomeAssistant{Enabled: true, URL: "https://ha.example/house", TokenFile: filepath.Join(t.TempDir(), "ha-token"), Rules: []HomeAssistantRule{{ID: "door", EventType: "state_changed", EntityIDs: []string{"binary_sensor.front_door"}, Title: "Home", Message: "{{name}}: {{state}}", Targets: []string{"tv"}}}}
 	c.Defaults()
 	return c
 }
@@ -16,7 +18,7 @@ func TestHomeAssistantDefaultsAndDisabledCompatibility(t *testing.T) {
 	if err := (HomeAssistant{}).Validate(); err != nil {
 		t.Fatal(err)
 	}
-	c := validHAConfig()
+	c := validHAConfig(t)
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +55,7 @@ func TestHomeAssistantConfigurationRejectsUnsafeOrUnboundedInputs(t *testing.T) 
 	}
 	for name, change := range tests {
 		t.Run(name, func(t *testing.T) {
-			c := validHAConfig()
+			c := validHAConfig(t)
 			change(&c)
 			err := c.Validate()
 			if err == nil {
@@ -67,7 +69,7 @@ func TestHomeAssistantConfigurationRejectsUnsafeOrUnboundedInputs(t *testing.T) 
 }
 
 func TestHomeAssistantCustomTemplatesAndConfiguredTargets(t *testing.T) {
-	ha := validHAConfig()
+	ha := validHAConfig(t)
 	ha.Rules = []HomeAssistantRule{{ID: "notice", EventType: "ottplay_notification", Title: "{{title}}", Message: "{{message}}", Severity: "critical", Targets: []string{"tv"}}}
 	c := Config{AdminToken: strings.Repeat("a", 32), Devices: []Device{{ID: "tv", Token: strings.Repeat("b", 32)}}, HomeAssistant: &ha}
 	c.Defaults()

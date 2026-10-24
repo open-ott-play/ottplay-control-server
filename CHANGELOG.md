@@ -43,6 +43,13 @@
 
 ### Added
 
+- Add an optional Home Assistant WebSocket bridge with long-lived token-file
+  authentication, explicit event and entity rules, reconnect handling, cooldowns
+  and bounded notification delivery to recently active connected players.
+- Expose integration health and delivery counters through `ott ha status`.
+  Notification delivery is separate from the remote command queue and does not
+  wake players. Expired or inactive-session messages are discarded; there is no
+  persistent notification backlog or confirmation that a person saw a banner.
 - Share one hardened USB ADB container across an explicit Android registry,
   with persistent authorized keys, serialized maintenance and per-device boot
   recovery state. Protect shared forwarding ports from cross-device rebinding
@@ -97,6 +104,14 @@
 
 ### Upgrade
 
+- Update this controller, the local `ott` CLI and participating players together
+  for Home Assistant banners. Keep existing device registrations, place the
+  long-lived token in a private file outside source and release directories,
+  and configure its absolute `token_file` path. Select explicit event types,
+  entity IDs and target devices in the private server configuration before
+  enabling the integration; follow the [setup guide](docs/home-assistant.md).
+  Restart the controller after configuration changes. Player remote control
+  must be enabled, and inactive players do not replay events on wake.
 - The deployment archive includes the Android USB manager source and transport
   image recipe. Install all manager modules from the same release, preserve
   existing authorized ADB keys, and disable old per-tablet recovery services
@@ -112,6 +127,11 @@
 
 ### Security
 
+- Keep the Home Assistant token on the controller; it is never sent to players.
+  Deliver only bounded, configured plain-text notification fields, not raw
+  events, HTML or executable actions. Keep the token file and server configuration
+  private, and filter event rules and templates for the people who can see each
+  target screen.
 - Portable profiles accept only bounded, allowlisted configuration fields.
   Filesystem handles, bookmarks, native references and access grants stay on the
   originating installation. A profile's binding identifier does not grant access

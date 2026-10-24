@@ -289,9 +289,14 @@ func TestReconnectResubscribesWithoutReplayingNotification(t *testing.T) {
 	c := testConfig()
 	c.URL, c.TokenFile = server.URL, makeToken(t, fixtureToken)
 	b, _ := runBridge(t, c, func(Notification) DeliveryResult { notices.Add(1); return DeliveryResult{Queued: 1} }, nil)
-	until(t, func() bool { return b.Snapshot().EventsReceived >= 2 })
-	if notices.Load() != 1 || b.Snapshot().Reconnects != 1 || b.Snapshot().EventsDropped != 1 {
-		t.Fatal("reconnect replayed notification", notices.Load(), b.Snapshot())
+	// Receipt is recorded before processing, so wait for the duplicate decision.
+	until(t, func() bool {
+		s := b.Snapshot()
+		return s.EventsReceived >= 2 && s.EventsDropped >= 1
+	})
+	s := b.Snapshot()
+	if notices.Load() != 1 || s.Reconnects != 1 || s.EventsDropped != 1 {
+		t.Fatal("reconnect replayed notification", notices.Load(), s)
 	}
 }
 
