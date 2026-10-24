@@ -184,7 +184,7 @@ registered device IDs to each rule to restrict rooms.
       "id": "motion-detected", "event_type": "state_changed",
       "entity_ids": ["binary_sensor.hall_motion"],
       "from": ["off"], "to": ["on"],
-      "title": "Motion", "message": "{{name}}: motion detected",
+      "title": "Motion", "message": "{{name}}",
       "cooldown_seconds": 10
     },
     {
@@ -589,7 +589,8 @@ not start another video player, a live camera stream, or camera audio. The
 existing main video continues. A single per-player notification preference
 controls the whole card, including text and imagery; turning it off clears
 current cards and revokes pending media access. Ordinary remote control stays
-available. Older players keep the text path.
+available. Older players keep the text path. Use `title: "Motion"` with
+`message: "{{name}}"` for a compact card: the title already identifies motion.
 
 Add a camera allowlist to the existing `home_assistant` object and append one
 rule per camera key to its `rules` array. This fragment does not replace the
@@ -609,7 +610,7 @@ existing URL, token file, devices or other rules:
       "event_type": "cisco_motion_snapshot_requested",
       "camera_key": "garage",
       "title": "Motion",
-      "message": "{{name}}: motion detected",
+      "message": "{{name}}",
       "severity": "info",
       "duration_ms": 7000,
       "ttl_seconds": 30,
