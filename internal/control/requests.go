@@ -14,16 +14,17 @@ const maxResponseBytes = 2 * 1024 * 1024
 const maxResultBytes = 16 * 1024 * 1024
 
 type requestResult struct {
-	owner, permission string
-	data              json.RawMessage
-	expires           time.Time
-	inspect           *inspectRequest
-	aspect            *aspectRequest
-	category          *categoryRequest
-	plexLibrary       *plexLibraryRequest
-	favorites         *favoritesRequest
-	handoff           *handoffRequest
-	offlineProfile    *offlineProfileRequest
+	owner, permission    string
+	data                 json.RawMessage
+	expires              time.Time
+	inspect              *inspectRequest
+	aspect               *aspectRequest
+	notificationSettings *notificationsRequest
+	category             *categoryRequest
+	plexLibrary          *plexLibraryRequest
+	favorites            *favoritesRequest
+	handoff              *handoffRequest
+	offlineProfile       *offlineProfileRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
@@ -139,6 +140,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = validScreenshotRequest(params)
 	case "aspect":
 		ok = parseAspectRequest(params) != nil
+	case "notifications":
+		ok = parseNotificationsRequest(params) != nil
 	case "categories":
 		ok = parseCategoryRequest(action, params) != nil
 	case "inspect":
@@ -259,6 +262,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "aspect" {
 		e.aspect = parseAspectRequest(params)
+	}
+	if action == "notifications" {
+		e.notificationSettings = parseNotificationsRequest(params)
 	}
 	if action == "categories" || action == "channels" {
 		e.category = parseCategoryRequest(action, params)
@@ -385,6 +391,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var offlineProfile *offlineProfileRequest
 	var inspect *inspectRequest
 	var aspect *aspectRequest
+	var notificationSettings *notificationsRequest
 	var category *categoryRequest
 	playbackOperation := ""
 	for _, pending := range d.queue {
@@ -398,6 +405,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			playbackOperation = pending.playbackOperation
 			inspect = pending.inspect
 			aspect = pending.aspect
+			notificationSettings = pending.notificationSettings
 			category = pending.category
 			break
 		}
@@ -407,6 +415,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if aspect == nil {
 		aspect = d.results[id].aspect
+	}
+	if notificationSettings == nil {
+		notificationSettings = d.results[id].notificationSettings
 	}
 	if category == nil {
 		category = d.results[id].category
@@ -436,6 +447,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	// An unbound or stale negative response must not consume another page's work.
 	if aspect != nil && !validAspectResult(m["data"], status, aspect) {
 		failure(w, 400, "invalid aspect result")
+		return
+	}
+	if notificationSettings != nil && (len(m["data"]) > 1024 || !validNotificationsResult(m["data"], status, notificationSettings)) {
+		failure(w, 400, "invalid notifications result")
 		return
 	}
 	if category != nil && !validCategoryResult(m["data"], status, category) {
@@ -495,7 +510,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, category: e.category, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, category: e.category, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

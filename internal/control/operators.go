@@ -73,7 +73,7 @@ func commandAction(action string, p map[string]json.RawMessage) string {
 		field = "target"
 	case "kiosk":
 		field = "mode"
-	case "aspect", "playback", "lifecycle", "vportal_queue", "maintenance", "app_update":
+	case "aspect", "playback", "lifecycle", "vportal_queue", "maintenance", "app_update", "notifications":
 		field = "operation"
 	case "plex_queue", "plex_library", "favorites", "categories":
 		field = "op"

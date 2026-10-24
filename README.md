@@ -21,6 +21,9 @@ long-lived token and one controller WebSocket connection to notify active
 players. The guide covers filtered rules, automation YAML, Docker/Helm token
 mounts, `ott ha status`, illustrated delivery flow and recovery. Notifications
 respect standby and visibility; queued or polled does not mean visibly displayed.
+Use the [single per-player notification preference](docs/notification-preferences.md)
+to control banners and notification media together: `ott t1 notifications off`
+or `ott t1,t2,t3,t4 notifications on`. This leaves IPTV/Plex playback unchanged.
 
 Optional [reliable control](docs/reliable-control.md) adds scoped integration
 credentials, bounded durable command outcomes, resumable Local/Home application

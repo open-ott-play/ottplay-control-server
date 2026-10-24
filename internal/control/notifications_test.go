@@ -161,3 +161,71 @@ func TestNotificationsAuthQueriesAndStatus(t *testing.T) {
 	s.operators[0].actions = map[string]bool{"capabilities": true}
 	expect(t, request(s, "GET", "/api/home-assistant/status", opToken, "", nil), 403)
 }
+
+func TestNotificationPreferenceNegotiationAndLegacyCompatibility(t *testing.T) {
+	s := newTestServer(t)
+	// The first request, including a new client's first request, is legacy-shaped.
+	path := "/api/notifications?runtime=r1&active=true"
+	w := request(s, "GET", path, firstToken, "", nil)
+	expect(t, w, 200)
+	var response struct {
+		Capabilities struct {
+			Enabled bool
+			Media   []string
+		}
+		Enabled bool `json:"notifications_enabled"`
+	}
+	if json.Unmarshal(w.Body.Bytes(), &response) != nil || !response.Enabled || !response.Capabilities.Enabled ||
+		len(response.Capabilities.Media) != 1 || response.Capabilities.Media[0] != "jpeg-v1" {
+		t.Fatal("missing capability negotiation")
+	}
+	n := sampleNotification("first")
+	if len(s.NotificationTargets(n)) != 1 || len(s.NotificationMediaTargets(n)) != 0 {
+		t.Fatal("legacy client must remain text-only")
+	}
+	if s.DeliverNotification(n).Queued != 1 {
+		t.Fatal("legacy text delivery failed")
+	}
+	// Preference off overrides even contradictory active=true; purge old work.
+	w = request(s, "GET", path+"&enabled=false&media=jpeg-v1", firstToken, "", nil)
+	expect(t, w, 200)
+	if !strings.Contains(w.Body.String(), `"notifications":[]`) || s.DeliverNotification(n).Queued != 0 || len(s.NotificationTargets(n)) != 0 {
+		t.Fatal("disabled client retained or received work")
+	}
+	status := request(s, "GET", "/api/home-assistant/status", adminToken, "", nil)
+	if !strings.Contains(status.Body.String(), `"notifications_enabled":false`) {
+		t.Fatal("reported preference missing")
+	}
+	// Re-enable in a new runtime: no retained events, now negotiate media.
+	w = request(s, "GET", "/api/notifications?runtime=r2&active=true&enabled=true&media=jpeg-v1", firstToken, "", nil)
+	expect(t, w, 200)
+	if !strings.Contains(w.Body.String(), `"notifications":[]`) || len(s.NotificationMediaTargets(n)) != 1 {
+		t.Fatal("re-enable replayed work or failed media negotiation")
+	}
+	for _, extra := range []string{"&enabled=1", "&enabled=", "&enabled=false&enabled=true", "&media=video", "&media="} {
+		expect(t, request(s, "GET", path+extra, firstToken, "", nil), 400)
+	}
+}
+
+func TestNotificationAcquisitionSnapshotCannotGainNewRecipients(t *testing.T) {
+	s := newTestServer(t)
+	now := time.Unix(2000000000, 0)
+	s.now = func() time.Time { return now }
+	pollBanners(t, s, firstToken, "before", true)
+	n := sampleNotification()
+	n.TargetRuntimes = s.NotificationTargets(n)
+	pollBanners(t, s, firstToken, "after", true)
+	pollBanners(t, s, secondToken, "newcomer", true)
+	if s.DeliverNotification(n).Queued != 0 {
+		t.Fatal("in-flight acquisition entered a new session")
+	}
+	n.TargetRuntimes = map[string]string{}
+	if s.DeliverNotification(n).Queued != 0 {
+		t.Fatal("empty admission snapshot became broadcast")
+	}
+	n.TargetRuntimes = s.NotificationTargets(n)
+	n.ExpiresAt = now
+	if s.DeliverNotification(n).Queued != 0 {
+		t.Fatal("expired acquisition queued")
+	}
+}

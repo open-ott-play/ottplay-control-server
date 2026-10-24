@@ -54,19 +54,27 @@ the durable operation journal.
 administrator credential or a command-operator credential allowed the `status`
 action. The
 JSON response contains `version: 1`, a credential-free `bridge` snapshot and
-`players` rows (`device_id`, `active`, `pending`, optional `last_poll_at`).
+`players` rows (`device_id`, `active`, `pending`, optional `last_poll_at`,
+`notifications_enabled` and `media_jpeg`). The latter values describe the latest
+heartbeat, not a separate persistent server setting.
 Administrators additionally receive `delivery` counters: `queued`, `polled`,
 `skipped`, `dropped`. Operators receive only their allowed device rows and bridge
 fields `enabled`, `state`, optional `last_error_code`; global bridge and delivery
 counters are administrator-only. The administrator bridge snapshot reports `enabled`, `state`,
 optional `last_error_code`, `reconnects`, `events_received`, `events_matched`,
-`events_dropped`, `notifications_queued`, `notifications_skipped` and optional
+`events_dropped`, `notifications_queued`, `notifications_skipped`,
+`camera_acquired`, `camera_failed`, `camera_skipped` and optional
 `last_event_at`. Counts reset on process restart and do not prove display.
 
 `GET /api/notifications?runtime=RUNTIME&active=true` uses the **device** token.
 An optional `device_id` must match that token's device. `runtime` is a 1–128
 character identifier using ASCII letters, digits, `_`, `.`, `:`, `-`; `active`
-must be exactly `true` or `false`. Unknown parameters are rejected. Only the
+must be exactly `true` or `false`. Updated clients initially send only these
+legacy fields. After the response advertises `capabilities.enabled:true` and
+`capabilities.media:["jpeg-v1"]`, they may add `enabled=true|false` and
+`media=jpeg-v1`. Missing `enabled` defaults to true; missing `media` means text
+only. A locally disabled preference always also sets `active=false`, including
+when connected to an older controller. Unknown parameters are rejected. Only the
 updated player should poll this destructive-read endpoint; manually polling it
 can consume a real banner before the player receives it.
 
@@ -77,6 +85,8 @@ The response has this shape (sample values, not a delivery receipt):
   "version": 1,
   "server_time": 1792764000.0,
   "poll_after_ms": 5000,
+  "notifications_enabled": true,
+  "capabilities": {"enabled": true, "media": ["jpeg-v1"]},
   "notifications": [
     {
       "id": "0123456789abcdef0123456789abcdef",
@@ -92,12 +102,57 @@ The response has this shape (sample values, not a delivery receipt):
 ```
 
 Times are Unix seconds. Queues are bounded to four entries per device. Only a
-runtime that reported `active=true` within the preceding 15 seconds is eligible
+runtime that reported `active=true` and has not reported `enabled=false` within
+the preceding 15 seconds is eligible
 for enqueue. Presence expiration is applied **before** a poll refreshes it, so
-reconnecting cannot revive a stale queue. A different runtime or `active=false`
-clears pending entries. A successful poll removes returned items; there is no
+reconnecting cannot revive a stale queue. A different runtime, `active=false`
+or `enabled=false` clears pending entries and revokes media grants. A successful
+poll removes returned items; there is no
 display ACK or redelivery guarantee. The player also checks its local activity,
 runtime and expiration before showing a banner. No notification wakes playback.
+
+### Notification media
+
+A negotiated image recipient may receive an additional `media` descriptor on
+an item: `id` (32 lowercase hex characters), `kind:"image"`,
+`content_type:"image/jpeg"`, integer `width`, `height`, and `bytes`. Images are
+bounded to 640 by 360 pixels and 163840 JPEG bytes. Without a usable image the
+same event remains a text notification; no direct camera URL is sent.
+
+`GET /api/notifications/media?id=ID&runtime=RUNTIME` requires the same device
+credential and permits an optional matching `device_id`. It returns version 1,
+`id`, `runtime`, `content_type`, `data_base64`, `width`, `height`, `bytes`,
+`server_time` and `expires_at` (Unix seconds). Access requires a fresh, enabled,
+active JPEG-capable runtime and an unexpired grant for that exact device and
+runtime; another device's token or a previous runtime cannot read it. Media
+responses use `Cache-Control: no-store`. The bounded in-memory store and grants
+expire; they are not a recording archive or a public download service.
+
+### Persistent notification preference RPC
+
+The typed `notifications` action uses the existing `/api/requests` and
+`/api/responses` exchange. Its capability is
+`"notifications":{"version":1,"operations":["get","set"]}`. Requests and
+receipts bind to the exact `capabilities.player.runtime`:
+
+```json
+{"action":"notifications","params":{"version":1,"runtime":"page-123","operation":"get"}}
+{"action":"notifications","params":{"version":1,"runtime":"page-123","operation":"set","enabled":false}}
+```
+
+These are exact shapes. Success data contains exactly `version:1`, `runtime`,
+`operation`, boolean `enabled` and `persisted:true`; a set receipt must return
+the requested boolean. A rejected/unsupported response contains exactly
+`version:1`, `runtime`, `operation` and `error`, restricted to `invalid_request`,
+`runtime_mismatch`, `storage_unavailable` or `unsupported`. Invalid or unbound
+receipts cannot consume the pending request. Operator scopes are
+`notifications.get` and `notifications.set`; CLI discovery also needs
+`capabilities`.
+
+This is one global setting in the player installation, shared by text and
+notification media. It does not alter primary playback. The server never writes
+this preference to configuration. See the [canonical examples](../contracts/notifications-v1.json)
+and [persistence and compatibility guide](notification-preferences.md).
 
 ## Controller debug snapshot
 
