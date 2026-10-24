@@ -176,7 +176,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME kiosk on --strict [CHANNEL]  lock local controls; media-footer seeking needs a supported player
   ott NAME kiosk set CHANNEL         replace by number or first name match
   ott NAME kiosk off                 release the kiosk lock
-  ott NAME random [FROM TO]          play a random channel
+  ott NAME R / random [FROM TO]      play a safe random channel from All
   ott NAME msg TEXT                  show an on-screen message
   ott NAME exit / quit / close        exit the app only when the platform supports it
 
@@ -186,6 +186,8 @@ Comma-separated player lists support provider/prov and notifications; each disti
 Add a channel number, R/random or name to switch and play from the provider's complete All catalog.
 Use provider "Local videos" -- NAME to separate a multiword provider from a channel explicitly.
 An exact full channel name wins; otherwise a random partial-name match is selected. Playback wakes standby.
+R/random uses All: 80% from channel numbers 1–1000 and 20% from higher numbers when both pools are available.
+An explicit FROM TO range is inclusive and uniform. Random selection excludes AceStream and parental-protected channels.
 All player names are checked first. A player failure does not stop the remaining players.
 --timeout applies to each player; completed switches are not rolled back or automatically retried.
 An exact saved player name containing commas retains its existing single-player meaning.
@@ -216,6 +218,7 @@ TOP_LEVEL_COMMANDS = frozenset((
 
 COMMAND_ALIASES = {
     "st": "status",
+    "r": "random",
     "channels": "s", "programs": "p", "programmes": "p",
     "vol": "v", "volume": "v", "vportal": "vp", "vportal-random": "vpr",
     "message": "msg", "prof": "profile", "profs": "profiles",
@@ -874,15 +877,22 @@ def _play_channel(client, device, params, deadline):
         error = Error("No channels match the search; no switch was requested")
         data["playback"] = {"error": str(error)}
         return data, error
-    selected = secrets.choice(rows) if len(rows) > 1 else rows[0]
+    exact = [row for row in rows if exact_id is not None or media_search_key(row["name"]) == media_search_key(text)]
+    selected = exact[0] if len(exact) == 1 else None
     try:
         # One mutation follows the complete read-only search. Never replay it.
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Channel search exceeded --timeout; no playback was requested")
         client.timeout = remaining
-        result = (media_request(client, device, "play_catalog", {"catalog": response["catalog"], "id": selected["id"]}, deadline)
-                  if modern else client.call(device, "play", {"query": str(selected["number"])}))
+        if selected is None:
+            controls = random_controls(client, device, deadline)
+            catalog = response["catalog"] if modern else random_catalog(client, device, controls, deadline)
+            result = random_play(client, device, catalog, {"search": text}, deadline, exact or rows)
+            selected = result["channel"]
+        else:
+            result = (media_request(client, device, "play_catalog", {"catalog": response["catalog"], "id": selected["id"]}, deadline)
+                      if modern else client.call(device, "play", {"query": str(selected["number"])}))
         channel = result.get("channel") if isinstance(result, dict) else None
         if (not isinstance(channel, dict) or result.get("dispatched") is not True
                 or type(channel.get("number")) is not int or channel["number"] != selected["number"]
@@ -1205,10 +1215,13 @@ def parse_command(words):
         if not tail:
             raise Error("message requires text")
         return "command", {"command": "popup_message", "message": text}
-    if verb == "random":
+    if verb in ("random", "rr"):
         params = {"command": "random_channel"}
+        if verb == "rr":
+            params["random_mode"] = "adult"
         if tail:
-            if len(tail) != 2 or not all(re.fullmatch(r"[1-9]\d*", x) for x in tail) or int(tail[0]) > int(tail[1]):
+            if (len(tail) != 2 or not all(len(x) <= 16 and re.fullmatch(r"[1-9]\d*", x) for x in tail)
+                    or not 0 < int(tail[0]) <= int(tail[1]) <= 9007199254740991):
                 raise Error("Use random or random FROM TO (one-based channel numbers)")
             params["random_range"] = [int(x) for x in tail]
         return "command", params
@@ -2905,6 +2918,11 @@ def capabilities_metadata(data):
                 any(not isinstance(value, str) or value not in allowed for value in values) or len(set(values)) != len(values)):
             raise Error(invalid)
         result[key] = list(values)
+    if "random" in data:
+        random = data["random"]
+        if not isinstance(random, dict) or set(random) != {"version"} or type(random["version"]) is not int or random["version"] != 1:
+            raise Error(invalid)
+        result["random"] = {"version": 1}
     if data.get("offline_profiles") is not None:
         offline = data["offline_profiles"]
         operations = offline.get("operations") if isinstance(offline, dict) else None
@@ -3136,6 +3154,9 @@ def print_player_help(data, name):
             continue
         command = {"seek": "seek SECONDS", "previous_channel": "prev", "next_channel": "next"}.get(operation, operation)
         print(f"  {prefix} {command}")
+    if "random" in controls:
+        print(f"  {prefix} R / random  — safe random channel from All; prefer numbers 1–1000")
+        print(f"  {prefix} random 1 1000  — safe uniform choice within an inclusive range")
     if controls["input"]:
         print(f"  {prefix} key KEY  — " + ", ".join(controls["input"]))
     shot = controls.get("screenshot", {})
@@ -4206,6 +4227,81 @@ def provider_ready(client, device, expected, deadline, wait, wake_report=None):
         time.sleep(min(0.25, max(0, deadline - time.monotonic())))
 
 
+def random_controls(client, device, deadline):
+    try:
+        controls = capabilities_metadata(media_call(client, device, "capabilities", {}, deadline))
+    except (PlayerUnsupported, PlayerRejected):
+        raise Error("Safe random selection is not supported by this player/controller. Update both; no playback was requested") from None
+    if "random" not in controls:
+        raise Error("Safe random selection is not supported by this player/controller. Update both; no playback was requested")
+    return controls
+
+
+def random_catalog(client, device, controls, deadline, provider=None):
+    if "categories" in controls:
+        if "list" not in controls["categories"]["operations"]:
+            raise Error("The player cannot read its catalog; no random playback was requested")
+        while True:
+            result = read_categories(client, device, controls, deadline, first_page_only=True)
+            if provider is not None and result["provider"] != provider:
+                raise Error("The provider changed before random selection; no playback was requested")
+            if not result["loading"]:
+                # A category-list receipt names the complete All catalog. No
+                # channel pages, stream URLs or parental metadata are needed.
+                return result["catalog"]
+            if provider is None:
+                raise Error("The catalog is still loading; no random playback was requested")
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+            provider_ready(client, device, provider, deadline, wait=False)
+    result = provider_request(client, device, "epg_catalog", {}, deadline)
+    return legacy_provider_catalog(result)["catalog"]
+
+
+def random_play(client, device, catalog, selector, deadline, candidates=None):
+    if (not isinstance(catalog, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", catalog)
+            or ("search" in selector and not media_text(selector["search"], 1024))):
+        raise Error("The random selector or source receipt is invalid; no playback was requested")
+    try:
+        result = media_call(client, device, "play_catalog", {"catalog": catalog, "random": selector}, deadline)
+    except PlayerUnsupported:
+        raise Error("Safe random selection is not supported by this player/controller. Update both; the request was not repeated") from None
+    except PlayerRejected as exc:
+        if isinstance(exc.data, dict) and exc.data.get("error") == "No eligible channels are available, or playback is restricted by the player.":
+            raise Error("No eligible channels are available, or playback is restricted by the player. The request was not repeated") from None
+        raise Error("Random playback was rejected: no eligible channel or the catalog, provider, PIN or kiosk state changed. The request was not repeated") from None
+    except HTTPError as exc:
+        if exc.code == 400:
+            raise Error("This controller does not accept safe random selection; update the controller and player. The request was not repeated") from None
+        raise
+    channel = result.get("channel") if isinstance(result, dict) else None
+    if (time.monotonic() >= deadline or not isinstance(result, dict) or set(result) != {"dispatched", "channel"}
+            or result["dispatched"] is not True or not isinstance(channel, dict) or set(channel) != {"id", "number", "name"}
+            or not media_text(channel["id"], 2048) or not media_text(channel["name"], 16384)
+            or type(channel["number"]) is not int or not 0 < channel["number"] <= 9007199254740991
+            or ("range" in selector and not selector["range"][0] <= channel["number"] <= selector["range"][1])
+            or ("search" in selector and media_search_key(selector["search"]) not in media_search_key(channel["name"]))
+            or (candidates is not None and not any(channel_identity(channel["id"]) == channel_identity(row["id"])
+                and all(channel[key] == row[key] for key in ("number", "name")) for row in candidates))):
+        raise Error("The player did not confirm a valid random channel. Playback may have started; the request was not repeated")
+    return {"dispatched": True, "channel": dict(channel)}
+
+
+def random_command(client, device, params, timeout):
+    previous_timeout = client.timeout
+    deadline = time.monotonic() + timeout
+    try:
+        controls = random_controls(client, device, deadline)
+        catalog = random_catalog(client, device, controls, deadline)
+        selector = {}
+        if "random_range" in params:
+            selector["range"] = params["random_range"]
+        if "random_mode" in params:
+            selector["mode"] = params["random_mode"]
+        return random_play(client, device, catalog, selector, deadline)
+    finally:
+        client.timeout = previous_timeout
+
+
 def provider_play_catalog(client, device, provider, deadline):
     controls = media_capabilities(client, device, deadline)
     if controls is not None:
@@ -4222,6 +4318,10 @@ def provider_play_catalog(client, device, provider, deadline):
             time.sleep(min(0.25, max(0, deadline - time.monotonic())))
             provider_ready(client, device, provider, deadline, wait=False)
     data = provider_request(client, device, "epg_catalog", {}, deadline)
+    return legacy_provider_catalog(data)
+
+
+def legacy_provider_catalog(data):
     invalid = "The player returned an invalid complete channel catalog; no playback was requested"
     if (not isinstance(data, dict) or not media_text(data.get("catalog"), 128)
             or not isinstance(data.get("channels"), list) or len(data["channels"]) > 10000):
@@ -4239,9 +4339,7 @@ def provider_play_catalog(client, device, provider, deadline):
 
 
 def provider_play_selection(rows, query):
-    if query.casefold() in ("r", "random"):
-        matches = rows
-    elif re.fullmatch(r"[0-9]+", query):
+    if re.fullmatch(r"[0-9]+", query):
         matches = [row for row in rows if str(row["number"]) == query.lstrip("0")]
     else:
         key = media_search_key(query)
@@ -4250,7 +4348,9 @@ def provider_play_selection(rows, query):
             matches = [row for row in rows if key in media_search_key(row["name"])]
     if not matches:
         raise Error("No channels match in the selected provider's catalog; no playback was requested")
-    return secrets.choice(matches) if len(matches) > 1 else matches[0]
+    if len(matches) == 1 and (query.isdecimal() or media_search_key(matches[0]["name"]) == media_search_key(query)):
+        return matches[0]
+    return None
 
 
 def provider_command(client, device, words, project=False):
@@ -4258,6 +4358,9 @@ def provider_command(client, device, words, project=False):
     deadline = time.monotonic() + previous_timeout
     try:
         params, provider, playback = provider_play_plan(client, device, words, deadline)
+        random_word = playback is not None and playback.casefold() in ("r", "random", "rr")
+        if random_word:
+            random_controls(client, device, deadline)
         data = provider_request(client, device, "provider", params, deadline)
         if playback is None:
             return provider_switch_metadata(data) if project else data, None
@@ -4266,15 +4369,30 @@ def provider_command(client, device, words, project=False):
         try:
             provider_ready(client, device, provider, deadline, wait=True, wake_report=data)
             stage = "catalog"
-            catalog = provider_play_catalog(client, device, provider, deadline)
-            stage = "selection"
-            selected = provider_play_selection(catalog["channels"], playback)
+            if random_word:
+                # Category support belongs to the destination provider, not the
+                # provider whose capabilities were checked before switching.
+                controls = random_controls(client, device, deadline)
+                catalog = {"catalog": random_catalog(client, device, controls, deadline, provider)}
+                selected = None
+            else:
+                catalog = provider_play_catalog(client, device, provider, deadline)
+                stage = "selection"
+                selected = provider_play_selection(catalog["channels"], playback)
+                if selected is None:
+                    random_controls(client, device, deadline)
             provider_ready(client, device, provider, deadline, wait=False)
             if time.monotonic() >= deadline:
                 raise Error("Provider operation exceeded --timeout; no playback was requested")
             stage, dispatched = "playback", None
-            result = provider_request(client, device, "play_catalog",
-                                      {"catalog": catalog["catalog"], "id": selected["id"]}, deadline)
+            if selected is None:
+                selector = ({} if playback.casefold() in ("r", "random") else
+                            {"mode": "adult"} if playback.casefold() == "rr" else {"search": playback})
+                result = random_play(client, device, catalog["catalog"], selector, deadline, catalog.get("channels"))
+                selected = result["channel"]
+            else:
+                result = provider_request(client, device, "play_catalog",
+                                          {"catalog": catalog["catalog"], "id": selected["id"]}, deadline)
             channel = result.get("channel") if isinstance(result, dict) else None
             if (not isinstance(result, dict) or result.get("dispatched") is not True
                     or not isinstance(channel, dict) or type(channel.get("number")) is not int
@@ -4529,6 +4647,8 @@ def main(argv=None):
             data = aspect_command(client, device, params, args.timeout)
         elif action == "notifications":
             data = notifications_command(client, device, params, args.timeout)
+        elif action == "command" and params.get("command") == "random_channel":
+            data = random_command(client, device, params, args.timeout)
         elif action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
         elif action == "play":
@@ -4735,12 +4855,16 @@ def main(argv=None):
             print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
         elif action == "command" and params.get("command") == "set_volume":
             print(f"{data['volume']:g}%")
+        elif action == "command" and params.get("command") == "random_channel":
+            print(f"Random channel requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
         else:
             print(json.dumps(data, ensure_ascii=False, indent=2))
         if action in ("programs", "play") and data.get("playback", {}).get("dispatched"):
             channel = data["playback"]["channel"]
             sys.stdout.flush()
-            if len(data.get("programs", data.get("channels", []))) > 1:
+            exact = (sum(media_search_key(row["name"]) == media_search_key(params["query"].strip())
+                         for row in data.get("channels", [])) if action == "play" else 0)
+            if len(data.get("programs", data.get("channels", []))) > 1 and exact != 1:
                 print(f"Randomly selected channel: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
             print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
         if action in ("vportal", "vportal_random"):

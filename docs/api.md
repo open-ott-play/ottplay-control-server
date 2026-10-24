@@ -478,7 +478,8 @@ Receipts are bounded, expire after 120 seconds of inactivity and belong to a
 player runtime, provider, source/profile and catalogue revision. Successful,
 validated category-list and channel-page reads renew the same receipt token.
 Category selection, playback and rejected access do not renew it. A category receipt cannot
-be used as a channel-play receipt. A reload, source change, append or
+be used for explicit-ID channel playback; the negotiated random selector below
+can use the category-list receipt for All. A reload, source change, append or
 membership/order edit invalidates a prior snapshot. Ordinary browsing does
 not. Pagination reports a fixed loaded snapshot; `loading:true` separately
 signals that provider discovery is incomplete. Clients must not combine
@@ -495,6 +496,51 @@ its existing success and rejection envelopes. A rejected or
 uncertain playback must not be repeated automatically or downgraded to a
 numeric switch. Existing peers may return the legacy unsupported envelope;
 clients require the capability before using this extension.
+
+### Player-owned random selection
+
+Compatible players advertise `"random":{"version":1}` in `capabilities`.
+The controller accepts an additive `play_catalog` union: either the existing
+`{catalog,id}` or `{catalog,random:{...}}`, never both. Check the capability
+before sending a random request; an old player/controller must fail closed,
+without retrying through a legacy random command or numeric playback.
+
+```json
+{"action":"play_catalog","params":{"catalog":"SOURCE_RECEIPT","random":{}}}
+{"action":"play_catalog","params":{"catalog":"SOURCE_RECEIPT","random":{"range":[1,1000]}}}
+{"action":"play_catalog","params":{"catalog":"SOURCE_RECEIPT","random":{"search":"News"}}}
+```
+
+Use the complete `epg_catalog` receipt for legacy catalogues, or a
+`categories.list` receipt to select from All without downloading every media
+page. A category/search-bound channel receipt restricts selection to its
+bound catalogue. A loading catalogue is not complete and cannot be used.
+Existing runtime, provider, source and catalogue-revision fences still apply.
+When switching provider first, re-read capabilities after it becomes ready:
+category support can differ between the source and destination providers.
+
+`search` is optional, nonempty text of at most 1,024 UTF-8 bytes without control
+characters. A matching full name takes priority over substring matches.
+`range` is an optional inclusive ordered pair of positive JavaScript-safe
+integers. Without a range, selection gives eligible global numbers 1–1000
+an 80% chance and the remaining numbers 20%, uniformly within each pool;
+an empty pool gives its chance to the other. An explicit range instead samples
+uniformly within that range and never falls back outside it.
+
+The player owns eligibility: normal random selection excludes AceStream names,
+provider/category adult classifications and manually protected channels even
+when parental control is temporarily unlocked. It checks eligibility and local
+playback admission again before dispatch. Manual exact-ID playback retains its
+existing policy. An empty eligible set is rejected without starting a channel.
+
+Success is exactly `{dispatched:true,channel:{id,number,name}}`; `id` is a
+nonempty string of at most 2,048 UTF-8 bytes, `name` at most 16,384 bytes and
+`number` a positive JavaScript-safe integer. IDs and names exclude control
+characters. The controller validates this bounded result, including any
+requested range. It confirms dispatch, not visible playback. Rejection or an
+uncertain response is never automatically replayed. Requests retain ordinary
+`play_catalog` ownership, operator grants, queue and expiry rules. Shared wire
+fixtures live in [`contracts/random-v1.json`](../contracts/random-v1.json).
 
 ### Ordered Plex queue extension
 
@@ -774,11 +820,13 @@ source, channel load, metadata or retention changes. Older players can omit the
 archive extension and still support live EPG search. It must not fetch guide
 rows. `catalog` is an opaque player-owned revision, `number` is the one-based
 catalogue position, and `shift` is the provider's additional time adjustment in
-integer seconds. No source URLs or credentials are included. `play_catalog`
+integer seconds. No source URLs or credentials are included. Explicit-ID `play_catalog`
 accepts exactly `{catalog,id}`; both strings must be nonempty, with at most 128
 UTF-8 bytes for `catalog` and 2048 for `id`. The player verifies its current
 catalogue still matches before dispatching playback and returns
 `{dispatched:true,channel:{id,number,name}}`. A changed catalogue is rejected.
+The separate negotiated [random selector](#player-owned-random-selection)
+does not alter this legacy request shape.
 
 The CLI's optional EPG configuration uses these RPCs around a separate public
 `POST /current` call. The control server never forwards its administrator token

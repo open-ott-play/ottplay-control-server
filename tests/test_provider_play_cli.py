@@ -47,7 +47,7 @@ class ProviderPlayTest(unittest.TestCase):
 
     def capabilities(self, modern=False):
         data = {'version': 1, 'player': {'version': 'test', 'platform': 'browser', 'runtime': 'runtime1'},
-                'lifecycle': ['wake'], 'input': [], 'playback': []}
+                'lifecycle': ['wake'], 'input': [], 'playback': [], 'random': {'version': 1}}
         if modern:
             data['categories'] = {'version': 1, 'operations': ['list', 'select'],
                                   'maxPageSize': 2}
@@ -78,6 +78,8 @@ class ProviderPlayTest(unittest.TestCase):
         if action == 'lifecycle':
             return {'operation': 'wake', 'accepted': True, 'dispatched': False, 'effect': 'lifecycle-after-ack'}
         if action == 'play_catalog':
+            if 'random' in params:
+                return {'dispatched': True, 'channel': self.rows[-1]}
             return {'dispatched': True, 'channel': next(row for row in self.rows if row['id'] == params['id'])}
         raise AssertionError((action, params))
 
@@ -120,7 +122,8 @@ class ProviderPlayTest(unittest.TestCase):
                 with mock.patch.object(ott.secrets, 'choice', side_effect=lambda candidates: candidates[-1]) as choice:
                     code, data, _ = self.run_cli(['provider', 'm3u', query])
                 self.assertEqual(code, 0)
-                self.assertEqual(choice.call_args.args[0], rows)
+                choice.assert_not_called()
+                self.assertEqual(self.mutations()[-1][2], {'catalog': 'source-snapshot', 'random': {'search': query}})
                 self.assertEqual(data['playback']['channel']['id'], 'two')
 
     def test_random_aliases_draw_from_complete_catalog(self):
@@ -128,7 +131,8 @@ class ProviderPlayTest(unittest.TestCase):
             with self.subTest(word=word), mock.patch.object(ott.secrets, 'choice', side_effect=lambda rows: rows[-1]) as choice:
                 code, data, _ = self.run_cli(['provider', 'm3u', word])
                 self.assertEqual(code, 0)
-                self.assertEqual(choice.call_args.args[0], self.rows)
+                choice.assert_not_called()
+                self.assertEqual(self.mutations()[-1][2], {'catalog': 'source-snapshot', 'random': {}})
                 self.assertEqual(data['playback']['channel']['id'], 'seven')
 
     def test_multiword_provider_queries_and_explicit_boundary(self):
@@ -274,8 +278,42 @@ class ProviderPlayTest(unittest.TestCase):
             code, data, err = self.run_cli(['provider', 'plex', 'R'])
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(len(reads), 2)
-        self.assertEqual(choice.call_args.args[0], self.rows)
+        choice.assert_not_called()
+        self.assertEqual(self.mutations()[-1][2], {'catalog': 'source-snapshot', 'random': {}})
+        self.assertNotIn('channels', [action for _, action, _ in self.calls])
         self.assertEqual(data['playback']['channel']['id'], 'seven')
+
+    def test_random_refreshes_destination_capabilities_in_both_directions(self):
+        self.modern_catalog()
+        self.overrides['capabilities'] = lambda device, params: self.capabilities(modern=self.provider == 'plex')
+        for origin, destination, expected, absent in (
+                ('m3u', 'plex', 'categories', 'epg_catalog'),
+                ('plex', 'm3u', 'epg_catalog', 'categories')):
+            with self.subTest(origin=origin, destination=destination):
+                self.provider = origin
+                self.calls.clear()
+                code, data, err = self.run_cli(['provider', destination, 'R'])
+                self.assertEqual((code, err), (0, ''))
+                actions = [action for _, action, _ in self.calls]
+                self.assertEqual(actions.count('capabilities'), 2)
+                self.assertLess(actions.index('capabilities'), actions.index('provider'))
+                self.assertGreater(actions.index('capabilities', actions.index('provider')), actions.index('status'))
+                self.assertIn(expected, actions)
+                self.assertNotIn(absent, actions)
+                self.assertEqual(data['playback']['channel']['id'], 'seven')
+
+    def test_random_support_disappearing_after_switch_prevents_playback(self):
+        def capabilities(device, params):
+            result = self.capabilities(modern=self.provider == 'plex')
+            if self.provider == 'plex':
+                result.pop('random')
+            return result
+        self.overrides['capabilities'] = capabilities
+        code, data, err = self.run_cli(['provider', 'plex', 'R'])
+        self.assertEqual(code, 1)
+        self.assertIn('not supported', err)
+        self.assertEqual(data['playback']['stage'], 'catalog')
+        self.assertEqual([action for _, action, _ in self.mutations()], ['provider'])
 
     def test_modern_wrong_provider_never_requests_channels_or_play(self):
         self.modern_catalog(wrong_provider=True)

@@ -48,7 +48,23 @@ class AliasDispatchTest(unittest.TestCase):
                 not ott.re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', query))
         except ott.Error:
             discovery = False
-        client.call.side_effect = ([ott.PlayerUnsupported('Legacy player')] if discovery else []) + responses
+        remaining = iter(responses)
+        capability_calls = 0
+        def call(device, action, params):
+            nonlocal capability_calls
+            if action == 'capabilities' and discovery:
+                capability_calls += 1
+                if capability_calls == 1:
+                    raise ott.PlayerUnsupported('Legacy category protocol')
+                return {'version': 1, 'player': {'version': 'test', 'platform': 'browser', 'runtime': 'page'},
+                        'lifecycle': [], 'input': [], 'playback': [], 'random': {'version': 1}}
+            if action == 'epg_catalog':
+                return {'catalog': 'snapshot', 'channels': [{'id': 'safe', 'number': 1, 'name': 'Fixture'}]}
+            result = next(remaining)
+            if isinstance(result, Exception):
+                raise result
+            return result
+        client.call.side_effect = call
         output, errors = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'Client', return_value=client), mock.patch.object(ott, 'read_json', return_value={}), \
                 mock.patch.object(ott.secrets, 'choice', side_effect=lambda rows: rows[-1]) as choice, \
@@ -58,6 +74,7 @@ class AliasDispatchTest(unittest.TestCase):
         if discovery:
             self.assertEqual(calls[0], mock.call('dev_tv', 'capabilities', {}))
             calls = calls[1:]
+        calls = [call for call in calls if not discovery or call.args[1] not in ('capabilities', 'epg_catalog')]
         return code, output.getvalue(), errors.getvalue(), calls, choice.call_args_list
 
     def test_volume_read_aliases_share_projection_and_format(self):
@@ -131,11 +148,15 @@ class AliasDispatchTest(unittest.TestCase):
     def test_short_and_full_cyrillic_channel_names_keep_substring_random_behavior(self):
         rows = [{'id': 'ren', 'number': 2, 'name': 'РЕН ТВ'}, {'id': 'ren-hd', 'number': 3, 'name': 'РЕН ТВ HD'}]
         for words in [['рЕн'], ['РЕН', 'ТВ'], ['play', 'РЕН ТВ']]:
-            code, _, err, calls, choices = self.run_cli(words, [{'channels': rows}, {'dispatched': True, 'channel': rows[-1]}])
-            self.assertEqual(code, 0, err)
             text = ' '.join(words[1:] if words[0] == 'play' else words)
-            self.assertEqual(calls, [mock.call('dev_tv', 'channels', {'search': text}), mock.call('dev_tv', 'play', {'query': '3'})])
-            self.assertEqual(choices, [mock.call(rows)])
+            exact = text.casefold() == 'рен тв'
+            row = rows[0] if exact else rows[-1]
+            code, _, err, calls, choices = self.run_cli(words, [{'channels': rows}, {'dispatched': True, 'channel': row}])
+            self.assertEqual(code, 0, err)
+            expected = (mock.call('dev_tv', 'play', {'query': '2'}) if exact else
+                        mock.call('dev_tv', 'play_catalog', {'catalog': 'snapshot', 'random': {'search': text}}))
+            self.assertEqual(calls, [mock.call('dev_tv', 'channels', {'search': text}), expected])
+            self.assertEqual(choices, [])
         row = rows[-1]
         code, _, err, calls, choices = self.run_cli(['РЕН ТВ HD'], [{'channels': [row]}, {'dispatched': True, 'channel': row}])
         self.assertEqual(code, 0, err)

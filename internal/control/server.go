@@ -41,6 +41,7 @@ type entry struct {
 	aspect               *aspectRequest
 	notificationSettings *notificationsRequest
 	category             *categoryRequest
+	randomPlay           *randomPlayRequest
 }
 type bucket struct {
 	start time.Time

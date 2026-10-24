@@ -782,7 +782,7 @@ ott t1,t2,t3,t4 provider m3u # switch four players, with one result per player
 ott t1,t2,t3,t4 prov m3u     # equivalent short command
 ott tv provider-config ~/private/xtream.json
 ott tv playlist https://example.com/list.m3u
-ott tv random               # random channel from the current playback list
+ott tv R                    # safe random channel from All (alias: r or random)
 ott tv random 1 10
 ott tv msg Hello
 ott tv caps                 # version, runtime identity and supported controls
@@ -858,13 +858,14 @@ including Cyrillic text. A text channel query lists every channel whose name
 contains the query, including exact names and longer names. For example,
 `ott t1 zee` lists all names containing `zee`; `ott iphone "РЕН ТВ"` can include
 both `РЕН ТВ` and `РЕН ТВ HD`. The list stays in provider catalogue order. With
-multiple matches, each matching channel has an equal chance of being selected;
-one match is selected directly. The CLI requests one channel switch after
-validating the complete returned list. `ott iphone s РЕН` only lists matches.
+an exact full-name match, that channel is selected directly. Otherwise the
+player chooses an eligible match using the random policy below, after the CLI
+validates the complete returned list. Duplicate exact names take precedence
+over longer partial matches. `ott iphone s РЕН` only lists matches.
 Numeric queries such as `ott tv 12` retain a single playback request.
 
 Text queries print `NUMBER: NAME` rows to stdout and the selected channel's
-switch acknowledgement to stderr. For multiple matches, stderr also reports
+switch acknowledgement to stderr. When multiple matches require a random choice, stderr also reports
 `Randomly selected channel: NUMBER: NAME`; selection alone does not confirm
 that the player accepted the switch. With `--json`, stdout contains the full
 `channels` list and a `playback` object containing the player acknowledgement
@@ -876,9 +877,26 @@ Keep the provider/catalogue unchanged between search and playback; a mismatching
 acknowledgement reports an error but cannot undo a switch that already happened.
 The numbers used by `s` and numeric `play` refer to the provider's full
 catalogue, including when a media category filters the displayed rows.
-Category positions are not channel numbers. `random` uses the current
-playback list. Updated media catalogues use the stable selection described
-below; the legacy compatibility path retains the number-based switch.
+Category positions are not channel numbers. `R`, `r` and `random` use the
+provider's complete **All** catalogue, regardless of the displayed category.
+The player excludes names containing `[AceStream]` and all channels classified
+as adult or parental-protected, even when protection is currently disabled or
+temporarily unlocked. This does not remove them from the catalogue or alter
+manual exact-name, number or ID selection.
+
+When both eligible pools are nonempty, random selection chooses numbers 1–1000
+with 80% probability and higher numbers with 20%, uniformly within the chosen
+pool. If only one pool is available, it supplies every choice. An explicit
+`random FROM TO` range is inclusive and uniformly sampled, without the default
+weighting or any fallback outside that range. No eligible channel means an
+error without playback. Eligibility and source identity are checked again by
+the player when playback is admitted; the CLI does not infer protection from
+channel names or cache private parental settings.
+
+Random selection, including partial or ambiguous channel-name selection, needs
+`capabilities.random.version = 1` and an updated controller. Older versions fail
+explicitly; the CLI never falls back to an unfiltered random command. Unique
+exact names, numbers and IDs retain their existing manual playback path.
 
 `p` includes only programmes with a title and `start <= now < end`. Channels
 without current EPG are omitted. Plain `p` only lists programmes. `p TEXT`
@@ -1024,8 +1042,8 @@ whose title is the command name `cat`.
 
 Selecting a category only changes browsing. It does not start a video,
 replace an explicit Plex queue, or change the category currently playing.
-`next`, `prev`, signed offsets and `random` continue to use their existing
-playback context. Starting a video from the selected category enters that
+`next`, `prev` and signed offsets continue to use their existing playback
+context; `R`/`random` uses All. Starting a video from the selected category enters that
 category through the normal player admission and resume path. Local kiosk,
 parental and busy-state restrictions still apply. Listing is read-only;
 category selection does not unlock a restricted player.
@@ -1601,7 +1619,8 @@ this uses **All**, even if a narrower category was previously selected. Profiles
 and provider credentials remain unchanged. A positive integer selects the
 catalogue's channel number, as shown by `s` with All selected;
 provider indices shown by `providers` remain zero-based. `R`, `r` and `random`
-are case-insensitive aliases for random selection. A title selects a complete,
+are case-insensitive aliases for the same safe, weighted random selection
+described above. A title selects a complete,
 case-insensitive name match in preference to partial matches. If several exact
 matches exist, one is chosen at random; if no exact match exists, one of the
 partial matches is chosen at random. No match is an error and sends no playback
@@ -1616,7 +1635,8 @@ already have succeeded when loading or playback fails; the command does not
 roll it back or replay an uncertain request. Playback acknowledgement means
 the player dispatched the request, not that a picture has appeared.
 
-The player and controller must support catalogue-bound playback. Older versions
+The player and controller must support catalogue-bound playback; random or
+ambiguous-name selection also requires the version-1 random capability. Older versions
 that lack it are reported as unsupported; the CLI does not substitute an
 unbound channel number. The legacy TV/Local videos catalogue API is limited to
 10,000 entries and its response-size limit; larger catalogues fail explicitly.
@@ -2698,8 +2718,9 @@ storage does not prove provider login, media availability or visible playback.
 
 Use `ott tv s "РЕН"` or `ott tv p --list "Кино"` to inspect results without
 switching. Channel queries use literal case-insensitive substrings: a full title
-can still match a longer title. Ordinary matching selects randomly among multiple
-matches; kiosk matching selects the first. Use the displayed catalogue number
+can still list a longer title. A unique exact name wins; partial or duplicate
+exact names use the player's safe random policy. Kiosk title commands keep their
+separate deterministic policy. Use the displayed catalogue number
 for a particular channel, keeping the provider/catalogue unchanged. Use
 `play TITLE` when the title is reserved by a command.
 

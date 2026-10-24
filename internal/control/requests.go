@@ -21,6 +21,7 @@ type requestResult struct {
 	aspect               *aspectRequest
 	notificationSettings *notificationsRequest
 	category             *categoryRequest
+	randomPlay           *randomPlayRequest
 	plexLibrary          *plexLibraryRequest
 	favorites            *favoritesRequest
 	handoff              *handoffRequest
@@ -179,6 +180,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		_, validCatalog := textValue(params["catalog"], 128)
 		_, validID := textValue(params["id"], 2048)
 		ok = len(params) == 2 && validCatalog && validID
+		if _, random := params["random"]; random {
+			ok = parseRandomPlayRequest(params) != nil
+		}
 	case "resolve_archive", "play_archive_catalog":
 		_, validCatalog := textValue(params["catalog"], 128)
 		_, validID := textValue(params["id"], 2048)
@@ -268,6 +272,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "categories" || action == "channels" {
 		e.category = parseCategoryRequest(action, params)
+	}
+	if action == "play_catalog" {
+		e.randomPlay = parseRandomPlayRequest(params)
 	}
 	if action == "plex_queue" {
 		e.plexQueue = parsePlexQueueRequest(params)
@@ -393,6 +400,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var aspect *aspectRequest
 	var notificationSettings *notificationsRequest
 	var category *categoryRequest
+	var randomPlay *randomPlayRequest
 	playbackOperation := ""
 	for _, pending := range d.queue {
 		if pending.rpc && pending.id == id {
@@ -407,6 +415,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			aspect = pending.aspect
 			notificationSettings = pending.notificationSettings
 			category = pending.category
+			randomPlay = pending.randomPlay
 			break
 		}
 	}
@@ -421,6 +430,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if category == nil {
 		category = d.results[id].category
+	}
+	if randomPlay == nil {
+		randomPlay = d.results[id].randomPlay
 	}
 	if plexLibrary == nil {
 		plexLibrary = d.results[id].plexLibrary
@@ -455,6 +467,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if category != nil && !validCategoryResult(m["data"], status, category) {
 		failure(w, 400, "invalid category result")
+		return
+	}
+	if randomPlay != nil && !validRandomPlayResult(m["data"], status, randomPlay) {
+		failure(w, 400, "invalid random playback result")
 		return
 	}
 	if screenshotRuntime != "" && status == "ok" && !validScreenshotResult(m["data"], screenshotRuntime) {
@@ -510,7 +526,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, category: e.category, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])
