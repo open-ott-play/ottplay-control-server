@@ -167,7 +167,8 @@ States**. The UI may label a binary sensor “Detected” or “Occupied” whil
 raw state is `on`. Select motion and occupancy sensors by their meaning, not just
 by the `binary_sensor` domain. Motion clearing means no current motion detected;
 it does not necessarily mean that a room is empty. Use a dedicated occupancy
-sensor for the room-occupied / room-clear announcements.
+sensor for the room-occupied / room-clear announcements. Motion detection
+notifies; the motion transition to `off` is intentionally ignored.
 
 Add the following entries to `home_assistant.rules`, replacing the example IDs.
 This fragment intentionally names only two selected lights and two selected
@@ -183,14 +184,7 @@ registered device IDs to each rule to restrict rooms.
       "id": "motion-detected", "event_type": "state_changed",
       "entity_ids": ["binary_sensor.hall_motion"],
       "from": ["off"], "to": ["on"],
-      "title": "Motion", "message": "{{name}}: motion detected",
-      "cooldown_seconds": 10
-    },
-    {
-      "id": "motion-cleared", "event_type": "state_changed",
-      "entity_ids": ["binary_sensor.hall_motion"],
-      "from": ["on"], "to": ["off"],
-      "title": "Motion", "message": "{{name}}: motion cleared",
+      "title": "Motion", "message": "{{name}}",
       "cooldown_seconds": 10
     },
     {
@@ -239,7 +233,7 @@ registered device IDs to each rule to restrict rooms.
 }
 ```
 
-The on/off rules have different IDs so an on notification cannot suppress the
+Occupancy, light and outlet on/off rules have different IDs so an on notification cannot suppress the
 following off notification through the same rule cooldown. Global rate limits,
 queue bounds, activity checks and repeated same-direction cooldown still apply.
 Explicit `from` and `to` exclude `unknown` / `unavailable` transitions and sensor
@@ -585,3 +579,109 @@ activity state, UTC event time and whether the screen visibly showed the test.
 Exclude HA credentials, administrator/device tokens, raw household event payloads
 and private configuration files. Clearly distinguish simulated checks, controller
 delivery evidence and a physical-screen observation.
+
+## Private camera motion snapshots
+
+![Private camera delivery](assets/home-assistant-camera.svg)
+
+An optional camera rule adds **one still JPEG** to the motion banner. It does
+not start another video player, a live camera stream, or camera audio. The
+existing main video continues. A single per-player notification preference
+controls the whole card, including text and imagery; turning it off clears
+current cards and revokes pending media access. Ordinary remote control stays
+available. Older players keep the text path. Use `title: "Motion"` with
+`message: "{{name}}"` for a compact card: the title already identifies motion.
+
+Add a camera allowlist to the existing `home_assistant` object and append one
+rule per camera key to its `rules` array. This fragment does not replace the
+existing URL, token file, devices or other rules:
+
+```json
+{
+  "cameras": {
+    "garage": {
+      "entity_id": "camera.garage_camera_notifications",
+      "label": "Garage"
+    }
+  },
+  "rules": [
+    {
+      "id": "garage-camera-motion",
+      "event_type": "cisco_motion_snapshot_requested",
+      "camera_key": "garage",
+      "title": "Motion",
+      "message": "{{name}}",
+      "severity": "info",
+      "duration_ms": 7000,
+      "ttl_seconds": 30,
+      "cooldown_seconds": 60,
+      "targets": ["living-room"]
+    }
+  ]
+}
+```
+
+Use the same approved HA notification-camera entity as the existing mobile
+notification. The Cisco integration's existing event contains `camera_key`,
+`event_id` and `event_at` (a finite number or strict decimal numeric string);
+no additional HA action is required when that producer
+is already installed. The ID is the original HA context plus camera suffix,
+not a Frigate event ID. `event_at` is the original trigger's Unix timestamp.
+The original event may be at most 90 seconds old, allowing notification-camera
+warm-up; the outer event still obeys `event_max_age_seconds` (normally 30).
+Neither timestamp may be more than five seconds in the future. Re-emitting an
+ID with a newer timestamp does not bypass deduplication.
+
+There are at most 16 fixed camera keys and one rule per key; combine recipient
+IDs in that rule. Events cannot supply camera URLs, credentials or arbitrary
+entity IDs. Only motion-detected producers fire this event: do not add a
+motion-clear/off rule. Remove overlapping generic motion rules for the same
+camera if they would produce a second text card. Occupancy, light and outlet
+off rules may remain.
+
+The controller checks active, enabled recipients and negotiated `jpeg-v1`
+support before requesting a frame. With no eligible media recipients it makes
+**no camera request**; eligible text-only players receive just text. It checks
+eligibility again when a queued fetch starts and before delivery. Two workers
+and four pending jobs bound camera work; saturation or acquisition failure
+falls back to text. Camera rules default to a 30-second notification TTL
+(ordinary text rules default to 15 seconds), allowing cold camera startup without
+extending an admitted event. The camera request has a 15-second overall/header limit and a shorter bound
+when the original notification deadline is nearer. It reads the first complete
+JPEG from `/api/camera_proxy_stream/<configured entity>`, then closes it. No
+redirect, environment proxy, cookie session or insecure TLS fallback is used.
+
+The source is limited to 2 MiB and 16 megapixels. The controller strips metadata
+and resizes to at most 640×360, encoding a JPEG no larger than 160 KiB. A shared
+in-memory store is limited to 32 frames / 4 MiB; timers delete expired entries
+even with no subsequent request. The image expires with the original notification
+deadline, additionally capped at 90 seconds from the original event; fetching
+and repeated reads never extend it. Images never enter the
+command journal, a disk archive, diagnostics, or the published player site.
+A source camera may itself return cached imagery: the frame is not proof of
+capture at the instant motion occurred.
+
+Updated clients first use the legacy notification poll, then negotiate
+`enabled=true|false` and `media=jpeg-v1` only after server capabilities advertise
+them. A media descriptor contains an opaque ID, JPEG type, width, height and
+byte count. `GET /api/notifications/media?id=<id>&runtime=<runtime>` requires the
+same device Bearer token as polling; the authenticated device, original runtime,
+current active/enabled state and expiry must all match. The response is bounded
+JSON containing JPEG base64, with `Cache-Control: no-store`. There is no public
+camera URL and no HA credential in a client. A new runtime, disable, stale
+presence or removal revokes that device's grants. An already-running network
+request can finish during a transition; the player's generation check prevents
+its result from appearing.
+
+For troubleshooting, inspect `ott ha status` and the credential-free
+`camera_acquired`, `camera_failed`, and `camera_skipped` counters. A counter or
+successful media GET does not prove physical display. If text works but images
+do not, check the camera key/entity, HA permission to read that camera, native
+transport support, negotiated JPEG support and the short deadline. Never paste
+base64 images, HA tokens or a private configuration into an issue. Validate the
+configuration, restart the controller, and test a new real motion event. For
+rollback to an older controller, remove `cameras` and camera rules before its
+configuration validation; preserve the non-camera rules and registrations.
+
+See [notification preferences](notification-preferences.md) for the single
+per-player switch and grouped `ott t1,t2 notifications off` commands.

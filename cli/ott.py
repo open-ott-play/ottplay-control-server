@@ -55,6 +55,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
   ott ha status [-j]                 Home Assistant bridge and active banner recipients
+  ott NAME notifications [on|off]    read/save the single banner and camera preference
+  ott t1,t2 notifications off        save that preference on each distinct player
   ott alias NAME UUID                name an existing device
   ott add NAME UUID                  create a device access code and queue
   ott pair NAME                      show the player connection settings
@@ -180,7 +182,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 --receipt writes one safe JSON request receipt to stderr per player RPC; stdout is unchanged.
-Comma-separated player lists support provider/prov; each distinct player runs once, in order.
+Comma-separated player lists support provider/prov and notifications; each distinct player runs once, in order.
 Add a channel number, R/random or name to switch and play from the provider's complete All catalog.
 Use provider "Local videos" -- NAME to separate a multiword provider from a channel explicitly.
 An exact full channel name wins; otherwise a random partial-name match is selected. Playback wakes standby.
@@ -223,6 +225,7 @@ COMMAND_ALIASES = {
     "previous": "prev", "shot": "screenshot",
     "stop": "standby", "start": "wake", "go": "wake",
     "aspect-ratio": "aspect",
+    "notification": "notifications", "notify": "notifications", "notif": "notifications",
     "fav": "favorites", "favs": "favorites", "favorite": "favorites",
     "favourite": "favorites", "favourites": "favorites",
 }
@@ -248,6 +251,8 @@ PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS)
 OFFLINE_PROFILE_OPERATIONS = frozenset(("list", "load", "save", "export", "import"))
 OFFLINE_BINDING_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 ASPECT_OPERATIONS = frozenset(("get", "set"))
+NOTIFICATIONS_OPERATIONS = frozenset(("get", "set"))
+NOTIFICATIONS_ERRORS = frozenset(("invalid_request", "runtime_mismatch", "storage_unavailable", "unsupported"))
 ASPECT_MODES = {"fit": "Fit to screen", "fill": "Fill screen"}
 SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
 MAX_SCREENSHOT_BYTES = 1024 * 1024
@@ -257,7 +262,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "categories", "favorites", "aspect",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -992,6 +997,12 @@ def parse_command(words):
         return "playback", {"operation": "step_channel", "offset": offset}
     if verb == "favorites":
         return "favorites", parse_favorites(tail)
+    if verb == "notifications":
+        if not tail or (len(tail) == 1 and tail[0].casefold() in ("status", "get")):
+            return "notifications", {"operation": "get"}
+        if len(tail) == 1 and tail[0].casefold() in ("on", "off"):
+            return "notifications", {"operation": "set", "enabled": tail[0].casefold() == "on"}
+        raise Error("Use notifications [status|on|off]; this controls banners and camera media together")
     if verb in ("category", "categories"):
         return "categories", parse_categories(tail, singular=verb == "category")
     if verb == "update":
@@ -2818,6 +2829,66 @@ def print_aspect(data, name):
         print("Saved mode: " + (f"{ASPECT_MODES[saved]} ({saved})." if saved is not None else "unavailable."))
 
 
+def notifications_metadata(data, params, runtime, status="ok"):
+    invalid = "The player returned invalid notification preference metadata; read notifications status before another change"
+    keys = {"version", "runtime", "operation", "enabled", "persisted"} if status == "ok" else {
+        "version", "runtime", "operation", "error"}
+    if (not isinstance(data, dict) or set(data) != keys
+            or type(data.get("version")) is not int or data["version"] != 1
+            or data.get("runtime") != runtime or data.get("operation") != params["operation"]):
+        raise Error(invalid)
+    if status != "ok":
+        if not isinstance(data.get("error"), str) or data["error"] not in NOTIFICATIONS_ERRORS:
+            raise Error(invalid)
+        return data
+    if (type(data.get("enabled")) is not bool or data.get("persisted") is not True
+            or (params["operation"] == "set" and data["enabled"] != params["enabled"])):
+        raise Error(invalid)
+    return dict(data)
+
+
+def notifications_command(client, device, params, timeout):
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        try:
+            controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        except (PlayerRejected, PlayerUnsupported):
+            raise Error("Notification controls are not supported by this player/controller; no preference command was sent") from None
+        if params["operation"] not in controls.get("notifications", {}).get("operations", []):
+            raise Error("Notification controls are not supported by this player/controller; no preference command was sent")
+        client.timeout = deadline - time.monotonic()
+        if client.timeout <= 0:
+            raise Error("Notification capability discovery exceeded --timeout; no preference command was sent")
+        runtime = controls["player"]["runtime"]
+        request = dict(params, version=1, runtime=runtime)
+        try:
+            raw = client.call(device, "notifications", request)
+        except (PlayerRejected, PlayerUnsupported) as exc:
+            checked = notifications_metadata(exc.data, params, runtime, "rejected")
+            messages = {
+                "storage_unavailable": "The player could not verify durable notification storage",
+                "runtime_mismatch": "The player runtime changed before the notification request",
+                "unsupported": "The player does not support notification preferences",
+                "invalid_request": "The player rejected the notification request",
+            }
+            raise Error(messages[checked["error"]] + "; the request was not repeated") from None
+        if time.monotonic() >= deadline:
+            raise Error("The notification response exceeded --timeout; the preference may have changed. Read notifications status; the request was not repeated")
+        return notifications_metadata(raw, params, runtime)
+    except HTTPError as exc:
+        if exc.code in (400, 404, 405):
+            raise Error("This controller does not support notification preferences; update the controller and player. The request was not repeated") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_notifications(data):
+    print("Notifications: " + ("on" if data["enabled"] else "off") + " (saved on player; banners and camera media).", flush=True)
+
+
 def capabilities_metadata(data):
     invalid = "The player returned invalid capabilities metadata"
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
@@ -2860,6 +2931,16 @@ def capabilities_metadata(data):
         if bool(aspect["operations"]) != bool(aspect["modes"]):
             raise Error(invalid)
         result["aspect"] = {"version": 1, "operations": list(aspect["operations"]), "modes": list(aspect["modes"])}
+    if "notifications" in data:
+        notifications = data["notifications"]
+        operations = notifications.get("operations") if isinstance(notifications, dict) else None
+        if (not isinstance(notifications, dict) or set(notifications) != {"version", "operations"}
+                or type(notifications.get("version")) is not int or notifications["version"] != 1
+                or not isinstance(operations, list) or len(operations) > len(NOTIFICATIONS_OPERATIONS)
+                or any(not isinstance(op, str) or op not in NOTIFICATIONS_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["notifications"] = {"version": 1, "operations": list(operations)}
     if data.get("app_update") is not None:
         update = data["app_update"]
         if (not isinstance(update, dict) or set(update) != {"version", "operations"}
@@ -3107,6 +3188,12 @@ def print_player_status(data, name):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
     if "set" in aspect.get("operations", []):
         print(f"  {prefix} aspect " + " / ".join(aspect["modes"]) + "  — request an aspect mode")
+    notifications = controls.get("notifications", {}).get("operations", [])
+    if "get" in notifications:
+        print(f"  {prefix} notifications  — read the saved banner and camera preference (alias: notif)")
+    if "set" in notifications:
+        print(f"  {prefix} notifications on / off  — save one preference for banners and camera media")
+        print("    Multiple players: ott t1,t2,t3,t4 notifications off")
     update = controls.get("app_update", {}).get("operations", [])
     if update:
         print(f"  {prefix} update status  — read installed and pending APK versions")
@@ -3116,7 +3203,7 @@ def print_player_status(data, name):
         print(f"  {prefix} update install SHA256  — request installation of the staged APK")
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not update):
+            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:
@@ -3308,7 +3395,8 @@ def home_assistant_metadata(raw):
         raise Error(invalid)
     result = {"version": 1, "bridge": {"enabled": bridge["enabled"], "state": bridge["state"]}, "players": []}
     count = lambda value: type(value) is int and 0 <= value <= 9007199254740991
-    for key in ("reconnects", "events_received", "events_matched", "notifications_queued", "notifications_skipped", "events_dropped"):
+    for key in ("reconnects", "events_received", "events_matched", "notifications_queued", "notifications_skipped", "events_dropped",
+                "camera_acquired", "camera_failed", "camera_skipped"):
         if key in bridge:
             if not count(bridge[key]):
                 raise Error(invalid)
@@ -3337,6 +3425,11 @@ def home_assistant_metadata(raw):
             raise Error(invalid)
         seen.add(player["device_id"])
         result["players"].append({key: player[key] for key in ("device_id", "active", "pending")})
+        for key in ("notifications_enabled", "media_jpeg"):
+            if key in player:
+                if type(player[key]) is not bool:
+                    raise Error(invalid)
+                result["players"][-1][key] = player[key]
     return result
 
 
@@ -3362,7 +3455,8 @@ def management(client, config_path, words, json_output=False):
             if "last_error_code" in data["bridge"]:
                 print("Reason: " + data["bridge"]["last_error_code"])
             for player in data["players"]:
-                print(f"  {player['device_id']}: {'active' if player['active'] else 'inactive or not reporting'}; pending={player['pending']}")
+                preference = ("; notifications=" + ("on" if player["notifications_enabled"] else "off")) if "notifications_enabled" in player else ""
+                print(f"  {player['device_id']}: {'active' if player['active'] else 'inactive or not reporting'}; pending={player['pending']}" + preference)
             if "delivery" in data:
                 delivery = data["delivery"]
                 print(f"Banners: queued={delivery['queued']}, polled={delivery['polled']}, skipped={delivery['skipped']}, dropped={delivery['dropped']}")
@@ -4189,7 +4283,7 @@ def provider_group_targets(client, selector):
 
 def provider_group_command(client, targets, words, json_output):
     if command_verb(words) != "provider":
-        raise Error("Player lists support provider/prov only; use ott t1,t2,t3,t4 provider m3u")
+        raise Error("Player lists support provider/prov or notifications; use ott t1,t2,t3,t4 provider m3u or notifications off")
     action, params = parse_command(words)
     if not params["query"].strip():
         raise Error("provider requires a provider ID, index or name")
@@ -4231,6 +4325,35 @@ def provider_group_command(client, targets, words, json_output):
     succeeded = sum(row["ok"] for row in results)
     if json_output:
         print(json.dumps({"action": action, "results": results, "succeeded": succeeded,
+                          "failed": len(results) - succeeded}, ensure_ascii=False, indent=2))
+    return 0 if succeeded == len(results) else 1
+
+
+def notifications_group_command(client, targets, words, json_output):
+    _, params = parse_command(words)
+    results = []
+    on_receipt = getattr(client, "on_receipt", None)
+    for name, device in targets:
+        row = {"player": name, "ok": False}
+        try:
+            if callable(on_receipt):
+                client.on_receipt = lambda receipt, name=name: on_receipt({**receipt, "player": name})
+            row["data"] = notifications_command(client, device, params, client.timeout)
+            row["ok"] = True
+        except Error as exc:
+            row["error"] = clean(str(exc))
+        finally:
+            client.on_receipt = on_receipt
+        results.append(row)
+        if not json_output:
+            print(clean(name) + ": ", end="")
+            if row["ok"]:
+                print_notifications(row["data"])
+            else:
+                print("Error: " + row["error"], flush=True)
+    succeeded = sum(row["ok"] for row in results)
+    if json_output:
+        print(json.dumps({"action": "notifications", "results": results, "succeeded": succeeded,
                           "failed": len(results) - succeeded}, ensure_ascii=False, indent=2))
     return 0 if succeeded == len(results) else 1
 
@@ -4301,6 +4424,8 @@ def main(argv=None):
             raise Error(f"The name {args.words[0]!r} is reserved for a CLI command. Run ott --help for its syntax; use another player alias or the device UUID")
         targets = provider_group_targets(client, args.words[0])
         if targets is not None:
+            if command_verb(args.words[1:]) == "notifications":
+                return notifications_group_command(client, targets, args.words[1:], args.json)
             return provider_group_command(client, targets, args.words[1:], args.json)
         device = client.device(args.words[0])
         words = args.words[1:]
@@ -4351,6 +4476,8 @@ def main(argv=None):
             data = favorites_command(client, device, params, args.timeout)
         elif action == "aspect":
             data = aspect_command(client, device, params, args.timeout)
+        elif action == "notifications":
+            data = notifications_command(client, device, params, args.timeout)
         elif action == "programs" and "epg" in config:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
         elif action == "play":
@@ -4460,6 +4587,8 @@ def main(argv=None):
             print_favorites(data)
         elif action == "aspect":
             print_aspect(data, args.words[0])
+        elif action == "notifications":
+            print_notifications(data)
         elif action == "channels" or (action == "play" and "channels" in data):
             for row in data["channels"]:
                 print(f"{row['number']}: {clean(row['name'])}")

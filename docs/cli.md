@@ -27,7 +27,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
-- [Home Assistant connection and event delivery status](#home-assistant-event-status)
+- [Home Assistant connection and event delivery status](#home-assistant-event-status), [per-player notification preference](#per-player-notification-preference)
 - [Read-only doctor, inspect, debug, bundles and test scenarios](workbench.md)
 - [Verify saved reports offline](workbench.md#verify-saved-evidence-offline)
 - [Troubleshooting](#troubleshooting)
@@ -54,6 +54,33 @@ fields; use the API reference for the complete endpoint response.
 a player. Neither proves a visible banner. Standby/hidden players are excluded,
 and old events are not replayed on wake. See the [setup examples, rules and
 troubleshooting](home-assistant.md), or the [Russian guide](home-assistant.ru.md).
+
+## Per-player notification preference
+
+One preference controls event banners, camera images and future notification
+clips together. It is saved in the player installation and survives reloads and
+provider/profile changes; it does not stop or change IPTV/Plex playback.
+
+```sh
+ott t1 notifications                 # read the saved preference
+ott t1 notifications off             # disable banners and notification media
+ott t1 notifications on              # enable future events without replay
+ott t1,t2,t3,t4 notifications off     # save independently on each player
+ott -j t1,t2 notifications status     # individual success/error results
+ott t1 notif off                     # short command alias
+```
+
+Both player and controller must support this operation. The player must be
+online; an acknowledged result confirms persistent storage in that installation.
+After a timeout, read the preference before deciding whether to repeat a change.
+The available-controls output from `ott t1` includes these commands when the
+player advertises them. Scoped operators need `notifications.get` for reads or
+`notifications.set` for changes, plus `capabilities` for CLI discovery.
+
+`ott ha status` shows the last reported `notifications_enabled` value, which
+is not a replacement for a direct durable read. Group operations report partial
+failures and return a nonzero exit status if any player failed. See the
+[persistence, compatibility and recovery details](notification-preferences.md).
 
 ## Installation and connection
 

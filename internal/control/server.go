@@ -29,17 +29,18 @@ type entry struct {
 	expires time.Time
 	rpc     bool
 	// Bound at enqueue time; never trust a responding page's runtime identity.
-	screenshotRuntime string
-	plexQueue         *plexQueueRequest
-	plexLibrary       *plexLibraryRequest
-	favorites         *favoritesRequest
-	handoff           *handoffRequest
-	offlineProfile    *offlineProfileRequest
-	owner, permission string
-	playbackOperation string
-	inspect           *inspectRequest
-	aspect            *aspectRequest
-	category          *categoryRequest
+	screenshotRuntime    string
+	plexQueue            *plexQueueRequest
+	plexLibrary          *plexLibraryRequest
+	favorites            *favoritesRequest
+	handoff              *handoffRequest
+	offlineProfile       *offlineProfileRequest
+	owner, permission    string
+	playbackOperation    string
+	inspect              *inspectRequest
+	aspect               *aspectRequest
+	notificationSettings *notificationsRequest
+	category             *categoryRequest
 }
 type bucket struct {
 	start time.Time
@@ -90,6 +91,7 @@ type Server struct {
 	publicRate, createRate bucket
 	notificationStats      notificationCounters
 	homeAssistantStatus    func() homeassistant.Snapshot
+	notificationMedia      notificationMediaStore
 }
 
 func New(c config.Config) (*Server, error) {
@@ -281,7 +283,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if path == "/api/pairings/approve" {
 			methods = "POST"
 		}
-	case "/healthz", "/readyz", "/api/devices", "/api/debug", "/api/operations", "/api/notifications", "/api/home-assistant/status", wire.LegacyPollPath:
+	case "/healthz", "/readyz", "/api/devices", "/api/debug", "/api/operations", "/api/notifications", "/api/notifications/media", "/api/home-assistant/status", wire.LegacyPollPath:
 		methods = "GET"
 	case wire.CommandPath:
 		methods = "GET,POST"
@@ -299,7 +301,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if intendedMethod == http.MethodOptions {
 		intendedMethod = r.Header.Get("Access-Control-Request-Method")
 	}
-	deviceRoute := path == "/api/notifications" || path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
+	deviceRoute := path == "/api/notifications" || path == "/api/notifications/media" || path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
 	if path == "/api/discovery" || (path == "/api/pairings" && (intendedMethod == "POST" || r.URL.Query().Has("id"))) {
 		deviceRoute = true
 	}
@@ -367,6 +369,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/notifications" {
 		s.pollNotifications(w, r, d, now)
+		return
+	}
+	if path == "/api/notifications/media" {
+		s.serveNotificationMedia(w, r, d, now)
 		return
 	}
 	if path == "/api/home-assistant/status" {

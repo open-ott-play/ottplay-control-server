@@ -4,6 +4,15 @@
 
 ### Added
 
+- One persistent notification switch per player, controlled with
+  `ott t1 notifications on|off|status` or an explicit group such as
+  `ott t1,t2,t3,t4 notifications off`. The switch covers text and notification
+  media together, preserves primary playback and discards missed events.
+- Private motion snapshots from the existing Home Assistant
+  `cisco_motion_snapshot_requested` event. Explicit camera mappings, bounded
+  single-frame capture and short-lived device/session grants keep camera
+  credentials and images out of public hosting and command journals. Older
+  players continue to receive text, and unavailable cameras fall back to text.
 - Select playback after switching any configured provider: `ott t4 provider m3u 1`,
   `provider m3u random` (`R` / `r`) or `provider m3u РЕН`. Wait for the target
   catalogue, prefer complete title matches, and dispatch one source-bound play request.

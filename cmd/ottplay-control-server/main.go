@@ -136,6 +136,7 @@ func run(args []string, out, errOut io.Writer) int {
 	defer stop()
 	if c.HomeAssistant != nil && c.HomeAssistant.Enabled {
 		bridge := homeassistant.New(*c.HomeAssistant, h.DeliverNotification)
+		bridge.SetCameraTargets(h.NotificationTargets, h.NotificationMediaTargets)
 		h.SetHomeAssistantStatus(func() homeassistant.Snapshot { return bridge.Snapshot() })
 		bridgeCtx, cancelBridge := context.WithCancel(ctx)
 		bridgeDone := make(chan struct{})

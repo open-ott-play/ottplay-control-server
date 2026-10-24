@@ -21,12 +21,16 @@ import (
 )
 
 type Notification struct {
-	Title      string
-	Message    string
-	Severity   string
-	DurationMS int
-	TTLSeconds int
-	Targets    []string
+	Title               string
+	Message             string
+	Severity            string
+	DurationMS          int
+	TTLSeconds          int
+	Targets             []string
+	Media               *CameraFrame
+	TargetRuntimes      map[string]string
+	MediaTargetRuntimes map[string]string
+	ExpiresAt           time.Time
 }
 
 // Queued is deliberately not called delivered: a server enqueue cannot prove
@@ -47,6 +51,9 @@ type Snapshot struct {
 	NotificationsSkipped uint64     `json:"notifications_skipped"`
 	EventsDropped        uint64     `json:"events_dropped"`
 	LastEventAt          *time.Time `json:"last_event_at,omitempty"`
+	CameraAcquired       uint64     `json:"camera_acquired"`
+	CameraFailed         uint64     `json:"camera_failed"`
+	CameraSkipped        uint64     `json:"camera_skipped"`
 }
 
 type timings struct {
@@ -62,10 +69,15 @@ type Bridge struct {
 	timing  timings
 	now     func() time.Time
 	// The following maps are owned by Run's single event-processing goroutine.
-	seen      map[[32]byte]time.Time
-	cooldown  map[string]time.Time
-	rateStart time.Time
-	rateUsed  int
+	seen               map[[32]byte]time.Time
+	cameraSeen         map[[32]byte]time.Time
+	cooldown           map[string]time.Time
+	rateStart          time.Time
+	rateUsed           int
+	cameraTargets      func(Notification) map[string]string
+	cameraMediaTargets func(Notification) map[string]string
+	cameraQueue        chan cameraJob
+	cameraFetch        func(context.Context, config.HomeAssistant, string) (*CameraFrame, error)
 }
 
 func New(c config.HomeAssistant, deliver func(Notification) DeliveryResult) *Bridge {
@@ -82,7 +94,8 @@ func New(c config.HomeAssistant, deliver func(Notification) DeliveryResult) *Bri
 	return &Bridge{
 		config: c, deliver: deliver, status: Snapshot{Enabled: c.Enabled, State: state},
 		timing: timings{handshake: 15 * time.Second, ping: 20 * time.Second, pong: 10 * time.Second, tokenPoll: 5 * time.Second, backoff: reconnectDelay},
-		now:    time.Now, seen: map[[32]byte]time.Time{}, cooldown: map[string]time.Time{},
+		now:    time.Now, seen: map[[32]byte]time.Time{}, cameraSeen: map[[32]byte]time.Time{}, cooldown: map[string]time.Time{},
+		cameraQueue: make(chan cameraJob, 4), cameraFetch: AcquireCameraFrame,
 	}
 }
 
@@ -113,6 +126,8 @@ func (b *Bridge) Run(ctx context.Context) {
 		b.setState("configuration_error", "invalid_configuration")
 		return
 	}
+	stopCameras := b.startCameraWorkers(ctx)
+	defer stopCameras()
 	defer b.setState("stopped", "")
 	var rejected [32]byte
 	haveRejected, attempted := false, false
