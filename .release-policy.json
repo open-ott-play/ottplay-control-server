@@ -62,7 +62,7 @@
   "nightly_cron": "52 5 * * *",
   "release_notes": "CHANGELOG.md",
   "fuzzing": {
-    "toolkit_ref": "5087530d6f327565b818fd84f64639abe03ad5e3"
+    "toolkit_ref": "e71559f44e41f39ad0037bf13c7f43bbbb2ec9af"
   },
   "toolkit_revision": "5e413f80a4353d328b4529eae57992ac3987e2dd",
   "single_entry_ci": true
