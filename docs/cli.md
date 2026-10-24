@@ -447,7 +447,7 @@ wait for **Connected**. Then verify the connection before sending a change:
 
 ```sh
 ott devices
-ott tv                      # status and currently available controls
+ott tv                      # available controls first, then readable player status
 ott tv s                    # read-only channel list
 ott tv 12                   # select catalogue row 12 when ready
 ```
@@ -614,6 +614,43 @@ connection. There is no `ott --version` or built-in CLI update command; record
 the source tag/commit used for installation. `ott PLAYER caps` reports the
 **player's** version, while the Go server has its own `version` subcommand.
 
+With a player name, `ott d1`, `ott d1 status` and `ott d1 st` contact that player
+and print its available commands first, followed by a readable status summary.
+The ordinary output uses English labels and does not dump the raw status JSON.
+Use `ott --json d1 status` for the unchanged machine-readable status and
+capabilities fields; scripts should consume that JSON instead of parsing the
+human summary. Update the CLI installation to obtain this output format;
+updating only the controller or player does not replace the CLI.
+
+Illustrative output for a standby player; the advertised command list is
+shortened here, and the version is an example:
+
+```text
+$ ott d1
+Available controls now:
+  ott d1 providers  — list allowed providers (alias: provs)
+  ...
+Local diagnostic help: ott d1 test list
+Request IDs: ott --receipt d1 COMMAND  — write RPC receipts to stderr
+
+Player summary:
+  Player:       d1
+  Status:       Standby
+  Now playing:  Nothing (standby)
+  Provider:     M3U
+  Volume:       100%
+  Channels:     0 (catalog not ready)
+  Platform:     browser
+  Version:      1.1.52-beta.48
+  Background:   suspended (0 pending)
+  Kiosk:        Off
+```
+
+`Awake` means standby is off; `Now playing: Not reported` means this response
+does not confirm current content. On older players,
+`Connected (standby not reported)` leaves standby unknown. The provider label `Local videos (offline)`
+names the local-file provider; it does not mean the player is disconnected.
+
 Options for the ordinary CLI must precede `PLAYER` or the management verb:
 
 ```sh
@@ -708,7 +745,7 @@ stop the controller or revoke player/operator credentials.
 ## Commands
 
 ```sh
-ott tv                      # player status and available control commands
+ott tv                      # available control commands, then readable player status
 ott tv 12                   # one-based channel number from s
 ott tv prev                 # previous channel in the current category; wraps
 ott tv previous             # full spelling of prev
@@ -1932,7 +1969,7 @@ ott d1 standby          # stop playback and enter player standby; stay connected
 ott d1 go               # leave standby and start configured playback
 ott d1 stop             # same as standby
 ott d1 start            # same as go; wake is also accepted
-ott d1                  # inspect the current state and available controls
+ott d1                  # available controls first, then the reported state
 ott d1 1                # select channel 1 after starting
 ott d1 restart stream   # reopen the current stream when one is active
 ott d1 restart          # reload the entire player; restart player is equivalent
@@ -1953,7 +1990,9 @@ activity owned by unrelated apps.
 
 Updated players report `player.standby` and
 `player.background: {"state":"suspended","pending":0}` in `ott -j d1`.
-Plain `ott d1` also prints these fields as a short summary. `suspending` means
+Plain `ott d1` includes these fields in the summary after the available controls.
+Standby on means playback is stopped; standby off alone does not confirm that
+video is playing. `suspending` means
 cancellation is still in progress; `suspended` with standby on and zero pending
 means the player reports its managed foreground and background work drained.
 `unsupported` means its native host cannot establish that state; `error` means
@@ -2089,15 +2128,24 @@ images, while diagnostic operators need their configured protocol-2 scopes.
 
 ## Capabilities, input and playback control
 
-`ott tv`, `ott tv status` and `ott tv st` show status followed by commands for
-the controls that the device currently advertises, including `ott tv restart`
-when page reload is available. They make two read-only requests within one
-`--timeout` budget. `--json` retains the status fields and adds a validated
+`ott tv`, `ott tv status` and `ott tv st` show commands for the controls that the
+device currently advertises first, including `ott tv restart` when page reload
+is available, then a readable player summary. They make two read-only requests
+within one `--timeout` budget. `--json` retains the status fields and adds a validated
 `capabilities` object. If that secondary request fails, is unsupported or belongs
 to a different player runtime, status still succeeds with `capabilities: null`
 and a `capabilities_error` explanation; text output shows the same limitation.
 Unavailable controls are never inferred from another platform. Volume-only
 queries (`v`, `vol`, `volume`) remain a single request with compact output.
+
+The summary describes only fields actually reported by the player. Missing
+values remain unknown or not reported; they do not become zero, off or stopped.
+The status response does not provide a confirmed current programme or video
+title. A provider, channel count or saved kiosk target describes configuration,
+not proof of current playback. A kiosk target can remain saved while the player
+is in standby. For a closer playback observation, use
+`ott tv inspect --view media` or `ott tv doctor` when advertised; neither proves
+that a physical screen or speaker is working.
 
 When status identifies a provider and capabilities were read successfully, the
 same list also includes the existing `providers`, `provider m3u` and
