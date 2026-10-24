@@ -182,7 +182,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 --receipt writes one safe JSON request receipt to stderr per player RPC; stdout is unchanged.
-Comma-separated player lists support provider/prov; each distinct player runs once, in order.
+Comma-separated player lists support provider/prov and notifications; each distinct player runs once, in order.
 Add a channel number, R/random or name to switch and play from the provider's complete All catalog.
 Use provider "Local videos" -- NAME to separate a multiword provider from a channel explicitly.
 An exact full channel name wins; otherwise a random partial-name match is selected. Playback wakes standby.
