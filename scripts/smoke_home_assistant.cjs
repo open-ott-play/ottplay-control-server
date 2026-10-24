@@ -42,6 +42,25 @@ const deviceToken = "b".repeat(32);
 const haToken = "local_fixture_ha_token_not_a_real_credential_123456789";
 const text = '<img src=x onerror="window.__haInjected=true"> Door opened';
 
+async function assertPlaintextBanner(banner, title, message) {
+    const titleNode = banner.locator(".remote-notify-title");
+    const messageNode = banner.locator(".remote-notify-message");
+    const [titles, messages] = await Promise.all([titleNode.count(), messageNode.count()]);
+    if (titles || messages) {
+        // Labeled banners add presentation text outside these payload fields.
+        assert.equal(titles, 1, "structured banner must have exactly one title");
+        assert.equal(messages, 1, "structured banner must have exactly one message");
+        assert.equal(await titleNode.textContent(), title);
+        assert.equal(await messageNode.textContent(), message);
+        assert.equal(await titleNode.locator(":scope > *").count(), 0, "title must remain a text node");
+        assert.equal(await messageNode.locator(":scope > *").count(), 0, "message must remain a text node");
+    } else {
+        // Earlier players rendered the same payload directly in the container.
+        assert.equal(await banner.textContent(), title + "\n" + message);
+    }
+    assert.equal(await banner.locator("img").count(), 0, "event text must never become HTML");
+}
+
 const fixtureSource = String.raw`package main
 
 import (
@@ -260,8 +279,7 @@ async function smoke() {
     await emit(text);
     const banner = page.locator(".remote-notify");
     await banner.waitFor({ state: "visible", timeout: 7500 });
-    assert.equal(await banner.textContent(), "Fixture home\n" + text);
-    assert.equal(await banner.locator("img").count(), 0, "event text must never become HTML");
+    await assertPlaintextBanner(banner, "Fixture home", text);
     assert.equal(await page.evaluate(() => window.__haInjected), undefined);
     console.log("PASS real HA authentication/subscription -> Go queue -> production player plaintext banner");
 
@@ -278,7 +296,7 @@ async function smoke() {
 
     await emit("Fresh event after wake");
     await banner.waitFor({ state: "visible", timeout: 7500 });
-    assert.equal(await banner.textContent(), "Fixture home\nFresh event after wake");
+    await assertPlaintextBanner(banner, "Fixture home", "Fresh event after wake");
     const cli = await execFile(process.env.PYTHON || "python3", [path.join(root, "cli/ott.py"), "-c", cliFile, "-t", "5", "-j", "ha", "status"], { cwd: root, timeout: 7000 });
     const report = JSON.parse(cli.stdout);
     assert.equal(report.bridge.state, "connected");
