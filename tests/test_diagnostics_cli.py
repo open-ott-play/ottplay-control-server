@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import tempfile
-import shutil
 import ssl
 import subprocess
 import threading
@@ -375,7 +374,6 @@ class DiagnosticsTests(unittest.TestCase):
                            "metrics": {"currentTime": 1.5, "paused": False}}}], next_seq=1)
         self.assertEqual(self.client(Opener(Response(data))).events("session")["events"], data["events"])
 
-    @unittest.skipUnless(shutil.which("openssl"), "local TLS fixture requires openssl")
     def test_real_tls_routes_verification_and_redirect_refusal(self):
         requests = []
 
@@ -408,13 +406,12 @@ class DiagnosticsTests(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(data)
 
-        with tempfile.TemporaryDirectory() as directory:
-            cert = str(Path(directory) / "cert.pem")
-            key = str(Path(directory) / "key.pem")
-            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                            "-days", "2", "-keyout", key, "-out", cert, "-subj", "/CN=localhost",
-                            "-addext", "subjectAltName=DNS:localhost"],
-                           check=True, capture_output=True, timeout=15)
+        # Public loopback-only credentials keep this real TLS check independent
+        # of external tools and random key-generation delays on slower runners.
+        fixture = Path(__file__).parent / "fixtures" / "tls"
+        cert = str(fixture / "localhost-cert.pem")
+        key = str(fixture / "localhost-key.pem")
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("TLS fixture must not spawn external tools")):
             server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -440,6 +437,12 @@ class DiagnosticsTests(unittest.TestCase):
                 with self.assertRaises(diag.DiagnosticError) as error:
                     redirect.runtimes("device")
                 self.assertEqual(error.exception.code, "redirect_refused")
+                self.assertEqual(len(requests), 7)
+                # A trusted certificate must still match the requested hostname.
+                with self.assertRaises(diag.DiagnosticError) as error:
+                    diag.DiagnosticsClient(base.replace("localhost", "127.0.0.1"), TOKEN,
+                                           opener=opener).runtimes("device")
+                self.assertEqual(error.exception.code, "transport_error")
                 self.assertEqual(len(requests), 7)
                 # Without the explicit synthetic CA the normal TLS verifier fails.
                 with self.assertRaises(diag.DiagnosticError) as error:
