@@ -93,7 +93,8 @@ function moduleOf(file, dependency, host) {
             return new Proxy({}, { get: () => unexpected });
         };
         const execute = moduleOf('commands/remote-requests', dependency, host).executeRemoteRequest;
-        const transport = moduleOf('plugins/command-server', () => wire, host);
+        const transport = moduleOf('plugins/command-server', name => name === './remote-notifications'
+            ? moduleOf('plugins/remote-notifications', unexpected, host) : wire, host);
         const send = (request, complete) => {
             const abort = new AbortController();
             fetch(request.url, { method: request.method, headers: request.headers, body: request.body, signal: abort.signal })

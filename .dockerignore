@@ -6,3 +6,7 @@
 !internal/
 !internal/**
 !Dockerfile
+!LICENSE
+!NOTICE
+!LICENSES/
+!LICENSES/**

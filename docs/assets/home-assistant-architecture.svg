@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title description">
+  <title id="title">Home Assistant to OTT-play: one connection, active screens</title>
+  <desc id="description">The controller authenticates to Home Assistant using a private token file. Explicit event rules produce short-lived notifications in separate device queues. Active players poll every five seconds. Standby and hidden players do not display or replay events. Administrator status reports queued and polled counts, not screen confirmation.</desc>
+  <defs>
+    <linearGradient id="header" x2="1" y2="1"><stop stop-color="#12304c"/><stop offset="1" stop-color="#174f65"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#39728a" stroke-width="2"/></marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill:#19364c; }
+      .title { font-size:32px; font-weight:700; fill:white; }
+      .subtitle { font-size:17px; fill:#d8eaf2; }
+      .kicker { font-size:13px; font-weight:700; letter-spacing:2px; fill:#547085; }
+      .heading { font-size:22px; font-weight:700; }
+      .body { font-size:17px; }
+      .small { font-size:15px; fill:#4b6475; }
+      .pill { font-size:13px; font-weight:700; }
+      .line { fill:none; stroke:#39728a; stroke-width:2.5; marker-end:url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1200" height="760" rx="20" fill="#f1f6fa"/>
+  <path d="M20 0H1180Q1200 0 1200 20V126H0V20Q0 0 20 0Z" fill="url(#header)"/>
+  <text x="44" y="55" class="title">Home events. Only on active screens.</text>
+  <text x="44" y="88" class="subtitle">One HA session · explicit rules · short-lived delivery · no playback commands</text>
+
+  <text x="44" y="171" class="kicker">EVENT SOURCE</text>
+  <rect x="40" y="192" width="275" height="205" rx="16" fill="white" stroke="#cadce7"/>
+  <circle cx="78" cy="232" r="19" fill="#dff4f5"/>
+  <path d="M67 235V226L78 218L89 226V240H67Z M75 240V230H81V240" fill="none" stroke="#147d85" stroke-width="2"/>
+  <text x="109" y="239" class="heading">Home Assistant</text>
+  <text x="60" y="281" class="body">Selected live event types</text>
+  <text x="60" y="314" class="small">• Household announcement</text>
+  <text x="60" y="341" class="small">• Exact entity state transition</text>
+  <text x="60" y="374" class="small">/api/websocket · WS / WSS</text>
+
+  <text x="387" y="171" class="kicker">CONTROLLER</text>
+  <rect x="382" y="192" width="387" height="355" rx="16" fill="white" stroke="#a8c8da" stroke-width="2"/>
+  <text x="407" y="237" class="heading">OTT-play remote server</text>
+  <rect x="406" y="256" width="337" height="62" rx="10" fill="#edf5fa"/>
+  <text x="422" y="281" class="body">Authenticate + subscribe</text>
+  <text x="422" y="303" class="small">Heartbeat · reconnect · token recovery</text>
+  <rect x="406" y="333" width="337" height="82" rx="10" fill="#e8f6f1"/>
+  <text x="422" y="359" class="body">Filter and format</text>
+  <text x="422" y="383" class="small">Entity / state · freshness · cooldown</text>
+  <text x="422" y="404" class="small">Plain text · fixed targets · bounded rate</text>
+  <rect x="406" y="430" width="337" height="91" rx="10" fill="#fff5e6"/>
+  <text x="422" y="457" class="body">Separate notification queues</text>
+  <text x="422" y="482" class="small">4 pending / device · TTL default 15 s</text>
+  <text x="422" y="505" class="small">Runtime-bound · active presence &lt;15 s</text>
+
+  <path d="M316 286H378" class="line"/>
+  <text x="322" y="262" class="small">events</text>
+  <rect x="40" y="431" width="275" height="116" rx="16" fill="#e6eef8" stroke="#c3d3e4"/>
+  <text x="60" y="465" class="heading" font-size="20">Private token file</text>
+  <text x="60" y="493" class="small">Read only by the controller</text>
+  <text x="60" y="520" class="small">Never copied to a player</text>
+  <path d="M316 481H345V301H378" class="line" stroke-dasharray="5 5"/>
+
+  <text x="846" y="171" class="kicker">CONNECTED PLAYERS</text>
+  <rect x="841" y="192" width="319" height="224" rx="16" fill="white" stroke="#afd5c8" stroke-width="2"/>
+  <rect x="863" y="214" width="118" height="27" rx="13" fill="#dff1e8"/>
+  <text x="878" y="233" class="pill" fill="#22634e">ACTIVE NOW</text>
+  <text x="863" y="277" class="heading">Visible, awake player</text>
+  <text x="863" y="310" class="body">Browser · LG · Tauri</text>
+  <text x="863" y="336" class="body">Capacitor Android / iOS</text>
+  <rect x="863" y="357" width="275" height="37" rx="8" fill="#173f54"/>
+  <text x="878" y="382" font-size="15" fill="white" style="fill:white">Home   Dinner is ready</text>
+  <path d="M770 471H806V304H837" class="line"/>
+  <text x="799" y="447" class="small" text-anchor="middle">5 s poll</text>
+  <rect x="841" y="443" width="319" height="104" rx="16" fill="#e9eef2" stroke="#c9d5dd"/>
+  <text x="863" y="478" class="heading" font-size="20">Standby / hidden / stale</text>
+  <text x="863" y="507" class="small">No banner · no wake · no replay</text>
+  <text x="863" y="530" class="small">New activity needs a new event</text>
+
+  <rect x="40" y="581" width="1120" height="130" rx="16" fill="white" stroke="#cbdce6"/>
+  <text x="61" y="617" class="heading">Observe each stage</text>
+  <text x="61" y="649" class="body">ott ha status   →   connection state · active players · queued / polled / skipped / dropped</text>
+  <text x="61" y="682" class="small">A queue counter proves server admission. A poll proves retrieval. Confirm the actual banner on the target screen.</text>
+</svg>

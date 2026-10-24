@@ -54,6 +54,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott report verify DIRECTORY [-j]   verify and re-evaluate saved evidence offline
   ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
+  ott ha status [-j]                 Home Assistant bridge and active banner recipients
   ott alias NAME UUID                name an existing device
   ott add NAME UUID                  create a device access code and queue
   ott pair NAME                      show the player connection settings
@@ -207,7 +208,7 @@ Signed channel offsets are nonzero whole numbers from -9007199254740991 to
 # Top-level commands take precedence over player names, including saved aliases.
 TOP_LEVEL_COMMANDS = frozenset((
     "add", "alias", "approve", "devices", "diagnostics", "discover", "handoff",
-    "help", "pair", "pending", "presets", "report", "resolve", "server",
+    "ha", "help", "pair", "pending", "presets", "report", "resolve", "server",
 ))
 
 
@@ -3294,8 +3295,79 @@ def server_debug_metadata(data):
     return data
 
 
+def home_assistant_metadata(raw):
+    """Project only public health fields; never print server configuration."""
+    invalid = "The controller returned invalid Home Assistant status"
+    if not isinstance(raw, dict) or type(raw.get("version")) is not int or raw["version"] != 1:
+        raise Error(invalid)
+    bridge = raw.get("bridge")
+    states = {"disabled", "connecting", "authenticating", "subscribing", "connected",
+              "reconnecting", "auth_failed", "token_error", "configuration_error", "stopped"}
+    if (not isinstance(bridge, dict) or type(bridge.get("enabled")) is not bool
+            or not isinstance(bridge.get("state"), str) or bridge["state"] not in states):
+        raise Error(invalid)
+    result = {"version": 1, "bridge": {"enabled": bridge["enabled"], "state": bridge["state"]}, "players": []}
+    count = lambda value: type(value) is int and 0 <= value <= 9007199254740991
+    for key in ("reconnects", "events_received", "events_matched", "notifications_queued", "notifications_skipped", "events_dropped"):
+        if key in bridge:
+            if not count(bridge[key]):
+                raise Error(invalid)
+            result["bridge"][key] = bridge[key]
+    errors = {"invalid_configuration", "token_file_unavailable", "authentication_rejected",
+              "authentication_protocol_error", "connection_failed", "connection_lost", "heartbeat_timeout",
+              "message_too_large", "subscription_protocol_error", "subscription_rejected"}
+    if bridge.get("last_error_code"):
+        if not isinstance(bridge["last_error_code"], str) or bridge["last_error_code"] not in errors:
+            raise Error(invalid)
+        result["bridge"]["last_error_code"] = bridge["last_error_code"]
+    if "delivery" in raw:
+        delivery = raw["delivery"]
+        if not isinstance(delivery, dict) or any(not count(delivery.get(key)) for key in ("queued", "polled", "skipped", "dropped")):
+            raise Error(invalid)
+        result["delivery"] = {key: delivery[key] for key in ("queued", "polled", "skipped", "dropped")}
+    players = raw.get("players")
+    if not isinstance(players, list) or len(players) > 64:
+        raise Error(invalid)
+    seen = set()
+    for player in players:
+        if (not isinstance(player, dict) or not isinstance(player.get("device_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", player["device_id"])
+                or player["device_id"] in seen or type(player.get("active")) is not bool
+                or not count(player.get("pending")) or player["pending"] > 4):
+            raise Error(invalid)
+        seen.add(player["device_id"])
+        result["players"].append({key: player[key] for key in ("device_id", "active", "pending")})
+    return result
+
+
 def management(client, config_path, words, json_output=False):
     verb = words[0].casefold()
+    if verb == "ha":
+        tail = [word for word in words[1:] if word not in ("-j", "--json")]
+        if len(tail) != 1 or tail[0].casefold() != "status":
+            raise Error("Use ott ha status [-j]")
+        try:
+            status, raw = client.api("/api/home-assistant/status")
+        except HTTPError as exc:
+            if exc.code in (404, 405):
+                raise Error("This controller does not support Home Assistant status; update the controller") from None
+            raise
+        if status != 200:
+            raise Error("The controller returned invalid Home Assistant status")
+        data = home_assistant_metadata(raw)
+        if json_output or any(word in ("-j", "--json") for word in words):
+            print(json.dumps(data, ensure_ascii=True, allow_nan=False, indent=2))
+        else:
+            print("Home Assistant: " + data["bridge"]["state"])
+            if "last_error_code" in data["bridge"]:
+                print("Reason: " + data["bridge"]["last_error_code"])
+            for player in data["players"]:
+                print(f"  {player['device_id']}: {'active' if player['active'] else 'inactive or not reporting'}; pending={player['pending']}")
+            if "delivery" in data:
+                delivery = data["delivery"]
+                print(f"Banners: queued={delivery['queued']}, polled={delivery['polled']}, skipped={delivery['skipped']}, dropped={delivery['dropped']}")
+            print("Queued/polled does not confirm that a banner was displayed.")
+        return True
     if verb == "server":
         tail = [word for word in words[1:] if word not in ("-j", "--json")]
         if len(tail) != 1 or tail[0].casefold() != "debug":

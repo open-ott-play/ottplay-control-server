@@ -18,6 +18,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOAMD64=v1 \
 FROM scratch
 COPY --from=build /out/ottplay-control-server /ottplay-control-server
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY LICENSE NOTICE /usr/share/licenses/ottplay-control-server/
+COPY LICENSES/ /usr/share/licenses/ottplay-control-server/third-party/
 USER 65532:65532
 EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=6s --start-period=5s --retries=3 CMD ["/ottplay-control-server", "healthcheck", "--url", "http://127.0.0.1:8081/healthz"]

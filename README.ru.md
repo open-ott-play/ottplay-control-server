@@ -8,6 +8,11 @@
 </p>
 <!-- language-navigation:end -->
 
+[События Home Assistant на активных плеерах](docs/home-assistant.ru.md): приватный
+long-lived токен, одно WebSocket-подключение контроллера, правила и YAML-примеры,
+Docker/Helm, `ott ha status`, SVG-схемы и устранение неполадок. Баннеры учитывают
+standby и видимость; постановка в очередь и получение не подтверждают показ.
+
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15562/badge)](https://www.bestpractices.dev/projects/15562)
 
 [![Fuzzing: RC only](https://img.shields.io/badge/Fuzzing-RC%20only-blue)](docs/fuzzing.md)

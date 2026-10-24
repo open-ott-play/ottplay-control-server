@@ -44,6 +44,61 @@ Plain GET without `delivery=ack` retains the legacy array response and removes d
 
 `GET /healthz` and `GET /readyz` require no token and expose only process readiness. They do not probe a TV or provider. `ottplay-control-server healthcheck --url http://127.0.0.1:8081/readyz` supplies the container probe without a shell or curl.
 
+## Home Assistant event banners
+
+The optional [Home Assistant bridge](home-assistant.md) has a separate,
+ephemeral notification channel. It does not enqueue playback commands or use
+the durable operation journal.
+
+`GET /api/home-assistant/status` accepts no query parameters. It requires the
+administrator credential or a command-operator credential allowed the `status`
+action. The
+JSON response contains `version: 1`, a credential-free `bridge` snapshot and
+`players` rows (`device_id`, `active`, `pending`, optional `last_poll_at`).
+Administrators additionally receive `delivery` counters: `queued`, `polled`,
+`skipped`, `dropped`. Operators receive only their allowed device rows and bridge
+fields `enabled`, `state`, optional `last_error_code`; global bridge and delivery
+counters are administrator-only. The administrator bridge snapshot reports `enabled`, `state`,
+optional `last_error_code`, `reconnects`, `events_received`, `events_matched`,
+`events_dropped`, `notifications_queued`, `notifications_skipped` and optional
+`last_event_at`. Counts reset on process restart and do not prove display.
+
+`GET /api/notifications?runtime=RUNTIME&active=true` uses the **device** token.
+An optional `device_id` must match that token's device. `runtime` is a 1–128
+character identifier using ASCII letters, digits, `_`, `.`, `:`, `-`; `active`
+must be exactly `true` or `false`. Unknown parameters are rejected. Only the
+updated player should poll this destructive-read endpoint; manually polling it
+can consume a real banner before the player receives it.
+
+The response has this shape (sample values, not a delivery receipt):
+
+```json
+{
+  "version": 1,
+  "server_time": 1792764000.0,
+  "poll_after_ms": 5000,
+  "notifications": [
+    {
+      "id": "0123456789abcdef0123456789abcdef",
+      "runtime": "example-runtime-1",
+      "title": "Home",
+      "message": "Dinner is ready",
+      "severity": "info",
+      "duration_ms": 5000,
+      "expires_at": 1792764010.0
+    }
+  ]
+}
+```
+
+Times are Unix seconds. Queues are bounded to four entries per device. Only a
+runtime that reported `active=true` within the preceding 15 seconds is eligible
+for enqueue. Presence expiration is applied **before** a poll refreshes it, so
+reconnecting cannot revive a stale queue. A different runtime or `active=false`
+clears pending entries. A successful poll removes returned items; there is no
+display ACK or redelivery guarantee. The player also checks its local activity,
+runtime and expiration before showing a banner. No notification wakes playback.
+
 ## Controller debug snapshot
 
 `GET /api/debug` uses the existing administrator token, origin rules and rate

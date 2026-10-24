@@ -27,9 +27,33 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
+- [Home Assistant connection and event delivery status](#home-assistant-event-status)
 - [Read-only doctor, inspect, debug, bundles and test scenarios](workbench.md)
 - [Verify saved reports offline](workbench.md#verify-saved-evidence-offline)
 - [Troubleshooting](#troubleshooting)
+
+## Home Assistant event status
+
+The optional [Home Assistant bridge](home-assistant.md) turns filtered HA events
+into banners on active players. Its status is controller-wide, so no player
+alias precedes `ha`:
+
+```sh
+ott ha status
+ott ha status -j
+```
+
+These read-only commands require a CLI and controller version containing the
+bridge. They use the administrator credential or a command-operator credential
+with the `status` action, show connection state and player activity, and never return the HA
+token or event text. Operators see only their authorized devices; global
+bridge and `delivery` counters are administrator-only. The JSON form projects known public
+fields; use the API reference for the complete endpoint response.
+
+`queued` means accepted into a temporary device queue; `polled` means fetched by
+a player. Neither proves a visible banner. Standby/hidden players are excluded,
+and old events are not replayed on wake. See the [setup examples, rules and
+troubleshooting](home-assistant.md), or the [Russian guide](home-assistant.ru.md).
 
 ## Installation and connection
 
