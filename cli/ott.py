@@ -63,7 +63,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott discover                       show controllers advertised in network DNS
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
-  ott NAME                           show player status and available controls
+  ott NAME                           show available controls, then a player summary
   ott NAME load PRESET               apply a private Plex, M3U and optional Stalker preset
   ott NAME load PRESET plan|apply|resume|verify [--checkpoint FILE]
                                      inspect or safely resume exact preset settings
@@ -3074,23 +3074,12 @@ def status_capabilities(client, device, data, deadline):
     return result
 
 
-def print_player_status(data, name):
-    print(json.dumps({key: value for key, value in data.items()
-                      if key not in ("capabilities", "capabilities_error")}, ensure_ascii=False, indent=2))
+def print_player_help(data, name):
     quoted_name = shlex.quote(clean(name))
     prefix = "ott " + quoted_name
-    player = data.get("player")
-    if isinstance(player, dict) and type(player.get("standby")) is bool:
-        background = player.get("background")
-        state = background["state"] if background else "not reported"
-        pending = background["pending"] if background else None
-        print("\nPlayer reports: standby " + ("on" if player["standby"] else "off") +
-              "; background " + state + "; pending " + (str(pending) if pending is not None else "unknown") + ".")
-        if player["standby"]:
-            print("Remote control stays connected. Host network activity is not measured here.")
     controls = data["capabilities"]
     if controls is None:
-        print("\n" + data["capabilities_error"])
+        print(data["capabilities_error"])
         print(f"Local diagnostic help: {prefix} test list")
         return
     lifecycle = {
@@ -3102,7 +3091,7 @@ def print_player_status(data, name):
         "exit_app": ("exit", "exit the app"),
         "reboot_device": ("reboot", "reboot the device OS"),
     }
-    print("\nAvailable controls now:")
+    print("Available controls now:")
     provider = data.get("provider")
     provider_commands = isinstance(provider, str) and bool(provider.strip())
     if provider_commands:
@@ -3120,7 +3109,7 @@ def print_player_status(data, name):
             if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):
                 print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
                 print(f"    Example: {prefix} profile 1  — select the first profile listed by profiles")
-            if provider == "m3u" and data.get("channels") == 0:
+            if provider == "m3u" and type(data.get("channels")) is int and data["channels"] == 0:
                 print("    No channels loaded: check the active profile with profiles; selecting M3U alone does not choose a profile.")
         offline = controls.get("offline_profiles", {}).get("operations", [])
         if provider == "offline":
@@ -3221,6 +3210,68 @@ def print_player_status(data, name):
             print(f"  {prefix} operation REQUEST_ID  — inspect a recent operation")
     print(f"Local diagnostic help: {prefix} test list")
     print(f"Request IDs: ott --receipt {quoted_name} COMMAND  — write RPC receipts to stderr")
+
+
+def status_text(value, pattern=None):
+    """Keep display names short and single-line; never render a URL as a title."""
+    if not isinstance(value, str) or not value or len(value) > 512:
+        return "Not reported"
+    if pattern is not None:
+        return value if re.fullmatch(pattern, value) else "Not reported"
+    if re.search(r"[a-z][a-z0-9+.-]*://|www\.|\b(?:token|password|authorization)=", value, re.I):
+        return "Not reported"
+    value = " ".join("".join(" " if unicodedata.category(char)[0] == "C" else char
+                             for char in value).split())
+    return (value[:157] + "..." if len(value) > 160 else value) or "Not reported"
+
+
+def print_player_summary(data, name):
+    """Project only known public status fields; catalog readiness is not playback."""
+    player = data.get("player") if isinstance(data.get("player"), dict) else {}
+    standby = player.get("standby")
+    state = "Standby" if standby is True else "Awake" if standby is False else "Connected (standby not reported)"
+    provider = status_text(data.get("provider"), r"[a-z0-9_-]{1,32}")
+    provider = {"m3u": "M3U", "vportal": "VPortal", "plex": "Plex", "stalker": "Stalker",
+                "offline": "Local videos (offline)"}.get(provider, provider)
+    volume = data.get("volume")
+    volume = f"{volume:g}%" if type(volume) in (int, float) and 0 <= volume <= 100 and math.isfinite(volume) else "Not reported"
+    channels = data.get("channels")
+    channels = str(channels) if type(channels) is int and 0 <= channels <= 2147483647 else "Not reported"
+    ready = data.get("ready")
+    catalog = "ready" if ready is True else "not ready" if ready is False else "readiness not reported"
+    background = player.get("background") if isinstance(player.get("background"), dict) else {}
+    activity = background.get("state")
+    if activity not in ("running", "suspending", "suspended", "unsupported", "error"):
+        activity = "Not reported"
+    pending = background.get("pending")
+    pending = str(pending) if type(pending) is int and 0 <= pending <= 2147483647 else "unknown"
+    kiosk = data.get("kiosk") if isinstance(data.get("kiosk"), dict) else {}
+    enabled = kiosk.get("enabled")
+    kiosk_state = ("On (strict)" if kiosk.get("strict") is True else "On") if enabled is True else "Off" if enabled is False else "Not reported"
+    rows = [
+        ("Player", status_text(name)),
+        ("Status", state),
+        ("Now playing", "Nothing (standby)" if standby is True else "Not reported"),
+        ("Provider", provider),
+        ("Volume", volume),
+        ("Channels", channels + " (catalog " + catalog + ")"),
+        ("Platform", status_text(player.get("platform"), r"[a-z0-9_-]{1,32}")),
+        ("Version", status_text(player.get("version"), r"[0-9][A-Za-z0-9_.+\-]{0,63}")),
+        ("Background", activity + " (" + pending + " pending)"),
+        ("Kiosk", kiosk_state),
+    ]
+    if enabled is True:
+        channel, media = kiosk.get("channel"), kiosk.get("media")
+        target = channel.get("name") if isinstance(channel, dict) else media.get("title") if isinstance(media, dict) else None
+        rows.append(("Kiosk target", status_text(target)))
+    print("\nPlayer summary:")
+    for label, value in rows:
+        print(f"  {label + ':':<14}{value}")
+
+
+def print_player_status(data, name):
+    print_player_help(data, name)
+    print_player_summary(data, name)
 
 
 def deferred_control_metadata(data, action, params):
