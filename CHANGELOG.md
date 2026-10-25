@@ -4,6 +4,10 @@
 
 ### Added
 
+- Negotiate capped Plex library queues with updated players. Libraries larger
+  than 500 items can start their first 500 items, with an explicit CLI warning;
+  shuffle applies to that selected set. Existing clients retain their previous
+  behavior, and incomplete or invalid library responses remain errors.
 - One persistent notification switch per player, controlled with
   `ott t1 notifications on|off|status` or an explicit group such as
   `ott t1,t2,t3,t4 notifications off`. The switch covers text and notification

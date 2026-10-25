@@ -56,6 +56,12 @@ func TestPlexLibrarySharedContract(t *testing.T) {
 			t.Fatalf("contract %s rejected", op)
 		}
 	}
+	request, _ := decodeObject(fixture["truncation_request"])
+	params, _ := decodeObject(request["params"])
+	bound := parsePlexLibraryRequest(params)
+	if bound == nil || !bound.AllowTruncate || bound.Op != "play" {
+		t.Fatal("truncation opt-in contract rejected")
+	}
 }
 
 func TestPlexLibraryRequestValidation(t *testing.T) {
@@ -68,8 +74,11 @@ func TestPlexLibraryRequestValidation(t *testing.T) {
 		`{` + base + `,"library_id":"` + strings.Repeat("1", 21) + `"}`,
 		`{` + base + `,"query":"A","library_id":"16"}`, `{` + base + `,"query":"A","shuffle":1}`,
 		`{` + base + `,"query":"A","shuffle":null}`, `{` + base + `,"query":"A","extra":true}`,
+		`{` + base + `,"query":"A","allow_truncate":false}`, `{` + base + `,"query":"A","allow_truncate":null}`,
+		`{` + base + `,"query":"A","allow_truncate":1}`, `{` + base + `,"query":"A","allow_truncate":"true"}`,
 		`{` + base + `,"query":"A","query":"B"}`,
 		`{"runtime":"page-123","op":"list","query":"A"}`, `{"runtime":"page-123","op":"list","shuffle":false}`,
+		`{"runtime":"page-123","op":"list","allow_truncate":true}`,
 		`{"runtime":"page_123","op":"list"}`, `{"runtime":"page-123","op":"search"}`,
 	} {
 		s := newTestServer(t)
@@ -79,10 +88,91 @@ func TestPlexLibraryRequestValidation(t *testing.T) {
 		}
 	}
 	for _, selector := range []string{`"query":"` + strings.Repeat("я", 128) + `"`, `"library_id":"` + strings.Repeat("1", 20) + `"`} {
-		for _, suffix := range []string{"", `,"shuffle":false`, `,"shuffle":true`} {
+		for _, suffix := range []string{"", `,"shuffle":false`, `,"shuffle":true`, `,"allow_truncate":true`, `,"shuffle":true,"allow_truncate":true`} {
 			s := newTestServer(t)
 			expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, `{"action":"plex_library","params":{`+base+`,`+selector+suffix+`}}`, nil), 202)
 		}
+	}
+}
+
+func TestPlexLibraryTruncationIsBoundToOptInAndFullQueue(t *testing.T) {
+	for _, op := range []string{"play", "preview"} {
+		t.Run(op, func(t *testing.T) {
+			value := plexLibraryFixture(op)
+			ids, titles := make([]string, maxPlexQueueItems), make([]string, maxPlexQueueItems)
+			for i := range ids {
+				ids[i], titles[i] = strconv.Itoa(i+1), "Item "+strconv.Itoa(i+1)
+			}
+			queue := value["queue"].(map[string]any)
+			queue["ids"] = ids
+			if op == "preview" {
+				queue["titles"] = titles
+			}
+			value["truncated"] = true
+			bound := &plexLibraryRequest{Runtime: "page-123", Op: op, Shuffle: true, AllowTruncate: true}
+			raw, _ := json.Marshal(value)
+			if !validPlexLibraryResult(raw, "ok", bound) {
+				t.Fatal("opted-in capped queue rejected")
+			}
+			bound.AllowTruncate = false
+			if validPlexLibraryResult(raw, "ok", bound) {
+				t.Fatal("unrequested capped queue accepted")
+			}
+			bound.AllowTruncate = true
+			for _, marker := range []any{false, nil, 0, 1, "true", map[string]any{}} {
+				value["truncated"] = marker
+				raw, _ = json.Marshal(value)
+				if validPlexLibraryResult(raw, "ok", bound) {
+					t.Fatal("non-true truncation marker accepted")
+				}
+			}
+			value["truncated"] = true
+			queue["ids"] = ids[:499]
+			if op == "preview" {
+				queue["titles"] = titles[:499]
+			}
+			raw, _ = json.Marshal(value)
+			if validPlexLibraryResult(raw, "ok", bound) {
+				t.Fatal("truncated queue below limit accepted")
+			}
+			delete(value, "truncated")
+			raw, _ = json.Marshal(value)
+			if !validPlexLibraryResult(raw, "ok", bound) {
+				t.Fatal("opt-in prevented a complete smaller queue")
+			}
+			bound.AllowTruncate = false
+			if !validPlexLibraryResult(raw, "ok", bound) {
+				t.Fatal("legacy smaller queue rejected")
+			}
+		})
+	}
+}
+
+func TestPlexLibraryOptInRoundTripPreservesTruncationMarker(t *testing.T) {
+	s := newTestServer(t)
+	id := rpcID(t, s, `{"action":"plex_library","params":{"runtime":"page-123","op":"play","query":"A","shuffle":true,"allow_truncate":true}}`)
+	if !s.devices[0].queue[0].plexLibrary.AllowTruncate {
+		t.Fatal("truncation consent was not bound to queued request")
+	}
+	value := plexLibraryFixture("play")
+	ids := make([]string, maxPlexQueueItems)
+	for i := range ids {
+		ids[i] = strconv.Itoa(i + 1)
+	}
+	value["queue"].(map[string]any)["ids"] = ids
+	value["truncated"] = true
+	body := screenshotEnvelope(id, "ok", value)
+	expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
+	got := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+	expect(t, got, 200)
+	if got.Body.String() != body {
+		t.Fatal("truncation receipt changed")
+	}
+	s = newTestServer(t)
+	id = rpcID(t, s, `{"action":"plex_library","params":{"runtime":"page-123","op":"play","query":"A","shuffle":true}}`)
+	expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, "ok", value), nil), 400)
+	if len(s.devices[0].queue) != 1 || s.resultBytes != 0 {
+		t.Fatal("unrequested truncated result consumed or stored legacy request")
 	}
 }
 

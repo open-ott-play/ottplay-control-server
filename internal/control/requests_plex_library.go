@@ -14,10 +14,11 @@ var plexLibraryErrors = map[string]bool{
 }
 
 type plexLibraryRequest struct {
-	Runtime   string
-	Op        string
-	LibraryID string
-	Shuffle   bool
+	Runtime       string
+	Op            string
+	LibraryID     string
+	Shuffle       bool
+	AllowTruncate bool
 }
 
 func parsePlexLibraryRequest(params map[string]json.RawMessage) *plexLibraryRequest {
@@ -42,6 +43,14 @@ func parsePlexLibraryRequest(params map[string]json.RawMessage) *plexLibraryRequ
 			return nil
 		}
 		v.Shuffle = *shuffle
+		count--
+	}
+	if raw, exists := params["allow_truncate"]; exists {
+		var allowed *bool
+		if json.Unmarshal(raw, &allowed) != nil || allowed == nil || !*allowed {
+			return nil
+		}
+		v.AllowTruncate = true
 		count--
 	}
 	if count != 3 {
@@ -106,7 +115,17 @@ func validPlexLibraryResult(raw json.RawMessage, status string, request *plexLib
 	}
 	id, valid := plexLibraryID(m["library"])
 	var shuffled *bool
-	if len(m) != 7 || !valid || (request.LibraryID != "" && request.LibraryID != id) ||
+	expectedFields := 7
+	truncated := false
+	if raw, exists := m["truncated"]; exists {
+		var value *bool
+		if !request.AllowTruncate || json.Unmarshal(raw, &value) != nil || value == nil || !*value {
+			return false
+		}
+		truncated = true
+		expectedFields++
+	}
+	if len(m) != expectedFields || !valid || (request.LibraryID != "" && request.LibraryID != id) ||
 		json.Unmarshal(m["shuffled"], &shuffled) != nil || shuffled == nil || *shuffled != request.Shuffle {
 		return false
 	}
@@ -115,7 +134,7 @@ func validPlexLibraryResult(raw json.RawMessage, status string, request *plexLib
 		return false
 	}
 	ids, valid := plexQueueIDs(queue["ids"], 1)
-	if !valid {
+	if !valid || (truncated && len(ids) != maxPlexQueueItems) {
 		return false
 	}
 	// Discovery establishes these IDs inside the player, rather than trusting a
