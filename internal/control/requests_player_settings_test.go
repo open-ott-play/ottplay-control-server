@@ -51,6 +51,22 @@ func TestPlayerSettingsFixtureBoundResults(t *testing.T) {
 	}
 }
 
+func TestPlayerSettingsRegisteredProviderContextIDs(t *testing.T) {
+	fixture := playerSettingsFixture(t)
+	for key, valid := range map[string]bool{"valid_provider_ids": true, "invalid_provider_ids": false} {
+		var providers []any
+		if err := json.Unmarshal(fixture[key], &providers); err != nil {
+			t.Fatal(err)
+		}
+		for _, provider := range providers {
+			body, _ := json.Marshal(map[string]any{"token": "context-1", "provider": provider, "profile": 1})
+			if got := validSettingContext(body, "context-1"); got != valid {
+				t.Fatalf("provider %v: accepted=%v, want %v", provider, got, valid)
+			}
+		}
+	}
+}
+
 func TestPlayerSettingsRejectMalformedRequests(t *testing.T) {
 	for _, params := range []string{
 		`{}`, `{"op":"get","runtime":"page-123","id":"bufSize","extra":1}`,

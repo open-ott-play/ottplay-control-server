@@ -236,5 +236,24 @@
       "state": "deferred",
       "reason": "automatic_buffer"
     }
+  ],
+  "valid_provider_ids": [
+    "m3u",
+    "bestlist/stalker",
+    "d/maxtv",
+    "iptv-ott.ru",
+    "shara.club"
+  ],
+  "invalid_provider_ids": [
+    "",
+    "/m3u",
+    "m3u/",
+    "a//b",
+    "a/../b",
+    "a..b",
+    "UPPER",
+    "a b",
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    42
   ]
 }

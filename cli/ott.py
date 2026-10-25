@@ -113,7 +113,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME plex play ID [ID ...]     play IDs in order from the start; stop after the last
   ott NAME plex play --shuffle ID...  shuffle all IDs once; kiosk on repeats that order
   ott NAME plex libraries            list movie/show libraries from the player's Plex server
-  ott NAME plex shuffle NAME         play an entire Plex library in a new shuffled order
+  ott NAME plex shuffle NAME         shuffle up to 500 library items; warn if the library is larger
   ott NAME plex library [--shuffle] [--preview] NAME  play or preview a library (or id:16)
   ott NAME plex queue / status       show the Plex queue without changing it
   ott NAME plex next / prev / stop   move within or clear the Plex queue (no wrapping)
@@ -3332,7 +3332,7 @@ def print_player_help(data, name):
     if "list" in libraries:
         print(f"  {prefix} plex libraries  — list movie/show libraries on the player's Plex server")
     if "play" in libraries:
-        print(f'  {prefix} plex shuffle "NAME" / plex library "NAME"  — play a whole library (or id:NUMBER)')
+        print(f'  {prefix} plex shuffle "NAME" / plex library "NAME"  — play up to 500 library items (or id:NUMBER)')
     if "preview" in libraries:
         print(f'  {prefix} plex library --preview "NAME"  — check a whole library without playing')
     categories = controls.get("categories", {}).get("operations", [])

@@ -157,6 +157,17 @@ class PlayerSettingsCliTests(unittest.TestCase):
             with self.assertRaises(ott.Error):
                 settings.metadata(ott,write,FIXTURE['requests']['set'],FIXTURE['descriptor'])
 
+    def test_registered_provider_context_ids_use_shared_corpus(self):
+        for valid, key in [(True, 'valid_provider_ids'), (False, 'invalid_provider_ids')]:
+            for provider in FIXTURE[key]:
+                response = result('get')
+                response['context']['provider'] = provider
+                if valid:
+                    self.assertEqual(settings.metadata(ott, response, FIXTURE['requests']['get']), response)
+                else:
+                    with self.assertRaises(ott.Error, msg=repr(provider)):
+                        settings.metadata(ott, response, FIXTURE['requests']['get'])
+
     def test_nonsecret_redaction_and_missing_stored_values_are_invalid(self):
         for operation in ['get','set']:
             response = result(operation)

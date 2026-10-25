@@ -13,7 +13,7 @@ const maxPlayerSettingsBytes = 64 * 1024
 var settingID = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 var settingAlias = regexp.MustCompile(`^[A-Za-z0-9_.+\-]{1,64}$`)
 var settingToken = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
-var settingProvider = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
+var settingProvider = regexp.MustCompile(`^[a-z0-9][a-z0-9_./-]{0,31}$`)
 var settingReasons = []string{"invalid_request", "unknown_setting", "invalid_value", "runtime_changed", "source_changed", "revision_conflict", "policy_restricted", "local_only", "unsupported", "storage_failed", "effect_failed"}
 
 type playerSettingsRequest struct {
@@ -138,8 +138,14 @@ func validSettingContext(raw json.RawMessage, expected string) bool {
 	m, err := decodeObject(raw)
 	return err == nil && settingKeys(m, []string{"token", "provider", "profile"}, nil) &&
 		settingPattern(m["token"], settingToken) && (expected == "" || settingString(m["token"]) == expected) &&
-		(settingNull(m["provider"]) || settingPattern(m["provider"], settingProvider)) &&
+		(settingNull(m["provider"]) || validSettingProvider(m["provider"])) &&
 		(settingNull(m["profile"]) || profileInteger(m["profile"], 1, 15))
+}
+
+func validSettingProvider(raw json.RawMessage) bool {
+	value := settingString(raw)
+	return settingProvider.MatchString(value) && !strings.Contains(value, "..") &&
+		!strings.Contains(value, "//") && !strings.HasSuffix(value, "/")
 }
 
 func validSettingDescriptor(raw json.RawMessage) bool {

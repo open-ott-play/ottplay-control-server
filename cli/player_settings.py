@@ -31,6 +31,12 @@ def pattern(value, regex):
     return isinstance(value, str) and re.fullmatch(regex, value) is not None
 
 
+def provider_id(value):
+    # Registered IDs are labels, including named providers and family/name IDs.
+    return (pattern(value, r"[a-z0-9][a-z0-9_./-]{0,31}")
+            and ".." not in value and "//" not in value and not value.endswith("/"))
+
+
 def text(value, maximum):
     try:
         return (isinstance(value, str) and len(value.encode("utf-8")) <= maximum
@@ -146,7 +152,7 @@ def _metadata(api, data, request, descriptor=None, rejected=False):
         return data
     context = data.get("context")
     if (not keys(context, ("token", "provider", "profile")) or not pattern(context["token"], TOKEN)
-            or (context["provider"] is not None and not pattern(context["provider"], r"[a-z0-9_-]{1,32}"))
+            or (context["provider"] is not None and not provider_id(context["provider"]))
             or (context["profile"] is not None and (type(context["profile"]) is not int or not 1 <= context["profile"] <= 15))
             or ("context" in request and context["token"] != request["context"])):
         raise api.Error(invalid)
