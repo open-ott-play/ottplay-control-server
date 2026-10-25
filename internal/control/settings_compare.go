@@ -13,6 +13,8 @@ func validSettingsCompare(p map[string]json.RawMessage) bool {
 		return false
 	}
 	switch provider {
+	case "vportal":
+		return parseVPortalSettingsRequest("settings_compare", p) != nil
 	case "m3u":
 		return len(p) == 3 && len(s) == 3 && profileInteger(p["number"], 1, 15) &&
 			profileText(s["name"], 256) && profileText(s["playlist"], 8192) &&

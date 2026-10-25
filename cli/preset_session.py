@@ -22,9 +22,13 @@ def comparisons(preset):
     for row in preset.get("stalker", []):
         yield "stalker_" + str(row["profile"]), {"provider": "stalker", "number": row["profile"],
             "settings": {k: row[k] for k in ("name", "server", "mac")}}
+    for row in preset.get("vportal", []):
+        yield "vportal_" + str(row["number"]), {"provider": "vportal", **row}
 
 
 def compare(api, client, device, params):
+    if params["provider"] == "vportal":
+        return api.vportal_compare(client, device, params)["matched"]
     result = client.call(device, "settings_compare", params)
     if (not isinstance(result, dict) or result.get("provider") != params["provider"]
             or result.get("number") != params.get("number") or type(result.get("matched")) is not bool):

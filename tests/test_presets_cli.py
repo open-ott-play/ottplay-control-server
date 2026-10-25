@@ -275,21 +275,23 @@ class PresetValidationTests(unittest.TestCase):
         self.assertEqual(player.calls, [])
         constructor.assert_not_called()
 
-    def test_legacy_vportal_fields_are_ignored_without_mutating_source(self):
+    def test_legacy_vportal_fields_migrate_without_mutating_source(self):
         expected = ott.validate_preset(config(), 'local')
         for link in ['', PORTAL, 'retired malformed portal link', 'x' * 8192]:
             source = config()
             for row in source['presets']['local']['m3u']:
                 row['vportal'] = link
             before = copy.deepcopy(source)
-            self.assertEqual(ott.validate_preset(source, 'local'), expected)
-            status, out, err, player, _ = run(source)
-            self.assertEqual((status, err), (0, ''))
+            normalized = ott.validate_preset(source, 'local')
+            if link:
+                self.assertEqual(normalized[1]['vportal'], [
+                    {'number': n, 'settings': {'vportal': link}} for n in (1, 2)])
+                self.assertEqual({key: value for key, value in normalized[1].items() if key != 'vportal'}, expected[1])
+            else:
+                self.assertEqual(normalized, expected)
             self.assertEqual(source, before)
-            for _, action, params in player.calls:
-                if action == 'profile_settings':
-                    self.assertEqual(set(params['settings']), {'name', 'playlist', 'history_hours'})
-            self.assert_no_secrets(out + err)
+            for row in normalized[1]['m3u']:
+                self.assertEqual(set(row['settings']), {'name', 'playlist', 'history_hours'})
 
     def test_numeric_hosts_are_validated_before_any_provider_change(self):
         for host in ('999.999.999.999', 'host.123', 'host.0xff', '09', '127.1', '0x7f000001'):

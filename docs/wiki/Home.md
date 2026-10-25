@@ -13,6 +13,7 @@ editing it does not automatically publish GitHub Wiki pages.
 
 - [Start and connect a player](../../README.md)
 - [Terminal CLI: installation and command reference](../cli.md)
+- [Typed settings, source-bound saves and VPortal preset migration](../player-settings.md)
 - [Home Assistant: active-player banners, token setup and recovery](../home-assistant.md)
 - [Reliable control: journal, Local/Home resume, exact verification and handoff](../reliable-control.md)
 - [Wire/API contract](../api.md)
