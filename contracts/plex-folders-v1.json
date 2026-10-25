@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "capability": {
+    "version": 1,
+    "setting_id": "plexFolderPaths",
+    "operations": [
+      "list",
+      "add",
+      "remove",
+      "clear"
+    ],
+    "max_page_size": 10,
+    "max_items": 1000
+  },
+  "context": {
+    "token": "context-1",
+    "provider": "plex",
+    "profile": null
+  },
+  "path_pattern": "^/library/(?:sections/[1-9][0-9]{0,19}/(?:all(?:\\?type=(?:[134]|10))?|folder(?:\\?parent=[0-9]{1,20})?)|metadata/[1-9][0-9]{0,19}/children)$",
+  "limits": {
+    "request_bytes": 16384,
+    "response_bytes": 65536,
+    "title_utf8_bytes": 4096,
+    "title_utf16_units": 1024,
+    "max_items": 1000,
+    "max_page_size": 10
+  },
+  "requests": {
+    "list": {
+      "op": "list",
+      "runtime": "page-123",
+      "limit": 10
+    },
+    "next": {
+      "op": "list",
+      "runtime": "page-123",
+      "limit": 10,
+      "cursor": "cursor-1"
+    },
+    "add": {
+      "runtime": "page-123",
+      "context": "context-1",
+      "revision": "revision-1",
+      "op": "add",
+      "path": "/library/sections/16/all",
+      "title": "Children's films"
+    },
+    "remove": {
+      "runtime": "page-123",
+      "context": "context-1",
+      "revision": "revision-1",
+      "op": "remove",
+      "path": "/library/sections/16/all"
+    },
+    "clear": {
+      "runtime": "page-123",
+      "context": "context-1",
+      "revision": "revision-1",
+      "op": "clear"
+    }
+  },
+  "responses": {
+    "list": {
+      "version": 1,
+      "op": "list",
+      "runtime": "page-123",
+      "context": {
+        "token": "context-1",
+        "provider": "plex",
+        "profile": null
+      },
+      "revision": "revision-1",
+      "items": [
+        {
+          "path": "/library/sections/16/all",
+          "title": "Children's films"
+        }
+      ],
+      "total": 1,
+      "max_items": 1000,
+      "next_cursor": null
+    },
+    "add": {
+      "version": 1,
+      "op": "add",
+      "runtime": "page-123",
+      "context": {
+        "token": "context-1",
+        "provider": "plex",
+        "profile": null
+      },
+      "revision": "revision-2",
+      "changed": true,
+      "persisted": true,
+      "total": 1,
+      "application": {
+        "state": "deferred",
+        "reason": "next_catalogue"
+      }
+    },
+    "remove": {
+      "version": 1,
+      "op": "remove",
+      "runtime": "page-123",
+      "context": {
+        "token": "context-1",
+        "provider": "plex",
+        "profile": null
+      },
+      "revision": "revision-2",
+      "changed": true,
+      "persisted": true,
+      "total": 0,
+      "application": {
+        "state": "deferred",
+        "reason": "next_catalogue"
+      }
+    },
+    "clear": {
+      "version": 1,
+      "op": "clear",
+      "runtime": "page-123",
+      "context": {
+        "token": "context-1",
+        "provider": "plex",
+        "profile": null
+      },
+      "revision": "revision-2",
+      "changed": true,
+      "persisted": true,
+      "total": 0,
+      "application": {
+        "state": "deferred",
+        "reason": "next_catalogue"
+      }
+    },
+    "error": {
+      "version": 1,
+      "op": "add",
+      "runtime": "page-123",
+      "error": "The Plex folder request could not be completed.",
+      "reason": "revision_conflict"
+    }
+  },
+  "errors": [
+    "invalid_request",
+    "invalid_value",
+    "runtime_changed",
+    "source_changed",
+    "revision_conflict",
+    "policy_restricted",
+    "unsupported",
+    "storage_failed",
+    "capacity_exceeded"
+  ],
+  "semantics": {
+    "empty_selection": "all libraries",
+    "add_existing": "unchanged; preserve existing title",
+    "remove_absent": "unchanged",
+    "pagination": "one context, revision and total for the whole saved snapshot",
+    "writes": "no implicit provider change, wake, playback or automatic retry"
+  },
+  "application_matrix": {
+    "deferred": [
+      "next_catalogue"
+    ],
+    "failed": [
+      "effect_failed"
+    ]
+  }
+}

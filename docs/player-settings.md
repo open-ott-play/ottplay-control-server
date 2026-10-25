@@ -81,11 +81,16 @@ discovery, reading and saving. The CLI never refreshes a revision and retries a
 failed write automatically.
 
 Success requires verified persistence. Application is separate: `completed`
-has no reason; `deferred` names `next_stream` or `manual`; `failed` names
+has no reason; `deferred` names `next_stream`, `manual`, or `after_ack`; `failed` names
 `effect_failed`. A saved value whose application failed is printed as saved
 with a failure and exits nonzero. After an uncertain response, read `setting KEY`
 before deciding whether another change is needed. A queued/accepted transport
 receipt is not proof of a save.
+
+`after_ack` means the desired value is saved and its runtime transition is
+scheduled after the response reaches the controller. It does not claim that a
+connection restart has already completed. Read the setting/transition status
+afterward to verify the active configuration.
 
 Scoped operators need `capabilities` and exact permissions
 `player_settings.schema`, `player_settings.get`, and, for writers,
@@ -94,6 +99,108 @@ and read-only operator permissions are not widened. The operation journal
 contains a digest and outcome, never setting values. Diagnostic operation
 evidence contains action/status, not request values. Direct authorized
 nonsecret reads remain available; diagnostic exports are not settings backups.
+
+## Change a connection as one transaction
+
+Use `player_settings_patch` version 1 for related connection fields. Inspect the
+saved group without revealing addresses or credentials:
+
+```sh
+ott d1 settings patch command_server
+ott -j d1 settings patch local_http
+```
+
+A private JSON file contains **only the fields to change**. `command_server`
+accepts `commandServerAddress`, `commandServerToken`, and integer
+`commandServerEnabled` (0 or 1). `local_http` accepts `localCmdUrl`,
+`localHttpDeviceCode`, and integer `localHttpEnabled` (0 or 1). At least one field
+is required. The remaining fields come from the captured group revision.
+Do not pass tokens as command-line arguments.
+
+For example, create `/absolute/private/connection.json` with mode 600:
+
+```json
+{
+  "commandServerAddress": "https://control.example/api/webhook/commands?device_id=YOUR_DEVICE_ID",
+  "commandServerToken": "YOUR_DEVICE_TOKEN",
+  "commandServerEnabled": 1
+}
+```
+
+Then save the tuple:
+
+```sh
+ott -t 45 d1 settings patch command_server --value-file /absolute/private/connection.json
+ott d1 settings patch command_server
+```
+
+The file and complete request must each fit within 16 KiB. URLs are bounded to
+4096 UTF-8 bytes and credentials to 256. Duplicate JSON keys, mixed-group fields,
+booleans in integer toggles, and unrecognized fields are rejected before sending
+any request. The CLI discovers support, reads the complete group, and sends at
+most one conditional write under one timeout. All three fields share the source
+context and revision. Local edits invalidate the snapshot.
+
+A changed tuple is persisted and read back before the acknowledgement. Its
+initial state is `pending`, with application `deferred/after_ack`; this confirms
+saving, **not a working new connection**. After acknowledgement, the player uses
+the normal connection owner to test the new tuple. A bounded failed handshake
+restores the previous tuple if that transition still owns the fields. A newer
+local edit is never overwritten by an older rollback. A private recovery journal
+also handles an interrupted transition on player restart. An unchanged tuple
+reports `applied` without reconnecting. Disabling the active control connection
+intentionally disconnects it; subsequent status must use a remaining connection
+or local UI.
+
+Read the group again through the active controller to see `idle`, `pending`,
+`applied`, `rolled_back`, or `failed`. Failed outcomes include bounded reasons
+such as `handshake_timeout`, `authorization_failed`, `network_error`,
+`storage_failed`, or `ack_timeout`. A timeout or lost response is not permission
+to replay the write automatically. Verify the saved group on the old/new
+controller or locally before retrying. Changing an address or token individually
+while its connection is enabled returns `atomic_patch_required` with guidance
+to this workflow.
+
+Scoped operators need `capabilities` and `player_settings_patch.get`; add
+`player_settings_patch.set` only for writers. Secrets are redacted in both plain
+text and JSON output. Existing player settings policies apply.
+
+## Plex folder selection
+
+When `plex_folders` is advertised and Plex is the current provider, `settings`
+also lists `plexFolderPaths` as a collection. It has a dedicated paginated API
+so all **1000 supported folder roots** remain editable without enlarging scalar
+setting requests. This is independent of the **500-item playback queue limit**.
+
+```sh
+ott d1 provider plex
+ott d1 plex libraries
+ott d1 setting plexFolderPaths
+ott -j d1 setting plexFolderPaths list
+ott d1 setting plexFolderPaths add /library/sections/16/all "Children's films"
+ott d1 setting plexFolderPaths remove /library/sections/16/all
+ott d1 setting plexFolderPaths clear
+```
+
+Use the library ID shown by `plex libraries` in `/library/sections/ID/all`.
+Canonical Plex folder roots and metadata children paths are also accepted;
+filesystem paths and arbitrary URLs are not. Adding an existing path preserves
+its title. Removing an absent path changes nothing. **An empty selection,
+including `clear`, means all libraries**, matching the player UI.
+
+Reads collect pages of at most 10 rows, with one context, revision and total for
+the entire saved snapshot. A changed snapshot or duplicate/incomplete page
+fails instead of returning a partial selection. Each edit first captures a
+revision and then sends one conditional operation. The player verifies saved
+bytes before invalidating the catalogue. The saved selection applies on the
+next catalogue load; the operation does not switch providers, wake playback or
+start a new stream. A full selection refuses an additional new path; removal
+and clearing remain available. After a timeout, read the collection before
+retrying an edit.
+
+Scoped operators need `plex_folders.list` to read the selection and the exact
+`plex_folders.add`, `.remove` or `.clear` permission for each intended edit,
+along with `capabilities`. Existing read-only/HA scopes are not expanded.
 
 ## Independent VPortal configuration
 
@@ -160,7 +267,7 @@ every object visible in Settings. Other configuration uses explicit workflows:
 | Plex server/token | `plex setup`, `plex server`, `plex token-file`; `provider-config FILE` |
 | Xtream, Stalker, OTTClub configuration | Existing `provider-config FILE` for a selected, supported driver |
 | Local video source grants and portable profiles | Local OS/browser picker; `profile save/load/export/import` |
-| Plex folder selection and driver-specific catalogs | Existing provider UI unless separately advertised |
+| Plex folder selection | `setting plexFolderPaths [list\|add PATH TITLE\|remove PATH\|clear]` when advertised |
 | Kiosk, lifecycle, notifications | `kiosk`, `standby`, `go`, `restart`, `notifications on/off` |
 | Remote connection, pairing, native permissions, identity | Existing connection/pairing/native workflow; schema reports generic access restrictions |
 
