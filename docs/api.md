@@ -276,6 +276,23 @@ limits and the application state/reason matrix. The
 [settings guide](player-settings.md) explains scopes, conflicts, CLI examples
 and settings outside this registry.
 
+Capability `plex_folders` version 1 adds `list`, `add`, `remove`, and `clear`
+operations for the `plexFolderPaths` collection. Lists use consistent pages of
+at most 10 entries, with up to 1000 canonical Plex roots in a saved selection.
+Writes require runtime, context, and revision; the result distinguishes verified
+persistence from catalogue application. Empty selection means all libraries.
+See the [folder contract](../contracts/plex-folders-v1.json).
+
+Capability `player_settings_patch` version 1 adds `get` and `set` for the finite
+`command_server` and `local_http` groups. All three fields share one revision;
+`set.values` contains one to three group fields. Sensitive snapshots report only
+presence. A changed tuple returns `deferred/after_ack` with transition `pending`;
+an unchanged tuple returns `completed` with transition `applied`. Subsequent
+reads can report a bounded failure or rollback reason. Results remain at most
+64 KiB. The [group contract](../contracts/player-settings-patch-v1.json) defines
+the exact field, storage, and transition rules. See the
+[connection workflow](player-settings.md#change-a-connection-as-one-transaction).
+
 `profiles` accepts exactly `{}`. For the active M3U provider it returns
 `{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured}]}`:
 exactly 15 ordered slots numbered 1–15, with one active slot. History is an

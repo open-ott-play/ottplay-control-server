@@ -152,7 +152,9 @@ Actions name the exact RPC, for example `status`, `profiles`, `settings_compare`
 or `profile_settings`. RPCs with sub-operations require the exact operation:
 `input.channel_up`, `playback.next_channel`, `aspect.get`, `favorites.list`,
 `kiosk.status`, `app_update.status`, `notifications.get`, `notifications.set`,
-`player_settings.schema`, `player_settings.get`, `player_settings.set`
+`player_settings.schema`, `player_settings.get`, `player_settings.set`,
+`player_settings_patch.get`, `player_settings_patch.set`,
+`plex_folders.list`, `plex_folders.add`, `plex_folders.remove`, `plex_folders.clear`
 or `command.set_volume`. No wildcards or
 family-wide `input`/`command` grant is accepted. The supported allowlist is in
 `internal/config/operators.go`. A `provider_settings` grant permits its validated
