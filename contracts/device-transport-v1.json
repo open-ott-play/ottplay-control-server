@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "endpoint": "/api/device-transport",
+  "method": "POST",
+  "max_envelope_bytes": 2105344,
+  "max_path_bytes": 2048,
+  "small_envelope_bytes": 65536,
+  "small_concurrency": 16,
+  "large_concurrency": 1,
+  "response": "original HTTP status, headers and body",
+  "valid": [
+    {"version":1,"method":"GET","path":"/api/discovery"},
+    {"version":1,"method":"POST","path":"/api/pairings","body":{"device_id":"first"}},
+    {"version":1,"method":"GET","path":"/api/webhook/commands?delivery=ack","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    {"version":1,"method":"POST","path":"/api/webhook/commands/ack","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","body":{"ids":[]}},
+    {"version":1,"method":"POST","path":"/api/v2/diagnostics/runtimes","body":{},"headers":{"X-OTT-Diagnostics-Epoch":"epoch"}}
+  ],
+  "invalid": [
+    {"version":1,"method":"GET","path":"/api/webhook/commands","token":null},
+    {"version":1,"method":"GET","path":"/api/webhook/commands","token":""},
+    {"version":1,"method":"GET","path":"/api/pairings"},
+    {"version":1,"method":"POST","path":"/api/pairings/approve","body":{}},
+    {"version":1,"method":"POST","path":"/api/webhook/commands","body":{}},
+    {"version":1,"method":"POST","path":"/api/responses","body":"{}"},
+    {"version":1,"method":"GET","path":"https://controller.example/api/webhook/commands"},
+    {"version":1,"method":"GET","path":"/api/webhook/commands/"},
+    {"version":1,"method":"POST","path":"/api/v2/diagnostics/poll","body":{},"headers":{"Origin":"null"}}
+  ]
+}

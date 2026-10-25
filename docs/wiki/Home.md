@@ -16,6 +16,7 @@ editing it does not automatically publish GitHub Wiki pages.
 - [Home Assistant: active-player banners, token setup and recovery](../home-assistant.md)
 - [Reliable control: journal, Local/Home resume, exact verification and handoff](../reliable-control.md)
 - [Wire/API contract](../api.md)
+- [Hosted device transport](../device-transport.md)
 - [Authentication, operator scopes and transport security](../security-design.md)
 - [Runtime diagnostics](../remote-diagnostics.md)
 - [Shared Android USB manager: installation, recovery and migration](../android-usb-manager.md)

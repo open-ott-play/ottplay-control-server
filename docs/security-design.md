@@ -4,6 +4,13 @@
 
 The project provides a Go command queue, diagnostics service and CLI for OTT-play players.
 
+[Hosted device transport](device-transport.md) accepts a bounded JSON envelope
+and dispatches only exact device/bootstrap routes inside the same process. It
+does not proxy arbitrary URLs or expose administrator/operator routes. Tokens
+in these request bodies are private: logging infrastructure must not record
+them. Original route authentication, CORS, response schemas and logical limits
+remain in force, with separate bounded ingress and small/large request slots.
+
 An administrator token authorizes command submission; each device has a distinct token. Configuration, pairing data, diagnostic captures and command payloads may contain secrets. Keep credentials separate and rotate exposed values. The default all-interface listener is reachable on the LAN; terminate verified HTTPS before crossing an untrusted network. Legacy plaintext HTTP does not protect credentials or commands.
 
 ## Direct HTTPS certificate policy

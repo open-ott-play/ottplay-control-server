@@ -902,6 +902,12 @@ Programme results use one `as_of` Unix-seconds timestamp captured at collection 
 
 ## Opt-in DNS-SD discovery and pairing
 
+Hosted clients may carry the device-side routes through
+[`POST /api/device-transport`](device-transport.md). Its fixed allowlist includes
+public discovery, pairing creation and claim/cancel; administrator listing and
+approval remain available only on their original routes. The same transport
+also supports device commands/results, notifications/media and runtime diagnostics.
+
 These routes return 404 unless the optional `discovery` configuration is present.
 The following configuration and response examples use illustrative addresses;
 replace them with your network domain, resolver and controller URL:

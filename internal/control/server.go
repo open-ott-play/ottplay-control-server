@@ -84,6 +84,9 @@ type Server struct {
 	resultBytes            int
 	lastTS                 float64
 	globalRate, adminRate  bucket
+	transportRate          bucket
+	transportSlots         chan struct{}
+	transportLarge         chan struct{}
 	now                    func() time.Time
 	discovery              *discovery
 	pairings               map[string]*pairing
@@ -100,7 +103,7 @@ func New(c config.Config) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	s := &Server{started: time.Now(), admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now}
+	s := &Server{started: time.Now(), admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now, transportSlots: make(chan struct{}, 16), transportLarge: make(chan struct{}, 1)}
 	s.configureOperators(c.Operators)
 	var err error
 	s.diagnostics, err = newDiagnostics(c)
@@ -262,6 +265,10 @@ func (s *Server) expire(now time.Time) {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Path == deviceTransportPath {
+		s.serveDeviceTransport(w, r)
+		return
+	}
 	path := strings.TrimRight(r.URL.Path, "/")
 	if path == diagnosticsPrefix || strings.HasPrefix(path, diagnosticsPrefix+"/") {
 		s.serveDiagnostics(w, r, path)
