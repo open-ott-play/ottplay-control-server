@@ -41,6 +41,9 @@
 
 ### Fixed
 
+- Preserve workbench diagnostic verdicts when report export fails. Return a
+  separate `report_error` and exit code 1 while retaining the observations;
+  continue refusing symlinked output paths and existing destinations.
 - Reject player aliases that conflict with top-level CLI commands before writing
   configuration or provisioning credentials. Preserve recovery of an unfinished
   registration under its original name and journal. Existing mappings remain

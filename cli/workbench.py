@@ -693,7 +693,13 @@ def run(api, client, device, words, timeout, json_output=False):
             result["completed_at"] = now()
             output = args.out if command == "bundle" else args.report if command == "test" else None
             if output:
-                result["report_directory"] = write_report(output, result)
+                try:
+                    result["report_directory"] = write_report(output, result)
+                except (ObservationError, InvalidData, OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError) as exc:
+                    # Export failure must not replace the observed media result.
+                    # Keep paths and arbitrary filesystem exception text private.
+                    reason = exc.reason if isinstance(exc, ObservationError) else "report_write_failed"
+                    result["report_error"] = {"reason": reason}
         result.setdefault("completed_at", now())
     except (ObservationError, InvalidData, OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError) as exc:
         reason = exc.reason if isinstance(exc, ObservationError) else "output_or_validation_failed"
@@ -715,6 +721,8 @@ def run(api, client, device, words, timeout, json_output=False):
                 print("  " + row["name"] + " — " + row["checks"])
         if result.get("report_directory"):
             print("Report: " + result["report_directory"])
+        if result.get("report_error"):
+            print("Report error: " + result["report_error"]["reason"])
         if command in ("doctor", "inspect", "operation", "debug"):
             print(encoded(result).decode("utf-8"), end="")
-    return {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]
+    return 1 if result.get("report_error") else {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]
