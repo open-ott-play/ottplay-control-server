@@ -59,6 +59,21 @@
 
 ### Changes
 
+- Add optional durable device registration with administrator approval for
+  unknown pairing requests, generation-bound revocation/rotation, explicit
+  static-configuration reconciliation and receipt-based recovery. `ott registry`
+  manages identities; `ott remove NAME` revokes before removing its local alias,
+  while `ott unalias NAME` is purely local. Credential export requires an explicit
+  private output file or `--show-secret`; `ott pair NAME` retains its connection
+  settings display.
+- Add the bounded, allowlisted hosted device transport for polling, responses,
+  diagnostics and notification media. Explicit trusted HTTPS aliases let hosted
+  pairing retain its selected address while native discovery keeps the canonical
+  endpoint. Removing an alias permanently retires its old approved claims.
+- Add typed player-setting discovery and revision-bound reads/writes, including
+  `ott PLAYER setting bufSize 3`, dedicated VPortal preset migration, paged Plex
+  folder selection and grouped setting changes. Receipts distinguish verified
+  persistence from immediate, next-stream and post-acknowledgement application.
 - Make `R`, `r` and `random` select through the player's complete, source-bound
   catalogue. Prefer eligible channel numbers 1–1000 with 80% probability and
   higher numbers with 20%; use the available pool when the other is empty.
@@ -74,6 +89,12 @@
 
 ### Upgrade
 
+- Install all 11 files from the same `cli/` revision together, including
+  `player_settings.py` and `device_registry.py`. Enable the registry only after
+  explicit private PVC initialization and validation with the verified new
+  image; preserve the live workload's scheduling constraints for `local-path`.
+  Keep one writer and retain the private registry across pod restarts. See the
+  [registry rollout and recovery runbook](docs/device-registry.md).
 - Update the controller first, then participating players and the local `ott`
   CLI. Random selection requires the version-1 `random` capability and fails
   explicitly on older players; existing manual playback requests remain
@@ -83,6 +104,16 @@
 
 ### Security
 
+- Registry administration remains administrator-only; read-only and scoped
+  integration credentials gain no registration or setting-write permissions.
+  Unknown pairing creates no device access until approval is durably saved.
+  Rotation and revocation preserve tombstones and historical credential hashes;
+  rollback must keep a registry-compatible image or deliberately migrate active
+  identities and scopes without reviving old static credentials.
+- Hosted transport accepts only fixed same-process device routes and preserves
+  their authentication, response, size and rate policies. It cannot address
+  arbitrary hosts or invoke administrator routes. Settings preserve local
+  restrictions, redact secret values and reject stale runtime/source revisions.
 - Eligibility is evaluated on the player and checked again before admission.
   Catalogue/runtime fences and local access restrictions remain
   authoritative. Random selection does not export private access settings
