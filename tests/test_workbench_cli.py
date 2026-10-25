@@ -501,9 +501,11 @@ class WorkbenchTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(result["verdict"], "pass")
             self.assertEqual(result["evidence_level"], "decoder_progress_only")
+            self.assertNotIn("report_error", result)
             manifest = json.loads((path / "manifest.json").read_text())
             raw = (path / "result.json").read_bytes()
             self.assertEqual(manifest["files"], [{"name": "result.json", "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}])
+            self.assertEqual(json.loads(raw), {key: value for key, value in result.items() if key != "report_directory"})
             self.assertEqual(len(result["tooling"]["cli_sha256"]), 64)
             self.assertNotIn(SECRET, text)
             self.assertFalse(list(path.glob("*.partial")))
@@ -667,6 +669,92 @@ class WorkbenchTest(unittest.TestCase):
                 with self.assertRaises(OSError):
                     wb.write_report(path / "link" / "escape", {})
                 self.assertFalse((path / "escape").exists())
+
+    def test_existing_report_preserves_each_media_verdict_and_returns_export_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp).resolve() / "existing"
+            path.mkdir()
+            original = b"existing evidence must not be replaced\n"
+            (path / "result.json").write_bytes(original)
+            for position, verdict, reason in (
+                (15, "pass", "same_media_progress_observed"),
+                (10, "fail", "media_did_not_progress"),
+                (9, "unknown", "position_discontinuity"),
+            ):
+                with self.subTest(verdict=verdict):
+                    captured = int(self.clock.value * 1000)
+                    self.client.snapshots = [snapshot(10, captured), snapshot(position, captured + 5000)]
+                    code, result, _ = self.execute(["test", "run", "media-progress", "--lane", "web",
+                        "--duration", "5", "--report", str(path), "--json"])
+                    self.assertEqual(code, 1)
+                    self.assertEqual((result["verdict"], result["reason"]), (verdict, reason))
+                    self.assertEqual(result["report_error"], {"reason": "output_exists"})
+                    self.assertNotIn("report_directory", result)
+                    self.assertEqual(result["observations"][0]["data"]["media"]["lanes"][0]["position"], 10)
+                    self.assertEqual(result["final_observations"][0]["data"]["media"]["lanes"][0]["position"], position)
+                    self.assertEqual((path / "result.json").read_bytes(), original)
+                    self.assertEqual({item.name for item in path.iterdir()}, {"result.json"})
+
+    @unittest.skipUnless(os.name == "posix", "POSIX ancestor no-follow policy")
+    def test_symlink_report_ancestor_preserves_observation_and_refuses_export(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            (root / "link").symlink_to(root, target_is_directory=True)
+            code, result, _ = self.execute(["test", "run", "media-progress", "--lane", "web",
+                "--report", str(root / "link" / "case"), "--json"])
+            self.assertEqual(code, 1)
+            self.assertEqual((result["verdict"], result["reason"]), ("pass", "same_media_progress_observed"))
+            self.assertEqual(result["report_error"], {"reason": "report_write_failed"})
+            self.assertNotIn("report_directory", result)
+            self.assertFalse((root / "case").exists())
+
+    @unittest.skipUnless(os.name == "posix", "POSIX atomic link publisher")
+    def test_partial_report_failure_is_separate_and_does_not_leak_exception_text(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp).resolve() / "case"
+            link = os.link
+
+            def fail_manifest(source, target, **kwargs):
+                if target == "manifest.json":
+                    raise OSError(SECRET)
+                return link(source, target, **kwargs)
+
+            with mock.patch.object(wb.os, "link", side_effect=fail_manifest):
+                code, result, text = self.execute(["test", "run", "media-progress", "--lane", "web",
+                    "--report", str(path), "--json"])
+            self.assertEqual(code, 1)
+            self.assertEqual((result["verdict"], result["reason"]), ("pass", "same_media_progress_observed"))
+            self.assertEqual(result["report_error"], {"reason": "report_write_failed"})
+            self.assertNotIn("report_directory", result)
+            self.assertNotIn(SECRET, text)
+            self.assertFalse((path / "manifest.json").exists())
+            saved = json.loads((path / "result.json").read_text())
+            self.assertEqual(saved, {key: value for key, value in result.items() if key != "report_error"})
+
+    def test_text_output_keeps_media_result_and_explicit_report_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = io.StringIO()
+            with mock.patch.object(wb, "time", self.clock), contextlib.redirect_stdout(out):
+                code = wb.run(ott, self.client, "web", ["test", "run", "media-progress", "--lane", "web",
+                    "--report", str(Path(temp).resolve())], 20)
+            self.assertEqual(code, 1)
+            self.assertIn("Workbench test: pass\n", out.getvalue())
+            self.assertIn("Reason: same_media_progress_observed\n", out.getvalue())
+            self.assertIn("Report error: output_exists\n", out.getvalue())
+            self.assertNotIn("Report: ", out.getvalue())
+
+    def test_oversized_result_keeps_bounded_error_without_writing_partial_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp).resolve() / "case"
+            with mock.patch.object(wb, "MAX_REPORT_BYTES", 1024):
+                code, result, text = self.execute(["test", "run", "media-progress", "--lane", "web",
+                    "--report", str(path), "--json"])
+            self.assertEqual(code, 1)
+            self.assertEqual((result["verdict"], result["reason"]), ("error", "report_too_large"))
+            self.assertLessEqual(len(text.encode("utf-8")), 1024)
+            self.assertNotIn("observations", result)
+            self.assertNotIn("report_directory", result)
+            self.assertFalse(path.exists())
 
     def test_native_operation_uses_durable_history_without_replaying(self):
         key = "b" * 32

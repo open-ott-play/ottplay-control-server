@@ -257,6 +257,23 @@ complete only when `manifest.json` exists and its declared size/SHA-256 matches
 `result.json`. A failure can leave incomplete evidence; choose a new directory
 instead of overwriting it.
 
+An export failure preserves the collected `verdict`, `reason` and observations.
+The command adds `report_error.reason` to its JSON output, prints `Report error:`
+in text mode and exits `1`, even if the scenario verdict is `pass`, `fail` or
+`unknown`. `output_exists` means the destination already exists;
+`report_write_failed` covers filesystem failures without exposing paths or raw
+exception messages. `unsafe_output_path` and `report_too_large` identify explicit
+writer checks. `report_directory` is present only after a successful export.
+These output fields do not change the saved evidence format.
+Output remains bounded: if the result exceeds 256 KiB, the existing size guard
+returns a compact `error` / `report_too_large` result instead of the observations.
+
+On macOS, `/tmp` is normally a symlink to `/private/tmp`, so an export under
+`/tmp` is refused by the same no-symlink rule. Use an explicitly chosen real
+parent and a new directory, for example
+`--report /private/tmp/a1-progress-new`. The writer never resolves symlinks or
+overwrites an earlier export automatically.
+
 The bundle currently contains the projected observations and, for a bound native
 agent, bounded event codes. It does not contain historical web logs, screenshots,
 private source maps, provider URLs, settings or arbitrary exception text. Local
@@ -264,6 +281,8 @@ tool hashes identify the collector; they are not release attestations.
 
 Exit codes: `0` = observations collected or scenario PASS; `1` = invalid command
 or export failure; `2` = scenario FAIL; `3` = unavailable/insufficient evidence.
+An export failure takes precedence over the scenario's exit code; check both
+`report_error` and `verdict` to distinguish delivery from diagnostic results.
 For `doctor`, `inspect`, and `bundle`, exit 0 can include an unavailable lane:
 check each observation's `status` and `reason`. JSON is the authoritative result.
 
