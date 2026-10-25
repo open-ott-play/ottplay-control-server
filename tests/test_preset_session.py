@@ -115,13 +115,14 @@ class PresetSessionTests(unittest.TestCase):
         self.assertNotIn(TOKEN,out.getvalue())
         self.assertEqual(self.player.calls,[])
 
-    def test_legacy_vportal_does_not_change_revision_or_exact_comparisons(self):
+    def test_legacy_vportal_changes_revision_and_adds_exact_comparisons(self):
         legacy = config()
         for row in legacy['presets']['local']['m3u']:
             row['vportal'] = 'retired private portal'
         _, normalized = ott.validate_preset(legacy, 'local')
-        self.assertEqual(session.digest(normalized), session.digest(self.preset))
-        self.assertEqual(list(session.comparisons(normalized)), list(session.comparisons(self.preset)))
+        self.assertNotEqual(session.digest(normalized), session.digest(self.preset))
+        self.assertEqual([name for name, _ in session.comparisons(normalized) if name.startswith('vportal_')],
+                         ['vportal_1', 'vportal_2'])
         for provider, params in session.comparisons(normalized):
             if provider.startswith('m3u_'):
                 self.assertEqual(set(params['settings']), {'name', 'playlist', 'history_hours'})

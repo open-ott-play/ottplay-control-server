@@ -222,7 +222,9 @@ older players may omit them. `strict: true` with `state: waiting` arms strict co
 for the first channel selection, rather than declaring an already locked UI.
 
 `provider_settings` accepts provider IDs `m3u`, `xtream`, `stalker`, `ottclub`
-and `plex`. The controller requires exactly `provider` and an object-valued
+and `plex` through the existing envelope. Dedicated `vportal` slots additionally
+require the runtime/context/revision envelope described below. For the existing
+providers, the controller requires exactly `provider` and an object-valued
 `settings`; provider-specific field validation remains on the player. For Plex,
 select the Plex provider on a compatible player, then send its server URL and
 token together:
@@ -245,6 +247,34 @@ The player saves that slot without changing the selected Stalker slot. Its
 receipt contains `provider`, `profile`, `saved` and the field names only.
 Editing an inactive slot does not reload playback. The existing `server`/`mac`
 form without `profile` continues to update the selected slot.
+
+For VPortal, first issue `settings_compare` with
+`{provider:"vportal",number:1,settings:{vportal:"portal::...",name?:"Family"},runtime}`.
+It returns `{provider,number,matched,runtime,context,revision}` without saved
+values. Save with `{provider:"vportal",settings:{profile:1,vportal:"portal::...",name?:"Family"},runtime,context,revision}`.
+The receipt contains `{provider,profile,fields,saved:true,reloaded,reload_required,runtime,context,revision}`.
+All fields are required except the request's optional name; omitting it preserves
+the dedicated slot name. Slot and runtime are request-bound, and both reload
+flags cannot be true. No provider/UI switch is performed. Capability
+`vportal_settings:{version:1}` identifies support. See the
+[fixture](../contracts/vportal-settings-v1.json) and [migration guide](player-settings.md).
+
+### Typed individual preferences
+
+Capability `player_settings:{version:1,operations:["schema","get","set"],max_page_size:20}`
+adds a separate `player_settings` action. Requests are `schema` with runtime and
+optional cursor/limit, `get` with runtime/id, or `set` with runtime/id/context/
+revision/value. Values are bounded integers, strings or string arrays; arbitrary
+objects are rejected. Each get returns its descriptor and saved-state snapshot.
+The set response requires verified persistence and reports application separately.
+All results are at most 64 KiB and bound to the submitted runtime/operation;
+write results also bind to the setting ID, source context and supplied value.
+Secret descriptors cannot return defaults or raw snapshot values. No settings
+payload is added to the operation journal or diagnostic operation evidence.
+The [wire fixture](../contracts/player-settings-v1.json) defines common shapes,
+limits and the application state/reason matrix. The
+[settings guide](player-settings.md) explains scopes, conflicts, CLI examples
+and settings outside this registry.
 
 `profiles` accepts exactly `{}`. For the active M3U provider it returns
 `{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured}]}`:
@@ -1340,9 +1370,12 @@ records become `unknown` on restart and no commands are replayed.
   all three settings fields are required; saved legacy VPortal links are ignored.
 - Plex: `{provider:"plex",settings:{server,token}}`.
 - Stalker: `{provider:"stalker",number:1,settings:{name,server,mac}}`.
+- VPortal: `{provider:"vportal",number:1,settings:{vportal,name?},runtime}`;
+  this compares the dedicated VPortal slot, not retired M3U shadow fields.
 
 The result data is `{provider,number?,matched}` with a boolean `matched` and no
-stored values. Slots range from 1 to 15. Existing player parental/settings policy
+stored values. VPortal additionally returns `runtime`, opaque `context` and
+`revision` for a conditional save. Slots range from 1 to 15. Existing player parental/settings policy
 still applies. The request carries expected values, so treat its body as private.
 
 ## Explicit playback handoff

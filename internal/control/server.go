@@ -40,6 +40,8 @@ type entry struct {
 	inspect              *inspectRequest
 	aspect               *aspectRequest
 	notificationSettings *notificationsRequest
+	playerSettings       *playerSettingsRequest
+	vportalSettings      *vportalSettingsRequest
 	category             *categoryRequest
 	randomPlay           *randomPlayRequest
 }

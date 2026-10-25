@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "capability": {"version": 1},
+  "compare_request": {"action": "settings_compare", "params": {"provider": "vportal", "number": 1, "runtime": "page-123", "settings": {"vportal": "portal::[key:fixture-only]https://portal.example/api/v1/"}}},
+  "compare_result": {"provider": "vportal", "number": 1, "runtime": "page-123", "matched": false, "context": "source-1", "revision": "revision-1"},
+  "write_request": {"action": "provider_settings", "params": {"provider": "vportal", "runtime": "page-123", "context": "source-1", "revision": "revision-1", "settings": {"profile": 1, "vportal": "portal::[key:fixture-only]https://portal.example/api/v1/"}}},
+  "write_result": {"provider": "vportal", "profile": 1, "runtime": "page-123", "context": "source-1", "revision": "revision-2", "fields": ["profile", "vportal"], "saved": true, "reloaded": false, "reload_required": false},
+  "write_error": {"provider": "vportal", "profile": 1, "runtime": "page-123", "error": "The settings source changed before saving.", "reason": "source_changed"}
+}

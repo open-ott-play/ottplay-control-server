@@ -151,7 +151,8 @@ administrator and diagnostic credentials. Configuration is applied on restart.
 Actions name the exact RPC, for example `status`, `profiles`, `settings_compare`
 or `profile_settings`. RPCs with sub-operations require the exact operation:
 `input.channel_up`, `playback.next_channel`, `aspect.get`, `favorites.list`,
-`kiosk.status`, `app_update.status`, `notifications.get`, `notifications.set`
+`kiosk.status`, `app_update.status`, `notifications.get`, `notifications.set`,
+`player_settings.schema`, `player_settings.get`, `player_settings.set`
 or `command.set_volume`. No wildcards or
 family-wide `input`/`command` grant is accepted. The supported allowlist is in
 `internal/config/operators.go`. A `provider_settings` grant permits its validated

@@ -2,7 +2,7 @@
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py` and `app_update.py`. Python 3.12 is the version used by CI. Commands take a short
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`, `player_settings.py` and `app_update.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -1265,8 +1265,16 @@ archive query is reported as `not_requested` and does not claim archive coverage
 
 ## Provider settings
 
-A `provider-config` file contains `provider` and `settings`. Select the intended
-provider with `provider` first. Supplied fields are updated; other fields are
+For individual application/provider preferences, use `ott f settings` to list
+the runtime schema, `ott f setting bufSize` to read, and `ott f setting bufSize 3`
+or `ott f setting players hls.js` to save with revision checks. See the
+[typed settings guide](player-settings.md) for scopes, limits, effect timing,
+private value files and recovery. Install `player_settings.py` beside `ott.py`.
+
+A `provider-config` file contains `provider` and `settings`. Except for the new
+bound VPortal slot API, select the intended provider with `provider` first.
+VPortal files contain `profile`, `vportal`, and optional `name`; they can save an
+inactive slot without selecting VPortal. Supplied fields are updated; others are
 preserved. Credentials are not echoed in status, provider lists or
 acknowledgements. Save these files with mode 600 and use HTTPS outside a trusted
 local network.
@@ -1938,19 +1946,25 @@ must include `number`, `name`, `playlist` and `history_hours`; numbers
 must be unique integers from 1 to 15. `active_profile` must refer to an included
 slot. Playlist URLs must be nonempty HTTP(S) addresses. Use IPv4 addresses in
 four decimal octets (for example, `127.0.0.1`), not shortened or hexadecimal
-forms. A legacy `vportal` string in an M3U setup entry is accepted but ignored:
-it is omitted from requests, comparisons and the normalized setup fingerprint.
-Remove it from the local file when convenient; loading does not erase old links
-on devices. An old resume checkpoint whose fingerprint included this field is
-rejected as a setup revision mismatch; inspect the device state before starting
-a new load. Plex requires both `server` and `token`.
+forms. A nonempty legacy `vportal` string in an M3U setup entry is normalized
+into the same numbered **dedicated VPortal slot**, preserving that slot's name.
+It participates in comparisons and the setup fingerprint and is never sent as
+an M3U field. An optional explicit `vportal` list accepts `number`, `vportal` and
+optional `name`. Equal links deduplicate; conflicting explicit/legacy links fail
+before writes. The local file is not rewritten. Old checkpoints that omitted
+these required VPortal settings fail with a revision mismatch. See
+[VPortal migration and examples](player-settings.md#independent-vportal-configuration).
+Plex requires both `server` and `token`.
 The existing provider length and request-size limits apply.
 
-Loading selects Plex, waits for its settings handler, saves its credentials,
+When VPortal slots are present, loading preflights all of them and performs
+source-bound saves without switching provider or opening UI. Old players fail
+before the first preset mutation. Loading then selects Plex, waits for its settings handler, saves its credentials,
 then selects M3U and waits for the profile handler. It saves inactive slots
 first and selects `active_profile`. If the previously active slot also needs
 updating, it saves that slot after switching, avoiding an unnecessary playlist
-reload. Finally, it checks the resulting M3U metadata. Unlisted M3U slots remain
+reload. Finally, it checks the resulting M3U metadata and exact VPortal fields.
+Unlisted M3U and VPortal slots remain
 unchanged. Each change uses the existing
 request/acknowledgement API; the next change is sent only after the preceding
 one is confirmed. A provider's empty library or unavailable playlist does not
