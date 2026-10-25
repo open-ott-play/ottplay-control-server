@@ -2594,15 +2594,20 @@ def plex_library_metadata(data, runtime, params, max_items=MAX_PLEX_QUEUE_ITEMS)
         if len({row["id"] for row in rows}) != len(rows):
             raise Error(invalid)
         return dict(data, libraries=rows)
-    if (set(data) != base | {"library", "shuffled", "queue"} or type(data["shuffled"]) is not bool
+    truncated = "truncated" in data
+    expected = base | {"library", "shuffled", "queue"} | ({"truncated"} if truncated else set())
+    if (set(data) != expected or type(data["shuffled"]) is not bool
             or data["shuffled"] != params.get("shuffle", False)):
+        raise Error(invalid)
+    if truncated and (data["truncated"] is not True or params.get("allow_truncate") is not True):
         raise Error(invalid)
     row = library(data["library"])
     if "library_id" in params and row["id"] != params["library_id"]:
         raise Error(invalid)
     queue_data = data["queue"]
     if (not isinstance(queue_data, dict) or not plex_queue_ids(queue_data.get("ids"), 1)
-            or len(queue_data["ids"]) > max_items or queue_data.get("state") == "error"):
+            or len(queue_data["ids"]) > max_items or queue_data.get("state") == "error"
+            or (truncated and len(queue_data["ids"]) != max_items)):
         raise Error(invalid)
     queue_data = plex_queue_metadata(queue_data, runtime, {"op": params["op"], "ids": queue_data["ids"]})
     return dict(data, library=row, queue=queue_data)
@@ -2612,21 +2617,24 @@ def plex_library_command(client, device, params, timeout):
     deadline = time.monotonic() + timeout
     previous_timeout = client.timeout
     runtime = None
+    request_params = dict(params)
     try:
         client.timeout = max(0, deadline - time.monotonic())
         controls = capabilities_metadata(client.call(device, "capabilities", {}))
         capability = controls.get("plex_library", {})
         if params["op"] not in capability.get("operations", []):
             raise Error("Plex library commands require an updated player and controller advertising plex_library. No library command was sent")
+        if params["op"] != "list" and "plex_library_truncation" in controls:
+            request_params["allow_truncate"] = True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Plex capability discovery exceeded --timeout; no library command was sent")
         client.timeout = remaining
         runtime = controls["player"]["runtime"]
-        result = client.call(device, "plex_library", dict(params, runtime=runtime))
+        result = client.call(device, "plex_library", dict(request_params, runtime=runtime))
         if time.monotonic() >= deadline:
             raise Error("Plex library response exceeded --timeout. Acceptance is uncertain; inspect plex status before another playback request. The request was not repeated")
-        result = plex_library_metadata(result, runtime, params, capability["max_items"])
+        result = plex_library_metadata(result, runtime, request_params, capability["max_items"])
         if result["state"] == "error":
             raise Error(PLEX_LIBRARY_ERRORS.get(result["error"], result["error"]) + " The request was not repeated")
         return result
@@ -2634,7 +2642,7 @@ def plex_library_command(client, device, params, timeout):
         detail = "Plex library request was rejected; check the saved Plex settings and current player runtime."
         if runtime is not None:
             try:
-                rejected = plex_library_metadata(exc.data, runtime, params)
+                rejected = plex_library_metadata(exc.data, runtime, request_params)
                 if rejected["state"] == "error":
                     detail = PLEX_LIBRARY_ERRORS.get(rejected["error"], rejected["error"])
             except Error:
@@ -2658,6 +2666,9 @@ def print_plex_library(data):
             print(f"id:{row['id']}  {clean(row['title'])} ({row['type']})")
     else:
         row = data["library"]
+        if data.get("truncated") is True:
+            count = len(data["queue"]["ids"])
+            print(f"Warning: The Plex library exceeds the {count}-item queue limit; using {count} items.")
         print(f"Plex library: {clean(row['title'])} (id:{row['id']}); "
               + ("shuffled once." if data["shuffled"] else "library order."))
         print_plex_queue(data["queue"], preview=data["op"] == "preview")
@@ -3008,6 +3019,14 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_library"] = {"version": 1, "operations": list(operations), "max_items": library["max_items"]}
+    if "plex_library_truncation" in data:
+        truncation = data["plex_library_truncation"]
+        if ("plex_library" not in result or result["plex_library"]["max_items"] != MAX_PLEX_QUEUE_ITEMS
+                or not isinstance(truncation, dict)
+                or set(truncation) != {"version"} or type(truncation.get("version")) is not int
+                or truncation["version"] != 1):
+            raise Error(invalid)
+        result["plex_library_truncation"] = {"version": 1}
     if "categories" in data:
         categories = data["categories"]
         operations = categories.get("operations") if isinstance(categories, dict) else None

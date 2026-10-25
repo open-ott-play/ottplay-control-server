@@ -28,6 +28,15 @@ def result(op='play', shuffled=True):
     return value
 
 
+def capped_result(op='play', count=500):
+    value = result(op)
+    value['truncated'] = True
+    value['queue']['ids'] = [str(i + 1) for i in range(count)]
+    if op == 'preview':
+        value['queue']['titles'] = ['Item ' + str(i + 1) for i in range(count)]
+    return value
+
+
 class PlexLibraryTest(unittest.TestCase):
     def run_cli(self, words, responses, json_output=False):
         client = mock.Mock(timeout=45)
@@ -48,6 +57,10 @@ class PlexLibraryTest(unittest.TestCase):
         for op in CONTRACT['operations']:
             params = CONTRACT[op + '_request']['params']
             self.assertEqual(ott.plex_library_metadata(result(op), 'page-123', params), result(op))
+        supported = dict(caps(), **CONTRACT['truncation_capability'])
+        self.assertEqual(ott.capabilities_metadata(supported)['plex_library_truncation'], {'version': 1})
+        params = CONTRACT['truncation_request']['params']
+        self.assertEqual(ott.plex_library_metadata(capped_result(), 'page-123', params), capped_result())
 
     def test_exact_aliases_options_and_explicit_library_id(self):
         cases = [
@@ -79,6 +92,89 @@ class PlexLibraryTest(unittest.TestCase):
             self.assertEqual(self.run_cli(words, [])[3], [])
         self.assertEqual(ott.parse_command(['plex', 'library', 'я' * 128])[1]['query'], 'я' * 128)
         self.assertEqual(ott.parse_command(['plex', 'library', 'id:' + '1' * 20])[1]['library_id'], '1' * 20)
+
+    def test_truncation_is_negotiated_without_changing_legacy_or_list_requests(self):
+        supported = caps()
+        supported['plex_library_truncation'] = {'version': 1}
+        for op, words in [('play', ['plex', 'shuffle', 'A']),
+                          ('preview', ['plex', 'library', '--preview', '--shuffle', 'A'])]:
+            with self.subTest(op=op):
+                data = capped_result(op)
+                code, out, err, calls = self.run_cli(words, [supported, data], True)
+                self.assertEqual((code, err, json.loads(out)), (0, '', data))
+                self.assertEqual(calls, [mock.call('dev_tv', 'capabilities', {}),
+                                        mock.call('dev_tv', 'plex_library', {
+                                            'op': op, 'query': 'A', 'shuffle': True,
+                                            'runtime': 'page-123', 'allow_truncate': True})])
+                # A complete smaller result is still valid for an opted-in request.
+                self.assertEqual(self.run_cli(words, [supported, result(op)])[0], 0)
+                code, _, _, legacy_calls = self.run_cli(words, [caps(), result(op)])
+                self.assertEqual(code, 0)
+                self.assertNotIn('allow_truncate', legacy_calls[-1].args[2])
+        code, _, _, calls = self.run_cli(['plex', 'libraries'], [supported, result('list')])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls[-1], mock.call('dev_tv', 'plex_library', {'op': 'list', 'runtime': 'page-123'}))
+
+    def test_capped_queue_warns_without_claiming_playback_or_polluting_json(self):
+        supported = caps()
+        supported['plex_library_truncation'] = {'version': 1}
+        for op, words in [('play', ['plex', 'shuffle', 'A']),
+                          ('preview', ['plex', 'library', '--preview', '--shuffle', 'A'])]:
+            code, out, err, calls = self.run_cli(words, [supported, capped_result(op)])
+            self.assertEqual((code, err, len(calls)), (0, '', 2))
+            self.assertTrue(out.startswith('Warning: The Plex library exceeds the 500-item queue limit; using 500 items.\n'))
+            if op == 'play':
+                self.assertIn('playback has not been confirmed', out)
+            data = capped_result(op)
+            del data['truncated']
+            code, out, err, _ = self.run_cli(words, [supported, data])
+            self.assertEqual((code, err), (0, ''))
+            self.assertNotIn('Warning:', out)
+
+    def test_truncation_capability_is_strict_and_requires_the_500_item_library(self):
+        for extension in [None, True, 1, {}, {'version': True}, {'version': 2},
+                          {'version': 1, 'token': SECRET}]:
+            value = caps()
+            value['plex_library_truncation'] = extension
+            code, out, err, calls = self.run_cli(['plex', 'shuffle', 'A'], [value])
+            self.assertEqual((code, out, len(calls)), (1, '', 1))
+            self.assertNotIn(SECRET, err)
+        for maximum in [None, 499]:
+            value = caps()
+            value['plex_library_truncation'] = {'version': 1}
+            if maximum is None:
+                del value['plex_library']
+            else:
+                value['plex_library']['max_items'] = maximum
+            self.assertEqual(len(self.run_cli(['plex', 'shuffle', 'A'], [value])[3]), 1)
+        legacy = caps()
+        legacy['plex_library']['max_items'] = 3
+        self.assertEqual(self.run_cli(['plex', 'shuffle', 'A'], [legacy, result()])[0], 0)
+
+    def test_truncated_result_requires_opt_in_exact_limit_and_true_marker(self):
+        supported = caps()
+        supported['plex_library_truncation'] = {'version': 1}
+        for marker in [False, 0, 1, None, 'true', {}, []]:
+            data = capped_result()
+            data['truncated'] = marker
+            code, out, _, calls = self.run_cli(['plex', 'shuffle', 'A'], [supported, data])
+            self.assertEqual((code, out, len(calls)), (1, '', 2), marker)
+        for count in [0, 1, 499, 501]:
+            code, out, _, calls = self.run_cli(['plex', 'shuffle', 'A'], [supported, capped_result(count=count)])
+            self.assertEqual((code, out, len(calls)), (1, '', 2), count)
+        self.assertEqual(self.run_cli(['plex', 'shuffle', 'A'], [caps(), capped_result()])[0], 1)
+        data = result('list'); data['truncated'] = True
+        self.assertEqual(self.run_cli(['plex', 'libraries'], [supported, data])[0], 1)
+        data = dict(CONTRACT['error_result'], truncated=True)
+        self.assertEqual(self.run_cli(['plex', 'shuffle', 'A'], [supported, data])[0], 1)
+
+    def test_opted_in_errors_are_not_retried_or_mistaken_for_capped_success(self):
+        supported = caps()
+        supported['plex_library_truncation'] = {'version': 1}
+        for response in [dict(CONTRACT['error_result'], error='incomplete_library'),
+                         ott.HTTPError(400), ott.TransportError('Timeout; do not repeat')]:
+            code, out, _, calls = self.run_cli(['plex', 'shuffle', 'A'], [supported, response])
+            self.assertEqual((code, out, len(calls)), (1, '', 2))
 
     def test_existing_commands_and_reserved_channel_names_keep_their_meaning(self):
         self.assertEqual(ott.parse_command(['plex', 'play', '16']), ('plex_queue', {'op': 'play', 'ids': ['16']}))

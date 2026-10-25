@@ -1353,11 +1353,11 @@ Other providers currently require their own settings UI.
 
 ## Plex libraries by name
 
-Play a whole movie or show library using the player's saved Plex connection:
+Play items from a movie or show library using the player's saved Plex connection:
 
 ```sh
 ott l plex libraries                         # list library IDs, names and types
-ott l plex shuffle "Tom and Jerry"            # shuffle the entire library once
+ott l plex shuffle "Tom and Jerry"            # shuffle up to 500 library items once
 ott l plex library "Tom and Jerry"            # play in library order
 ott l plex library --preview "Tom and Jerry"  # check without changing playback
 ott l plex library --shuffle --preview id:16  # preview one new shuffled order
@@ -1396,12 +1396,32 @@ inside another library or a filesystem folder. For example, a dedicated
 Show libraries include their episodes. Lookup happens on the player using its
 own saved Plex server and token; local CLI presets are not used or applied.
 
-The player collects the complete library before preparing a queue. Discovery
-supports servers with up to 1000 library sections and lists only movie/show
-libraries. Up to 500 items can be queued, subject to
-the advertised limit. A missing, ambiguous, oversized or incomplete library
-fails without starting a partial queue. The selected library and generated ID
-order are returned in `--json` output. A shuffled preview and a later play are
+Discovery supports servers with up to 1000 library sections and lists only
+movie/show libraries. Up to 500 items can be queued. With updated CLI, controller
+and player support, a larger library uses the first 500 items in library order
+and prints this warning before the usual queue result:
+
+```text
+Warning: The Plex library exceeds the 500-item queue limit; using 500 items.
+```
+
+For example, `ott -t 45 lg2 plex shuffle MultCocomelonALl` starts a shuffled
+500-item queue when that library exceeds the limit. Shuffle randomizes the
+selected 500, not a sample of the whole oversized library. Remaining items are
+not appended automatically. Exactly 500 items need no warning. Preview applies
+the same limit but does not start playback. `--json` remains JSON-only and adds
+`"truncated": true` to the successful library result when the limit was applied;
+that field is absent for a complete library.
+
+The player advertises this behavior separately as
+`plex_library_truncation: {"version": 1}` alongside its 500-item `plex_library`
+capability. The CLI opts in automatically only when advertised. Install the
+updated controller before deploying the new player and CLI: older controllers
+reject the new opt-in request, and older players keep reporting an oversized
+library error. A missing, ambiguous, malformed or incompletely fetched selected
+set still fails without starting a queue; truncation is not a retry after an
+error. The selected library and generated ID order are returned in `--json`
+output. A shuffled preview and a later play are
 separate requests and can produce different orders; to reuse a preview's exact
 order, pass its `queue.ids` to the existing `plex play ID...` command.
 
@@ -1478,8 +1498,12 @@ does not prove that playback never started.
 
 - For a missing or ambiguous library, use `plex libraries`, then `plex library
   --preview id:NUMBER`. A series title inside a library is not a library name.
-- An incomplete or oversized library is not truncated. Check that the library
-  is stable and within the item limit; use an explicit smaller ID queue when needed.
+- An incomplete library is not started. Check that the library
+  is stable and reachable; use an explicit smaller ID queue when needed.
+- An oversized library should start or preview 500 items with a warning on
+  updated installations. If it still reports `no partial queue was started`,
+  check for `plex_library_truncation` in `caps` and update the player and CLI.
+  If the controller rejects the opt-in request, update the controller as well.
 - `plex_library` requires newer support than `plex_queue`. Updating only the
   Python CLI cannot add library lookup to a TV that does not advertise it.
 

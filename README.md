@@ -166,7 +166,7 @@ ott l plex queue                     # current item and preparation/playback sta
 ott l plex next                      # advance once; no wrap at the last item
 ott l plex stop                      # stop and clear this queue
 ott l plex libraries                 # list libraries (requires plex_library support)
-ott l plex shuffle "Tom and Jerry"   # shuffle one complete library, up to 500 items
+ott l plex shuffle "Tom and Jerry"   # shuffle up to 500 items from the library
 ott l plex library --preview id:16    # read-only check of an explicit library
 ```
 
@@ -186,7 +186,11 @@ switches the provider or replaces current playback. See
 [Plex queue commands](docs/cli.md#ordered-plex-queues) for limits and readiness.
 Library lookup additionally requires an updated player and controller advertising
 `plex_library`; it uses the player's saved Plex connection and rejects ambiguous
-or incomplete selections. See [Plex libraries by name](docs/cli.md#plex-libraries-by-name).
+or incomplete selections. With updated CLI, controller and player support, a
+library larger than 500 items starts a 500-item queue and prints a limit warning.
+The first 500 items are selected in library order, then shuffled when requested;
+remaining items are not appended automatically. See
+[Plex libraries by name](docs/cli.md#plex-libraries-by-name).
 
 ### Save Local videos profiles
 

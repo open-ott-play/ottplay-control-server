@@ -624,6 +624,8 @@ changes the legacy command contract nor extends the `plex_queue` request schema.
 {"action":"plex_library","params":{"runtime":"page-123","op":"list"}}
 {"action":"plex_library","params":{"runtime":"page-123","op":"preview","query":"Tom and Jerry"}}
 {"action":"plex_library","params":{"runtime":"page-123","op":"play","library_id":"16","shuffle":true}}
+{"plex_library_truncation":{"version":1}}
+{"action":"plex_library","params":{"runtime":"page-123","op":"play","library_id":"16","shuffle":true,"allow_truncate":true}}
 ```
 
 The optional capability has exactly `version`, `operations` and `max_items`.
@@ -635,11 +637,25 @@ capability or missing operation is unsupported. `max_items` is an integer from
 (a string matching `^[1-9][0-9]{0,19}$`). Optional `shuffle` is a boolean,
 default false. Unknown or duplicate fields and malformed UTF-16 escapes fail.
 
+An additional top-level capability `plex_library_truncation` has exactly
+`{"version":1}` and requires the sibling `plex_library.max_items` to be 500.
+It leaves the existing `plex_library` object unchanged. After discovering this
+capability, callers may add `allow_truncate:true` to `preview` or `play`. The
+field must be literal `true` when present; `false`, `null`, other types and use
+on `list` are rejected. Without this opt-in, oversized libraries retain the
+`too_many_items` error and do not start a partial queue. Older controllers reject
+the opt-in request before dispatch; deploy the updated controller first.
+
 The player prefers an exact case-insensitive library-title match, then a unique
 substring match; an ambiguous match fails. Only `movie` and `show` sections are
 eligible. Discovery limits the complete section inventory to 1000, including
-unsupported types, and includes complete pagination before committing playback;
-show sections resolve episodes. It does not recursively search filesystem folders
+unsupported types. Show sections resolve episodes. With truncation enabled,
+item discovery retains the first 500 items in library order, validates the
+selected set and stops once it can establish that the limit was exceeded.
+It does not scan the remainder of a larger library. Shuffle is applied to the
+retained set; it is not a random sample from the whole library. Without opt-in,
+item discovery still requires complete pagination before committing playback.
+It does not recursively search filesystem folders
 or treat a series inside another section as a library. Discovery and queue
 preparation share request ownership, saved-configuration checks and expiry.
 
@@ -654,7 +670,13 @@ runtime and operation. Exact successful list data is:
 and `type`; title is nonblank, sanitized single-line text of at most 160 UTF-8
 bytes and type is `movie` or `show`. Ready preview/play data has exactly the same
 four base fields plus `library` (one row), `shuffled` (the requested boolean)
-and `queue` (the existing preview or play result, respectively). An explicit
+and `queue` (the existing preview or play result, respectively), with one
+optional field: `truncated:true`. That field is accepted only for a request
+bound to `allow_truncate:true` and a queue of exactly 500 IDs. It is omitted
+when the complete library fits, including exactly 500 items; false, null and
+non-boolean markers are rejected. It is never valid on list or error data.
+The CLI preserves the marker in JSON and prints a limit warning in text output.
+An explicit
 `library_id` must match the selected library; the nested queue must have the same
 runtime, 1–500 IDs, and play begins at index zero. `queue.state:error` is not a
 successful library result. `ready` describes the library operation; a nested
