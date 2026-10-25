@@ -269,3 +269,18 @@ available. Repair storage, validate the private file,
 restart the single controller and inspect the durable operation receipt and
 device generation. Do not delete the registry to make startup pass, and do not
 assume a timeout or failed response proves that no registration occurred.
+
+## Rollback after enabling the registry
+
+After a registration, rotation or revocation, keep the private store and use a
+registry-compatible server image. Disabling `device_registry`, restoring an old
+static Secret, or running an image that ignores the store can revive revoked
+credentials and make dynamically registered identities disappear. Restoring an
+older registry backup can also roll back revocations; reconcile its effective
+identities and credential history before serving traffic.
+
+Rolling back to a pre-registry server requires an explicit migration of the
+effective active identities and their operator/Home Assistant scopes. Preserve
+the registry backup and ensure the replacement configuration excludes every
+revoked credential; do not bypass tombstones by reusing the former static
+configuration. A deployment rollback alone is not that migration.
