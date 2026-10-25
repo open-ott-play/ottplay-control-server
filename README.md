@@ -28,6 +28,8 @@ or `ott t1,t2,t3,t4 notifications on`. This leaves IPTV/Plex playback unchanged.
 Optional [reliable control](docs/reliable-control.md) adds scoped integration
 credentials, bounded durable command outcomes, resumable Local/Home application
 with exact settings verification, and explicit live/archive playback handoff.
+The [typed settings guide](docs/player-settings.md) covers `setting KEY VALUE`,
+runtime schema discovery, conditional saves and dedicated VPortal presets.
 These features require controller and CLI revisions containing this guide.
 Exact settings verification and handoff also require an updated player. The older
 installation pin below does not include these features. The [architecture diagram](docs/assets/reliable-control.svg)

@@ -56,6 +56,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott devices                        list devices and their last connection
   ott ha status [-j]                 Home Assistant bridge and active banner recipients
   ott NAME notifications [on|off]    read/save the single banner and camera preference
+  ott NAME settings [list|schema]    discover typed settings for this player/source
+  ott NAME setting KEY [VALUE]      read or save one setting (e.g. bufSize 3)
+  ott NAME setting players hls.js   choose a schema-listed playback engine
   ott t1,t2 notifications off        save that preference on each distinct player
   ott alias NAME UUID                name an existing device
   ott add NAME UUID                  create a device access code and queue
@@ -110,7 +113,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME plex play ID [ID ...]     play IDs in order from the start; stop after the last
   ott NAME plex play --shuffle ID...  shuffle all IDs once; kiosk on repeats that order
   ott NAME plex libraries            list movie/show libraries from the player's Plex server
-  ott NAME plex shuffle NAME         play an entire Plex library in a new shuffled order
+  ott NAME plex shuffle NAME         shuffle up to 500 library items; warn if the library is larger
   ott NAME plex library [--shuffle] [--preview] NAME  play or preview a library (or id:16)
   ott NAME plex queue / status       show the Plex queue without changing it
   ott NAME plex next / prev / stop   move within or clear the Plex queue (no wrapping)
@@ -265,7 +268,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "categories", "favorites", "aspect",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -1186,6 +1189,12 @@ def parse_command(words):
             raise Error('Expected {"provider":"xtream","settings":{...}}')
         if data["provider"] == "plex":
             data["settings"] = validate_plex_settings(data["settings"])
+        elif data["provider"] == "vportal":
+            settings = data["settings"]
+            if (not {"profile", "vportal"} <= set(settings) or set(settings) - {"profile", "vportal", "name"}
+                    or type(settings["profile"]) is not int or not 1 <= settings["profile"] <= 15):
+                raise Error("VPortal settings require profile 1–15, vportal and optional name")
+            validate_profile_settings({key: value for key, value in settings.items() if key != "profile"})
         return "provider_settings", data
     if verb == "plex":
         operation = tail[0].casefold() if tail else ""
@@ -1545,6 +1554,82 @@ def vportal_profile_command(client, device, params, timeout):
         client.timeout = previous_timeout
 
 
+def vportal_settings_metadata(data, params, write=False):
+    key = "profile" if write else "number"
+    number = params["settings"]["profile"] if write else params["number"]
+    required = {"provider", key, "runtime", "context", "revision"}
+    required |= {"fields", "saved", "reloaded", "reload_required"} if write else {"matched"}
+    valid = (isinstance(data, dict) and set(data) == required and data["provider"] == "vportal"
+             and type(data[key]) is int and data[key] == number and data["runtime"] == params["runtime"]
+             and all(isinstance(data[field], str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", data[field])
+                     for field in ("context", "revision")))
+    if write:
+        valid = (valid and data["saved"] is True and data["context"] == params["context"]
+                 and type(data["reloaded"]) is bool and type(data["reload_required"]) is bool
+                 and not (data["reloaded"] and data["reload_required"])
+                 and isinstance(data["fields"], list) and len(data["fields"]) == len(params["settings"])
+                 and all(isinstance(field, str) for field in data["fields"])
+                 and set(data["fields"]) == set(params["settings"]))
+    else:
+        valid = valid and type(data["matched"]) is bool
+    if not valid:
+        raise Error("The player did not confirm the exact VPortal settings operation; the request was not repeated")
+    return data
+
+
+def vportal_compare(client, device, row):
+    """Read the dedicated slot and capture a source-bound write receipt."""
+    deadline, previous = time.monotonic() + client.timeout, client.timeout
+    try:
+        caps = capabilities_metadata(client.call(device, "capabilities", {}))
+        if "vportal_settings" not in caps:
+            raise Error("Dedicated VPortal settings require an updated player and controller; no VPortal settings were sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("VPortal discovery exceeded --timeout; no settings were sent")
+        client.timeout = remaining
+        params = {"provider": "vportal", "number": row["number"], "settings": row["settings"],
+                  "runtime": caps["player"]["runtime"]}
+        data = client.call(device, "settings_compare", params)
+        if time.monotonic() >= deadline:
+            raise Error("VPortal comparison exceeded --timeout; no settings were sent")
+        return vportal_settings_metadata(data, params)
+    except (PlayerRejected, PlayerUnsupported, HTTPError):
+        raise Error("Dedicated VPortal comparison was rejected or unsupported; no settings were sent") from None
+    finally:
+        client.timeout = previous
+
+
+def vportal_settings_command(client, device, row, session=None, label=None):
+    """Save a named slot without selecting its provider, opening UI or waking it."""
+    deadline, previous = time.monotonic() + client.timeout, client.timeout
+    try:
+        receipt = vportal_compare(client, device, row)
+        if receipt["matched"]:
+            if session is not None:
+                session.complete(label)
+            return receipt
+        params = {"provider": "vportal", "settings": {"profile": row["number"], **row["settings"]},
+                  **{key: receipt[key] for key in ("runtime", "context", "revision")}}
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("VPortal comparison exceeded --timeout; no settings were sent")
+        client.timeout = remaining
+        if session is not None:
+            session.retry(label, "provider_settings", params)
+        data = session.call("provider_settings", params) if session is not None else client.call(device, "provider_settings", params)
+        if time.monotonic() >= deadline:
+            raise Error("VPortal save exceeded --timeout; inspect the slot before retrying. The request was not repeated")
+        data = vportal_settings_metadata(data, params, write=True)
+        if session is not None:
+            session.complete(label)
+        return data
+    except (PlayerRejected, PlayerUnsupported, HTTPError):
+        raise Error("Dedicated VPortal save was rejected or unsupported; the request was not repeated") from None
+    finally:
+        client.timeout = previous
+
+
 def preset_name(value):
     return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", value)
 
@@ -1592,27 +1677,46 @@ def validate_preset(config, requested):
     name = matches[0]
     value = config["presets"][name]
     if (not isinstance(value, dict) or not {"m3u", "plex", "active_profile"} <= set(value)
-            or set(value) - {"m3u", "plex", "active_profile", "stalker"}):
-        raise Error("A preset must contain m3u, plex and active_profile, with optional stalker profiles")
+            or set(value) - {"m3u", "plex", "active_profile", "stalker", "vportal"}):
+        raise Error("A preset must contain m3u, plex and active_profile, with optional stalker and vportal profiles")
     if not isinstance(value["m3u"], list) or not 1 <= len(value["m3u"]) <= 15:
         raise Error("A preset must contain 1–15 complete M3U profiles")
     profiles = []
+    portals = {}
     numbers = set()
     for row in value["m3u"]:
         if (not isinstance(row, dict) or not {"number", "name", "playlist", "history_hours"} <= set(row)
                 or set(row) - {"number", "name", "playlist", "history_hours", "vportal"}
                 or type(row["number"]) is not int or not 1 <= row["number"] <= 15 or row["number"] in numbers):
             raise Error("Preset M3U profiles require complete fields and unique numbers from 1 to 15")
-        # Old local presets may contain VPortal credentials. Validate their text
-        # bounds, but never send, compare or fingerprint them as M3U settings.
+        # Legacy links target the independent VPortal slot, never M3U storage.
+        # Preserve that slot's name: an M3U label is not a VPortal label.
         if "vportal" in row:
             validate_profile_settings({"vportal": row["vportal"]})
+            if row["vportal"]:
+                portals[row["number"]] = {"vportal": row["vportal"]}
         settings = {key: row[key] for key in ("name", "playlist", "history_hours")}
         validate_profile_settings(settings)
         if not preset_url(settings["playlist"]):
             raise Error("Preset profiles require an HTTP(S) playlist")
         profiles.append({"number": row["number"], "settings": settings})
         numbers.add(row["number"])
+    if "vportal" in value:
+        if not isinstance(value["vportal"], list) or not 1 <= len(value["vportal"]) <= 15:
+            raise Error("A VPortal preset requires 1–15 profiles")
+        seen = set()
+        for row in value["vportal"]:
+            if (not isinstance(row, dict) or not {"number", "vportal"} <= set(row)
+                    or set(row) - {"number", "vportal", "name"}
+                    or type(row["number"]) is not int or not 1 <= row["number"] <= 15 or row["number"] in seen):
+                raise Error("VPortal profiles require unique numbers 1–15, vportal and optional name")
+            settings = {key: row[key] for key in ("vportal", "name") if key in row}
+            validate_profile_settings(settings)
+            old = portals.get(row["number"])
+            if old is not None and old["vportal"] != settings["vportal"]:
+                raise Error("Explicit and legacy VPortal links conflict in one slot; no settings were sent")
+            portals[row["number"]] = settings
+            seen.add(row["number"])
     active = value["active_profile"]
     if type(active) is not int or active not in numbers:
         raise Error("Preset active_profile must name one of its M3U profiles")
@@ -1640,12 +1744,16 @@ def validate_preset(config, requested):
     requests = [("provider_settings", {"provider": "plex", "settings": plex})]
     requests.extend(("profile_settings", row) for row in profiles)
     requests.extend(("provider_settings", {"provider": "stalker", "settings": row}) for row in stalker)
+    requests.extend(("provider_settings", {"provider": "vportal", "settings": {"profile": number, **settings}})
+                    for number, settings in portals.items())
     for action, params in requests:
         if len(json.dumps({"action": action, "params": params}, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
             raise Error("A preset settings request exceeds the 16 KiB limit")
     result = {"m3u": sorted(profiles, key=lambda row: row["number"]), "plex": plex, "active_profile": active}
     if stalker:
         result["stalker"] = stalker
+    if portals:
+        result["vportal"] = [{"number": number, "settings": settings} for number, settings in sorted(portals.items())]
     return name, result
 
 
@@ -1716,6 +1824,15 @@ def load_preset(client, device, name, preset, session=None):
         step("save_profile_" + str(row["number"]), "profile_settings", row, validate)
 
     try:
+        # Every dedicated slot must support exact comparison before any mutation.
+        # Capture again before each save because an earlier save changes revision.
+        for row in preset.get("vportal", []):
+            stage = "preflight_vportal_" + str(row["number"])
+            vportal_compare(client, device, row)
+        for row in preset.get("vportal", []):
+            stage = "save_vportal_" + str(row["number"])
+            vportal_settings_command(client, device, row, session, stage)
+            completed.append(stage)
         if preset.get("stalker"):
             step("select_stalker", "provider", {"query": "stalker"}, provider("stalker"))
             for row in preset["stalker"]:
@@ -1766,6 +1883,11 @@ def load_preset(client, device, name, preset, session=None):
                                  "profile_settings", row)
             return True
         step("verify_profiles", "profiles", {}, verified)
+        for row in preset.get("vportal", []):
+            stage = "verify_vportal_" + str(row["number"])
+            if not vportal_compare(client, device, row)["matched"]:
+                raise Error("VPortal saved settings differ from the preset")
+            completed.append(stage)
     except KeyboardInterrupt:
         return {"preset": name, "status": "interrupted", "stage": stage, "completed": completed,
                 "error": "Loading interrupted. A request may have executed; inspect the player before retrying."}
@@ -2923,6 +3045,19 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "player_settings" in data:
+        settings = data["player_settings"]
+        if (not isinstance(settings, dict) or set(settings) != {"version", "operations", "max_page_size"}
+                or type(settings["version"]) is not int or settings["version"] != 1
+                or type(settings["max_page_size"]) is not int or settings["max_page_size"] != 20
+                or settings["operations"] != ["schema", "get", "set"]):
+            raise Error(invalid)
+        result["player_settings"] = settings
+    if "vportal_settings" in data:
+        settings = data["vportal_settings"]
+        if not isinstance(settings, dict) or set(settings) != {"version"} or type(settings["version"]) is not int or settings["version"] != 1:
+            raise Error(invalid)
+        result["vportal_settings"] = {"version": 1}
     for key, allowed in (("lifecycle", LIFECYCLE_OPERATIONS), ("input", INPUT_KEYS), ("playback", PLAYBACK_OPERATIONS)):
         values = data.get(key)
         if (not isinstance(values, list) or len(values) > len(allowed) or
@@ -3129,6 +3264,10 @@ def print_player_help(data, name):
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("Available controls now:")
+    if "player_settings" in controls:
+        print(f"  {prefix} settings  — list typed preferences for this player and source")
+        print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
+        print(f"  {prefix} setting players [hls.js]  — read/save a supported engine for this provider/profile")
     provider = data.get("provider")
     provider_commands = isinstance(provider, str) and bool(provider.strip())
     if provider_commands:
@@ -3193,7 +3332,7 @@ def print_player_help(data, name):
     if "list" in libraries:
         print(f"  {prefix} plex libraries  — list movie/show libraries on the player's Plex server")
     if "play" in libraries:
-        print(f'  {prefix} plex shuffle "NAME" / plex library "NAME"  — play a whole library (or id:NUMBER)')
+        print(f'  {prefix} plex shuffle "NAME" / plex library "NAME"  — play up to 500 library items (or id:NUMBER)')
     if "preview" in libraries:
         print(f'  {prefix} plex library --preview "NAME"  — check a whole library without playing')
     categories = controls.get("categories", {}).get("operations", [])
@@ -4617,6 +4756,14 @@ def main(argv=None):
             return provider_group_command(client, targets, args.words[1:], args.json)
         device = client.device(args.words[0])
         words = args.words[1:]
+        if words and words[0].casefold() in ("setting", "settings"):
+            module_path = Path(__file__).resolve().with_name("player_settings.py")
+            if not module_path.is_file():
+                raise Error("Install all CLI Python files from the same revision to manage settings")
+            spec = importlib.util.spec_from_file_location("ott_player_settings", module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.run(SimpleNamespace(**globals()), client, device, words, args.timeout, args.json)
         if (words and words[0].casefold() == "update" and
                 (len(words) == 1 or words[1].casefold() not in ("status", "prepare", "install"))):
             module_path = Path(__file__).resolve().with_name("app_update.py")
@@ -4650,6 +4797,10 @@ def main(argv=None):
             data = offline_profile_command(client, device, action, params, args.timeout)
         elif action == "profile_settings" and "vportal" in params["settings"]:
             data = vportal_profile_command(client, device, params, args.timeout)
+        elif action == "provider_settings" and params.get("provider") == "vportal":
+            row = {"number": params["settings"]["profile"],
+                   "settings": {key: value for key, value in params["settings"].items() if key != "profile"}}
+            data = vportal_settings_command(client, device, row)
         elif action == "screenshot":
             data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
         elif action == "plex_queue":

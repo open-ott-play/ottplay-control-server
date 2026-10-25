@@ -14,7 +14,7 @@ These features require the controller and CLI from a revision containing this
 guide. Exact settings comparison and handoff also require an updated player.
 Older release archives and the historical CLI revision in the installation
 guide do not acquire these features automatically. Install **all `cli/*.py`
-files together**, including `preset_session.py`; preserve private configuration.
+files together**, including `preset_session.py` and `player_settings.py`; preserve private configuration.
 
 ![Control, checkpoint and handoff flow](assets/reliable-control.svg)
 
@@ -99,8 +99,13 @@ M3U profile. It returns nonzero if anything differs or comparison is unsupported
 `apply` requires the server journal. It creates a private checkpoint and compares
 every configured provider before the first mutation. Each save compares stored
 bytes to the expected values through `settings_compare`; a match skips the
-write. A final verification covers Plex, all M3U slots, optional Stalker slots
-and the selected M3U profile. Comparisons return a boolean, never stored secrets.
+write. A final verification covers Plex, all M3U slots, optional Stalker and
+dedicated VPortal slots, and the selected M3U profile. VPortal comparisons also
+return opaque source/revision receipts for conditional writes; no stored secrets
+are returned. Nonempty legacy `m3u[].vportal` links become dedicated VPortal
+slots in the normalized plan, preserving their existing VPortal names. They
+now affect the fingerprint, so checkpoints that omitted them cannot resume as
+complete. See the [migration and settings guide](player-settings.md).
 
 The default checkpoint is below `~/.config/ottplay-control/checkpoints/`.
 Use `--checkpoint /absolute/private/path/session.json` after the mode to choose
