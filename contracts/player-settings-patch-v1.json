@@ -1,0 +1,395 @@
+{
+  "version": 1,
+  "action": "player_settings_patch",
+  "capability": {
+    "version": 1,
+    "groups": [
+      "command_server",
+      "local_http"
+    ],
+    "max_fields": 3
+  },
+  "limits": {
+    "result_bytes": 65536,
+    "string_utf8_bytes": 4096,
+    "receipt_ttl_seconds": 120,
+    "max_fields": 3
+  },
+  "groups": {
+    "command_server": {
+      "commandServerAddress": {
+        "type": "string",
+        "sensitive": true,
+        "max_utf8_bytes": 4096
+      },
+      "commandServerToken": {
+        "type": "string",
+        "sensitive": true,
+        "max_utf8_bytes": 256
+      },
+      "commandServerEnabled": {
+        "type": "integer",
+        "sensitive": false,
+        "values": [
+          0,
+          1
+        ]
+      }
+    },
+    "local_http": {
+      "localCmdUrl": {
+        "type": "string",
+        "sensitive": true,
+        "max_utf8_bytes": 4096
+      },
+      "localHttpDeviceCode": {
+        "type": "string",
+        "sensitive": true,
+        "max_utf8_bytes": 256
+      },
+      "localHttpEnabled": {
+        "type": "integer",
+        "sensitive": false,
+        "values": [
+          0,
+          1
+        ]
+      }
+    }
+  },
+  "snapshot_storage": [
+    "default",
+    "stored",
+    "invalid"
+  ],
+  "snapshot_rules": {
+    "group_revision_only": true,
+    "all_group_fields_required": true,
+    "sensitive_keys": [
+      "id",
+      "storage",
+      "redacted",
+      "configured"
+    ],
+    "ordinary_required_keys": [
+      "id",
+      "storage",
+      "value"
+    ],
+    "ordinary_optional_keys": [
+      "persisted_value"
+    ],
+    "redacted_must_equal": true,
+    "persisted_value_only_when_storage": "stored",
+    "ordinary_persisted_value_required_when_storage": "stored",
+    "set_storage": "stored"
+  },
+  "transition_matrix": {
+    "idle": [
+      null
+    ],
+    "pending": [
+      null
+    ],
+    "applied": [
+      null
+    ],
+    "rolled_back": [
+      "handshake_timeout",
+      "authorization_failed",
+      "network_error",
+      "storage_failed",
+      "ack_timeout",
+      "effect_failed"
+    ],
+    "failed": [
+      "handshake_timeout",
+      "authorization_failed",
+      "network_error",
+      "storage_failed",
+      "superseded",
+      "ack_timeout",
+      "effect_failed"
+    ]
+  },
+  "reasons": [
+    "invalid_request",
+    "invalid_value",
+    "runtime_changed",
+    "source_changed",
+    "revision_conflict",
+    "policy_restricted",
+    "unsupported",
+    "storage_failed",
+    "effect_failed"
+  ],
+  "requests": {
+    "get": {
+      "op": "get",
+      "runtime": "page-123",
+      "group": "command_server"
+    },
+    "set": {
+      "op": "set",
+      "runtime": "page-123",
+      "group": "command_server",
+      "context": "context-1",
+      "revision": "revision-1",
+      "values": {
+        "commandServerAddress": "https://control.example/api/webhook/commands?device_id=example-player",
+        "commandServerToken": "example_device_token_01234567890123456789",
+        "commandServerEnabled": 1
+      }
+    },
+    "partial": {
+      "op": "set",
+      "runtime": "page-123",
+      "group": "local_http",
+      "context": "context-1",
+      "revision": "revision-1",
+      "values": {
+        "localHttpEnabled": 0
+      }
+    }
+  },
+  "responses": {
+    "get": {
+      "version": 1,
+      "op": "get",
+      "runtime": "page-123",
+      "group": "command_server",
+      "context": {
+        "token": "context-1",
+        "provider": "m3u",
+        "profile": 1
+      },
+      "revision": "revision-1",
+      "settings": [
+        {
+          "id": "commandServerAddress",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerToken",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerEnabled",
+          "storage": "stored",
+          "value": 1,
+          "persisted_value": 1
+        }
+      ],
+      "transition": {
+        "state": "idle"
+      }
+    },
+    "set": {
+      "version": 1,
+      "op": "set",
+      "runtime": "page-123",
+      "group": "command_server",
+      "context": {
+        "token": "context-1",
+        "provider": "m3u",
+        "profile": 1
+      },
+      "revision": "revision-2",
+      "settings": [
+        {
+          "id": "commandServerAddress",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerToken",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerEnabled",
+          "storage": "stored",
+          "value": 1,
+          "persisted_value": 1
+        }
+      ],
+      "transition": {
+        "state": "pending"
+      },
+      "persisted": true,
+      "changed": true,
+      "application": {
+        "state": "deferred",
+        "reason": "after_ack"
+      }
+    },
+    "local_http_get": {
+      "version": 1,
+      "op": "get",
+      "runtime": "page-123",
+      "group": "local_http",
+      "context": {
+        "token": "context-1",
+        "provider": "m3u",
+        "profile": 1
+      },
+      "revision": "revision-1",
+      "settings": [
+        {
+          "id": "localCmdUrl",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "localHttpDeviceCode",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "localHttpEnabled",
+          "storage": "stored",
+          "value": 1,
+          "persisted_value": 1
+        }
+      ],
+      "transition": {
+        "state": "idle"
+      }
+    },
+    "error": {
+      "version": 1,
+      "op": "set",
+      "runtime": "page-123",
+      "group": "command_server",
+      "error": "The player settings patch could not be completed.",
+      "reason": "revision_conflict"
+    },
+    "unchanged": {
+      "version": 1,
+      "op": "set",
+      "runtime": "page-123",
+      "group": "command_server",
+      "context": {
+        "token": "context-1",
+        "provider": "m3u",
+        "profile": 1
+      },
+      "revision": "revision-2",
+      "settings": [
+        {
+          "id": "commandServerAddress",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerToken",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerEnabled",
+          "storage": "stored",
+          "value": 1,
+          "persisted_value": 1
+        }
+      ],
+      "transition": {
+        "state": "applied"
+      },
+      "persisted": true,
+      "changed": false,
+      "application": {
+        "state": "completed"
+      }
+    },
+    "unchanged_pending": {
+      "version": 1,
+      "op": "set",
+      "runtime": "page-123",
+      "group": "command_server",
+      "context": {
+        "token": "context-1",
+        "provider": "m3u",
+        "profile": 1
+      },
+      "revision": "revision-2",
+      "settings": [
+        {
+          "id": "commandServerAddress",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerToken",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerEnabled",
+          "storage": "stored",
+          "value": 1,
+          "persisted_value": 1
+        }
+      ],
+      "transition": {
+        "state": "pending"
+      },
+      "persisted": true,
+      "changed": false,
+      "application": {
+        "state": "deferred",
+        "reason": "after_ack"
+      }
+    }
+  },
+  "semantics": [
+    "A nonempty partial patch may contain only the finite IDs from its group; runtime validates the final tuple.",
+    "One opaque revision binds all three fields, including unchanged fields, for 120 seconds.",
+    "Sensitive snapshots never include value, persisted_value, effective_value, or secrets in errors.",
+    "A successful set confirms persistence, not connection establishment; actual owner application follows delivery acknowledgement.",
+    "Pending writes reject another write to the same group. Subsequent get reports applied, rolled_back, or failed.",
+    "A failed handover restores the prior tuple only while the journal and complete desired tuple still belong to that operation.",
+    "Missing acknowledgement on a live page rolls back after 120 seconds; startup reconciles a still-owned pending journal.",
+    "Equal saved values report changed=false. Completion without reconnecting requires matching live-owner evidence; otherwise application is deferred/after_ack with transition pending. Supplied enabled integers must match value and persisted_value."
+  ],
+  "application_matrix": {
+    "changed": {
+      "application": {
+        "state": "deferred",
+        "reason": "after_ack"
+      },
+      "transition": {
+        "state": "pending"
+      }
+    },
+    "unchanged": {
+      "application": {
+        "state": "completed"
+      },
+      "transition": {
+        "state": "applied"
+      }
+    },
+    "unchanged_pending": {
+      "application": {
+        "state": "deferred",
+        "reason": "after_ack"
+      },
+      "transition": {
+        "state": "pending"
+      }
+    }
+  }
+}

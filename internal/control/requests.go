@@ -21,6 +21,8 @@ type requestResult struct {
 	aspect               *aspectRequest
 	notificationSettings *notificationsRequest
 	playerSettings       *playerSettingsRequest
+	plexFolders          *plexFoldersRequest
+	settingsPatch        *settingsPatchRequest
 	vportalSettings      *vportalSettingsRequest
 	category             *categoryRequest
 	randomPlay           *randomPlayRequest
@@ -39,7 +41,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	if d == nil {
-		for _, candidate := range s.devices {
+		for _, candidate := range s.currentDevices() {
 			if candidate.id == q.Get("device_id") {
 				d = candidate
 			}
@@ -147,6 +149,10 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parseNotificationsRequest(params) != nil
 	case "player_settings":
 		ok = parsePlayerSettingsRequest(params) != nil
+	case "plex_folders":
+		ok = parsePlexFoldersRequest(params) != nil
+	case "player_settings_patch":
+		ok = parseSettingsPatchRequest(params) != nil
 	case "categories":
 		ok = parseCategoryRequest(action, params) != nil
 	case "inspect":
@@ -279,6 +285,12 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "player_settings" {
 		e.playerSettings = parsePlayerSettingsRequest(params)
+	}
+	if action == "plex_folders" {
+		e.plexFolders = parsePlexFoldersRequest(params)
+	}
+	if action == "player_settings_patch" {
+		e.settingsPatch = parseSettingsPatchRequest(params)
 	}
 	if (action == "provider_settings" || action == "settings_compare") && settingString(params["provider"]) == "vportal" {
 		e.vportalSettings = parseVPortalSettingsRequest(action, params)
@@ -413,6 +425,8 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var aspect *aspectRequest
 	var notificationSettings *notificationsRequest
 	var playerSettings *playerSettingsRequest
+	var plexFolders *plexFoldersRequest
+	var settingsPatch *settingsPatchRequest
 	var vportalSettings *vportalSettingsRequest
 	var category *categoryRequest
 	var randomPlay *randomPlayRequest
@@ -430,6 +444,8 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			aspect = pending.aspect
 			notificationSettings = pending.notificationSettings
 			playerSettings = pending.playerSettings
+			plexFolders = pending.plexFolders
+			settingsPatch = pending.settingsPatch
 			vportalSettings = pending.vportalSettings
 			category = pending.category
 			randomPlay = pending.randomPlay
@@ -447,6 +463,12 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if playerSettings == nil {
 		playerSettings = d.results[id].playerSettings
+	}
+	if plexFolders == nil {
+		plexFolders = d.results[id].plexFolders
+	}
+	if settingsPatch == nil {
+		settingsPatch = d.results[id].settingsPatch
 	}
 	if vportalSettings == nil {
 		vportalSettings = d.results[id].vportalSettings
@@ -490,6 +512,14 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if playerSettings != nil && !validPlayerSettingsResult(m["data"], status, playerSettings) {
 		failure(w, 400, "invalid player settings result")
+		return
+	}
+	if plexFolders != nil && !validPlexFoldersResult(m["data"], status, plexFolders) {
+		failure(w, 400, "invalid Plex folder settings result")
+		return
+	}
+	if settingsPatch != nil && !validSettingsPatchResult(m["data"], status, settingsPatch) {
+		failure(w, 400, "invalid grouped settings result")
 		return
 	}
 	if vportalSettings != nil && !validVPortalSettingsResult(m["data"], status, vportalSettings) {
@@ -557,7 +587,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

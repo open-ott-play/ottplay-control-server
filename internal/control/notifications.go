@@ -69,7 +69,8 @@ func (s *Server) expireNotifications(d *device, now time.Time) {
 }
 
 // Recipient snapshots precede camera acquisition. Delivery rechecks the runtime
-// so a stopped/reconfigured player never gains a frame acquired for its past session.
+// and registry generation so a restarted or re-registered player never gains a
+// frame acquired for its past session. These receipts stay inside the server.
 func (s *Server) NotificationTargets(n homeassistant.Notification) map[string]string {
 	return s.notificationTargets(n, false)
 }
@@ -87,17 +88,26 @@ func (s *Server) notificationTargets(n homeassistant.Notification, media bool) m
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, d := range s.devices {
+	for _, d := range s.currentDevices() {
 		if len(n.Targets) > 0 && !targets[d.id] {
 			continue
 		}
 		s.expireNotifications(d, now)
 		p := &d.notifications
 		if p.fresh(now) && len(p.queue) < notificationQueueLimit && (!media || p.mediaJPEG) {
-			result[d.id] = p.runtime
+			result[d.id] = s.notificationRecipient(d)
 		}
 	}
 	return result
+}
+
+// The queue lock is held, so the device list and generation cannot change while
+// this opaque recipient receipt is constructed or compared.
+func (s *Server) notificationRecipient(d *device) string {
+	if snapshot := s.registryView.Load(); snapshot != nil {
+		return snapshot.identities[d.id].Generation + ":" + d.notifications.runtime
+	}
+	return d.notifications.runtime
 }
 
 // SetHomeAssistantStatus installs a credential-free snapshot callback. It must
@@ -152,21 +162,22 @@ func (s *Server) DeliverNotification(n homeassistant.Notification) homeassistant
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, d := range s.devices {
+	for _, d := range s.currentDevices() {
 		if targeted && !targets[d.id] {
 			continue
 		}
 		delete(targets, d.id)
 		s.expireNotifications(d, now)
 		p := &d.notifications
+		recipient := s.notificationRecipient(d)
 		if !p.fresh(now) || !expiry.After(now) || len(p.queue) >= notificationQueueLimit ||
-			(n.TargetRuntimes != nil && n.TargetRuntimes[d.id] != p.runtime) {
+			(n.TargetRuntimes != nil && n.TargetRuntimes[d.id] != recipient) {
 			result.Skipped++
 			s.notificationStats.Skipped++
 			continue
 		}
 		var media *notificationMediaDescriptor
-		if n.Media != nil && p.mediaJPEG && n.MediaTargetRuntimes[d.id] == p.runtime {
+		if n.Media != nil && p.mediaJPEG && n.MediaTargetRuntimes[d.id] == recipient {
 			media = s.grantNotificationMedia(id, d.id, p.runtime, n.Media, expiry, now)
 		}
 		p.queue = append(p.queue, notification{ID: id, Runtime: p.runtime, Title: n.Title,
@@ -235,8 +246,8 @@ func (s *Server) notificationStatus(w http.ResponseWriter, r *http.Request, now 
 		return
 	}
 	s.mu.Lock()
-	players := make([]map[string]any, 0, len(s.devices))
-	for _, d := range s.devices {
+	players := make([]map[string]any, 0, len(s.currentDevices()))
+	for _, d := range s.currentDevices() {
 		if operator != nil && !operator.devices[d.id] {
 			continue
 		}

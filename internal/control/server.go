@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
@@ -41,6 +42,8 @@ type entry struct {
 	aspect               *aspectRequest
 	notificationSettings *notificationsRequest
 	playerSettings       *playerSettingsRequest
+	plexFolders          *plexFoldersRequest
+	settingsPatch        *settingsPatchRequest
 	vportalSettings      *vportalSettingsRequest
 	category             *categoryRequest
 	randomPlay           *randomPlayRequest
@@ -72,6 +75,9 @@ type device struct {
 }
 
 type Server struct {
+	registry               *deviceRegistry
+	registryGate           sync.RWMutex
+	registryView           atomic.Pointer[registrySnapshot]
 	started                time.Time
 	diagnostics            *diagnosticsState
 	mu                     sync.Mutex
@@ -86,6 +92,9 @@ type Server struct {
 	resultBytes            int
 	lastTS                 float64
 	globalRate, adminRate  bucket
+	transportRate          bucket
+	transportSlots         chan struct{}
+	transportLarge         chan struct{}
 	now                    func() time.Time
 	discovery              *discovery
 	pairings               map[string]*pairing
@@ -102,18 +111,46 @@ func New(c config.Config) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	s := &Server{started: time.Now(), admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now}
-	s.configureOperators(c.Operators)
-	var err error
-	s.diagnostics, err = newDiagnostics(c)
+	registry, err := openDeviceRegistry(c)
 	if err != nil {
+		return nil, err
+	}
+	active := c
+	var identities map[string]registryIdentity
+	if registry != nil {
+		identities, err = registryIdentities(c, registry.disk)
+		if err != nil {
+			registry.lock.Close()
+			return nil, err
+		}
+		if err = registryRevocationReserve(c, registry.disk, identities, time.Now()); err != nil {
+			registry.lock.Close()
+			return nil, err
+		}
+		if err = registry.pruneConfiguredClaims(time.Now()); err != nil {
+			registry.lock.Close()
+			return nil, err
+		}
+		active = registryActiveConfig(c, identities)
+	}
+	s := &Server{started: time.Now(), admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now, transportSlots: make(chan struct{}, 16), transportLarge: make(chan struct{}, 1)}
+	s.configureOperators(c.Operators)
+	s.registry = registry
+	s.diagnostics, err = newDiagnostics(active)
+	if err != nil {
+		if registry != nil {
+			registry.lock.Close()
+		}
 		return nil, err
 	}
 	for _, origin := range c.AllowedOrigins {
 		s.origins[origin] = true
 	}
-	for _, d := range c.Devices {
+	for _, d := range active.Devices {
 		s.devices = append(s.devices, &device{id: d.ID, token: sha256.Sum256([]byte(d.Token))})
+	}
+	if registry != nil {
+		s.registryView.Store(&registrySnapshot{devices: s.devices, identities: identities})
 	}
 	if c.Discovery != nil {
 		s.discovery = newDiscovery(*c.Discovery)
@@ -127,6 +164,9 @@ func New(c config.Config) (*Server, error) {
 	}
 	s.journal, err = newCommandJournal(c.Journal)
 	if err != nil {
+		if registry != nil {
+			registry.lock.Close()
+		}
 		return nil, err
 	}
 	return s, nil
@@ -187,7 +227,7 @@ func (s *Server) authenticate(r *http.Request) (admin bool, d *device) {
 	}
 	hash := sha256.Sum256([]byte(token))
 	admin = subtle.ConstantTimeCompare(hash[:], s.admin[:]) == 1
-	for _, candidate := range s.devices {
+	for _, candidate := range s.currentDevices() {
 		if subtle.ConstantTimeCompare(hash[:], candidate.token[:]) == 1 {
 			d = candidate
 		}
@@ -241,7 +281,7 @@ func readLimitedBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byt
 }
 
 func (s *Server) expire(now time.Time) {
-	for _, d := range s.devices {
+	for _, d := range s.currentDevices() {
 		for id, result := range d.results {
 			if !now.Before(result.expires) {
 				s.resultBytes -= len(result.data)
@@ -264,7 +304,19 @@ func (s *Server) expire(now time.Time) {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Path == deviceTransportPath {
+		s.serveDeviceTransport(w, r)
+		return
+	}
 	path := strings.TrimRight(r.URL.Path, "/")
+	if path == "/api/device-registry" || strings.HasPrefix(path, "/api/device-registry/") {
+		s.serveDeviceRegistry(w, r, path)
+		return
+	}
+	if s.registry != nil && path != "/api/pairings" && path != "/api/pairings/approve" {
+		s.registryGate.RLock()
+		defer s.registryGate.RUnlock()
+	}
 	if path == diagnosticsPrefix || strings.HasPrefix(path, diagnosticsPrefix+"/") {
 		s.serveDiagnostics(w, r, path)
 		return
@@ -317,6 +369,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/healthz" || path == "/readyz" {
+		if snapshot := s.registryView.Load(); path == "/readyz" && snapshot != nil && snapshot.unavailable {
+			failure(w, 503, "device registry requires recovery")
+			return
+		}
 		reply(w, 200, map[string]string{"status": "ok"})
 		return
 	}
@@ -324,7 +380,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	// Each configured player can use its full allowance without exhausting a
 	// smaller shared budget; unauthenticated traffic still has a fixed bound.
-	if !s.globalRate.allow(now, len(s.devices)*120+240) {
+	if !s.globalRate.allow(now, len(s.currentDevices())*120+240) {
 		s.mu.Unlock()
 		w.Header().Set("Retry-After", "60")
 		failure(w, 429, "request rate exceeded")
@@ -400,7 +456,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if admin || operator != nil {
-		for _, candidate := range s.devices {
+		for _, candidate := range s.currentDevices() {
 			if candidate.id == q.Get("device_id") {
 				d = candidate
 			}
@@ -588,8 +644,8 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request, now time.Time) {
 	}
 	s.mu.Lock()
 	s.expire(now)
-	devices := make([]map[string]any, 0, len(s.devices))
-	for _, d := range s.devices {
+	devices := make([]map[string]any, 0, len(s.currentDevices()))
+	for _, d := range s.currentDevices() {
 		var seen any
 		if !d.lastSeen.IsZero() {
 			seen = d.lastSeen.UTC().Format(time.RFC3339Nano)

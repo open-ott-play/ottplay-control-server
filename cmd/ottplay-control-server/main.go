@@ -27,14 +27,14 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, out, errOut io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(errOut, "Usage: ottplay-control-server <serve|init|validate|version|healthcheck> [options]")
+		fmt.Fprintln(errOut, "Usage: ottplay-control-server <serve|init|registry-init|validate|version|healthcheck> [options]")
 		return 2
 	}
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	// Flag errors can contain supplied values, including accidental credentials.
 	f.SetOutput(io.Discard)
 	configPath := ""
-	if args[0] == "serve" || args[0] == "init" || args[0] == "validate" {
+	if args[0] == "serve" || args[0] == "init" || args[0] == "validate" || args[0] == "registry-init" {
 		f.StringVar(&configPath, "config", "", "Configuration JSON path")
 	}
 	deviceID, listen, cert, key, probe := "", "", "", "", ""
@@ -47,7 +47,7 @@ func run(args []string, out, errOut io.Writer) int {
 		f.StringVar(&key, "tls-key", "", "TLS private key PEM path")
 	case "healthcheck":
 		f.StringVar(&probe, "url", "http://127.0.0.1:8081/healthz", "Full health probe URL")
-	case "version", "validate":
+	case "version", "validate", "registry-init":
 	default:
 		fmt.Fprintln(errOut, "Unknown command.")
 		return 2
@@ -63,7 +63,7 @@ func run(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "Invalid command options.")
 		return 2
 	}
-	if (args[0] == "init" || args[0] == "validate" || args[0] == "serve") && configPath == "" {
+	if (args[0] == "init" || args[0] == "validate" || args[0] == "serve" || args[0] == "registry-init") && configPath == "" {
 		fmt.Fprintln(errOut, "--config is required.")
 		return 2
 	}
@@ -105,7 +105,19 @@ func run(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	if args[0] == "registry-init" {
+		if control.InitDeviceRegistry(c) != nil {
+			fmt.Fprintln(errOut, "Cannot initialize device registry.")
+			return 1
+		}
+		fmt.Fprintln(out, "Private device registry initialized. Existing state is never overwritten.")
+		return 0
+	}
 	if args[0] == "validate" {
+		if err := control.ValidateDeviceRegistry(c); err != nil {
+			fmt.Fprintln(errOut, "Device registry validation failed:", err)
+			return 1
+		}
 		fmt.Fprintln(out, "Configuration is valid.")
 		return 0
 	}

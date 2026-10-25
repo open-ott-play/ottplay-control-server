@@ -85,6 +85,15 @@ controller through their network domain and receive an individual device token
 after `ott approve NAME CODE`. DNS contains service metadata only. Existing
 manual connections continue to work without enabling discovery.
 
+The optional [durable device registry](docs/device-registry.md) can register an
+unknown player after administrator approval, retain approved claims across
+restarts, and revoke or rotate credentials without rewriting the static Secret.
+Initialize its private persistent store explicitly before enabling it.
+
+[Hosted device transport](docs/device-transport.md) carries device polling,
+acknowledgements, notifications, pairing and runtime diagnostics through one
+bounded JSON POST endpoint. Existing credentials, approval and route limits apply.
+
 Use the Python CLI for player aliases, live volume, channel search, current EPG,
 provider selection and supported provider configuration: [CLI guide](docs/cli.md).
 Both server and player must include the request/response extension.

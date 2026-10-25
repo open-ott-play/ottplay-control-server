@@ -28,7 +28,8 @@
     "local_only",
     "unsupported",
     "storage_failed",
-    "effect_failed"
+    "effect_failed",
+    "atomic_patch_required"
   ],
   "access_reasons": [
     "policy_restricted",
@@ -36,12 +37,14 @@
     "unsupported",
     "storage_failed",
     "device_forced_auto",
-    "lifecycle_required"
+    "lifecycle_required",
+    "local_action_required"
   ],
   "application_reasons": [
     "next_stream",
     "manual",
-    "effect_failed"
+    "effect_failed",
+    "after_ack"
   ],
   "requests": {
     "schema": {
@@ -158,7 +161,8 @@
     ],
     "deferred": [
       "next_stream",
-      "manual"
+      "manual",
+      "after_ack"
     ],
     "failed": [
       "effect_failed"

@@ -2,11 +2,17 @@
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`, `player_settings.py` and `app_update.py`. Python 3.12 is the version used by CI. Commands take a short
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
+`player_settings.py`, `app_update.py` and `device_registry.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
 command queue.
+
+For dynamic registration, removal, credential rotation and recovery, see the
+[device registry CLI workflow](device-registry.md#cli-workflow). `ott remove NAME`
+revokes access before removing its local alias; `ott unalias NAME` only removes
+the local alias. Run `ott registry --help` for all lifecycle commands.
 
 Use this guide for the terminal client. The [deployment guide](deployment.md)
 covers installing, starting and stopping the separate Go command server;
@@ -1270,6 +1276,9 @@ the runtime schema, `ott f setting bufSize` to read, and `ott f setting bufSize 
 or `ott f setting players hls.js` to save with revision checks. See the
 [typed settings guide](player-settings.md) for scopes, limits, effect timing,
 private value files and recovery. Install `player_settings.py` beside `ott.py`.
+Use `settings patch command_server|local_http [--value-file FILE]` to inspect or
+atomically change a connection. Use `setting plexFolderPaths` for the full Plex
+folder selection, with `add PATH TITLE`, `remove PATH`, or `clear` (all libraries).
 
 A `provider-config` file contains `provider` and `settings`. Except for the new
 bound VPortal slot API, select the intended provider with `provider` first.
@@ -1357,7 +1366,8 @@ OTTClub's `server` field takes a hostname with an optional port, without
 
 Settings use the existing save and reload drivers. Parental settings locks and
 platform restrictions still apply; unlock the settings on the player first.
-Other providers currently require their own settings UI.
+For other providers, use `settings` and the live typed schema when advertised;
+only preferences absent from that schema require their local workflow.
 
 ## Plex libraries by name
 

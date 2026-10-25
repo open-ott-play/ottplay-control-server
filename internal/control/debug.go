@@ -29,7 +29,7 @@ func (s *Server) debug(w http.ResponseWriter, r *http.Request, now time.Time) {
 	}
 	s.mu.Lock()
 	pending, queues, results := 0, 0, 0
-	for _, device := range s.devices {
+	for _, device := range s.currentDevices() {
 		pending += len(device.queue)
 		results += len(device.results)
 		if len(device.queue) > 0 {
@@ -37,7 +37,7 @@ func (s *Server) debug(w http.ResponseWriter, r *http.Request, now time.Time) {
 		}
 	}
 	control := map[string]any{
-		"devices": len(s.devices), "queues": queues, "pending": pending,
+		"devices": len(s.currentDevices()), "queues": queues, "pending": pending,
 		"queueBytes": s.bytes, "resultEntries": results, "resultBytes": s.resultBytes,
 		"commandTtlMs": s.ttl.Milliseconds(), "maxPendingPerDevice": s.maxPending,
 	}

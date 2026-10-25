@@ -37,6 +37,7 @@ type Config struct {
 	Operators           []CommandOperator `json:"operators,omitempty"`
 	Journal             *CommandJournal   `json:"journal,omitempty"`
 	HomeAssistant       *HomeAssistant    `json:"home_assistant,omitempty"`
+	DeviceRegistry      *DeviceRegistry   `json:"device_registry,omitempty"`
 }
 
 var deviceID = regexp.MustCompile(wire.DeviceIdPattern)
@@ -67,6 +68,14 @@ func (c *Config) Defaults() {
 }
 
 func (c Config) Validate() error {
+	if c.DeviceRegistry != nil {
+		if err := c.DeviceRegistry.Validate(); err != nil {
+			return err
+		}
+		if c.Journal != nil && (c.Journal.Path == c.DeviceRegistry.Path || c.Journal.Path+".lock" == c.DeviceRegistry.Path || c.Journal.Path == c.DeviceRegistry.Path+".lock") {
+			return errors.New("registry and journal must use different files")
+		}
+	}
 	if c.HomeAssistant != nil {
 		if err := c.HomeAssistant.Validate(); err != nil {
 			return err
@@ -78,7 +87,7 @@ func (c Config) Validate() error {
 			}
 			for _, r := range c.HomeAssistant.Rules {
 				for _, id := range r.Targets {
-					if !configured[id] {
+					if !configured[id] && c.DeviceRegistry == nil {
 						return errors.New("home_assistant rule target must name a configured device")
 					}
 				}
@@ -115,7 +124,7 @@ func (c Config) Validate() error {
 	if !token.MatchString(c.AdminToken) {
 		return errors.New("admin_token must contain 32..256 URL-safe characters")
 	}
-	if len(c.Devices) == 0 || len(c.Devices) > MaxDevices {
+	if (len(c.Devices) == 0 && c.DeviceRegistry == nil) || len(c.Devices) > MaxDevices {
 		return errors.New("devices must contain 1..64 entries")
 	}
 	ids, tokens := map[string]bool{}, map[string]bool{c.AdminToken: true}

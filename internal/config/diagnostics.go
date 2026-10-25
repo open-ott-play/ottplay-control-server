@@ -96,7 +96,7 @@ func (c Config) validateDiagnostics() error {
 		}
 		seen := map[string]bool{}
 		for _, id := range o.DeviceIDs {
-			if !devices[id] || seen[id] {
+			if !deviceID.MatchString(id) || (!devices[id] && c.DeviceRegistry == nil) || seen[id] {
 				return errors.New("invalid diagnostic operator device scope")
 			}
 			seen[id] = true

@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/open-ott-play/ottplay-control-server/internal/config"
 )
 
 const pairingTTL = 10 * time.Minute
@@ -19,6 +21,7 @@ const maxPairings = 64
 
 type pairing struct {
 	id, device, code string
+	address          string
 	secret           [32]byte
 	server           discoveredServer
 	expires          time.Time
@@ -49,7 +52,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request, path string) 
 	s.mu.Lock()
 	allowed := false
 	if public {
-		allowed = s.publicRate.allow(s.now(), len(s.devices)*30+60)
+		allowed = s.publicRate.allow(s.now(), len(s.currentDevices())*30+60)
 	} else {
 		allowed = s.adminRate.allow(s.now(), 240)
 	}
@@ -90,7 +93,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request, path string) 
 		list := []map[string]any{}
 		for _, p := range s.pairings {
 			if !p.approved {
-				list = append(list, map[string]any{"id": p.id, "device_id": p.device, "code": p.code, "address": p.server.Address, "expires_in": int(p.expires.Sub(now).Seconds())})
+				list = append(list, map[string]any{"id": p.id, "device_id": p.device, "code": p.code, "address": p.address, "expires_in": int(p.expires.Sub(now).Seconds())})
 			}
 		}
 		s.mu.Unlock()
@@ -100,27 +103,70 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request, path string) 
 }
 
 func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
+	if s.registry != nil {
+		s.registry.mu.Lock()
+		failed := s.registry.failed
+		s.registry.mu.Unlock()
+		if failed {
+			failure(w, 503, "device registry requires recovery")
+			return
+		}
+	}
 	b, ok := readBody(w, r)
 	if !ok {
 		return
 	}
 	fields, err := decodeObject(b)
-	var deviceID, serverID string
-	if err != nil || (len(fields) != 1 && len(fields) != 2) || json.Unmarshal(fields["device_id"], &deviceID) != nil {
+	var deviceID, serverID, address string
+	if err != nil || len(fields) < 1 || len(fields) > 3 || json.Unmarshal(fields["device_id"], &deviceID) != nil || !registryID.MatchString(deviceID) {
 		failure(w, 400, "device_id and optional server_id are required")
 		return
 	}
-	if len(fields) == 2 && (json.Unmarshal(fields["server_id"], &serverID) != nil || len(serverID) == 0 || len(serverID) > 254) {
+	for key := range fields {
+		if key != "device_id" && key != "server_id" && key != "server_address" {
+			failure(w, 400, "unsupported pairing field")
+			return
+		}
+	}
+	if raw, present := fields["server_id"]; present && (json.Unmarshal(raw, &serverID) != nil || len(serverID) == 0 || len(serverID) > 254) {
 		failure(w, 400, "invalid server_id")
 		return
+	}
+	address = s.discovery.publicURL
+	if raw, present := fields["server_address"]; present {
+		if json.Unmarshal(raw, &address) != nil {
+			failure(w, 400, "invalid server_address")
+			return
+		}
+		address, err = config.HTTPSBase(address)
+		if err != nil || !s.discovery.publicAliases[address] {
+			failure(w, 400, "server_address is not configured")
+			return
+		}
 	}
 	s.mu.Lock()
 	now := s.now()
 	s.expirePairings(now)
 	rate, registered := s.pairRates[deviceID]
+	if !registered && s.registry != nil {
+		for id, previous := range s.pairRates {
+			if !previous.start.IsZero() && now.Sub(previous.start) >= pairingTTL {
+				delete(s.pairRates, id)
+			}
+		}
+		if len(s.pairRates) < 256 {
+			rate = new(bucket)
+			s.pairRates[deviceID] = rate
+			registered = true
+		}
+	}
 	allowed := registered && rate.allow(now, 3) && s.createRate.allow(now, 30)
 	s.mu.Unlock()
 	if !registered {
+		if s.registry != nil {
+			failure(w, 429, "pairing creation capacity reached")
+			return
+		}
 		failure(w, 400, "device is not registered")
 		return
 	}
@@ -170,17 +216,17 @@ func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 		failure(w, 429, "pairing queue is full")
 		return
 	}
-	s.pairings[id] = &pairing{id: id, device: deviceID, code: code, secret: sha256.Sum256([]byte(secret)), server: selected, expires: now.Add(pairingTTL)}
+	s.pairings[id] = &pairing{id: id, device: deviceID, code: code, secret: sha256.Sum256([]byte(secret)), server: selected, address: address, expires: now.Add(pairingTTL)}
 	s.mu.Unlock()
 	reply(w, 201, map[string]any{"id": id, "secret": secret, "code": code, "expires_in": 600})
 }
 
-func (s *Server) currentPairingServer(r *http.Request, expected discoveredServer) (bool, error) {
+func (s *Server) currentPairingServer(r *http.Request, expected discoveredServer, address string) (bool, error) {
 	servers, err := s.discovery.resolve(r.Context(), true)
 	if err != nil {
 		return false, err
 	}
-	if expected.Address != s.discovery.publicURL {
+	if expected.Address != s.discovery.publicURL || !s.discovery.publicAliases[address] {
 		return false, nil
 	}
 	for _, server := range servers {
@@ -192,6 +238,10 @@ func (s *Server) currentPairingServer(r *http.Request, expected discoveredServer
 }
 
 func (s *Server) approvePairing(w http.ResponseWriter, r *http.Request) {
+	if s.registry != nil {
+		s.approveRegistryPairing(w, r)
+		return
+	}
 	b, ok := readBody(w, r)
 	if !ok {
 		return
@@ -226,7 +276,7 @@ func (s *Server) approvePairing(w http.ResponseWriter, r *http.Request) {
 	}
 	expected := p.server
 	s.mu.Unlock()
-	current, err := s.currentPairingServer(r, expected)
+	current, err := s.currentPairingServer(r, expected, p.address)
 	if err != nil {
 		failure(w, 503, "DNS discovery unavailable")
 		return
@@ -258,6 +308,10 @@ func (s *Server) approvePairing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) claimPairing(w http.ResponseWriter, r *http.Request, id string) {
+	if s.registry != nil {
+		s.claimRegistryPairing(w, r, id, false)
+		return
+	}
 	values := r.Header.Values("Authorization")
 	if !commandID.MatchString(id) || len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
 		failure(w, 401, "valid pairing claim required")
@@ -283,7 +337,7 @@ func (s *Server) claimPairing(w http.ResponseWriter, r *http.Request, id string)
 		reply(w, 202, map[string]string{"status": "pending"})
 		return
 	}
-	current, err := s.currentPairingServer(r, expected)
+	current, err := s.currentPairingServer(r, expected, p.address)
 	if err != nil {
 		failure(w, 503, "DNS discovery unavailable")
 		return
@@ -304,7 +358,7 @@ func (s *Server) claimPairing(w http.ResponseWriter, r *http.Request, id string)
 		failure(w, 401, "valid pairing claim required")
 		return
 	}
-	result := map[string]string{"status": "approved", "device_id": p.device, "address": p.server.Address, "token": s.pairTokens[p.device]}
+	result := map[string]string{"status": "approved", "device_id": p.device, "address": p.address, "token": s.pairTokens[p.device]}
 	s.mu.Unlock()
 	reply(w, 200, result)
 }
@@ -312,6 +366,10 @@ func (s *Server) claimPairing(w http.ResponseWriter, r *http.Request, id string)
 // A caller may retire only its own claim, including after successful storage.
 // Cancellation never requires DNS and never accepts an administrator shortcut.
 func (s *Server) cancelPairing(w http.ResponseWriter, r *http.Request, id string) {
+	if s.registry != nil {
+		s.claimRegistryPairing(w, r, id, true)
+		return
+	}
 	values := r.Header.Values("Authorization")
 	if !commandID.MatchString(id) || len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
 		failure(w, 401, "valid pairing claim required")

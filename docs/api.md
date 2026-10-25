@@ -276,6 +276,25 @@ limits and the application state/reason matrix. The
 [settings guide](player-settings.md) explains scopes, conflicts, CLI examples
 and settings outside this registry.
 
+Capability `plex_folders` version 1 adds `list`, `add`, `remove`, and `clear`
+operations for the `plexFolderPaths` collection. Lists use consistent pages of
+at most 10 entries, with up to 1000 canonical Plex roots in a saved selection.
+Writes require runtime, context, and revision; the result distinguishes verified
+persistence from catalogue application. Empty selection means all libraries.
+See the [folder contract](../contracts/plex-folders-v1.json).
+
+Capability `player_settings_patch` version 1 adds `get` and `set` for the finite
+`command_server` and `local_http` groups. All three fields share one revision;
+`set.values` contains one to three group fields. Sensitive snapshots report only
+presence. A changed tuple returns `deferred/after_ack` with transition `pending`;
+an unchanged tuple returns `completed` with transition `applied` only when the
+live owner already matches. Otherwise it also uses `deferred/after_ack` and
+`pending` with `changed:false`. Subsequent
+reads can report a bounded failure or rollback reason. Results remain at most
+64 KiB. The [group contract](../contracts/player-settings-patch-v1.json) defines
+the exact field, storage, and transition rules. See the
+[connection workflow](player-settings.md#change-a-connection-as-one-transaction).
+
 `profiles` accepts exactly `{}`. For the active M3U provider it returns
 `{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured}]}`:
 exactly 15 ordered slots numbered 1–15, with one active slot. History is an
@@ -931,6 +950,18 @@ Results are bounded to 2 MiB each, 50 per device and 16 MiB globally; they expir
 Programme results use one `as_of` Unix-seconds timestamp captured at collection start. `checked` counts completed channel lookups and `partial` indicates an unfinished collection, not whether every provider feed was available. Channels with no current programme are omitted; the guide service does not distinguish missing data from a fetch failure in an empty result.
 
 ## Opt-in DNS-SD discovery and pairing
+
+The optional [durable registry API](device-registry.md) adds explicit
+administrator registration/revocation/rotation and durable approved claims.
+Its guide defines generation checks, operation receipts, static conflicts and
+selected HTTPS pairing aliases. Without that configuration, registration
+remains static and pending pairing behavior below is unchanged.
+
+Hosted clients may carry the device-side routes through
+[`POST /api/device-transport`](device-transport.md). Its fixed allowlist includes
+public discovery, pairing creation and claim/cancel; administrator listing and
+approval remain available only on their original routes. The same transport
+also supports device commands/results, notifications/media and runtime diagnostics.
 
 These routes return 404 unless the optional `discovery` configuration is present.
 The following configuration and response examples use illustrative addresses;

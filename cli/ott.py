@@ -62,6 +62,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott t1,t2 notifications off        save that preference on each distinct player
   ott alias NAME UUID                name an existing device
   ott add NAME UUID                  create a device access code and queue
+  ott registry --help               durable registration, revoke, rotate and recovery
+  ott remove NAME                   revoke access, then remove the local alias
+  ott unalias NAME                  remove only the local alias
   ott pair NAME                      show the player connection settings
   ott discover                       show controllers advertised in network DNS
   ott pending                        list pending player pairing requests
@@ -215,7 +218,7 @@ Signed channel offsets are nonzero whole numbers from -9007199254740991 to
 # Top-level commands take precedence over player names, including saved aliases.
 TOP_LEVEL_COMMANDS = frozenset((
     "add", "alias", "approve", "devices", "diagnostics", "discover", "handoff",
-    "ha", "help", "pair", "pending", "presets", "report", "resolve", "server",
+    "ha", "help", "pair", "pending", "presets", "registry", "remove", "report", "resolve", "server", "unalias",
 ))
 
 
@@ -268,7 +271,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "categories", "favorites", "aspect",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -3045,6 +3048,24 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "player_settings_patch" in data:
+        patch = data["player_settings_patch"]
+        if (not isinstance(patch, dict) or set(patch) != {"version", "groups", "max_fields"}
+                or type(patch["version"]) is not int or patch["version"] != 1
+                or patch["groups"] != ["command_server", "local_http"]
+                or type(patch["max_fields"]) is not int or patch["max_fields"] != 3):
+            raise Error(invalid)
+        result["player_settings_patch"] = patch
+    if "plex_folders" in data:
+        folders = data["plex_folders"]
+        if (not isinstance(folders, dict) or set(folders) != {"version", "setting_id", "operations", "max_page_size", "max_items"}
+                or type(folders["version"]) is not int or folders["version"] != 1
+                or folders["setting_id"] != "plexFolderPaths"
+                or folders["operations"] != ["list", "add", "remove", "clear"]
+                or type(folders["max_page_size"]) is not int or folders["max_page_size"] != 10
+                or type(folders["max_items"]) is not int or folders["max_items"] != 1000):
+            raise Error(invalid)
+        result["plex_folders"] = folders
     if "player_settings" in data:
         settings = data["player_settings"]
         if (not isinstance(settings, dict) or set(settings) != {"version", "operations", "max_page_size"}
@@ -3268,6 +3289,10 @@ def print_player_help(data, name):
         print(f"  {prefix} settings  — list typed preferences for this player and source")
         print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
         print(f"  {prefix} setting players [hls.js]  — read/save a supported engine for this provider/profile")
+    if "player_settings_patch" in controls:
+        print(f"  {prefix} settings patch command_server|local_http [--value-file FILE]  — read/change a connection together; secrets stay redacted")
+    if "plex_folders" in controls:
+        print(f"  {prefix} setting plexFolderPaths [list|add PATH TITLE|remove PATH|clear]  — Plex folder selection; empty means all libraries")
     provider = data.get("provider")
     provider_commands = isinstance(provider, str) and bool(provider.strip())
     if provider_commands:
@@ -3663,8 +3688,22 @@ def home_assistant_metadata(raw):
     return result
 
 
+def registry_management(client, config_path, words, json_output=False):
+    path = Path(__file__).resolve().with_name("device_registry.py")
+    if not path.is_file():
+        raise Error("Install device_registry.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_device_registry", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.dispatch(SimpleNamespace(**globals()), client, config_path, words, json_output)
+
+
 def management(client, config_path, words, json_output=False):
     verb = words[0].casefold()
+    registry_verbs = ("registry", "remove", "unalias", "add", "alias", "pair", "approve")
+    legacy_reserved = verb in ("add", "alias") and len(words) > 1 and words[1].casefold() in TOP_LEVEL_COMMANDS
+    if verb in registry_verbs and not legacy_reserved and registry_management(client, config_path, words, json_output):
+        return True
     if verb == "ha":
         tail = [word for word in words[1:] if word not in ("-j", "--json")]
         if len(tail) != 1 or tail[0].casefold() != "status":
@@ -4712,6 +4751,9 @@ def main(argv=None):
         print(HELP)
         return 0
     try:
+        if args.words[0].casefold() == "registry" and args.words[1:] in (["--help"], ["-h"]):
+            registry_management(None, args.config, args.words, args.json)
+            return 0
         if args.words[0].casefold() == "report":
             # Saved evidence must remain inspectable without credentials or a
             # reachable controller. Do not construct a Client on this path.
@@ -4728,6 +4770,9 @@ def main(argv=None):
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
             raise Error("--timeout must be between 1 and 300 seconds")
         config = read_json(args.config)
+        if args.words[0].casefold() == "unalias":
+            registry_management(None, args.config, args.words, args.json)
+            return 0
         if args.words[0].casefold() == "presets":
             if len(args.words) != 1:
                 raise Error("Use presets without arguments")
