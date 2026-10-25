@@ -44,6 +44,7 @@ type entry struct {
 	playerSettings       *playerSettingsRequest
 	plexFolders          *plexFoldersRequest
 	settingsPatch        *settingsPatchRequest
+	perfCapture          *perfCaptureRequest
 	vportalSettings      *vportalSettingsRequest
 	category             *categoryRequest
 	randomPlay           *randomPlayRequest

@@ -3,11 +3,15 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py` and `device_registry.py`. Python 3.12 is the version used by CI. Commands take a short
+`player_settings.py`, `app_update.py`, `device_registry.py` and `performance.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
 command queue.
+
+For opt-in performance recording, bounded export and guarded notification A–B–A
+trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
+perf --help` works without loading credentials; recording is off by default.
 
 For dynamic registration, removal, credential rotation and recovery, see the
 [device registry CLI workflow](device-registry.md#cli-workflow). `ott remove NAME`

@@ -106,7 +106,7 @@ function moduleOf(file, dependency, host) {
             } },
         };
         const dependency = name => {
-            if (['./remote-handoff', './remote-profiles', './remote-settings', './remote-restart'].includes(name))
+            if (['./remote-handoff', './remote-profiles', './remote-settings', './remote-restart', './remote-feature'].includes(name))
                 return moduleOf('commands/' + name.slice(2), dependency, host);
             if (name === '../utils/helpers') return { getScriptDOM: loadAsset };
             if (name === '../provider') return { isProviderAllowed: () => true, checkProviderUrl: () => true };

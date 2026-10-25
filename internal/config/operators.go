@@ -30,6 +30,7 @@ var CommandOperations = map[string]string{
 	"player_settings":       "schema get set",
 	"player_settings_patch": "get set",
 	"plex_folders":          "list add remove clear",
+	"perf_capture":          "start status read stop",
 }
 
 func ValidCommandAction(action string) bool {

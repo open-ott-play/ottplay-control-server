@@ -1,6 +1,7 @@
 """Rich diagnostics remain bounded, read-only, and separate from effect evidence."""
 import contextlib
 import copy
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -11,6 +12,8 @@ from unittest import mock
 from test_workbench_cli import Client, Clock, RUNTIME, SECRET, capabilities, load, ott, wb
 
 verify = load("debug_report_verify", "report_verify.py")
+ROOT = Path(__file__).resolve().parents[1]
+V3 = json.loads((ROOT / "contracts/runtime-debug-v3.json").read_text())
 
 
 def debug_snapshot():
@@ -147,6 +150,76 @@ class DebugCLITest(unittest.TestCase):
             code, result = self.run_debug(["debug", "--engine"])
             self.assertEqual((code, result["observations"][0]["reason"]), (3, "invalid_response"))
             self.assertNotIn("data", result["observations"][0])
+
+    def enable_attempts(self):
+        self.client.capabilities.update(copy.deepcopy(V3["capabilities"]))
+        self.client.debug = copy.deepcopy(V3["response"]["data"])
+
+    def test_actual_old_parser_ignores_new_marker(self):
+        source = (ROOT / V3["legacy_parser"]["path"]).read_bytes()
+        self.assertEqual(hashlib.sha256(source).hexdigest(), V3["legacy_parser"]["sha256"])
+        namespace = dict(vars(ott))
+        exec(compile(source, V3["legacy_parser"]["path"], "exec"), namespace)
+        self.enable_attempts()
+        legacy = namespace["capabilities_metadata"](self.client.capabilities)
+        self.assertEqual(legacy["debug_versions"], [1, 2])
+        self.assertNotIn("debug_attempts", legacy)
+        modern = ott.capabilities_metadata(self.client.capabilities)
+        self.assertEqual(modern.pop("debug_attempts"), {"version": 3})
+        self.assertEqual(modern, legacy)
+        with self.assertRaises(ott.Error):
+            namespace["capabilities_metadata"](dict(self.client.capabilities, debug_versions=[1, 2, 3]))
+
+    def test_engine_negotiates_v3_and_preserves_null_or_real_zero(self):
+        self.enable_attempts()
+        for empty in (False, True):
+            if empty:
+                self.client.debug["media"][0].update(attempt=None, lastAttempt=None)
+            code, result = self.run_debug(["debug", "--engine"])
+            self.assertEqual(code, 0)
+            self.assertEqual(self.client.calls[-1][2]["version"], 3)
+            self.assertEqual(result["observations"][0]["data"], self.client.debug)
+            self.assertEqual(result["observations"][0]["data"]["media"][0]["metrics"]["totalFrames"], 0)
+        self.client.debug = debug_snapshot()
+        code, result = self.run_debug(["debug"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.client.calls[-1][2]["version"], 1)
+
+    def test_attempt_capability_is_strict_and_requires_legacy_base(self):
+        self.enable_attempts()
+        for value in (None, {}, {"version": True}, {"version": 3.0}, {"version": 2}, {"version": 4}, {"version": 3, "url": SECRET}):
+            with self.subTest(value=value), self.assertRaises(ott.Error):
+                ott.capabilities_metadata(dict(self.client.capabilities, debug_attempts=value))
+        for field in ("debug", "debug_versions"):
+            caps = copy.deepcopy(self.client.capabilities)
+            del caps[field]
+            with self.assertRaises(ott.Error):
+                ott.capabilities_metadata(caps)
+
+    def test_v3_attempts_reject_malformed_private_or_downgraded_data(self):
+        mutations = [lambda d: d.update(version=2), lambda d: d["media"][0].pop("attempt"),
+                     lambda d: d["media"][0].pop("lastAttempt"),
+                     lambda d: d["media"][0]["attempt"].update(url=SECRET),
+                     lambda d: d["media"][0]["attempt"].pop("attachment"),
+                     lambda d: d["media"][0]["lastAttempt"].update(reason=SECRET),
+                     lambda d: d["media"][0]["lastAttempt"].update(handleId=None)]
+        for field in V3["attempt_fields"]:
+            for bad in (True, -1, 0.5, float("inf"), "1", None, 2 ** 53):
+                mutations.append(lambda d, field=field, bad=bad: d["media"][0]["attempt"].update({field: bad}))
+        for mutate in mutations:
+            self.enable_attempts()
+            mutate(self.client.debug)
+            code, result = self.run_debug(["debug", "--engine"])
+            self.assertEqual((code, result["observations"][0]["reason"]), (3, "invalid_response"))
+            self.assertNotIn("data", result["observations"][0])
+
+    def test_v3_rejection_never_retries_or_silently_downgrades(self):
+        self.enable_attempts()
+        self.client.inspect_failure = ott.HTTPError(400)
+        code, result = self.run_debug(["debug", "--engine"])
+        self.assertEqual((code, result["observations"][0]["reason"]), (3, "unsupported_controller"))
+        self.assertEqual([call[1] for call in self.client.calls], ["capabilities", "inspect"])
+        self.assertEqual(self.client.calls[-1][2]["version"], 3)
 
     def test_unavailable_native_and_missing_metrics_remain_unavailable(self):
         for state in ("unsupported", "unavailable", "timeout", "invalid"):

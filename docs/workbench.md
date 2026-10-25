@@ -53,6 +53,10 @@ local scenarios; that list does not claim the player supports their observations
 
 ## Runtime debug snapshots
 
+For a temporary event timeline and a notification A–B–A experiment, use
+[`ott PLAYER perf`](performance-capture.md). It is a separate opt-in capture;
+ordinary debug reads and bundles do not start that capture.
+
 `ott a1 debug` (alias `dbg`) reads the player's bounded runtime snapshot. It
 collects event-loop delay, available browser memory counters, connectivity and
 focus, command backlog/failure counters, media counters, and a bounded ring of
@@ -82,13 +86,24 @@ capability. An older controller reports `unsupported_controller`, without retry
 or a fallback to playback commands. `ott a1 play debug` still searches that title.
 
 Use `ott a1 debug --engine --json` to request the attached playback engine with
-debug schema version 2. This requires an updated controller and a player that
-advertises the separate `debug_versions: [1, 2]` capability. Each HTML media lane
+debug schema version 2, or version 3 when the player additionally advertises
+`debug_attempts: {"version":3}`. Both require an updated controller and the
+separate `debug_versions: [1, 2]` capability. Each HTML media lane
 then includes `engine`: `hls.js`, `shaka`, `html5`, or null when no current attached
 engine can be observed. This describes actual ownership, not the selected player
 preference, decoded frames, or physical display output. The CLI rejects unknown
 values and does not downgrade the request if the controller or player lacks
 support. Ordinary `debug` and bundle reads retain the exact version 1 schema.
+
+Version 3 adds nullable `attempt` and `lastAttempt` objects. Their counters are
+`attachment`, `engineStarts`, `fatalErrors`, `nativeFallbacks`, and `streamRetries`.
+The retired attempt also identifies its `handleId`, nullable `generation`, and
+reason (`ended`, `disposed`, or `suspended`). Null means unavailable, not zero.
+Compare counters only within the same runtime, lane, generation, handle, and
+attachment; replacing an engine or stream can reset them. A rejected version 3
+request is reported without retrying or silently downgrading. The legacy
+`debug_versions` array stays unchanged so older controllers/CLIs can keep using
+their supported schemas.
 
 Bundles use evaluator `workbench-v3` and keep exactly `manifest.json` and
 `result.json`. The latter contains separate `debug_observations`; a native-only

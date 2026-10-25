@@ -88,7 +88,7 @@ func validDebugSnapshot(raw json.RawMessage, runtime string) bool {
 }
 
 func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int) bool {
-	if version != 1 && version != 2 {
+	if version != 1 && version != 2 && version != 3 {
 		return false
 	}
 	if len(raw) > maxDebugSnapshotBytes {
@@ -109,8 +109,11 @@ func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int)
 	seen := map[string]bool{}
 	for _, rawLane := range lanes {
 		keys := []string{"lane", "generation", "handleId", "metrics"}
-		if version == 2 {
+		if version >= 2 {
 			keys = append(keys, "engine")
+		}
+		if version == 3 {
+			keys = append(keys, "attempt", "lastAttempt")
 		}
 		lane, valid := inspectObject(rawLane, keys...)
 		if !valid || !inspectEnum(lane["lane"], "main", "pip") ||
@@ -119,7 +122,10 @@ func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int)
 			!validDebugMetrics(lane["metrics"], debugMediaNumbers, debugMediaBools, true) {
 			return false
 		}
-		if version == 2 && !inspectNull(lane["engine"]) && !inspectEnum(lane["engine"], "hls.js", "shaka", "html5") {
+		if version >= 2 && !inspectNull(lane["engine"]) && !inspectEnum(lane["engine"], "hls.js", "shaka", "html5") {
+			return false
+		}
+		if version == 3 && (!validDebugAttempt(lane["attempt"], false) || !validDebugAttempt(lane["lastAttempt"], true)) {
 			return false
 		}
 		name, _ := inspectString(lane["lane"], 8)
@@ -147,4 +153,26 @@ func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int)
 		previous = sequence
 	}
 	return true
+}
+
+func validDebugAttempt(raw json.RawMessage, retired bool) bool {
+	if inspectNull(raw) {
+		return true
+	}
+	keys := []string{"attachment", "engineStarts", "fatalErrors", "nativeFallbacks", "streamRetries"}
+	if retired {
+		keys = append(keys, "handleId", "generation", "reason")
+	}
+	m, ok := inspectObject(raw, keys...)
+	if !ok {
+		return false
+	}
+	for _, key := range keys[:5] {
+		if !inspectNumber(m[key], 0, inspectMaxInteger, true, false) {
+			return false
+		}
+	}
+	return !retired || (inspectNumber(m["handleId"], 0, inspectMaxInteger, true, false) &&
+		inspectNumber(m["generation"], 0, inspectMaxInteger, true, true) &&
+		inspectEnum(m["reason"], "ended", "disposed", "suspended"))
 }

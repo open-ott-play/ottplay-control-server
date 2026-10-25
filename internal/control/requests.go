@@ -23,6 +23,7 @@ type requestResult struct {
 	playerSettings       *playerSettingsRequest
 	plexFolders          *plexFoldersRequest
 	settingsPatch        *settingsPatchRequest
+	perfCapture          *perfCaptureRequest
 	vportalSettings      *vportalSettingsRequest
 	category             *categoryRequest
 	randomPlay           *randomPlayRequest
@@ -153,6 +154,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parsePlexFoldersRequest(params) != nil
 	case "player_settings_patch":
 		ok = parseSettingsPatchRequest(params) != nil
+	case "perf_capture":
+		ok = parsePerfCaptureRequest(params) != nil
 	case "categories":
 		ok = parseCategoryRequest(action, params) != nil
 	case "inspect":
@@ -292,6 +295,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	if action == "player_settings_patch" {
 		e.settingsPatch = parseSettingsPatchRequest(params)
 	}
+	if action == "perf_capture" {
+		e.perfCapture = parsePerfCaptureRequest(params)
+	}
 	if (action == "provider_settings" || action == "settings_compare") && settingString(params["provider"]) == "vportal" {
 		e.vportalSettings = parseVPortalSettingsRequest(action, params)
 	}
@@ -427,6 +433,8 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var playerSettings *playerSettingsRequest
 	var plexFolders *plexFoldersRequest
 	var settingsPatch *settingsPatchRequest
+	var perfCapture *perfCaptureRequest
+	capabilitiesResult := d.results[id].permission == "capabilities"
 	var vportalSettings *vportalSettingsRequest
 	var category *categoryRequest
 	var randomPlay *randomPlayRequest
@@ -446,6 +454,8 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			playerSettings = pending.playerSettings
 			plexFolders = pending.plexFolders
 			settingsPatch = pending.settingsPatch
+			perfCapture = pending.perfCapture
+			capabilitiesResult = pending.permission == "capabilities"
 			vportalSettings = pending.vportalSettings
 			category = pending.category
 			randomPlay = pending.randomPlay
@@ -469,6 +479,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if settingsPatch == nil {
 		settingsPatch = d.results[id].settingsPatch
+	}
+	if perfCapture == nil {
+		perfCapture = d.results[id].perfCapture
 	}
 	if vportalSettings == nil {
 		vportalSettings = d.results[id].vportalSettings
@@ -496,6 +509,21 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	// requested page. An older or unrelated queue consumer cannot close the
 	// request with an unbound unsupported response. This is result fencing, not
 	// routing: a protocol-1 device queue still supports only one consumer.
+	if perfCapture != nil && (len(b) > maxPerfOuterBytes || !validPerfCaptureResult(m["data"], status, perfCapture)) {
+		failure(w, 400, "invalid performance capture result")
+		return
+	}
+	if capabilitiesResult && status == "ok" {
+		capabilities, err := decodeObject(m["data"])
+		if err != nil {
+			failure(w, 400, "invalid capabilities result")
+			return
+		}
+		if marker, exists := capabilities["perf_capture"]; exists && !validPerfCapability(marker) {
+			failure(w, 400, "invalid performance capture capability")
+			return
+		}
+	}
 	if inspect != nil && (len(b) > maxInspectResultBytes || !validInspectResult(m["data"], status, inspect)) {
 		failure(w, 400, "invalid inspect result")
 		return
@@ -587,7 +615,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

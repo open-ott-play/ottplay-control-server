@@ -1,0 +1,108 @@
+{
+  "version": 3,
+  "capabilities": {
+    "debug": {
+      "version": 1
+    },
+    "debug_versions": [
+      1,
+      2
+    ],
+    "debug_attempts": {
+      "version": 3
+    }
+  },
+  "max_snapshot_bytes": 16384,
+  "max_lanes": 2,
+  "max_events": 32,
+  "safe_integer": 9007199254740991,
+  "attempt_fields": [
+    "attachment",
+    "engineStarts",
+    "fatalErrors",
+    "nativeFallbacks",
+    "streamRetries"
+  ],
+  "last_attempt_fields": [
+    "attachment",
+    "engineStarts",
+    "fatalErrors",
+    "nativeFallbacks",
+    "streamRetries",
+    "handleId",
+    "generation",
+    "reason"
+  ],
+  "retired_reasons": [
+    "ended",
+    "disposed",
+    "suspended"
+  ],
+  "nullable_fields": [
+    "attempt",
+    "lastAttempt",
+    "generation"
+  ],
+  "request": {
+    "action": "inspect",
+    "params": {
+      "version": 3,
+      "runtime": "page-one",
+      "section": "debug"
+    }
+  },
+  "response": {
+    "version": 3,
+    "runtime": "page-one",
+    "section": "debug",
+    "data": {
+      "version": 3,
+      "runtime": "page-one",
+      "capturedAt": 1000000,
+      "platform": "browser",
+      "metrics": {
+        "visible": true
+      },
+      "media": [
+        {
+          "lane": "main",
+          "generation": 8,
+          "handleId": 10,
+          "metrics": {
+            "paused": false,
+            "totalFrames": 0
+          },
+          "engine": "hls.js",
+          "attempt": {
+            "attachment": 1,
+            "engineStarts": 3,
+            "fatalErrors": 2,
+            "nativeFallbacks": 1,
+            "streamRetries": 1
+          },
+          "lastAttempt": {
+            "attachment": 1,
+            "engineStarts": 3,
+            "fatalErrors": 2,
+            "nativeFallbacks": 1,
+            "streamRetries": 1,
+            "handleId": 9,
+            "generation": 7,
+            "reason": "ended"
+          }
+        }
+      ],
+      "events": [],
+      "eventsDropped": 0,
+      "native": {
+        "state": "unsupported",
+        "data": null
+      }
+    }
+  },
+  "legacy_parser": {
+    "source_revision": "5166858e8a1c4e2cd6accad6ee53c7b59adab68a",
+    "path": "tests/fixtures/capabilities_metadata_5166858.txt",
+    "sha256": "0c71ca9b3e44872a344adaf542d08c99188a6f6832e6aa4447a1cca4ebabdfba"
+  }
+}

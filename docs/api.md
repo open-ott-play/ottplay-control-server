@@ -1361,11 +1361,38 @@ All other fields, bounds, runtime binding and allowlists remain identical.
 
 Default requests still use version 1 and cannot carry `engine`. An updated
 player therefore remains compatible with earlier controllers and CLIs.
-`ott PLAYER debug --engine` opts in to version 2; unsupported players are not
-queried and unsupported controllers cause a clear failure without a version 1
+`ott PLAYER debug --engine` opts in to version 2, or version 3 when the separate
+`debug_attempts:{"version":3}` capability is present. Unsupported players are not
+queried and unsupported controllers cause a clear failure without a downgraded
 retry. An attached engine is not evidence of decoded frames or physical output.
 
+Version 3 keeps the same 16 KiB snapshot limit, envelope/runtime binding and
+version 2 fields. Each media lane additionally requires `attempt` and
+`lastAttempt`. Both are nullable; a missing owner produces null. A current
+attempt contains exactly `attachment`, `engineStarts`, `fatalErrors`,
+`nativeFallbacks`, and `streamRetries`, all integers from 0 through 9007199254740991.
+A retired attempt adds required `handleId` (the same integer bounds),
+`generation` (nullable integer), and `reason` (`ended`, `disposed`, or `suspended`).
+Unknown fields, incomplete objects and out-of-range counters are rejected.
+Current and retired attempt identities must be considered separately; counter
+changes across replacement handles do not measure retries of one stream.
+
+The new marker requires the existing `debug:{"version":1}` and
+`debug_versions:[1,2]` capabilities. Keep that legacy array unchanged: existing
+CLIs require its exact shape and safely ignore unknown top-level markers.
+Deploy controller support before enabling the new player/CLI combination.
+The shared [version 3 fixture](../contracts/runtime-debug-v3.json) defines the
+bounded extension. Negative replies must also retain requested version 3 and
+the exact runtime; no error permits silent retry with another schema.
+
 ## Scoped ordinary command credentials
+
+The additive `perf_capture` action has exact `start`, `status`, `read`, and `stop`
+operations, runtime/session binding, and independent scoped permissions such as
+`perf_capture.read`. Its [wire contract](../contracts/perf-capture-v1.json) defines
+the finite event schemas, TTL, ring and response limits; the
+[capture runbook](performance-capture.md) covers export and guarded trials.
+Advertising the capability does not start recording.
 
 `operators` optionally authorizes exact device/action pairs for ordinary RPC and
 legacy command submission. Composite RPCs require an operation-qualified action
