@@ -1,0 +1,12 @@
+# Render the explicit namespace before applying. This claim is not owned by Helm.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ottplay-control-registry
+  namespace: ${OTT_NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

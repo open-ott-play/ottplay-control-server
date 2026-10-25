@@ -49,6 +49,95 @@ tombstones before validating Home Assistant and operator device scopes. Revoked
 identities remain known for scope validation but cannot authenticate or receive
 commands. A scope naming a completely unknown device still fails validation.
 
+## First Kubernetes rollout
+
+The nonsecret examples [PVC](../deploy/device-registry-pvc.yaml.in) and
+[bootstrap Job](../deploy/device-registry-bootstrap-job.yaml.in) use a separate
+1 GiB ReadWriteOnce `local-path` claim named `ottplay-control-registry`. They are
+templates, not manifests to apply unchanged. This path assumes the deployment
+has no existing journal claim. If one is already mounted, preserve that claim
+and its journal or plan an explicit private data migration before changing
+`journalExistingClaim`; a fresh claim must not silently replace existing state.
+
+Verify the published release image and digest first. Stage a private configuration
+Secret containing the existing configuration plus the registry path above.
+Use a new Secret name for initial rollout so the old running image is not given
+registry configuration before it is upgraded. No Secret contents belong in Git.
+Set these values to the verified release and intended cluster objects:
+
+```sh
+export OTT_NAMESPACE='YOUR_NAMESPACE'
+export OTT_RELEASE='YOUR_EXISTING_HELM_RELEASE'
+export OTT_CONFIG_SECRET='YOUR_STAGED_PRIVATE_CONFIG_SECRET'
+export OTT_IMAGE_REPOSITORY='ghcr.io/open-ott-play/ottplay-control-server'
+export OTT_IMAGE_TAG='EXACT_PUBLISHED_RELEASE_TAG'
+export OTT_IMAGE_DIGEST='sha256:VERIFIED_64_HEX_DIGEST'
+export OTT_VERIFIED_IMAGE="${OTT_IMAGE_REPOSITORY}:${OTT_IMAGE_TAG}@${OTT_IMAGE_DIGEST}"
+```
+
+Copy the live Deployment's `spec.template.spec.nodeSelector`, `affinity` and
+`tolerations` as JSON into `OTT_NODE_SELECTOR_JSON`, `OTT_AFFINITY_JSON` and
+`OTT_TOLERATIONS_JSON`. Use `{}`, `{}` and `[]` only for fields that are actually
+absent. Preserve hostname/architecture restrictions and excluded nodes. The
+bootstrap Job must use the same scheduling constraints as the server:
+`local-path` binds storage to its first consumer's node, and initializing on an
+ineligible node can leave the server permanently unable to mount that claim.
+Do not relax the workload's placement to work around an incorrectly bound PVC.
+
+Render with `envsubst` (GNU gettext) into an operator-owned directory. Replace
+every placeholder and inspect the namespace, image, Secret and scheduling fields
+before applying. Do not infer a tag or digest from the example:
+
+```sh
+: "${OTT_NODE_SELECTOR_JSON:?Copy the live nodeSelector as JSON}"
+: "${OTT_AFFINITY_JSON:?Copy the live affinity as JSON}"
+: "${OTT_TOLERATIONS_JSON:?Copy the live tolerations as JSON}"
+OTT_ROLLOUT_DIR="$(mktemp -d)"
+envsubst '${OTT_NAMESPACE}' < deploy/device-registry-pvc.yaml.in > "$OTT_ROLLOUT_DIR/pvc.yaml"
+envsubst '${OTT_NAMESPACE} ${OTT_CONFIG_SECRET} ${OTT_VERIFIED_IMAGE} ${OTT_NODE_SELECTOR_JSON} ${OTT_AFFINITY_JSON} ${OTT_TOLERATIONS_JSON}' \
+  < deploy/device-registry-bootstrap-job.yaml.in > "$OTT_ROLLOUT_DIR/init.yaml"
+kubectl apply -f "$OTT_ROLLOUT_DIR/pvc.yaml"
+kubectl apply -f "$OTT_ROLLOUT_DIR/init.yaml"
+kubectl -n "$OTT_NAMESPACE" wait --for=condition=complete \
+  job/ottplay-control-registry-init --timeout=5m
+kubectl -n "$OTT_NAMESPACE" logs job/ottplay-control-registry-init -c initialize
+kubectl -n "$OTT_NAMESPACE" logs job/ottplay-control-registry-init -c validate
+```
+
+The Job runs `registry-init` in its init container, followed by `validate` in the
+main container, with the same verified image, read-only Secret and writable PVC.
+Both run as UID/GID 65532 with fsGroup 65532, a read-only root filesystem, dropped
+capabilities and no service-account token. `backoffLimit: 0` prevents blind retry.
+The initializer creates its private 0700 directory and 0600 store; do not loosen
+these modes to work around a storage error. `local-path` may wait for the Job's
+first consumer before binding the claim. An existing store is an initialization
+failure, not permission to remove it or recreate the volume.
+
+After Job completion, upgrade the existing release with explicit image identity
+and the same Secret/claim. `--reuse-values` preserves unrelated settings:
+
+```sh
+helm upgrade "$OTT_RELEASE" charts/ottplay-control-server \
+  --namespace "$OTT_NAMESPACE" --reuse-values \
+  --set-string image.repository="$OTT_IMAGE_REPOSITORY" \
+  --set-string image.tag="$OTT_IMAGE_TAG" \
+  --set-string image.digest="$OTT_IMAGE_DIGEST" \
+  --set-string existingSecret="$OTT_CONFIG_SECRET" \
+  --set-string journalExistingClaim=ottplay-control-registry \
+  --wait --timeout 5m
+kubectl -n "$OTT_NAMESPACE" rollout status deployment/"$OTT_RELEASE" --timeout=5m
+ott -j registry list
+```
+
+Confirm the live pod's image digest and both mounts, `/readyz` success, and the
+expected active/static identity inventory. Record `store_id`, then perform one
+planned deployment restart and verify the same `store_id`, generations and
+revoked states through `ott -j registry list` after readiness returns. Do not
+rerun initialization on pod restart. Keep the PVC and private configuration in
+the backup plan, including the [rollback safeguards](#rollback-after-enabling-the-registry).
+The completed bootstrap Job may be removed after retaining its nonsecret logs;
+do not delete the PVC as Job cleanup.
+
 ## CLI workflow
 
 Install all `cli/*.py` files from the same release, including
