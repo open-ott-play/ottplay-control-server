@@ -122,8 +122,9 @@ are required for this transport-only feature.
 - **413:** check both envelope and destination limits; a larger proxy limit
   cannot raise the controller's limits.
 - **429:** respect Retry-After when present; avoid duplicate concurrent polls.
-- **Unknown UUID pairing rejected:** registration is still static in this
-  revision. An envelope does not grant registration rights or bypass approval.
+- **Unknown UUID pairing rejected:** configure the optional
+  [durable registry](device-registry.md) to permit pending unknown devices.
+  An envelope alone does not grant registration rights or bypass approval.
 - **Diagnostic epoch missing:** compare direct and bridged responses; correct
   header preservation before relying on runtime recovery.
 - **Notification image rejected:** retain its JSON content type, original

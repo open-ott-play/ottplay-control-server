@@ -932,6 +932,12 @@ Programme results use one `as_of` Unix-seconds timestamp captured at collection 
 
 ## Opt-in DNS-SD discovery and pairing
 
+The optional [durable registry API](device-registry.md) adds explicit
+administrator registration/revocation/rotation and durable approved claims.
+Its guide defines generation checks, operation receipts, static conflicts and
+selected HTTPS pairing aliases. Without that configuration, registration
+remains static and pending pairing behavior below is unchanged.
+
 Hosted clients may carry the device-side routes through
 [`POST /api/device-transport`](device-transport.md). Its fixed allowlist includes
 public discovery, pairing creation and claim/cancel; administrator listing and

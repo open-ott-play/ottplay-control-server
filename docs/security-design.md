@@ -2,6 +2,13 @@
 
 ## Scope and trust boundaries
 
+The optional [durable registry](device-registry.md) separates pending pairing
+from active device credentials. Administrator approval persists activation;
+generation-bound revoke/rotate and static tombstones prevent restart from
+restoring an old credential. A private locked store has one writer; uncertain
+persistence disables admission until recovery. Existing scoped integrations
+do not gain access to newly registered devices automatically.
+
 The project provides a Go command queue, diagnostics service and CLI for OTT-play players.
 
 [Hosted device transport](device-transport.md) accepts a bounded JSON envelope

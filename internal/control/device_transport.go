@@ -119,7 +119,7 @@ func (s *Server) serveDeviceTransport(w http.ResponseWriter, r *http.Request) {
 	// device, four-runtime and public bootstrap ceilings. Logical allowances
 	// remain owned by the original handler and are never charged twice.
 	s.mu.Lock()
-	allowed := s.transportRate.allow(s.now(), len(s.devices)*1600+300)
+	allowed := s.transportRate.allow(s.now(), len(s.currentDevices())*1600+300)
 	s.mu.Unlock()
 	if !allowed {
 		w.Header().Set("Retry-After", "60")

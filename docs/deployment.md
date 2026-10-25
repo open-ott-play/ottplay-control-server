@@ -1,5 +1,11 @@
 # Deployment
 
+The optional [device registry](device-registry.md) needs a separately initialized
+private persistent file. Its path may share the existing journal PVC mount, but
+must differ from the journal and lock files. Serve never initializes a missing
+store, and never writes the mounted configuration Secret. Complete the explicit
+registry-init maintenance step before enabling the new configuration.
+
 For a hosted POST-only bridge, deploy the controller before enabling
 [device transport](device-transport.md). Preserve the proxy prefix and required
 response headers, allow bodies up to 2 MiB + 8 KiB, and disable request-body

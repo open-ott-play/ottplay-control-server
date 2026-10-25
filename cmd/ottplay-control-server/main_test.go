@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,6 +39,38 @@ func TestCLIInitValidateAndNoSecrets(t *testing.T) {
 	}
 	if run([]string{"version"}, &out, &errOut) != 0 || !strings.Contains(out.String(), version) {
 		t.Fatal("missing version")
+	}
+}
+
+func TestCLIRegistryInitializationAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Init(path, "tv"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.DeviceRegistry = &config.DeviceRegistry{Path: filepath.Join(filepath.Dir(path), "private", "devices.json")}
+	b, _ := json.Marshal(c)
+	if os.WriteFile(path, b, 0600) != nil {
+		t.Fatal("write failed")
+	}
+	var out, errOut bytes.Buffer
+	if run([]string{"validate", "--config", path}, &out, &errOut) == 0 {
+		t.Fatal("missing registry accepted")
+	}
+	if run([]string{"registry-init", "--config", path}, &out, &errOut) != 0 {
+		t.Fatal("registry init failed")
+	}
+	if run([]string{"validate", "--config", path}, &out, &errOut) != 0 {
+		t.Fatal("registry validation failed")
+	}
+	if run([]string{"registry-init", "--config", path}, &out, &errOut) == 0 {
+		t.Fatal("registry overwritten")
+	}
+	if strings.Contains(out.String()+errOut.String(), c.AdminToken) || strings.Contains(out.String()+errOut.String(), c.Devices[0].Token) {
+		t.Fatal("credential leaked")
 	}
 }
 

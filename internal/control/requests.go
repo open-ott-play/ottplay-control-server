@@ -39,7 +39,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	if d == nil {
-		for _, candidate := range s.devices {
+		for _, candidate := range s.currentDevices() {
 			if candidate.id == q.Get("device_id") {
 				d = candidate
 			}

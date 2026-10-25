@@ -182,10 +182,14 @@ func (j *commandJournal) save(rows map[string]operationRecord) error {
 	return nil
 }
 func (s *Server) Close() error {
-	if s.journal != nil {
-		return s.journal.lock.Close()
+	var err error
+	if s.registry != nil {
+		err = s.registry.lock.Close()
 	}
-	return nil
+	if s.journal != nil {
+		return errors.Join(err, s.journal.lock.Close())
+	}
+	return err
 }
 
 // Called under s.mu; retained duplicates consume no queue capacity.
@@ -263,7 +267,7 @@ func (s *Server) operation(w http.ResponseWriter, r *http.Request) {
 	}
 	id := q.Get("device_id")
 	var target *device
-	for _, d := range s.devices {
+	for _, d := range s.currentDevices() {
 		if d.id == id {
 			target = d
 		}
