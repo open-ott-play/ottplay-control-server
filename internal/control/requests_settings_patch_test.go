@@ -25,7 +25,7 @@ func settingsPatchFixture(t *testing.T) (map[string]json.RawMessage, map[string]
 
 func TestSettingsPatchFixtureAndReplayBinding(t *testing.T) {
 	requests, responses := settingsPatchFixture(t)
-	for _, pair := range [][2]string{{"get", "get"}, {"set", "set"}, {"set", "unchanged"}} {
+	for _, pair := range [][2]string{{"get", "get"}, {"set", "set"}, {"set", "unchanged"}, {"set", "unchanged_pending"}} {
 		s := newTestServer(t)
 		id := rpcID(t, s, `{"action":"player_settings_patch","params":`+string(requests[pair[0]])+`}`)
 		if s.devices[0].queue[0].settingsPatch == nil {
@@ -83,7 +83,6 @@ func TestSettingsPatchBadResultsPreservePending(t *testing.T) {
 		func(m map[string]any) { m["runtime"] = "other" },
 		func(m map[string]any) { m["context"].(map[string]any)["token"] = "other" },
 		func(m map[string]any) { m["persisted"] = false },
-		func(m map[string]any) { m["changed"] = false },
 		func(m map[string]any) { m["settings"] = m["settings"].([]any)[:2] },
 		func(m map[string]any) { m["settings"].([]any)[1] = m["settings"].([]any)[0] },
 		func(m map[string]any) { m["settings"].([]any)[0].(map[string]any)["value"] = "secret" },

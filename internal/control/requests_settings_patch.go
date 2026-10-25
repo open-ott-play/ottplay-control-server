@@ -130,8 +130,8 @@ func validSettingsPatchResult(raw json.RawMessage, status string, expected *sett
 	if e != nil {
 		return false
 	}
-	if string(m["changed"]) == "false" {
-		return settingKeys(a, []string{"state"}, nil) && settingString(a["state"]) == "completed" && settingString(t["state"]) == "applied"
+	if string(m["changed"]) == "false" && settingString(a["state"]) == "completed" {
+		return settingKeys(a, []string{"state"}, nil) && settingString(t["state"]) == "applied"
 	}
 	return settingKeys(a, []string{"state", "reason"}, nil) && settingString(a["state"]) == "deferred" && settingString(a["reason"]) == "after_ack" && settingString(t["state"]) == "pending"
 }

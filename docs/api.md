@@ -287,7 +287,9 @@ Capability `player_settings_patch` version 1 adds `get` and `set` for the finite
 `command_server` and `local_http` groups. All three fields share one revision;
 `set.values` contains one to three group fields. Sensitive snapshots report only
 presence. A changed tuple returns `deferred/after_ack` with transition `pending`;
-an unchanged tuple returns `completed` with transition `applied`. Subsequent
+an unchanged tuple returns `completed` with transition `applied` only when the
+live owner already matches. Otherwise it also uses `deferred/after_ack` and
+`pending` with `changed:false`. Subsequent
 reads can report a bounded failure or rollback reason. Results remain at most
 64 KiB. The [group contract](../contracts/player-settings-patch-v1.json) defines
 the exact field, storage, and transition rules. See the

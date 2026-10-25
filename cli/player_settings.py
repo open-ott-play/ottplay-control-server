@@ -21,7 +21,7 @@ REASONS = {
     "storage_failed": "The player could not verify the saved setting",
     "effect_failed": "The setting was saved but its application failed",
 }
-ACCESS_REASONS = set(REASONS) | {"device_forced_auto", "lifecycle_required"}
+ACCESS_REASONS = set(REASONS) | {"device_forced_auto", "lifecycle_required", "local_action_required"}
 
 
 def keys(value, required, optional=()):
@@ -593,8 +593,9 @@ def _patch_metadata(api, data, request, rejected=False):
     if request["op"] == "set":
         if data["persisted"] is not True or type(data["changed"]) is not bool:
             raise api.Error(invalid)
-        expected = {"state": "deferred", "reason": "after_ack"} if data["changed"] else {"state": "completed"}
-        if data["application"] != expected or state != ("pending" if data["changed"] else "applied"):
+        completed = data["application"] == {"state": "completed"} and not data["changed"] and state == "applied"
+        pending = data["application"] == {"state": "deferred", "reason": "after_ack"} and state == "pending"
+        if not (completed or pending):
             raise api.Error(invalid)
     return data
 
@@ -688,7 +689,7 @@ def run_patch(api, client, device, words, timeout, json_output):
                   + (" (" + transition["reason"].replace("_", " ") + ")" if "reason" in transition else "") + ".")
             if data["op"] == "set":
                 print("Saved; connection switch starts after acknowledgement. New connectivity is not confirmed."
-                      if data["changed"] else "Unchanged; applied without reconnecting.")
+                      if data["application"]["state"] == "deferred" else "Unchanged; applied without reconnecting.")
         return 1 if data["transition"]["state"] in ("failed", "rolled_back") else 0
     finally:
         client.timeout = previous

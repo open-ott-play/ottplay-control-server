@@ -37,12 +37,14 @@
     "unsupported",
     "storage_failed",
     "device_forced_auto",
-    "lifecycle_required"
+    "lifecycle_required",
+    "local_action_required"
   ],
   "application_reasons": [
     "next_stream",
     "manual",
-    "effect_failed"
+    "effect_failed",
+    "after_ack"
   ],
   "requests": {
     "schema": {

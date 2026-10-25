@@ -160,7 +160,7 @@ func validSettingDescriptor(raw json.RawMessage) bool {
 	if e != nil || !settingKeys(access, []string{"read", "write"}, []string{"reason"}) || !settingBool(access["read"]) || !settingBool(access["write"]) {
 		return false
 	}
-	if reason, ok := access["reason"]; ok && !settingEnum(reason, append(settingReasons, "device_forced_auto", "lifecycle_required")...) {
+	if reason, ok := access["reason"]; ok && !settingEnum(reason, append(settingReasons, "device_forced_auto", "lifecycle_required", "local_action_required")...) {
 		return false
 	}
 	constraints, e := decodeObject(m["constraints"])

@@ -311,6 +311,47 @@
       "application": {
         "state": "completed"
       }
+    },
+    "unchanged_pending": {
+      "version": 1,
+      "op": "set",
+      "runtime": "page-123",
+      "group": "command_server",
+      "context": {
+        "token": "context-1",
+        "provider": "m3u",
+        "profile": 1
+      },
+      "revision": "revision-2",
+      "settings": [
+        {
+          "id": "commandServerAddress",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerToken",
+          "storage": "stored",
+          "redacted": true,
+          "configured": true
+        },
+        {
+          "id": "commandServerEnabled",
+          "storage": "stored",
+          "value": 1,
+          "persisted_value": 1
+        }
+      ],
+      "transition": {
+        "state": "pending"
+      },
+      "persisted": true,
+      "changed": false,
+      "application": {
+        "state": "deferred",
+        "reason": "after_ack"
+      }
     }
   },
   "semantics": [
@@ -321,7 +362,7 @@
     "Pending writes reject another write to the same group. Subsequent get reports applied, rolled_back, or failed.",
     "A failed handover restores the prior tuple only while the journal and complete desired tuple still belong to that operation.",
     "Missing acknowledgement on a live page rolls back after 120 seconds; startup reconciles a still-owned pending journal.",
-    "An unchanged tuple is durably materialized without reconnecting: changed=false, application completed with no reason, transition applied. Supplied enabled integers must be echoed exactly in value and persisted_value."
+    "Equal saved values report changed=false. Completion without reconnecting requires matching live-owner evidence; otherwise application is deferred/after_ack with transition pending. Supplied enabled integers must match value and persisted_value."
   ],
   "application_matrix": {
     "changed": {
@@ -339,6 +380,15 @@
       },
       "transition": {
         "state": "applied"
+      }
+    },
+    "unchanged_pending": {
+      "application": {
+        "state": "deferred",
+        "reason": "after_ack"
+      },
+      "transition": {
+        "state": "pending"
       }
     }
   }

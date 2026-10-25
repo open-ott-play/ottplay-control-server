@@ -43,6 +43,13 @@ class SettingsPatchCliTests(unittest.TestCase):
             if isinstance(value, str):
                 self.assertNotIn(value, out + err)
 
+    def test_local_action_descriptor_is_visible_and_cannot_write(self):
+        data = base.result('get')
+        data['descriptor']['access'] = {'read': False, 'write': False, 'reason': 'local_action_required'}
+        code, out, err, client = self.run_cli(['f','setting','bufSize','3'], [base.caps(), data])
+        self.assertEqual((code, out, client.call.call_count), (1, '', 2))
+        self.assertIn('local_action_required', err)
+
     def test_noop_and_failed_transition_have_honest_status(self):
         code, out, err, _ = self.write([caps(), result('get'), result('unchanged')])
         self.assertEqual((code, err), (0, ''))
@@ -50,6 +57,12 @@ class SettingsPatchCliTests(unittest.TestCase):
         data = result('get'); data['transition'] = {'state': 'rolled_back', 'reason': 'handshake_timeout'}
         code, out, err, _ = self.run_cli(['f', 'settings', 'patch', 'command_server'], [caps(), data])
         self.assertEqual((code, err), (1, '')); self.assertIn('rolled back', out)
+
+    def test_unchanged_values_can_require_a_pending_reconnect(self):
+        code, out, err, _ = self.write([caps(), result('get'), result('unchanged_pending')])
+        self.assertEqual((code, err), (0, ''))
+        self.assertIn('New connectivity is not confirmed', out)
+        self.assertNotIn('without reconnecting', out)
 
     def test_invalid_private_files_are_rejected_before_any_request(self):
         invalid = ['{}', '[]', '{"commandServerEnabled":true}', '{"commandServerToken":"a","commandServerToken":"b"}',
@@ -78,7 +91,7 @@ class SettingsPatchCliTests(unittest.TestCase):
                    lambda d: d['settings'].pop(), lambda d: d['settings'].__setitem__(1, d['settings'][0]),
                    lambda d: d['settings'][2].update(value=0), lambda d: d['settings'][2].pop('persisted_value'),
                    lambda d: d['context'].update(token='other'), lambda d: d['context'].update(provider='plex'),
-                   lambda d: d.update(application={'state': 'completed'}), lambda d: d.update(changed=False),
+                   lambda d: d.update(application={'state': 'completed'}),
                    lambda d: d.update(transition={'state': 'applied'}), lambda d: d.update(persisted=False)]
         for change in changes:
             data = result('set'); change(data)

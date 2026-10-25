@@ -148,7 +148,8 @@ the normal connection owner to test the new tuple. A bounded failed handshake
 restores the previous tuple if that transition still owns the fields. A newer
 local edit is never overwritten by an older rollback. A private recovery journal
 also handles an interrupted transition on player restart. An unchanged tuple
-reports `applied` without reconnecting. Disabling the active control connection
+reports `applied` without reconnecting only when the live owner already matches.
+Otherwise it reports `changed: false` with `pending` while restoring the connection. Disabling the active control connection
 intentionally disconnects it; subsequent status must use a remaining connection
 or local UI.
 
