@@ -1276,6 +1276,9 @@ the runtime schema, `ott f setting bufSize` to read, and `ott f setting bufSize 
 or `ott f setting players hls.js` to save with revision checks. See the
 [typed settings guide](player-settings.md) for scopes, limits, effect timing,
 private value files and recovery. Install `player_settings.py` beside `ott.py`.
+Use `settings patch command_server|local_http [--value-file FILE]` to inspect or
+atomically change a connection. Use `setting plexFolderPaths` for the full Plex
+folder selection, with `add PATH TITLE`, `remove PATH`, or `clear` (all libraries).
 
 A `provider-config` file contains `provider` and `settings`. Except for the new
 bound VPortal slot API, select the intended provider with `provider` first.
@@ -1363,7 +1366,8 @@ OTTClub's `server` field takes a hostname with an optional port, without
 
 Settings use the existing save and reload drivers. Parental settings locks and
 platform restrictions still apply; unlock the settings on the player first.
-Other providers currently require their own settings UI.
+For other providers, use `settings` and the live typed schema when advertised;
+only preferences absent from that schema require their local workflow.
 
 ## Plex libraries by name
 

@@ -14,7 +14,7 @@ var settingID = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 var settingAlias = regexp.MustCompile(`^[A-Za-z0-9_.+\-]{1,64}$`)
 var settingToken = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 var settingProvider = regexp.MustCompile(`^[a-z0-9][a-z0-9_./-]{0,31}$`)
-var settingReasons = []string{"invalid_request", "unknown_setting", "invalid_value", "runtime_changed", "source_changed", "revision_conflict", "policy_restricted", "local_only", "unsupported", "storage_failed", "effect_failed"}
+var settingReasons = []string{"invalid_request", "unknown_setting", "atomic_patch_required", "invalid_value", "runtime_changed", "source_changed", "revision_conflict", "policy_restricted", "local_only", "unsupported", "storage_failed", "effect_failed"}
 
 type playerSettingsRequest struct {
 	Runtime, Op, ID, Context string
@@ -152,7 +152,7 @@ func validSettingDescriptor(raw json.RawMessage) bool {
 	m, err := decodeObject(raw)
 	if err != nil || !settingKeys(m, []string{"id", "type", "scope", "sensitive", "access", "constraints", "apply"}, []string{"default_value", "choices", "description", "unit"}) ||
 		!settingPattern(m["id"], settingID) || !settingEnum(m["type"], "integer", "string", "string_array") ||
-		!settingEnum(m["scope"], "application", "provider") || !settingBool(m["sensitive"]) || !settingEnum(m["apply"], "immediate", "next_stream", "manual") {
+		!settingEnum(m["scope"], "application", "provider") || !settingBool(m["sensitive"]) || !settingEnum(m["apply"], "immediate", "next_stream", "manual", "after_ack") {
 		return false
 	}
 	kind := settingString(m["type"])
@@ -160,7 +160,7 @@ func validSettingDescriptor(raw json.RawMessage) bool {
 	if e != nil || !settingKeys(access, []string{"read", "write"}, []string{"reason"}) || !settingBool(access["read"]) || !settingBool(access["write"]) {
 		return false
 	}
-	if reason, ok := access["reason"]; ok && !settingEnum(reason, append(settingReasons, "device_forced_auto", "lifecycle_required")...) {
+	if reason, ok := access["reason"]; ok && !settingEnum(reason, append(settingReasons, "device_forced_auto", "lifecycle_required", "local_action_required")...) {
 		return false
 	}
 	constraints, e := decodeObject(m["constraints"])
@@ -340,7 +340,7 @@ func validPlayerSettingsResult(raw json.RawMessage, status string, expected *pla
 			return false
 		}
 		return (settingString(a["state"]) == "completed" && a["reason"] == nil) ||
-			(settingString(a["state"]) == "deferred" && settingEnum(a["reason"], "next_stream", "manual")) ||
+			(settingString(a["state"]) == "deferred" && settingEnum(a["reason"], "next_stream", "manual", "after_ack")) ||
 			(settingString(a["state"]) == "failed" && settingEnum(a["reason"], "effect_failed"))
 	}
 	return false

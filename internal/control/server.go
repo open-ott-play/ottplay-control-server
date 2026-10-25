@@ -42,6 +42,8 @@ type entry struct {
 	aspect               *aspectRequest
 	notificationSettings *notificationsRequest
 	playerSettings       *playerSettingsRequest
+	plexFolders          *plexFoldersRequest
+	settingsPatch        *settingsPatchRequest
 	vportalSettings      *vportalSettingsRequest
 	category             *categoryRequest
 	randomPlay           *randomPlayRequest
