@@ -3,8 +3,10 @@ import contextlib
 import copy
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -15,6 +17,22 @@ perf = load("performance_test", "performance.py")
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = json.loads((ROOT / "contracts/perf-capture-v1.json").read_text())
 SID = "a" * 32
+
+
+class MemoryJournal(perf.Journal):
+    """Exercise capture/CAS sequencing without depending on POSIX persistence."""
+    def __init__(self, directory):
+        self.path = Path(directory).absolute()
+        self.fd, self.total, self.files, self.records = None, 0, [], {}
+
+    def write(self, name, value):
+        if name in self.records:
+            raise FileExistsError(name)
+        raw = perf.encoded(value)
+        perf.check(self.total + len(raw) <= perf.MAX_EXPORT, "export_size_limit")
+        self.records[name] = json.loads(raw)
+        self.total += len(raw)
+        self.files.append({"name": name, "bytes": len(raw), "sha256": perf.hashlib.sha256(raw).hexdigest()})
 
 
 class PerfClock(Clock):
@@ -154,10 +172,15 @@ class PerformanceTest(unittest.TestCase):
     def setUp(self):
         self.clock = PerfClock()
         self.client = PerfClient(self.clock)
+        self.journal = None
 
-    def run_perf(self, words, timeout=240):
+    def run_perf(self, words, timeout=240, *, memory=True):
         out = io.StringIO()
-        with mock.patch.object(perf, "time", self.clock), contextlib.redirect_stdout(out):
+        def journal(directory):
+            self.journal = MemoryJournal(directory)
+            return self.journal
+        persistence = mock.patch.object(perf, "Journal", side_effect=journal) if memory else contextlib.nullcontext()
+        with persistence, mock.patch.object(perf, "time", self.clock), contextlib.redirect_stdout(out):
             status = perf.run(ott, self.client, "web", words, timeout, True)
         self.assertNotIn(SECRET, out.getvalue())
         return status, json.loads(out.getvalue())
@@ -210,10 +233,8 @@ class PerformanceTest(unittest.TestCase):
             changes = [row[2] for row in self.client.calls if row[1] == "player_settings" and row[2]["op"] == "set"]
             self.assertEqual([row["value"] for row in changes], [0, 1])
             self.assertEqual([row["revision"] for row in changes], ["policy-1", "policy-2"])
-            self.assertTrue((output / "trial-plan.json").exists())
-            self.assertTrue((output / "manifest.json").exists())
-            self.assertEqual(output.stat().st_mode & 0o777, 0o700)
-            self.assertTrue(all((p.stat().st_mode & 0o777) == 0o600 for p in output.iterdir()))
+            self.assertIn("trial-plan.json", self.journal.records)
+            self.assertIn("manifest.json", self.journal.records)
 
     def test_external_same_value_aba_prevents_restore(self):
         def external():
@@ -239,7 +260,7 @@ class PerformanceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             output = Path(root).resolve() / "trial"
             code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(output)], 180)
-            self.assertTrue((output / "manifest.json").exists())
+            self.assertIn("manifest.json", self.journal.records)
         self.assertEqual(code, 130)
         self.assertIs(result["policy_restored"], True)
         self.assertEqual(self.client.policy, 1)
@@ -272,7 +293,7 @@ class PerformanceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             output = Path(root).resolve() / "export"
             code, result = self.run_perf(["export", SID, "--out", str(output)])
-            self.assertTrue((output / "manifest.json").exists())
+            self.assertIn("manifest.json", self.journal.records)
         self.assertEqual(code, 3)
         self.assertFalse(result["capture"]["complete"])
         self.assertEqual(len([row for row in self.client.calls if row[1] == "perf_capture" and row[2]["op"] == "read"]), 1)
@@ -318,13 +339,29 @@ class PerformanceTest(unittest.TestCase):
                 ott.main(["f", "perf", *tail])
             self.assertEqual(stopped.exception.code, 0)
 
+    @unittest.skipUnless(os.name == "posix", "Real private directory persistence requires POSIX")
     def test_existing_output_prevents_any_request(self):
         with tempfile.TemporaryDirectory() as root:
-            code, result = self.run_perf(["trial", "notifications", "--out", str(Path(root).resolve())])
+            code, result = self.run_perf(["trial", "notifications", "--out", str(Path(root).resolve())], memory=False)
         self.assertNotEqual(code, 0)
         self.assertEqual(self.client.calls, [])
 
     def test_request_is_saved_before_policy_mutation(self):
+        original = self.client.call_receipt
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root).resolve() / "trial"
+            def verified(target, action, params):
+                if action == "player_settings" and params["op"] == "set":
+                    saved = [value for name, value in self.journal.records.items() if name.startswith("request-")]
+                    self.assertTrue(any(row["action"] == action and row["params"] == params for row in saved))
+                    self.assertIn("trial-plan.json", self.journal.records)
+                return original(target, action, params)
+            self.client.call_receipt = verified
+            code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(output)], 180)
+        self.assertEqual(code, 0, result)
+
+    @unittest.skipUnless(os.name == "posix", "Real private directory persistence requires POSIX")
+    def test_posix_trial_persists_request_before_write_with_private_permissions(self):
         original = self.client.call_receipt
         with tempfile.TemporaryDirectory() as root:
             output = Path(root).resolve() / "trial"
@@ -335,8 +372,33 @@ class PerformanceTest(unittest.TestCase):
                     self.assertTrue((output / "trial-plan.json").exists())
                 return original(target, action, params)
             self.client.call_receipt = verified
-            code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(output)], 180)
+            code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(output)], 180, memory=False)
+            self.assertEqual(code, 0, result)
+            self.assertTrue(result["policy_restored"])
+            self.assertTrue((output / "manifest.json").exists())
+            self.assertEqual(output.stat().st_mode & 0o777, 0o700)
+            self.assertTrue(all((p.stat().st_mode & 0o777) == 0o600 for p in output.iterdir()))
+            saved_result = json.loads((output / "result.json").read_text())
+            self.assertTrue(saved_result["policy_restored"])
+
+    def test_non_posix_export_and_trial_refuse_before_any_request(self):
+        with tempfile.TemporaryDirectory() as root:
+            for operation in (["export", SID], ["trial", "notifications"]):
+                output = Path(root).resolve() / operation[0]
+                with self.subTest(operation=operation[0]), mock.patch.object(perf, "os", SimpleNamespace(name="nt")):
+                    code, result = self.run_perf([*operation, "--out", str(output)], memory=False)
+                self.assertEqual(code, 3)
+                self.assertEqual(result["reason"], "private_output_requires_posix")
+                self.assertFalse(result["unknown_outcome"])
+                self.assertEqual(self.client.calls, [])
+                self.assertFalse(output.exists())
+
+    def test_memory_trial_keeps_algorithm_coverage_without_posix(self):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(perf, "os", SimpleNamespace(name="nt")):
+            code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(Path(root).resolve() / "trial")], 180)
         self.assertEqual(code, 0, result)
+        self.assertTrue(result["policy_restored"])
+        self.assertEqual([row["notification_policy"] for row in result["phases"]], [1, 0, 1])
 
     def test_zero_frames_and_missing_identity_never_claim_smoothness(self):
         first = schema_minimal(CONTRACT["$defs"]["sample_event"])
