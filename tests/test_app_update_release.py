@@ -156,7 +156,7 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(mutate=mutate), self.assertRaises(ott.Error):
                 self.resolve(mutate, explicit=True)
 
-    def resolve_promotion(self, mutate=None):
+    def resolve_promotion(self, mutate=None, *, annotated=()):
         proof = promotion_metadata()
         if mutate:
             mutate(proof)
@@ -170,13 +170,19 @@ class ReleaseTests(unittest.TestCase):
             ota.API + "/git/ref/tags/v1.1.60": {"object": {"type": "commit", "sha": proof["stable_source"]}},
             ota.API + "/git/ref/tags/v1.1.60-rc.1": {"object": {"type": "commit", "sha": proof["candidate_source"]}},
         }
+        for name in annotated:
+            tag, tag_sha = {"stable": ("v1.1.60", "d" * 40),
+                            "candidate": ("v1.1.60-rc.1", "e" * 40)}[name]
+            replies[ota.API + "/git/ref/tags/" + tag] = {"object": {"type": "tag", "sha": tag_sha}}
+            replies[ota.API + "/git/tags/" + tag_sha] = {
+                "object": {"type": "commit", "sha": proof[name + "_source"]}}
         def fetch(url, error, limit=None, deadline=None):
             self.assertEqual(deadline, 123)
             self.assertIn(url, replies)
             return replies[url]
         with patch.object(ota, "request_json", side_effect=fetch) as request:
             target = ota.release_target(self.opts("--version", "v1.1.60"), ott.Error, deadline=123)
-        self.assertEqual(request.call_count, 6)
+        self.assertEqual(request.call_count, 6 + len(annotated))
         return target
 
     def test_stable_byte_promotion_retains_rc_evidence_and_final_package_version(self):
@@ -185,6 +191,20 @@ class ReleaseTests(unittest.TestCase):
                                       source_sha=SOURCE, sha256=SHA,
                                       url="https://github.com/" + ota.REPOSITORY +
                                           "/releases/download/v1.1.60/" + APK))
+
+    def test_stable_promotion_dereferences_annotated_tags_with_the_same_deadline(self):
+        for annotated in (("stable",), ("candidate",), ("stable", "candidate")):
+            with self.subTest(annotated=annotated):
+                target = self.resolve_promotion(annotated=annotated)
+                self.assertEqual(target["source_sha"], SOURCE)
+                self.assertEqual(target["tag"], "v1.1.60")
+
+    def test_stable_promotion_rejects_a_different_annotated_commit(self):
+        for name in ("stable", "candidate"):
+            def mutate(proof):
+                proof[name + "_source"] = "c" * 40
+            with self.subTest(name=name), self.assertRaises(ott.Error):
+                self.resolve_promotion(mutate, annotated=("stable", "candidate"))
 
     def test_stable_promotion_rejects_mismatched_source_plan_or_package(self):
         mutations = {
