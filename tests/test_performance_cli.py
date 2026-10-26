@@ -339,6 +339,15 @@ class PerformanceTest(unittest.TestCase):
                 ott.main(["f", "perf", *tail])
             self.assertEqual(stopped.exception.code, 0)
 
+    def test_invalid_help_is_normal_cli_error_without_loading_credentials(self):
+        error = io.StringIO()
+        with mock.patch.object(ott, "read_json", side_effect=AssertionError), contextlib.redirect_stderr(error):
+            status = ott.main(["f", "perf", "bogus", "--help"])
+        self.assertEqual(status, 1)
+        self.assertIn("Error: Invalid performance arguments", error.getvalue())
+        self.assertIn("ott PLAYER perf --help", error.getvalue())
+        self.assertNotIn("Traceback", error.getvalue())
+
     @unittest.skipUnless(os.name == "posix", "Real private directory persistence requires POSIX")
     def test_existing_output_prevents_any_request(self):
         with tempfile.TemporaryDirectory() as root:
@@ -399,6 +408,79 @@ class PerformanceTest(unittest.TestCase):
         self.assertEqual(code, 0, result)
         self.assertTrue(result["policy_restored"])
         self.assertEqual([row["notification_policy"] for row in result["phases"]], [1, 0, 1])
+
+    def test_confirmed_end_of_trial_restore_does_not_repeat_fourth_policy_read(self):
+        original, reads = self.client.call_receipt, []
+        def guarded(target, action, params):
+            if action == "player_settings" and params["op"] == "get":
+                reads.append(params)
+                if len(reads) == 4:
+                    raise ott.TransportError("hypothetical cleanup read failure")
+            return original(target, action, params)
+        self.client.call_receipt = guarded
+        with tempfile.TemporaryDirectory() as root:
+            code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(Path(root).resolve() / "trial")], 180)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(len(reads), 3)
+        self.assertTrue(result["policy_restored"])
+        self.assertNotIn("restore_error", result)
+
+    def test_failed_fresh_end_of_trial_policy_read_stays_unconfirmed(self):
+        original, reads = self.client.call_receipt, []
+        def failed(target, action, params):
+            if action == "player_settings" and params["op"] == "get":
+                reads.append(params)
+                if len(reads) == 3:
+                    raise ott.TransportError("fresh verification failed")
+            return original(target, action, params)
+        self.client.call_receipt = failed
+        with tempfile.TemporaryDirectory() as root:
+            code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(Path(root).resolve() / "trial")], 180)
+        self.assertEqual(code, 3)
+        self.assertEqual(result["reason"], "transport_error")
+        self.assertIsNone(result["policy_restored"])
+        self.assertNotIn("final_policy", result)
+        self.assertEqual(len(reads), 3, "failed verification must not silently become a fourth successful read")
+        self.assertEqual(self.client.policy, 1)
+        self.assertEqual(len([row for row in self.client.calls if row[1] == "player_settings" and row[2]["op"] == "set"]), 2)
+
+    def test_end_of_trial_external_policy_change_revokes_confirmation_and_ownership(self):
+        original, reads = self.client.call_receipt, []
+        def changed(target, action, params):
+            if action == "player_settings" and params["op"] == "get":
+                reads.append(params)
+                if len(reads) == 3:
+                    self.client.policy_revision += 1
+                    self.client.policy = 0
+            return original(target, action, params)
+        self.client.call_receipt = changed
+        with tempfile.TemporaryDirectory() as root:
+            code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(Path(root).resolve() / "trial")], 180)
+        self.assertEqual(code, 3)
+        self.assertEqual(result["reason"], "notification_policy_superseded")
+        self.assertIsNone(result["policy_restored"])
+        self.assertEqual(len(reads), 3)
+        self.assertEqual(self.client.policy, 0, "external policy must not be overwritten")
+        self.assertEqual(len([row for row in self.client.calls if row[1] == "player_settings" and row[2]["op"] == "set"]), 2)
+
+    def test_a2_interruption_keeps_prior_confirmation_without_another_policy_read(self):
+        original, snapshots = self.client.call_receipt, []
+        def observed(target, action, params):
+            if action == "inspect" and params.get("section") == "snapshot":
+                snapshots.append(params)
+            return original(target, action, params)
+        def interrupt():
+            if len(snapshots) == 3:
+                self.clock.on_sleep = None
+                raise KeyboardInterrupt()
+        self.client.call_receipt = observed
+        self.clock.on_sleep = interrupt
+        with tempfile.TemporaryDirectory() as root:
+            code, result = self.run_perf(["trial", "notifications", "--seconds-per-phase", "10", "--out", str(Path(root).resolve() / "trial")], 180)
+        self.assertEqual(code, 130)
+        self.assertTrue(result["policy_restored"])
+        self.assertEqual(len([row for row in self.client.calls if row[1] == "player_settings" and row[2]["op"] == "get"]), 2)
+        self.assertEqual(self.client.policy, 1)
 
     def test_zero_frames_and_missing_identity_never_claim_smoothness(self):
         first = schema_minimal(CONTRACT["$defs"]["sample_event"])

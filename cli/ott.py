@@ -4795,7 +4795,10 @@ def main(argv=None):
             spec = importlib.util.spec_from_file_location("ott_performance", path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            module.arguments(args.words[2:])
+            try:
+                module.arguments(args.words[2:])
+            except module.Failure:
+                raise Error("Invalid performance arguments; use ott PLAYER perf --help") from None
             return 0
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
             raise Error("--timeout must be between 1 and 300 seconds")

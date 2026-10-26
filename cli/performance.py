@@ -479,12 +479,15 @@ class Trial:
         # Clear ownership before sending: an uncertain write must never use a stale
         # revision for restoration, even if the desired value is visible later.
         prior_owned, self.owned = self.owned, None
+        prior_restored = self.result.get("policy_restored")
+        self.result["policy_restored"] = None
         try:
             data = self.capture.rpc("player_settings", params,
                                     lambda raw: self.settings.metadata(self.capture.api, raw, params, self.original["descriptor"]))
         except BaseException as error:
             if not self.capture.last_attempted:
                 self.owned = prior_owned
+                self.result["policy_restored"] = prior_restored
             elif isinstance(error, Failure) and error.confirmed is not None:
                 self.adopt_policy(error.confirmed, previous)
             raise
@@ -536,10 +539,19 @@ class Trial:
         if self.owned is None:
             self.result["policy_restored"] = None if self.result.get("policy_write_attempted") else False
             return
-        current = self.get_policy()
-        check(current["context"] == self.original["context"]
-              and current["setting"]["revision"] == self.owned["setting"]["revision"]
-              and current["setting"]["value"] == self.original["setting"]["value"], "notification_policy_superseded")
+        # Starting a fresh verification retires the prior confirmation. A failed
+        # observation must not be retried by cleanup using stale ownership.
+        self.result["policy_restored"] = None
+        self.result.pop("final_policy", None)
+        self.result["storage_representation_changed"] = None
+        try:
+            current = self.get_policy()
+            check(current["context"] == self.original["context"]
+                  and current["setting"]["revision"] == self.owned["setting"]["revision"]
+                  and current["setting"]["value"] == self.original["setting"]["value"], "notification_policy_superseded")
+        except BaseException:
+            self.owned = None
+            raise
         self.result["policy_restored"] = True
         self.result["final_policy"] = current
         self.result["storage_representation_changed"] = current["setting"]["storage"] != self.original["setting"]["storage"]
@@ -583,7 +595,7 @@ class Trial:
         finally:
             self.capture.deadline = self.deadline
             try:
-                if self.owned is not None:
+                if self.owned is not None and self.result.get("policy_restored") is not True:
                     self.restore()
             except (Exception, KeyboardInterrupt, SystemExit):
                 self.result["policy_restored"] = None

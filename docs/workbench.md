@@ -5,7 +5,7 @@ Android maintenance agent. It does not start playback, reload a player, change
 settings, capture the screen, or run arbitrary commands. Install the
 [reviewed CLI source revision](cli.md#choose-the-cli-source-revision) using the
 macOS/Linux or Windows instructions; stable CLI v0.1.0 does not include these
-commands. Keep all seven CLI Python files from the same revision together.
+commands. Keep all `cli/*.py` modules from the same revision together.
 
 ## Quick start
 
@@ -328,7 +328,7 @@ New bundle reports identify their evaluator as `workbench-v3`; test reports use
 `workbench-v2`. Both are supported. Reports without that field use the supported
 legacy web evaluator; old native-only progress reports
 are not reinterpreted as passing native tests. Unknown evaluators are rejected.
-Keep all seven CLI Python files together when updating.
+Keep all `cli/*.py` modules from the same revision together when updating.
 
 A matching SHA-256 proves that the files agree with their manifest. It does not
 prove their origin: anyone who can change both can recalculate the hash. The
@@ -340,7 +340,7 @@ decoder progress certifies the physical screen or audible sound.
 - Missing workbench commands or Python modules: follow the
   [pinned installation/update steps](cli.md#choose-the-cli-source-revision), verify
   the checkout SHA and use its direct Python invocation. An older `ott` may still
-  be first on PATH; keep all seven modules together.
+  be first on PATH; keep all `cli/*.py` modules from the same revision together.
 - `unsupported`: the player does not advertise the requested inspection section.
   Check the target UUID/build with ordinary `caps`/`status`, then update the
   [installation that target actually runs](cli.md#update-the-installation-used-by-the-target-player).
