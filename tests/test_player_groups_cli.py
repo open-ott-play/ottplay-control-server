@@ -225,8 +225,10 @@ class PlayerGroupsTest(unittest.TestCase):
                         return 0
                     code, _, err, _ = self.module_cli(['-j', 't1,t2', *words, *option], run)
                     self.assertEqual((code, err), (0, ''))
-                    self.assertTrue(calls[0][-1].endswith('/evidence.t1'))
-                    self.assertTrue(calls[1][-1].endswith('/evidence.t2'))
+                    for index, call in enumerate(calls, 1):
+                        argument = call[-1]
+                        value = argument.split('=', 1)[1] if argument.startswith('--') and '=' in argument else argument
+                        self.assertEqual(Path(value), Path(temporary) / f'evidence.t{index}')
 
     def test_output_mapping_covers_profile_native_and_checkpoint_but_never_inputs(self):
         cases = [(['prof', 'export', '1', 'movies.json'], 'movies.t1.json'),
@@ -290,11 +292,14 @@ class PlayerGroupsTest(unittest.TestCase):
 
     def test_relative_output_beginning_with_dash_keeps_option_safe_spelling(self):
         words, _, _ = ott.group_output_arguments(['bundle', '--out', './-report'], 'workbench', None, 't1')
-        self.assertEqual(words, ['bundle', '--out', './-report.t1'])
+        self.assertEqual(words[:2], ['bundle', '--out'])
+        self.assertEqual(Path(words[-1]), Path('-report.t1'))
+        self.assertFalse(words[-1].startswith('-'))
+        self.assertFalse(Path(words[-1]).is_absolute())
         module_spec = importlib.util.spec_from_file_location('group_workbench_args', Path(ott.__file__).with_name('workbench.py'))
         module = importlib.util.module_from_spec(module_spec)
         module_spec.loader.exec_module(module)
-        self.assertEqual(module.arguments(words, False).out, './-report.t1')
+        self.assertEqual(module.arguments(words, False).out, words[-1])
 
     def test_output_limits_report_incomplete_results_without_replaying_commands(self):
         for output_limit, aggregate_limit, expected in ((20, 1000, [False, False]), (1000, 50, [True, False])):
