@@ -17,7 +17,7 @@ from test_performance_hls_cli import HLSClient, sample_hls
 from test_report_verify import verify, wb
 
 perf, ott, SID = fixtures.perf, fixtures.ott, fixtures.SID
-SECRET = "private-path-must-not-be-exported"
+PATH_MARKER = "private-path-must-not-be-exported"
 
 
 class PerformanceReportTest(unittest.TestCase):
@@ -27,7 +27,7 @@ class PerformanceReportTest(unittest.TestCase):
         fixtures.PerformanceTest.setUp(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.path = Path(self.temp.name).resolve() / SECRET
+        self.path = Path(self.temp.name).resolve() / PATH_MARKER
 
     def capture(self, version=1, start=True):
         if version == 2:
@@ -56,7 +56,7 @@ class PerformanceReportTest(unittest.TestCase):
                 mock.patch.object(ott, "Client", side_effect=AssertionError("network forbidden")), \
                 mock.patch.object(ott, "read_json", side_effect=AssertionError("config forbidden")):
             code = verify.main(["verify", str(self.path)] + (["--json"] if json_output else []), ott, wb)
-        self.assertNotIn(SECRET, output.getvalue())
+        self.assertNotIn(PATH_MARKER, output.getvalue())
         return code, json.loads(output.getvalue()) if json_output else output.getvalue()
 
     def test_complete_export_is_portable_and_verifies_without_configuration(self):
@@ -64,7 +64,7 @@ class PerformanceReportTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(live["output"], str(self.path))
         self.assertNotIn("output", self.records["result.json"])
-        self.assertNotIn(SECRET, json.dumps(self.records))
+        self.assertNotIn(PATH_MARKER, json.dumps(self.records))
         code, checked = self.invoke()
         self.assertEqual((code, checked["integrity"], checked["evaluation_policy"]),
                          (0, "verified", "performance-v1"))
@@ -90,7 +90,7 @@ class PerformanceReportTest(unittest.TestCase):
         self.run_perf(["start", "--session", SID])
         code, result = self.run_perf(["export", SID, "--out", str(self.path)], memory=False)
         self.assertEqual(code, 0, result)
-        self.assertNotIn(SECRET, (self.path / "result.json").read_text())
+        self.assertNotIn(PATH_MARKER, (self.path / "result.json").read_text())
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o700)
         self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in self.path.iterdir()))
         self.assertEqual(self.invoke()[0], 0)
@@ -167,7 +167,7 @@ class PerformanceReportTest(unittest.TestCase):
         self.assertEqual(self.invoke()[0], 3)
 
     def test_typed_request_failures_survive_export_without_retry_or_raw_messages(self):
-        for reason in (*perf.REQUEST_FAILURE_REASONS, SECRET):
+        for reason in (*perf.REQUEST_FAILURE_REASONS, PATH_MARKER):
             with self.subTest(reason=reason):
                 self.client = fixtures.PerfClient(self.clock)
                 self.run_perf(["start", "--session", SID])
@@ -175,12 +175,12 @@ class PerformanceReportTest(unittest.TestCase):
                 def response(target, action, params):
                     if action == "perf_capture" and params["op"] == "read":
                         attempts.append(params)
-                        raise ott.RequestError(reason, "response_poll", SECRET)
+                        raise ott.RequestError(reason, "response_poll", PATH_MARKER)
                     return original(target, action, params)
                 self.client.call_receipt = response
                 code, live = self.capture(start=False)
                 self.assertEqual((code, len(attempts)), (3, 1))
-                expected = reason if reason != SECRET else "transport_error"
+                expected = reason if reason != PATH_MARKER else "transport_error"
                 self.assertIn(expected, live["capture"]["partial_reasons"])
                 code, checked = self.invoke()
                 self.assertEqual(code, 3, checked)
@@ -254,7 +254,7 @@ class PerformanceReportTest(unittest.TestCase):
         self.persist()
         self.assertEqual(self.invoke()[0], 1)
         self.persist(rehash=True)
-        (self.path / "unexpected").write_text(SECRET)
+        (self.path / "unexpected").write_text("unrelated test file")
         self.assertEqual(self.invoke()[1]["reason"], "unexpected_report_files")
 
     def test_oversized_or_symlinked_request_file_is_never_accepted(self):
@@ -270,7 +270,7 @@ class PerformanceReportTest(unittest.TestCase):
     def test_private_or_mutating_request_payload_is_rejected_even_after_rehash(self):
         self.capture()
         original = copy.deepcopy(self.records)
-        for changes in ({"op": "start"}, {"url": SECRET}, {"runtime": "different-runtime"}):
+        for changes in ({"op": "start"}, {"url": PATH_MARKER}, {"runtime": "different-runtime"}):
             self.records = copy.deepcopy(original)
             self.records["request-002.json"]["params"].update(changes)
             self.records["result.json"]["requests"][2]["params"].update(changes)
