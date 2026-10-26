@@ -31,9 +31,9 @@ with exact settings verification, and explicit live/archive playback handoff.
 The [typed settings guide](docs/player-settings.md) covers `setting KEY VALUE`,
 runtime schema discovery, conditional saves and dedicated VPortal presets.
 These features require controller and CLI revisions containing this guide.
-Exact settings verification and handoff also require an updated player. The older
-installation pin below does not include these features. The [architecture diagram](docs/assets/reliable-control.svg)
-shows where settings, credentials and operation state remain.
+Exact settings verification and handoff also require an updated player. The
+[architecture diagram](docs/assets/reliable-control.svg) shows where settings,
+credentials and operation state remain.
 
 The server runs as a single portable Go executable, with a pinned DNS library for optional service discovery. Release packages cover Linux amd64, arm64 and ARMv7; macOS Intel and Apple Silicon; and Windows amd64 and arm64. Container images support Linux amd64 and arm64. Kubernetes and k3s use the included Helm chart.
 
@@ -101,7 +101,7 @@ Both server and player must include the request/response extension.
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
 cover macOS/Linux and Windows, Python/PATH setup and the required CLI modules.
-They pin the monitoring release source with workbench and offline
+They pin the CLI release source with workbench and offline
 verification; stable CLI v0.1.0 and native server archives do not include those
 commands. [Update or roll back the CLI](docs/cli.md#update-select-or-roll-back-the-cli)
 without replacing an existing checkout, launcher or private configuration.
@@ -111,9 +111,11 @@ Use [finite group monitoring](docs/monitoring-runbook.md) to distinguish control
 access failures, unavailable observations, standby and decoder progress before
 repairing a player. Saved diagnostic bundles and performance exports can be
 verified offline.
-For buffer starvation, use the explicitly selected
-[HLS policy capture](docs/performance-capture.md#hls-buffer-policy-and-retry-evidence)
-to distinguish constructor settings, observed cap changes and mutable retry statistics.
+The unreleased
+[HLS policy capture extension](docs/performance-capture.md#hls-buffer-policy-and-retry-evidence)
+adds explicit opt-in evidence for buffer starvation, distinguishing constructor
+settings, observed cap changes and mutable retry statistics. It is not included
+in the pinned beta.12 CLI installation.
 Once installed and configured:
 
 ```sh

@@ -2003,13 +2003,15 @@ def kiosk_metadata(data, mode, require_strict=False):
     provider = data.get("provider")
     if (data["enabled"] and not isinstance(provider, str)) or (not data["enabled"] and provider is not None):
         raise Error(message)
-    if ("screen_suspended" in data and
-            (type(data["screen_suspended"]) is not bool or
-             (data["screen_suspended"] and data["state"] != "locked"))):
+    # Screen suspension follows the active provider as well as the kiosk lock.
+    # Offline playback can be suspended while the policy is waiting or off;
+    # the policy's provider field does not identify the active provider then.
+    if "screen_suspended" in data and type(data["screen_suspended"]) is not bool:
         raise Error(message)
     if ("startup_grace_seconds" in data and
             (type(data["startup_grace_seconds"]) is not int or
-             data["startup_grace_seconds"] != 60 or media is None)):
+             data["startup_grace_seconds"] != 60 or data["state"] != "locked" or
+             provider not in ("plex", "vportal"))):
         raise Error(message)
     return {**{key: data[key] for key in ("enabled", "state", "retry_seconds", "retries", "health")},
             "channel": channel, "provider": provider, **({"media": media} if media is not None else {}),
@@ -5189,7 +5191,7 @@ def main(argv=None):
             else:
                 print(f"Kiosk channel: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
             if data.get("screen_suspended"):
-                print("Kiosk playback is suspended while the screen is off or the app is in the background.")
+                print("Playback is suspended while the screen is off or the app is in the background.")
         elif plex_settings:
             print("Plex settings saved: " + ", ".join(data["fields"]) + ".")
         elif action == "play":

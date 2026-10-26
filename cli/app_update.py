@@ -1,4 +1,5 @@
 """Explicit, verified-release Android OTA orchestration; no background scheduler."""
+import hashlib
 import json
 import math
 import queue
@@ -133,9 +134,9 @@ def release_target(opts, error, deadline=None):
             release.get("tag_name") != tag or not release.get("published_at") or
             not isinstance(release.get("assets"), list)):
         raise error("The selected official release is not published")
-    prefix = "https://github.com/" + REPOSITORY + "/releases/download/" + tag + "/"
-    def asset(name):
-        found = [a for a in release["assets"] if isinstance(a, dict) and a.get("name") == name]
+    def asset(name, selected_release=release, selected_tag=tag):
+        prefix = "https://github.com/" + REPOSITORY + "/releases/download/" + selected_tag + "/"
+        found = [a for a in selected_release["assets"] if isinstance(a, dict) and a.get("name") == name]
         if (len(found) != 1 or found[0].get("browser_download_url") != prefix + name or
                 type(found[0].get("size")) is not int or found[0]["size"] <= 0):
             raise error("Official release has a missing or ambiguous " + name)
@@ -144,30 +145,62 @@ def release_target(opts, error, deadline=None):
     if manifest_asset["size"] > 1024 * 1024:
         raise error("Official release manifest is too large")
     manifest = fetch(manifest_asset["browser_download_url"])
-    ref = fetch(API + "/git/ref/tags/" + tag)
-    obj = ref.get("object", {}) if isinstance(ref, dict) else {}
-    for _ in range(3):
-        if obj.get("type") != "tag":
-            break
-        sha = obj.get("sha")
-        if not isinstance(sha, str) or not COMMIT.fullmatch(sha):
-            raise error("Invalid official release tag")
-        annotated = fetch(API + "/git/tags/" + sha)
-        obj = annotated.get("object", {}) if isinstance(annotated, dict) else {}
-    source = obj.get("sha")
-    if obj.get("type") != "commit" or not isinstance(source, str) or not COMMIT.fullmatch(source):
-        raise error("Official release tag does not identify a commit")
+    def tag_source(selected_tag):
+        ref = fetch(API + "/git/ref/tags/" + selected_tag)
+        obj = ref.get("object", {}) if isinstance(ref, dict) else {}
+        for _ in range(3):
+            if not isinstance(obj, dict):
+                break
+            if obj.get("type") != "tag":
+                break
+            sha = obj.get("sha")
+            if not isinstance(sha, str) or not COMMIT.fullmatch(sha):
+                raise error("Invalid official release tag")
+            annotated = fetch(API + "/git/tags/" + sha)
+            obj = annotated.get("object", {}) if isinstance(annotated, dict) else {}
+        source = obj.get("sha") if isinstance(obj, dict) else None
+        if not isinstance(obj, dict) or obj.get("type") != "commit" or not isinstance(source, str) or not COMMIT.fullmatch(source):
+            raise error("Official release tag does not identify a commit")
+        return source
+    source = tag_source(tag)
     if not isinstance(manifest, dict):
         raise error("Invalid official release manifest")
     plan = manifest.get("version_plan", {})
     expected_channel = next((channel for channel in ("beta", "rc", "nightly") if "-" + channel + "." in tag), "stable")
+    evidence_tag = tag
+    promoted = expected_channel == "stable" and manifest.get("channel") == "rc"
+    if promoted:
+        evidence_tag = manifest.get("tag")
+        match = re.fullmatch(re.escape(tag) + r"-rc\.([1-9][0-9]*)", evidence_tag) if isinstance(evidence_tag, str) else None
+        plan_keys = {"schema_version", "base_version", "version", "channel", "sequence", "tag",
+                     "source_sha", "build_number", "policy_sha256", "promotion"}
+        policy = manifest.get("source_policy", {})
+        policy = policy.get("data") if isinstance(policy, dict) else None
+        def digest(value):
+            try:
+                raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
+            except (TypeError, ValueError):
+                return None
+            return hashlib.sha256(raw).hexdigest()
+        if (not match or release.get("prerelease") is not False or
+                not isinstance(plan, dict) or set(plan) != plan_keys or
+                plan.get("promotion") != "promote-bytes" or
+                type(plan.get("sequence")) is not int or str(plan["sequence"]) != match[1] or
+                plan.get("base_version") != tag[1:] or manifest.get("version") != tag[1:] or
+                not isinstance(manifest.get("plan_sha256"), str) or not HASH.fullmatch(manifest["plan_sha256"]) or
+                not isinstance(plan.get("policy_sha256"), str) or not HASH.fullmatch(plan["policy_sha256"]) or
+                manifest.get("plan_sha256") != digest(plan) or
+                not isinstance(policy, dict) or plan.get("policy_sha256") != digest(policy) or
+                not isinstance(policy.get("versioning"), dict) or policy["versioning"].get("promotion") != "promote-bytes"):
+            raise error("Official stable release has invalid RC promotion evidence")
+        expected_channel = "rc"
     if (type(manifest.get("schema")) is not int or manifest["schema"] != 1 or manifest.get("repository") != REPOSITORY or
-            manifest.get("tag") != tag or manifest.get("source_sha") != source or
+            manifest.get("tag") != evidence_tag or manifest.get("source_sha") != source or
             manifest.get("channel") != expected_channel or
             not isinstance(plan, dict) or type(plan.get("schema_version")) is not int or plan["schema_version"] != 1 or
             plan.get("channel") != expected_channel or
-            plan.get("tag") != tag or plan.get("source_sha") != source or
-            plan.get("version") != tag[1:] or
+            plan.get("tag") != evidence_tag or plan.get("source_sha") != source or
+            plan.get("version") != evidence_tag[1:] or
             type(plan.get("build_number")) is not int or not 0 < plan["build_number"] <= 2100000000):
         raise error("Official release tag and version plan do not match")
     name = VARIANTS[opts["variant"]]
@@ -177,10 +210,32 @@ def release_target(opts, error, deadline=None):
     if (len(found) != 1 or not isinstance(found[0].get("sha256"), str) or
             not HASH.fullmatch(found[0]["sha256"]) or found[0].get("size") != apk["size"] or apk["size"] > 128 * 1024 * 1024):
         raise error("Official APK size/hash does not match the release manifest")
+    if promoted:
+        # Promotion copies the RC bytes, including its unchanged manifest. Keep
+        # the stable download URL, but bind both publications to that evidence.
+        manifest_content = digest(manifest)
+        if manifest_content is None:
+            raise error("Official stable release has invalid RC manifest content")
+        candidate = fetch(API + "/releases/tags/" + evidence_tag)
+        if (not isinstance(candidate, dict) or candidate.get("draft") is not False or
+                candidate.get("prerelease") is not True or candidate.get("tag_name") != evidence_tag or
+                not candidate.get("published_at") or not isinstance(candidate.get("assets"), list)):
+            raise error("Official stable release has no published RC evidence")
+        candidate_manifest = asset("release-manifest.json", candidate, evidence_tag)
+        candidate_apk = asset(name, candidate, evidence_tag)
+        manifest_digest = manifest_asset.get("digest")
+        if (not isinstance(manifest_digest, str) or not re.fullmatch(r"sha256:[a-f0-9]{64}", manifest_digest) or
+                candidate_manifest.get("digest") != manifest_digest or candidate_manifest["size"] != manifest_asset["size"] or
+                candidate_apk.get("digest") != "sha256:" + found[0]["sha256"] or
+                apk.get("digest") != candidate_apk.get("digest") or candidate_apk["size"] != apk["size"] or
+                digest(fetch(candidate_manifest["browser_download_url"])) != manifest_content or
+                tag_source(evidence_tag) != source):
+            raise error("Official stable release differs from its RC source or assets")
     versions = manifest.get("package_versions", [])
     def value(field, expected):
         rows = [row for row in versions if isinstance(row, dict) and row.get("path") == name and row.get("field") == field] if isinstance(versions, list) else []
-        return len(rows) == 1 and rows[0].get("version") == expected
+        return (len(rows) == 1 and rows[0].get("version") == expected and
+                (not promoted or rows[0].get("plan_sha256") == manifest["plan_sha256"]))
     if not value("versionCode", str(plan["build_number"])) or not value("version", tag[1:]):
         raise error("Official APK version metadata does not match its version plan")
     return {"tag": tag, "variant": opts["variant"], "version_code": plan["build_number"],

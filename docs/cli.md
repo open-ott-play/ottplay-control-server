@@ -12,8 +12,10 @@ command queue.
 For opt-in performance recording, bounded export and guarded notification A–B–A
 trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
 perf --help` works without loading credentials; recording is off by default.
-`ott d1 perf start --hls-policy-details` selects version 3 HLS policy evidence
-when supported; `--hls-details` continues to select version 2. See the
+In builds containing the unreleased version 3 extension,
+`ott d1 perf start --hls-policy-details` selects HLS policy evidence when
+supported; `--hls-details` continues to select version 2. This extension is not
+included in the beta.12 installation pinned below. See the
 [buffer-policy runbook](performance-capture.md#hls-buffer-policy-and-retry-evidence)
 for capture, export, verification and the limits of retry/cause observations.
 
@@ -146,12 +148,13 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 source from release
-[`v0.1.6-beta.10`](https://github.com/open-ott-play/ottplay-control-server/releases/tag/v0.1.6-beta.10).
+[`v0.1.6-beta.12`](https://github.com/open-ott-play/ottplay-control-server/releases/tag/v0.1.6-beta.12).
 It contains the complete CLI module set, including finite group `watch`,
 performance-export verification, negotiated debug bundles and the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
-OTA workflow (`app_update.py`), Local videos profile save/load/import/export, and
-`standby` / `go` controls. It also includes media categories, stable-ID playback
+OTA workflow (`app_update.py`), including stable releases promoted from RC bytes, Local videos profile save/load/import/export, and
+`standby` / `go` controls. Kiosk confirmation accepts screen-suspended playback
+while retaining policy and strict-state checks. It also includes media categories, stable-ID playback
 and bounded catalogue pages (`s --limit` / `--offset`), plus group provider
 changes such as `ott t1,t2,t3,t4 provider m3u`, with optional channel numbers,
 `R` / `random` or title selection after switching. Update the controller and
@@ -176,8 +179,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=v0.1.6-beta.10
-  ott_source="$HOME/.local/share/ottplay-control-server-0.1.6-beta.10"
+  ott_ref=v0.1.6-beta.12
+  ott_source="$HOME/.local/share/ottplay-control-server-0.1.6-beta.12"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -197,7 +200,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.10/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.12/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -211,7 +214,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-0.1.6-beta.10/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-0.1.6-beta.12/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -233,8 +236,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'v0.1.6-beta.10'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.10'
+$ottRef = 'v0.1.6-beta.12'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.12'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -279,12 +282,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.10/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.12/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.10\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.12\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -313,7 +316,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-0.1.6-beta.10`, stages the replacement beside it, then switches atomically.
+`ott.before-0.1.6-beta.12`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -325,9 +328,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-0.1.6-beta.10")
-staged = launcher.with_name("ott.switch-0.1.6-beta.10")
-reviewed = Path.home() / ".local/share/ottplay-control-server-0.1.6-beta.10/cli/ott.py"
+backup = launcher.with_name("ott.before-0.1.6-beta.12")
+staged = launcher.with_name("ott.switch-0.1.6-beta.12")
+reviewed = Path.home() / ".local/share/ottplay-control-server-0.1.6-beta.12/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -2591,10 +2594,15 @@ policy was stored and any requested launch attempted, not that visible playback
 was verified. Delivery and uncertain-result handling match the other CLI requests;
 do not repeat an uncertain mutation blindly. Inspect `kiosk status` first.
 On players that report them, `--json` also retains `startup_grace_seconds: 60`
-for media queues and `screen_suspended`. A true `screen_suspended` means the
-player intentionally suspended locked playback while the device screen is off
-or the app is in the background. The ordinary text status explains this instead
-of leaving only `health: waiting`.
+for Plex/VPortal media queues, including older channel-backed queues, and
+`screen_suspended`. A true `screen_suspended` reports the player's screen policy
+suspending playback while the device screen is off or the app is in the
+background. Offline playback can report this while kiosk is `waiting` or `off`:
+`kiosk off` releases the kiosk lock but does not wake the screen or override that
+provider's background policy. The returned `provider` belongs to the kiosk policy
+and is `null` when that policy is off. The ordinary text status explains screen
+suspension instead of leaving only `health: waiting`. The CLI still requires the
+requested enabled/disabled state and, for `--strict`, explicit `strict: true`.
 Absence of these optional fields on older players does not establish their state.
 
 Direct API example, submitted to the existing authenticated `/api/requests`
@@ -2934,6 +2942,16 @@ sending the existing download request. Android additionally verifies the actual
 APK's package, signature and strictly increasing versionCode. Selecting an older
 version fails; selecting the already installed versionCode does nothing and is
 not proof of byte-for-byte equality.
+
+Stable releases promoted from an RC retain the original RC manifest and version
+plan. The CLI accepts this only for a matching `promote-bytes` plan, published RC
+and stable tags pointing to the same source, identical manifest evidence, and
+matching APK size/digests. The APK keeps the final package version and original
+versionCode; its download URL uses the selected stable tag. For example:
+
+```sh
+ott k8c update --version v1.1.60 --variant api22 --prepare-only
+```
 
 The command polls preparation, requests installation once, then reports verified
 installed versionCode, pending permission/confirmation, or unconfirmed reconnect.

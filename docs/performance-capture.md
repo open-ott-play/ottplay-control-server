@@ -283,6 +283,9 @@ version 1 schema remains unchanged.
 
 ## HLS buffer policy and retry evidence
 
+This version 3 extension is unreleased and is not included in the beta.12 CLI
+installation pinned in the [installation guide](cli.md#installation-and-connection).
+
 Use the explicitly selected version 3 capture when an effective buffer limit has
 shrunk, or a fragment's retry counter changes between loading and buffering:
 
