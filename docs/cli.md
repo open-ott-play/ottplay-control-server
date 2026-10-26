@@ -2587,10 +2587,15 @@ policy was stored and any requested launch attempted, not that visible playback
 was verified. Delivery and uncertain-result handling match the other CLI requests;
 do not repeat an uncertain mutation blindly. Inspect `kiosk status` first.
 On players that report them, `--json` also retains `startup_grace_seconds: 60`
-for media queues and `screen_suspended`. A true `screen_suspended` means the
-player intentionally suspended locked playback while the device screen is off
-or the app is in the background. The ordinary text status explains this instead
-of leaving only `health: waiting`.
+for Plex/VPortal media queues, including older channel-backed queues, and
+`screen_suspended`. A true `screen_suspended` reports the player's screen policy
+suspending playback while the device screen is off or the app is in the
+background. Offline playback can report this while kiosk is `waiting` or `off`:
+`kiosk off` releases the kiosk lock but does not wake the screen or override that
+provider's background policy. The returned `provider` belongs to the kiosk policy
+and is `null` when that policy is off. The ordinary text status explains screen
+suspension instead of leaving only `health: waiting`. The CLI still requires the
+requested enabled/disabled state and, for `--strict`, explicit `strict: true`.
 Absence of these optional fields on older players does not establish their state.
 
 Direct API example, submitted to the existing authenticated `/api/requests`

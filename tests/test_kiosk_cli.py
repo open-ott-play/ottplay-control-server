@@ -109,10 +109,101 @@ class KioskTest(unittest.TestCase):
         with self.assertRaises(ott.Error):
             ott.kiosk_metadata(waiting, 'status')
         waiting.pop('startup_grace_seconds')
-        with self.assertRaises(ott.Error):
-            ott.kiosk_metadata(waiting, 'status')
+        # The saved policy's provider need not be the currently active provider.
+        self.assertTrue(ott.kiosk_metadata(waiting, 'status')['screen_suspended'])
         waiting['screen_suspended'] = False
         self.assertFalse(ott.kiosk_metadata(waiting, 'status')['screen_suspended'])
+
+    def test_channel_backed_media_startup_grace(self):
+        data = {'enabled':True, 'state':'locked', 'channel':{'id':'a', 'name':'Episode'},
+                'provider':'plex', 'retry_seconds':10, 'retries':0, 'health':'starting',
+                'startup_grace_seconds':60}
+        for provider in ['plex', 'vportal']:
+            with self.subTest(provider=provider):
+                value = {**data, 'provider':provider}
+                self.assertEqual(ott.kiosk_metadata(value, 'on'), value)
+        for patch in [{'provider':'m3u'}, {'provider':'offline'},
+                      {'state':'waiting', 'channel':None},
+                      {'state':'off', 'enabled':False, 'provider':None, 'channel':None},
+                      {'startup_grace_seconds':True}, {'startup_grace_seconds':10}]:
+            with self.subTest(patch=patch), self.assertRaises(ott.Error):
+                ott.kiosk_metadata({**data, **patch}, 'status')
+
+    def test_suspended_offline_policy_commands_confirm_once(self):
+        # createKiosk().request emits these shapes with an asleep offline provider.
+        for mode in ['off', 'on']:
+            enabled = mode == 'on'
+            # The player reports the policy provider, which becomes null on off.
+            data = {'enabled':enabled, 'state':'waiting' if enabled else 'off',
+                    'channel':None, 'provider':'offline' if enabled else None,
+                    'retry_seconds':10, 'retries':0,
+                    'health':'waiting' if enabled else 'idle',
+                    'strict':enabled, 'screen_suspended':True}
+            params = {'mode':mode, **({'strict':True} if enabled else {})}
+            for machine in [False, True]:
+                with self.subTest(mode=mode, machine=machine):
+                    client = mock.Mock(timeout=45)
+                    client.device.return_value = 'dev_tv'
+                    client.call.return_value = {**data, 'video_progress':{'state':'unknown'}}
+                    output, errors = io.StringIO(), io.StringIO()
+                    args = (['--json'] if machine else []) + ['tv', 'kiosk', mode]
+                    if enabled:
+                        args.append('--strict')
+                    with mock.patch.object(ott, 'Client', return_value=client), \
+                            mock.patch.object(ott, 'read_json', return_value={}), \
+                            contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                        code = ott.main(args)
+                    client.call.assert_called_once_with('dev_tv', 'kiosk', params)
+                    self.assertEqual((code, errors.getvalue()), (0, ''))
+                    if machine:
+                        self.assertEqual(json.loads(output.getvalue()), data)
+                    else:
+                        expected = (
+                            'Strict kiosk is armed; local controls lock after the first channel selection.\n'
+                            'Kiosk mode enabled; waiting for the first channel selection in the player.\n'
+                            if enabled else 'Kiosk mode disabled.\n'
+                        )
+                        self.assertEqual(output.getvalue(), expected +
+                            'Playback is suspended while the screen is off or the app is in the background.\n')
+
+    def test_suspension_uses_active_provider_not_saved_policy_provider(self):
+        # Arming M3U, then activating offline and sleeping the screen preserves
+        # provider=m3u in createKiosk().snapshot while screen_suspended is true.
+        data = {'enabled':True, 'state':'waiting', 'channel':None, 'provider':'m3u',
+                'retry_seconds':10, 'retries':0, 'health':'waiting',
+                'strict':False, 'screen_suspended':True}
+        self.assertEqual(ott.kiosk_metadata(data, 'status'), data)
+
+    def test_suspension_cannot_replace_requested_policy_confirmation(self):
+        waiting = {'enabled':True, 'state':'waiting', 'channel':None, 'provider':'offline',
+                   'retry_seconds':10, 'retries':0, 'health':'waiting',
+                   'strict':True, 'screen_suspended':True}
+        off = {**waiting, 'enabled':False, 'state':'off', 'provider':None,
+               'health':'idle', 'strict':False}
+        for mode, data in [('off', waiting), ('on', off),
+                           ('on', {**waiting, 'strict':False}),
+                           ('on', {key:value for key, value in waiting.items() if key != 'strict'}),
+                           ('on', {'execution':{'state':'handler-completed'}})]:
+            for machine in [False, True]:
+                with self.subTest(mode=mode, data=data, machine=machine):
+                    client = mock.Mock(timeout=45)
+                    client.device.return_value = 'dev_tv'
+                    client.call.return_value = data
+                    output, errors = io.StringIO(), io.StringIO()
+                    args = (['--json'] if machine else []) + ['tv', 'kiosk', mode]
+                    params = {'mode':mode}
+                    if mode == 'on':
+                        args.append('--strict')
+                        params['strict'] = True
+                    with mock.patch.object(ott, 'Client', return_value=client), \
+                            mock.patch.object(ott, 'read_json', return_value={}), \
+                            contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                        code = ott.main(args)
+                    client.call.assert_called_once_with('dev_tv', 'kiosk', params)
+                    self.assertEqual((code, output.getvalue()), (1, ''))
+                    self.assertIn('did not confirm the kiosk policy', errors.getvalue())
+        with self.assertRaises(ott.Error):
+            ott.kiosk_metadata(waiting, 'set', True)
 
     def test_status_identifies_media_provider_and_screen_suspension(self):
         for provider, name in [('plex', 'Plex'), ('vportal', 'VPortal')]:
@@ -137,7 +228,7 @@ class KioskTest(unittest.TestCase):
                         expected = (
                             'Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.\n'
                             f'Kiosk {name}: Episode | 1/2 | waiting | retries: 0\n'
-                            'Kiosk playback is suspended while the screen is off or the app is in the background.\n'
+                            'Playback is suspended while the screen is off or the app is in the background.\n'
                         )
                     self.assertEqual((code, output.getvalue(), errors.getvalue()), (0, expected, ''))
 
