@@ -90,7 +90,8 @@ player advertises them. Scoped operators need `notifications.get` for reads or
 `ott ha status` shows the last reported `notifications_enabled` value, which
 is not a replacement for a direct durable read. Group operations report partial
 failures and return a nonzero exit status if any player failed. See the
-[persistence, compatibility and recovery details](notification-preferences.md).
+[single-player disable/enable and verification recipe](notification-preferences.md#disable-or-enable-one-player-and-verify-delivery)
+and [persistence, compatibility and recovery details](notification-preferences.md).
 
 ## Installation and connection
 
