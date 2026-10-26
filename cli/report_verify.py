@@ -1,7 +1,8 @@
-"""Offline integrity and semantic replay for bounded workbench report bundles."""
+"""Offline integrity and semantic replay for bounded diagnostic reports."""
 import argparse
 import datetime
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -17,12 +18,19 @@ MAX_JSON_DEPTH = 32
 FILES = frozenset(("manifest.json", "result.json"))
 POLICY = "workbench-v2"
 DEBUG_POLICY = "workbench-v3"
+ENGINE_POLICY = "workbench-v4"
+PERFORMANCE_POLICIES = ("performance-v1", "performance-v2")
+MAX_PERFORMANCE_BYTES = 1024 * 1024
+MAX_PERFORMANCE_MANIFEST = 16 * 1024
+PERFORMANCE_FILES = FILES | {"trial-plan.json"} | {"request-%03d.json" % index for index in range(96)}
 LEGACY_POLICY = "legacy-web-v1"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 ERROR_REASONS = frozenset((
     "invalid_native_binding", "not_bound", "deadline_exceeded", "invalid_response",
     "unsupported", "invalid_request", "runtime_mismatch", "unavailable",
     "unsupported_controller", "unauthorized", "rejected",
+    "controller_unavailable", "controller_http_error", "request_pending_timeout",
+    "receipt_missing", "rate_limited",
 ))
 
 
@@ -144,8 +152,8 @@ def _windows_open(path, directory, stack):
             kernel.CloseHandle(handle)
 
 
-def read_bundle(directory):
-    """Read only the two fixed names, with bounded reads and no symlink traversal."""
+def read_bundle(directory, include_performance=False):
+    """Read only fixed report names, with bounded reads and no symlink traversal."""
     require(isinstance(directory, str) and "\0" not in directory, "unsafe_report_path")
     path = Path(directory).expanduser().absolute()
     require(".." not in path.parts, "unsafe_report_path")
@@ -176,12 +184,21 @@ def read_bundle(directory):
             with os.scandir(directory_fd if directory_fd is not None else path) as iterator:
                 for entry in iterator:
                     names.add(entry.name)
-                    require(len(names) <= len(FILES), "unexpected_report_files")
+                    require(len(names) <= len(FILES) or include_performance and
+                            len(names) <= len(PERFORMANCE_FILES) and names <= PERFORMANCE_FILES,
+                            "unexpected_report_files")
             return names
 
-        require(entries() == FILES, "unexpected_report_files")
+        inventory = entries()
+        require(FILES <= inventory and (inventory == FILES or include_performance and
+                inventory <= PERFORMANCE_FILES), "unexpected_report_files")
+        expanded = inventory != FILES
         values, fingerprints, descriptors = {}, {}, {}
-        for name, limit in (("manifest.json", MAX_MANIFEST_BYTES), ("result.json", MAX_RESULT_BYTES)):
+        limits = [("manifest.json", MAX_PERFORMANCE_MANIFEST if expanded else MAX_MANIFEST_BYTES),
+                  ("result.json", MAX_PERFORMANCE_BYTES if expanded else MAX_RESULT_BYTES)]
+        limits += [(name, 16 * 1024) for name in sorted(inventory - FILES)]
+        total = 0
+        for name, limit in limits:
             if directory_fd is not None:
                 flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
                 fd = os.open(name, flags, dir_fd=directory_fd)
@@ -190,14 +207,41 @@ def read_bundle(directory):
                 fd = _windows_open(path / name, False, stack)
             descriptors[name] = fd
             values[name], fingerprints[name] = _read_fd(fd, limit)
-        require(entries() == FILES, "report_changed")
+            total += len(values[name])
+            require(total <= MAX_PERFORMANCE_BYTES, "report_size_invalid")
+        require(entries() == inventory, "report_changed")
         for name, expected in fingerprints.items():
             _verify_unchanged(name, descriptors[name], expected, directory_fd)
+        if include_performance:
+            return values["manifest.json"], values["result.json"], {name: values[name] for name in inventory - FILES}
         return values["manifest.json"], values["result.json"]
 
 
-def verify_manifest(raw, result):
+def verify_manifest(raw, result, extra_files=None):
     manifest = _json(raw)
+    if isinstance(manifest, dict) and "capture_complete" in manifest:
+        require(set(manifest) == {"version", "complete", "files", "capture_complete", "physical_display_verified"}
+                and type(manifest["version"]) is int and manifest["version"] == 1
+                and manifest["complete"] is True and type(manifest["capture_complete"]) is bool
+                and manifest["physical_display_verified"] is False, "invalid_manifest")
+        values = {"result.json": result, **(extra_files or {})}
+        require(set(values) <= PERFORMANCE_FILES - {"manifest.json"}, "invalid_manifest")
+        files = manifest["files"]
+        require(isinstance(files, list) and len(files) == len(values) <= 98, "invalid_manifest")
+        seen = set()
+        for entry in files:
+            require(isinstance(entry, dict) and set(entry) == {"name", "bytes", "sha256"}, "invalid_manifest")
+            name = entry["name"]
+            require(isinstance(name, str) and name in values and name not in seen
+                    and type(entry["bytes"]) is int and 0 < entry["bytes"] <= MAX_PERFORMANCE_BYTES
+                    and isinstance(entry["sha256"], str) and HEX.fullmatch(entry["sha256"]), "invalid_manifest")
+            seen.add(name)
+            require(entry["bytes"] == len(values[name]), "byte_count_mismatch")
+            require(entry["sha256"] == hashlib.sha256(values[name]).hexdigest(), "digest_mismatch")
+        require(seen == set(values) and len(raw) + sum(map(len, values.values())) <= MAX_PERFORMANCE_BYTES,
+                "invalid_manifest")
+        return manifest
+    require(not extra_files, "unexpected_report_files")
     require(isinstance(manifest, dict) and set(manifest) == {"version", "complete", "files", "physical_display_verified"},
             "invalid_manifest")
     require(type(manifest["version"]) is int and manifest["version"] == 1
@@ -210,6 +254,7 @@ def verify_manifest(raw, result):
             and isinstance(entry["sha256"], str) and HEX.fullmatch(entry["sha256"]), "invalid_manifest")
     require(entry["bytes"] == len(result), "byte_count_mismatch")
     require(entry["sha256"] == hashlib.sha256(result).hexdigest(), "digest_mismatch")
+    return manifest
 
 
 def _timestamp(value):
@@ -236,7 +281,7 @@ def _logs(value, api, workbench, runtime):
     api.android_metadata({"version": 1, "events": events}, "maintenance", {"operation": "logs"})
 
 
-def _observations(rows, api, workbench, bundle, ids, section="snapshot"):
+def _observations(rows, api, workbench, bundle, ids, section="snapshot", strongest_debug=False):
     require(isinstance(rows, list) and 1 <= len(rows) <= 2)
     require(all(isinstance(row, dict) for row in rows))
     require([row.get("lane") for row in rows] in (["web"], ["native"], ["web", "native"]))
@@ -273,8 +318,10 @@ def _observations(rows, api, workbench, bundle, ids, section="snapshot"):
                         and ("debug" in caps if section == "debug" else "snapshot" in caps.get("inspect", {}).get("sections", [])))
                 require([item["action"] for item in requests] == ["capabilities", "inspect"]
                         and all(item["status"] == "ok" for item in requests))
-                envelope = {"version": 1, "runtime": runtime, "section": section, "data": raw.get("data")}
-                data = (workbench.debug_metadata(envelope, runtime) if section == "debug"
+                version = (3 if caps.get("debug_attempts") == {"version": 3} else 2) if (
+                    strongest_debug and section == "debug" and caps.get("debug_versions") == [1, 2]) else 1
+                envelope = {"version": version, "runtime": runtime, "section": section, "data": raw.get("data")}
+                data = (workbench.debug_metadata(envelope, runtime, version) if section == "debug"
                         else workbench.snapshot_metadata(envelope, runtime, "snapshot"))
                 require("logs" not in raw and "logs_error" not in raw)
             else:
@@ -299,7 +346,7 @@ def _observations(rows, api, workbench, bundle, ids, section="snapshot"):
 def evaluate_report(report, api, workbench):
     require(isinstance(report, dict) and type(report.get("version")) is int and report["version"] == 1)
     policy = report.get("evaluator", LEGACY_POLICY)
-    require("evaluator" not in report or policy in (POLICY, DEBUG_POLICY), "unsupported_evaluator")
+    require("evaluator" not in report or policy in (POLICY, DEBUG_POLICY, ENGINE_POLICY), "unsupported_evaluator")
     require(report.get("command") in ("bundle", "test") and report.get("read_only") is True
             and report.get("physical_display_verified") is False)
     require(isinstance(report.get("device_id"), str)
@@ -312,13 +359,13 @@ def evaluate_report(report, api, workbench):
     bundle = report["command"] == "bundle"
     ids = set()
     before = _observations(report.get("observations"), api, workbench, bundle, ids)
-    if policy == DEBUG_POLICY:
+    if policy in (DEBUG_POLICY, ENGINE_POLICY):
         require(bundle and "debug_observations" in report)
         debug = report["debug_observations"]
         if [row["lane"] for row in before] == ["native"]:
             require(debug == [])
         else:
-            _observations(debug, api, workbench, True, ids, "debug")
+            _observations(debug, api, workbench, True, ids, "debug", strongest_debug=policy == ENGINE_POLICY)
     else:
         require("debug_observations" not in report)
     if bundle:
@@ -355,6 +402,164 @@ class Parser(argparse.ArgumentParser):
         raise InvalidReport("invalid_arguments")
 
 
+def _performance_module():
+    # Load the installed schema beside this verifier, never a path in a report.
+    path = Path(__file__).resolve().with_name("performance.py")
+    spec = importlib.util.spec_from_file_location("ott_report_performance", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _performance_requests(report, extra_files, perf):
+    rows = report.get("requests")
+    require(isinstance(rows, list) and len(rows) <= 34)
+    require(set(extra_files) == {"request-%03d.json" % index for index in range(len(rows))},
+            "unexpected_report_files")
+    failures = set(perf.ERRORS) | set(perf.REQUEST_FAILURE_REASONS) | {"transport_error", "unsupported_controller"}
+    ids, previous_end, previous_cursor = set(), 0, -1
+    for index, row in enumerate(rows):
+        require(isinstance(row, dict) and set(row) >= {
+            "action", "params", "started_monotonic", "finished_monotonic", "state"}
+            and set(row) <= {"action", "params", "started_monotonic", "finished_monotonic", "state", "request_id", "reason"})
+        perf.N(row["started_monotonic"])
+        perf.N(row["finished_monotonic"])
+        require(previous_end <= row["started_monotonic"] <= row["finished_monotonic"])
+        previous_end = row["finished_monotonic"]
+        require(row["state"] in ("confirmed", "confirmed_late", "unconfirmed", "rejected"))
+        require(index == len(rows) - 1 or row["state"] == "confirmed")
+        if row["state"] in ("confirmed", "confirmed_late"):
+            perf.matching(r"[A-Za-z0-9_.:-]{1,80}")(row.get("request_id"))
+            require(row["request_id"] not in ids and "reason" not in row)
+            ids.add(row["request_id"])
+        else:
+            require("request_id" not in row)
+            require("reason" not in row or row["reason"] in failures)
+            require(row["state"] != "rejected" or "reason" in row)
+        params = row["params"]
+        if index == 0:
+            require(row["action"] == "capabilities" and params == {})
+        else:
+            require(row["action"] == "perf_capture" and isinstance(params, dict))
+            op = "status" if index == 1 else "read"
+            perf.fields(version=perf.one(report["version"]), runtime=perf.matching(perf.RUNTIME),
+                        op=perf.one(op), session_id=perf.matching(perf.SESSION_ID),
+                        **({"after_seq": perf.I, "limit": perf.one(64)} if op == "read" else {}))(params)
+            require(params["session_id"] == report.get("session_id"))
+            if "capture" in report:
+                require(params["runtime"] == report["capture"]["runtime"])
+            if op == "read":
+                require(params["after_seq"] > previous_cursor and (index != 2 or params["after_seq"] == 0))
+                previous_cursor = params["after_seq"]
+        expected = {key: row[key] for key in ("action", "params", "started_monotonic")}
+        expected["state"] = "sent"
+        require(perf.encoded(_json(extra_files["request-%03d.json" % index])) == perf.encoded(expected),
+                "request_journal_mismatch")
+    return rows
+
+
+def evaluate_performance_report(report, manifest, extra_files, api):
+    """Replay export structure and completeness, never commands or trial effects."""
+    perf = _performance_module()
+    try:
+        require(report.get("operation") == "export", "unsupported_report")
+        required = {"version", "evaluator", "device_id", "physical_display_verified", "started_at_unix_ms",
+                    "completed_at_unix_ms", "operation", "read_only", "requests"}
+        require(required <= set(report) <= required | {"session_id", "capture", "reason", "unknown_outcome",
+                                                       "confirmed_late_result", "output"})
+        perf.one(1, 2)(report["version"])
+        require(report["evaluator"] == "performance-v" + str(report["version"]))
+        require(report["read_only"] is True and report["physical_display_verified"] is False)
+        perf.matching(perf.RUNTIME)(report["device_id"])
+        perf.I(report["started_at_unix_ms"])
+        perf.I(report["completed_at_unix_ms"])
+        # Wall-clock adjustment during collection is not proof of invalid media.
+        if "output" in report:  # Earlier exporters included this local-only field.
+            require(isinstance(report["output"], str) and len(report["output"]) <= 4096)
+        if "session_id" in report:
+            perf.matching(perf.SESSION_ID)(report["session_id"])
+        if "unknown_outcome" in report:
+            perf.B(report["unknown_outcome"])
+        rows = _performance_requests(report, extra_files, perf)
+        reasons_allowed = set(perf.ERRORS) | set(perf.REQUEST_FAILURE_REASONS) | {
+            "discarded_prefix", "sequence_gap", "page_limit", "events_dropped", "missing_tail",
+            "deadline_exceeded", "request_limit", "transport_error", "unauthorized", "unsupported_controller",
+            "invalid_response", "session_changed", "session_clock_regressed", "nonadvancing_export",
+            "nonmonotonic_export", "export_event_limit", "export_size_limit", "operation_failed", "interrupted"}
+        if "capture" not in report:
+            require(report.get("reason") in reasons_allowed and manifest.get("capture_complete") is False)
+            if "confirmed_late_result" in report:
+                require(rows and rows[-1]["state"] == "confirmed_late")
+                if rows[-1]["action"] == "capabilities":
+                    api.capabilities_metadata(report["confirmed_late_result"])
+                else:
+                    perf.metadata(report["confirmed_late_result"], rows[-1]["params"])
+            return {"evaluation_policy": report["evaluator"], "report_kind": "perf.export", "verdict": "unknown",
+                    "reason": "capture_unavailable", "capture_complete": False, "partial_reasons": [report["reason"]]}
+        require("reason" not in report and "confirmed_late_result" not in report)
+        capture = report["capture"]
+        perf.fields(version=perf.one(report["version"]), runtime=perf.matching(perf.RUNTIME),
+                    session_id=perf.one(report["session_id"]), scope=perf.one("frozen_highwater"),
+                    highwater=perf.I, pages=perf.num(0, 32, True), first_session=lambda _: None,
+                    last_session=lambda _: None, events=perf.array(lambda _: None, 1024),
+                    complete=perf.B, partial_reasons=perf.array(perf.one(*reasons_allowed), len(reasons_allowed), True))(capture)
+        first, last = capture["first_session"], capture["last_session"]
+        for session in (first, last):
+            perf.validate_session(session, report["version"])
+            require(session["id"] == capture["session_id"])
+        require(capture["highwater"] == first["next_seq"] - 1)
+        require(len(rows) >= 2 and all(row["state"] == "confirmed" for row in rows[:2]))
+        reads = rows[2:]
+        require(capture["pages"] == sum(row["state"] == "confirmed" for row in reads))
+        require(all(row["params"]["after_seq"] < capture["highwater"] for row in reads))
+        require(len(capture["events"]) <= 64 * capture["pages"])
+        reasons, mandatory = set(capture["partial_reasons"]), set()
+        stable_keys = ("id", "started_at_unix_ms", "duration_seconds", "clock", "requested", "supported", "capture_version")
+        changed = any(first.get(key) != last.get(key) for key in stable_keys)
+        regressed = last["elapsed_ms"] < first["elapsed_ms"]
+        if changed:
+            mandatory.add("session_changed")
+        if regressed:
+            mandatory.add("session_clock_regressed")
+        if first["dropped_events"] or last["dropped_events"]:
+            mandatory.add("events_dropped")
+        if reads and reads[-1]["state"] != "confirmed":
+            require(bool(reasons), "semantic_mismatch")
+        if first["first_seq"] > 1 and capture["events"]:
+            mandatory.add("discarded_prefix")
+        events = capture["events"]
+        # A failed page may have replaced `last_session` before the collector
+        # detected a changed or regressed boundary. Retained earlier events
+        # remain useful, but cannot establish complete capture.
+        event_session = dict(first, next_seq=capture["highwater"] + 1,
+                             elapsed_ms=max(first["elapsed_ms"], last["elapsed_ms"]))
+        if changed or regressed or "session_clock_regressed" in reasons:
+            event_session["elapsed_ms"] = perf.SAFE
+        previous, elapsed, event_bytes = 0, -1, 0
+        for event in events:
+            perf.validate_event(event, event_session)
+            require(previous < event["seq"] <= capture["highwater"] and event["at_ms"] >= elapsed)
+            if event["seq"] != previous + 1:
+                mandatory.add("sequence_gap")
+            previous, elapsed = event["seq"], event["at_ms"]
+            event_bytes += len(perf.encoded(event)) - 1
+        require(event_bytes <= 524288)
+        if previous < capture["highwater"]:
+            mandatory.add("missing_tail")
+        require(mandatory <= reasons and capture["complete"] == (not reasons), "semantic_mismatch")
+        require(manifest.get("capture_complete") is capture["complete"], "semantic_mismatch")
+        require("page_limit" not in reasons or capture["pages"] == 32, "semantic_mismatch")
+        if capture["complete"]:
+            require(not changed and not regressed and last["next_seq"] >= first["next_seq"]
+                    and all(row["state"] == "confirmed" for row in rows), "semantic_mismatch")
+        return {"evaluation_policy": report["evaluator"], "report_kind": "perf.export",
+                "verdict": "observed" if capture["complete"] else "unknown",
+                "reason": "capture_completeness_verified", "capture_complete": capture["complete"],
+                "event_count": len(events), "highwater": capture["highwater"], "partial_reasons": sorted(reasons)}
+    except perf.Failure:
+        raise InvalidReport("invalid_performance_report") from None
+
+
 def main(argv, api, workbench, json_output=False):
     """No config or client access. A valid digest is not an authenticated report."""
     result = {"version": 1, "command": "report_verify", "valid": False, "integrity": "unverified",
@@ -363,15 +568,15 @@ def main(argv, api, workbench, json_output=False):
     json_output = json_output or any(arg in ("--json", "-j") for arg in argv)
     try:
         parser = Parser(prog="ott report", allow_abbrev=False,
-                        description="Verify a local workbench report without contacting a player. Integrity is not authenticity.")
+                        description="Verify a local workbench or performance export without contacting a player. Integrity is not authenticity.")
         parser.add_argument("action", choices=("verify",))
         parser.add_argument("directory", metavar="DIR")
         parser.add_argument("-j", "--json", action="store_true", default=json_output)
         args = parser.parse_args(argv)
         json_output = args.json
-        manifest, raw = read_bundle(args.directory)
+        manifest, raw, extra_files = read_bundle(args.directory, include_performance=True)
         try:
-            verify_manifest(manifest, raw)
+            metadata = verify_manifest(manifest, raw, extra_files)
         except InvalidReport:
             result["integrity"] = "invalid"
             raise
@@ -379,9 +584,14 @@ def main(argv, api, workbench, json_output=False):
         report = _json(raw)
         if isinstance(report, dict):
             marker = report.get("evaluator", LEGACY_POLICY)
-            if marker in (POLICY, DEBUG_POLICY, LEGACY_POLICY) and isinstance(marker, str):
+            if isinstance(marker, str) and marker in (POLICY, DEBUG_POLICY, ENGINE_POLICY, LEGACY_POLICY, *PERFORMANCE_POLICIES):
                 result["evaluation_policy"] = marker
-        result.update(evaluate_report(report, api, workbench), valid=True)
+        if isinstance(report, dict) and report.get("evaluator") in PERFORMANCE_POLICIES:
+            require("capture_complete" in metadata, "invalid_manifest")
+            result.update(evaluate_performance_report(report, metadata, extra_files, api), valid=True)
+        else:
+            require("capture_complete" not in metadata, "invalid_manifest")
+            result.update(evaluate_report(report, api, workbench), valid=True)
     except SystemExit as exc:
         return int(exc.code)
     except InvalidReport as exc:
@@ -398,5 +608,9 @@ def main(argv, api, workbench, json_output=False):
     else:
         print("Report verification: " + (result["verdict"] if result["valid"] else "invalid"))
         print("Integrity: " + result["integrity"] + "; authenticated: false; physical display verified: false")
+        if "capture_complete" in result:
+            print("Capture: " + ("complete" if result["capture_complete"] else "partial or unavailable"))
+            if result.get("partial_reasons"):
+                print("Partial reasons: " + ", ".join(result["partial_reasons"]))
         print("Reason: " + result["reason"])
     return {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]

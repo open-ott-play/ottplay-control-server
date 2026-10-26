@@ -110,7 +110,8 @@ class StatusCliTest(unittest.TestCase):
                 self.assertNotIn('player changed', out)
                 if machine:
                     self.assertEqual(json.loads(out)['player'], status['player'])
-                    self.assertNotIn('background', json.loads(out)['capabilities']['player'])
+                    self.assertEqual(json.loads(out)['capabilities']['player']['background'], {'state': 'running', 'pending': 0})
+                    self.assertFalse(json.loads(out)['capabilities']['player']['standby'])
                 else:
                     self.assertIn('Background:   ' + state + ' (' +
                                   (str(pending) if pending is not None else 'unknown') + ' pending)', out)

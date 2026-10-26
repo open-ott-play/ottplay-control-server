@@ -54,6 +54,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott report verify DIRECTORY [-j]   verify and re-evaluate saved evidence offline
   ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
+  ott t1,t2 watch --duration 30       observe players and decoder progress (read-only)
   ott ha status [-j]                 Home Assistant bridge and active banner recipients
   ott NAME notifications [on|off]    read/save the single banner and camera preference
   ott NAME settings [list|schema]    discover typed settings for this player/source
@@ -353,6 +354,15 @@ def listing_option(words):
 
 class Error(Exception):
     pass
+
+
+class RequestError(Error):
+    """A bounded request failure with machine-readable cause and stage."""
+    def __init__(self, reason, stage, message, request_id=None):
+        super().__init__(message)
+        self.reason = reason
+        self.stage = stage
+        self.request_id = request_id
 
 
 class PlayerRejected(Error):
@@ -754,9 +764,13 @@ class Client:
                 # Replaying it would give a relative-volume command a second ID.
                 if isinstance(exc, HTTPError) and exc.code < 500:
                     raise
-                raise Error(str(exc) + ". The request may have been accepted; do not repeat the change blindly.") from exc
+                reason = ("controller_unavailable" if isinstance(exc, TransportError) else
+                          "controller_http_error" if isinstance(exc, HTTPError) else "invalid_response")
+                raise RequestError(reason, "enqueue", "The controller did not confirm the request. "
+                                   "The request may have been accepted; do not repeat the change blindly.") from exc
             if not isinstance(queued, dict) or not isinstance(queued.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", queued["id"]):
-                raise Error("The server did not return a request ID. The request may have been accepted; do not repeat the change blindly.")
+                raise RequestError("invalid_response", "enqueue", "The server did not return a request ID. "
+                                   "The request may have been accepted; do not repeat the change blindly.")
             request_id = queued["id"]
             try:
                 receipt = self._wait_receipt(query, request_id, deadline)
@@ -781,6 +795,7 @@ class Client:
                     pass
 
     def _wait_receipt(self, query, request_id, deadline):
+        last_failure = None
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -792,23 +807,32 @@ class Client:
             try:
                 status, result = self.api("/api/requests" + query + "&id=" + request_id, timeout=remaining)
             except TransportError:
+                last_failure = "controller_unavailable"
                 continue
             except HTTPError as exc:
                 if exc.code in (502, 503, 504):
+                    last_failure = "controller_http_error"
                     continue
                 if exc.code == 404:
-                    raise Error("The request receipt has expired or is missing. The request may have been executed; do not repeat the change blindly.") from exc
-                raise Error(f"The request receipt could not be read (HTTP {exc.code}). The request may have been executed; do not repeat the change blindly.") from exc
+                    raise RequestError("receipt_missing", "receipt", "The request receipt has expired or is missing. "
+                                       "The request may have been executed; do not repeat the change blindly.", request_id) from exc
+                reason = "unauthorized" if exc.code in (401, 403) else "rate_limited" if exc.code == 429 else "controller_http_error"
+                raise RequestError(reason, "receipt", f"The request receipt could not be read (HTTP {exc.code}). "
+                                   "The request may have been executed; do not repeat the change blindly.", request_id) from exc
             except Error as exc:
-                raise Error(str(exc) + ". The request may have been executed; do not repeat the change blindly.") from exc
+                raise RequestError("invalid_response", "receipt", "The controller returned an invalid request receipt. "
+                                   "The request may have been executed; do not repeat the change blindly.", request_id) from exc
             if time.monotonic() >= deadline:
                 break
             if status == 202:
                 if not isinstance(result, dict) or result.get("status") != "pending":
-                    raise Error("The server returned an invalid pending status. The request may have been executed; do not repeat the change blindly.")
+                    raise RequestError("invalid_response", "receipt", "The server returned an invalid pending status. "
+                                       "The request may have been executed; do not repeat the change blindly.", request_id)
+                last_failure = None
                 continue
             if status != 200 or not isinstance(result, dict) or result.get("id") != request_id or result.get("status") not in ("ok", "rejected", "unsupported") or not isinstance(result.get("data"), dict):
-                raise Error("The server returned an invalid player response. The request may have been executed; do not repeat the change blindly.")
+                raise RequestError("invalid_response", "receipt", "The server returned an invalid player response. "
+                                   "The request may have been executed; do not repeat the change blindly.", request_id)
             if result.get("status") != "ok":
                 data = result["data"]
                 matches = data.get("matches", [])
@@ -820,7 +844,13 @@ class Client:
                     raise PlayerRejected(message, data)
                 raise PlayerUnsupported(message, data)
             return {"request_id": request_id, "status": "ok", "data": result["data"]}
-        raise Error("The player did not respond. Open it, check the address/access code and use a version that supports the CLI. The request may still execute before its TTL expires; do not repeat the change blindly.")
+        if last_failure:
+            message = "The controller could not be reached while waiting for the request receipt." if last_failure == "controller_unavailable" else "The controller returned HTTP errors while waiting for the request receipt."
+            raise RequestError(last_failure, "receipt", message + " The player's response is unknown. "
+                               "The request may still execute before its TTL expires; do not repeat the change blindly.", request_id)
+        raise RequestError("request_pending_timeout", "receipt", "No player response was received before the deadline. "
+                           "This does not establish that the player is offline. The request may still execute before its TTL expires; "
+                           "do not repeat the change blindly.", request_id)
 
 
 def clean(value):
@@ -3049,6 +3079,18 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "standby" in player:
+        if type(player["standby"]) is not bool:
+            raise Error(invalid)
+        result["player"]["standby"] = player["standby"]
+    if "background" in player:
+        background = player["background"]
+        if (not isinstance(background, dict) or set(background) != {"state", "pending"}
+                or background.get("state") not in ("running", "suspending", "suspended", "unsupported", "error")
+                or (background.get("pending") is not None and
+                    (type(background["pending"]) is not int or not 0 <= background["pending"] <= 2147483647))):
+            raise Error(invalid)
+        result["player"]["background"] = dict(background)
     if "player_settings_patch" in data:
         patch = data["player_settings_patch"]
         if (not isinstance(patch, dict) or set(patch) != {"version", "groups", "max_fields"}
@@ -3275,7 +3317,7 @@ def status_capabilities(client, device, data, deadline):
         if time.monotonic() >= deadline:
             result["capabilities_error"] = "Available controls did not arrive within --timeout; run status again."
         elif identity is not None and (not isinstance(identity, dict) or any(
-                identity.get(key) != value for key, value in controls["player"].items())):
+                identity.get(key) != controls["player"][key] for key in ("version", "platform", "runtime"))):
             result["capabilities_error"] = "The player changed while reading status; run status again."
         else:
             result["capabilities"] = controls
@@ -3436,6 +3478,7 @@ def print_player_help(data, name):
             print(f"  {prefix} doctor  — read runtime health and identity")
         if "snapshot" in sections:
             print(f"  {prefix} inspect --view ui,media  — read interface and decoder state")
+            print(f"  {prefix} watch --duration 30  — observe state and decoder progress over time")
             print(f"  {prefix} bundle --out DIR  — save diagnostic evidence")
             print(f"  {prefix} test run health --report DIR  — check observation lanes")
             print(f"  {prefix} test run media-progress --report DIR  — observe decoder progress")
@@ -3727,6 +3770,16 @@ def registry_management(client, config_path, words, json_output=False):
     return module.dispatch(SimpleNamespace(**globals()), client, config_path, words, json_output)
 
 
+def fleet_module():
+    path = Path(__file__).resolve().with_name("fleet.py")
+    if not path.is_file():
+        raise Error("Install fleet.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_fleet", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def management(client, config_path, words, json_output=False):
     verb = words[0].casefold()
     registry_verbs = ("registry", "remove", "unalias", "add", "alias", "pair", "approve")
@@ -3825,11 +3878,22 @@ def management(client, config_path, words, json_output=False):
         else:
             print(f"Pairing approved for {clean(words[1])}. The player will save its own access code and connect automatically.")
         return True
-    if verb == "devices" and len(words) == 1:
-        _, data = client.api("/api/devices")
-        for row in data["devices"]:
-            aliases = [key for key, value in client.config.get("players", {}).items() if value == row["id"]]
-            print(f"{','.join(aliases) or '—'}  {row['id']}  last_seen={row.get('last_seen') or 'never'}  pending={row['pending']}")
+    if verb == "devices" and all(word in ("-j", "--json") for word in words[1:]):
+        module = fleet_module()
+        status, raw = client.api("/api/devices")
+        try:
+            if status != 200:
+                raise module.Failure("invalid_response")
+            data = module.inventory_metadata(raw, client.config)
+        except (module.Failure, ValueError, TypeError, KeyError, OverflowError, RecursionError):
+            raise Error("The controller returned invalid device inventory metadata") from None
+        if json_output or len(words) > 1:
+            print(json.dumps(data, ensure_ascii=True, allow_nan=False, indent=2))
+        else:
+            for row in data["devices"]:
+                print(f"{','.join(row['aliases']) or '—'}  {row['id']}  last_seen={row.get('last_seen') or 'never'}  pending={row['pending']}")
+            for row in data["stale_aliases"]:
+                print(f"{row['alias']}  {row['id']}  not registered on this controller")
         return True
     if verb == "pair" and len(words) == 2:
         device = client.device(words[1])
@@ -4810,6 +4874,9 @@ def main(argv=None):
             return 0
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
             raise Error("--timeout must be between 1 and 300 seconds")
+        if len(args.words) >= 2 and args.words[1].casefold() == "watch" and args.words[-1] in ("--help", "-h"):
+            fleet_module().arguments(args.words[2:], args.json)
+            return 0
         config = read_json(args.config)
         if args.words[0].casefold() == "unalias":
             registry_management(None, args.config, args.words, args.json)
@@ -4835,6 +4902,8 @@ def main(argv=None):
             return 0
         if args.words[0].casefold() in TOP_LEVEL_COMMANDS:
             raise Error(f"The name {args.words[0]!r} is reserved for a CLI command. Run ott --help for its syntax; use another player alias or the device UUID")
+        if len(args.words) >= 2 and args.words[1].casefold() == "watch":
+            return fleet_module().run(SimpleNamespace(**globals()), client, args.words[0], args.words[2:], args.timeout, args.json)
         targets = provider_group_targets(client, args.words[0])
         if targets is not None:
             if command_verb(args.words[1:]) == "notifications":

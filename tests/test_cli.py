@@ -470,6 +470,40 @@ class ReadbackTest(unittest.TestCase):
     def advance(self, duration):
         self.now += duration
 
+    def test_timeout_retains_controller_vs_pending_cause_and_request_identity(self):
+        for failure, expected in ((ott.TransportError('private-url'), 'controller_unavailable'),
+                                  (ott.HTTPError(503), 'controller_http_error'),
+                                  ((202, {'status': 'pending'}), 'request_pending_timeout')):
+            with self.subTest(expected=expected):
+                self.now = 0
+                def api(path, payload=None, timeout=None):
+                    if payload is not None:
+                        return 202, {'id': 'a' * 32}
+                    if isinstance(failure, Exception):
+                        raise failure
+                    return failure
+                self.client.api = mock.Mock(side_effect=api)
+                with self.assertRaises(ott.RequestError) as caught:
+                    self.client.call('tv', 'status', {})
+                self.assertEqual(caught.exception.reason, expected)
+                self.assertEqual(caught.exception.stage, 'receipt')
+                self.assertEqual(caught.exception.request_id, 'a' * 32)
+                self.assertNotIn('private-url', str(caught.exception))
+                self.assertNotIn('The player did not respond', str(caught.exception))
+                self.assertEqual(sum(len(call.args) == 2 for call in self.client.api.call_args_list), 1)
+
+    def test_successful_pending_read_resets_prior_controller_failure(self):
+        responses = iter([(202, {'id': 'a' * 32}), ott.HTTPError(503)])
+        def api(*args, **kwargs):
+            value = next(responses, (202, {'status': 'pending'}))
+            if isinstance(value, Exception):
+                raise value
+            return value
+        self.client.api = api
+        with self.assertRaises(ott.RequestError) as caught:
+            self.client.call('tv', 'status', {})
+        self.assertEqual(caught.exception.reason, 'request_pending_timeout')
+
     def test_transient_readback_retries_same_id_without_reposting(self):
         self.client.api = mock.Mock(side_effect=[
             (202, {'id': 'a' * 32}), ott.TransportError('lost readback'),
