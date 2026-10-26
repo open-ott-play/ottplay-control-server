@@ -222,7 +222,9 @@ older players may omit them. `strict: true` with `state: waiting` arms strict co
 for the first channel selection, rather than declaring an already locked UI.
 
 `provider_settings` accepts provider IDs `m3u`, `xtream`, `stalker`, `ottclub`
-and `plex`. The controller requires exactly `provider` and an object-valued
+and `plex` through the existing envelope. Dedicated `vportal` slots additionally
+require the runtime/context/revision envelope described below. For the existing
+providers, the controller requires exactly `provider` and an object-valued
 `settings`; provider-specific field validation remains on the player. For Plex,
 select the Plex provider on a compatible player, then send its server URL and
 token together:
@@ -245,6 +247,53 @@ The player saves that slot without changing the selected Stalker slot. Its
 receipt contains `provider`, `profile`, `saved` and the field names only.
 Editing an inactive slot does not reload playback. The existing `server`/`mac`
 form without `profile` continues to update the selected slot.
+
+For VPortal, first issue `settings_compare` with
+`{provider:"vportal",number:1,settings:{vportal:"portal::...",name?:"Family"},runtime}`.
+It returns `{provider,number,matched,runtime,context,revision}` without saved
+values. Save with `{provider:"vportal",settings:{profile:1,vportal:"portal::...",name?:"Family"},runtime,context,revision}`.
+The receipt contains `{provider,profile,fields,saved:true,reloaded,reload_required,runtime,context,revision}`.
+All fields are required except the request's optional name; omitting it preserves
+the dedicated slot name. Slot and runtime are request-bound, and both reload
+flags cannot be true. No provider/UI switch is performed. Capability
+`vportal_settings:{version:1}` identifies support. See the
+[fixture](../contracts/vportal-settings-v1.json) and [migration guide](player-settings.md).
+
+### Typed individual preferences
+
+Capability `player_settings:{version:1,operations:["schema","get","set"],max_page_size:20}`
+adds a separate `player_settings` action. Requests are `schema` with runtime and
+optional cursor/limit, `get` with runtime/id, or `set` with runtime/id/context/
+revision/value. Values are bounded integers, strings or string arrays; arbitrary
+objects are rejected. Each get returns its descriptor and saved-state snapshot.
+The set response requires verified persistence and reports application separately.
+All results are at most 64 KiB and bound to the submitted runtime/operation;
+write results also bind to the setting ID, source context and supplied value.
+Secret descriptors cannot return defaults or raw snapshot values. No settings
+payload is added to the operation journal or diagnostic operation evidence.
+The [wire fixture](../contracts/player-settings-v1.json) defines common shapes,
+limits and the application state/reason matrix. The
+[settings guide](player-settings.md) explains scopes, conflicts, CLI examples
+and settings outside this registry.
+
+Capability `plex_folders` version 1 adds `list`, `add`, `remove`, and `clear`
+operations for the `plexFolderPaths` collection. Lists use consistent pages of
+at most 10 entries, with up to 1000 canonical Plex roots in a saved selection.
+Writes require runtime, context, and revision; the result distinguishes verified
+persistence from catalogue application. Empty selection means all libraries.
+See the [folder contract](../contracts/plex-folders-v1.json).
+
+Capability `player_settings_patch` version 1 adds `get` and `set` for the finite
+`command_server` and `local_http` groups. All three fields share one revision;
+`set.values` contains one to three group fields. Sensitive snapshots report only
+presence. A changed tuple returns `deferred/after_ack` with transition `pending`;
+an unchanged tuple returns `completed` with transition `applied` only when the
+live owner already matches. Otherwise it also uses `deferred/after_ack` and
+`pending` with `changed:false`. Subsequent
+reads can report a bounded failure or rollback reason. Results remain at most
+64 KiB. The [group contract](../contracts/player-settings-patch-v1.json) defines
+the exact field, storage, and transition rules. See the
+[connection workflow](player-settings.md#change-a-connection-as-one-transaction).
 
 `profiles` accepts exactly `{}`. For the active M3U provider it returns
 `{provider:"m3u",profiles:[{number,name,active,history_hours,playlist_configured}]}`:
@@ -624,6 +673,8 @@ changes the legacy command contract nor extends the `plex_queue` request schema.
 {"action":"plex_library","params":{"runtime":"page-123","op":"list"}}
 {"action":"plex_library","params":{"runtime":"page-123","op":"preview","query":"Tom and Jerry"}}
 {"action":"plex_library","params":{"runtime":"page-123","op":"play","library_id":"16","shuffle":true}}
+{"plex_library_truncation":{"version":1}}
+{"action":"plex_library","params":{"runtime":"page-123","op":"play","library_id":"16","shuffle":true,"allow_truncate":true}}
 ```
 
 The optional capability has exactly `version`, `operations` and `max_items`.
@@ -635,11 +686,25 @@ capability or missing operation is unsupported. `max_items` is an integer from
 (a string matching `^[1-9][0-9]{0,19}$`). Optional `shuffle` is a boolean,
 default false. Unknown or duplicate fields and malformed UTF-16 escapes fail.
 
+An additional top-level capability `plex_library_truncation` has exactly
+`{"version":1}` and requires the sibling `plex_library.max_items` to be 500.
+It leaves the existing `plex_library` object unchanged. After discovering this
+capability, callers may add `allow_truncate:true` to `preview` or `play`. The
+field must be literal `true` when present; `false`, `null`, other types and use
+on `list` are rejected. Without this opt-in, oversized libraries retain the
+`too_many_items` error and do not start a partial queue. Older controllers reject
+the opt-in request before dispatch; deploy the updated controller first.
+
 The player prefers an exact case-insensitive library-title match, then a unique
 substring match; an ambiguous match fails. Only `movie` and `show` sections are
 eligible. Discovery limits the complete section inventory to 1000, including
-unsupported types, and includes complete pagination before committing playback;
-show sections resolve episodes. It does not recursively search filesystem folders
+unsupported types. Show sections resolve episodes. With truncation enabled,
+item discovery retains the first 500 items in library order, validates the
+selected set and stops once it can establish that the limit was exceeded.
+It does not scan the remainder of a larger library. Shuffle is applied to the
+retained set; it is not a random sample from the whole library. Without opt-in,
+item discovery still requires complete pagination before committing playback.
+It does not recursively search filesystem folders
 or treat a series inside another section as a library. Discovery and queue
 preparation share request ownership, saved-configuration checks and expiry.
 
@@ -654,7 +719,13 @@ runtime and operation. Exact successful list data is:
 and `type`; title is nonblank, sanitized single-line text of at most 160 UTF-8
 bytes and type is `movie` or `show`. Ready preview/play data has exactly the same
 four base fields plus `library` (one row), `shuffled` (the requested boolean)
-and `queue` (the existing preview or play result, respectively). An explicit
+and `queue` (the existing preview or play result, respectively), with one
+optional field: `truncated:true`. That field is accepted only for a request
+bound to `allow_truncate:true` and a queue of exactly 500 IDs. It is omitted
+when the complete library fits, including exactly 500 items; false, null and
+non-boolean markers are rejected. It is never valid on list or error data.
+The CLI preserves the marker in JSON and prints a limit warning in text output.
+An explicit
 `library_id` must match the selected library; the nested queue must have the same
 runtime, 1–500 IDs, and play begins at index zero. `queue.state:error` is not a
 successful library result. `ready` describes the library operation; a nested
@@ -879,6 +950,18 @@ Results are bounded to 2 MiB each, 50 per device and 16 MiB globally; they expir
 Programme results use one `as_of` Unix-seconds timestamp captured at collection start. `checked` counts completed channel lookups and `partial` indicates an unfinished collection, not whether every provider feed was available. Channels with no current programme are omitted; the guide service does not distinguish missing data from a fetch failure in an empty result.
 
 ## Opt-in DNS-SD discovery and pairing
+
+The optional [durable registry API](device-registry.md) adds explicit
+administrator registration/revocation/rotation and durable approved claims.
+Its guide defines generation checks, operation receipts, static conflicts and
+selected HTTPS pairing aliases. Without that configuration, registration
+remains static and pending pairing behavior below is unchanged.
+
+Hosted clients may carry the device-side routes through
+[`POST /api/device-transport`](device-transport.md). Its fixed allowlist includes
+public discovery, pairing creation and claim/cancel; administrator listing and
+approval remain available only on their original routes. The same transport
+also supports device commands/results, notifications/media and runtime diagnostics.
 
 These routes return 404 unless the optional `discovery` configuration is present.
 The following configuration and response examples use illustrative addresses;
@@ -1278,11 +1361,38 @@ All other fields, bounds, runtime binding and allowlists remain identical.
 
 Default requests still use version 1 and cannot carry `engine`. An updated
 player therefore remains compatible with earlier controllers and CLIs.
-`ott PLAYER debug --engine` opts in to version 2; unsupported players are not
-queried and unsupported controllers cause a clear failure without a version 1
+`ott PLAYER debug --engine` opts in to version 2, or version 3 when the separate
+`debug_attempts:{"version":3}` capability is present. Unsupported players are not
+queried and unsupported controllers cause a clear failure without a downgraded
 retry. An attached engine is not evidence of decoded frames or physical output.
 
+Version 3 keeps the same 16 KiB snapshot limit, envelope/runtime binding and
+version 2 fields. Each media lane additionally requires `attempt` and
+`lastAttempt`. Both are nullable; a missing owner produces null. A current
+attempt contains exactly `attachment`, `engineStarts`, `fatalErrors`,
+`nativeFallbacks`, and `streamRetries`, all integers from 0 through 9007199254740991.
+A retired attempt adds required `handleId` (the same integer bounds),
+`generation` (nullable integer), and `reason` (`ended`, `disposed`, or `suspended`).
+Unknown fields, incomplete objects and out-of-range counters are rejected.
+Current and retired attempt identities must be considered separately; counter
+changes across replacement handles do not measure retries of one stream.
+
+The new marker requires the existing `debug:{"version":1}` and
+`debug_versions:[1,2]` capabilities. Keep that legacy array unchanged: existing
+CLIs require its exact shape and safely ignore unknown top-level markers.
+Deploy controller support before enabling the new player/CLI combination.
+The shared [version 3 fixture](../contracts/runtime-debug-v3.json) defines the
+bounded extension. Negative replies must also retain requested version 3 and
+the exact runtime; no error permits silent retry with another schema.
+
 ## Scoped ordinary command credentials
+
+The additive `perf_capture` action has exact `start`, `status`, `read`, and `stop`
+operations, runtime/session binding, and independent scoped permissions such as
+`perf_capture.read`. Its [wire contract](../contracts/perf-capture-v1.json) defines
+the finite event schemas, TTL, ring and response limits; the
+[capture runbook](performance-capture.md) covers export and guarded trials.
+Advertising the capability does not start recording.
 
 `operators` optionally authorizes exact device/action pairs for ordinary RPC and
 legacy command submission. Composite RPCs require an operation-qualified action
@@ -1318,9 +1428,12 @@ records become `unknown` on restart and no commands are replayed.
   all three settings fields are required; saved legacy VPortal links are ignored.
 - Plex: `{provider:"plex",settings:{server,token}}`.
 - Stalker: `{provider:"stalker",number:1,settings:{name,server,mac}}`.
+- VPortal: `{provider:"vportal",number:1,settings:{vportal,name?},runtime}`;
+  this compares the dedicated VPortal slot, not retired M3U shadow fields.
 
 The result data is `{provider,number?,matched}` with a boolean `matched` and no
-stored values. Slots range from 1 to 15. Existing player parental/settings policy
+stored values. VPortal additionally returns `runtime`, opaque `context` and
+`revision` for a conditional save. Slots range from 1 to 15. Existing player parental/settings policy
 still applies. The request carries expected values, so treat its body as private.
 
 ## Explicit playback handoff

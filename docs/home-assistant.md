@@ -35,6 +35,13 @@ device has been tested.
   returning from standby or after restarting the controller. Do not use them as
   the sole destination for alarms that must be acknowledged.
 
+To disable HA banners and camera media for just one player, use
+`ott f notifications off`; restore future delivery with `ott f notifications on`.
+Replace `f` with its CLI alias. This saved preference does not change other
+players' preferences or the shared bridge configuration. Follow the
+[per-player readback and delivery checks](notification-preferences.md#disable-or-enable-one-player-and-verify-delivery)
+to verify both the saved value and the controller's individual recipient state.
+
 ## 1. Create and store the HA token
 
 In Home Assistant, open your user profile → **Security → Long-lived access

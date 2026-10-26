@@ -25,8 +25,12 @@ var CommandOperations = map[string]string{
 	"plex_queue": "status preview play next previous stop", "plex_library": "list preview play",
 	"favorites": "list add play remove", "vportal_queue": "status next previous restart stop play",
 	"maintenance": "health logs recover_video update", "app_update": "status prepare install",
-	"categories":    "list select",
-	"notifications": "get set",
+	"categories":            "list select",
+	"notifications":         "get set",
+	"player_settings":       "schema get set",
+	"player_settings_patch": "get set",
+	"plex_folders":          "list add remove clear",
+	"perf_capture":          "start status read stop",
 }
 
 func ValidCommandAction(action string) bool {
@@ -66,7 +70,7 @@ func (c Config) validateOperators() error {
 		}
 		seen := map[string]bool{}
 		for _, id := range o.DeviceIDs {
-			if !devices[id] || seen[id] {
+			if !deviceID.MatchString(id) || (!devices[id] && c.DeviceRegistry == nil) || seen[id] {
 				return errors.New("invalid command operator device scope")
 			}
 			seen[id] = true

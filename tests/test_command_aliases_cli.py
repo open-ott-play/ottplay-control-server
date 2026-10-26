@@ -217,6 +217,8 @@ class AliasDispatchTest(unittest.TestCase):
 class PlayerAliasTest(unittest.TestCase):
     def client(self, registered=True):
         client = object.__new__(ott.Client)
+        client.timeout = 45
+        client.api = mock.Mock(side_effect=ott.HTTPError(404))
         client.config = {'players': {}, 'server_config': 'server.json'}
         client.credentials = {'devices': [{'id': 'dev_tv', 'token': 'fixture'}] if registered else []}
         return client

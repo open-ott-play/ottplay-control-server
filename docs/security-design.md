@@ -2,7 +2,21 @@
 
 ## Scope and trust boundaries
 
+The optional [durable registry](device-registry.md) separates pending pairing
+from active device credentials. Administrator approval persists activation;
+generation-bound revoke/rotate and static tombstones prevent restart from
+restoring an old credential. A private locked store has one writer; uncertain
+persistence disables admission until recovery. Existing scoped integrations
+do not gain access to newly registered devices automatically.
+
 The project provides a Go command queue, diagnostics service and CLI for OTT-play players.
+
+[Hosted device transport](device-transport.md) accepts a bounded JSON envelope
+and dispatches only exact device/bootstrap routes inside the same process. It
+does not proxy arbitrary URLs or expose administrator/operator routes. Tokens
+in these request bodies are private: logging infrastructure must not record
+them. Original route authentication, CORS, response schemas and logical limits
+remain in force, with separate bounded ingress and small/large request slots.
 
 An administrator token authorizes command submission; each device has a distinct token. Configuration, pairing data, diagnostic captures and command payloads may contain secrets. Keep credentials separate and rotate exposed values. The default all-interface listener is reachable on the LAN; terminate verified HTTPS before crossing an untrusted network. Legacy plaintext HTTP does not protect credentials or commands.
 
@@ -151,7 +165,10 @@ administrator and diagnostic credentials. Configuration is applied on restart.
 Actions name the exact RPC, for example `status`, `profiles`, `settings_compare`
 or `profile_settings`. RPCs with sub-operations require the exact operation:
 `input.channel_up`, `playback.next_channel`, `aspect.get`, `favorites.list`,
-`kiosk.status`, `app_update.status`, `notifications.get`, `notifications.set`
+`kiosk.status`, `app_update.status`, `notifications.get`, `notifications.set`,
+`player_settings.schema`, `player_settings.get`, `player_settings.set`,
+`player_settings_patch.get`, `player_settings_patch.set`,
+`plex_folders.list`, `plex_folders.add`, `plex_folders.remove`, `plex_folders.clear`
 or `command.set_volume`. No wildcards or
 family-wide `input`/`command` grant is accepted. The supported allowlist is in
 `internal/config/operators.go`. A `provider_settings` grant permits its validated

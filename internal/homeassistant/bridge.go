@@ -21,13 +21,14 @@ import (
 )
 
 type Notification struct {
-	Title               string
-	Message             string
-	Severity            string
-	DurationMS          int
-	TTLSeconds          int
-	Targets             []string
-	Media               *CameraFrame
+	Title      string
+	Message    string
+	Severity   string
+	DurationMS int
+	TTLSeconds int
+	Targets    []string
+	Media      *CameraFrame
+	// Recipient values are opaque server receipts, not client runtime IDs.
 	TargetRuntimes      map[string]string
 	MediaTargetRuntimes map[string]string
 	ExpiresAt           time.Time

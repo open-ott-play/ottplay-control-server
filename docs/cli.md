@@ -2,11 +2,21 @@
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
-`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py` and `app_update.py`. Python 3.12 is the version used by CI. Commands take a short
+`diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
+`player_settings.py`, `app_update.py`, `device_registry.py` and `performance.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
 command queue.
+
+For opt-in performance recording, bounded export and guarded notification A–B–A
+trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
+perf --help` works without loading credentials; recording is off by default.
+
+For dynamic registration, removal, credential rotation and recovery, see the
+[device registry CLI workflow](device-registry.md#cli-workflow). `ott remove NAME`
+revokes access before removing its local alias; `ott unalias NAME` only removes
+the local alias. Run `ott registry --help` for all lifecycle commands.
 
 Use this guide for the terminal client. The [deployment guide](deployment.md)
 covers installing, starting and stopping the separate Go command server;
@@ -80,7 +90,8 @@ player advertises them. Scoped operators need `notifications.get` for reads or
 `ott ha status` shows the last reported `notifications_enabled` value, which
 is not a replacement for a direct durable read. Group operations report partial
 failures and return a nonzero exit status if any player failed. See the
-[persistence, compatibility and recovery details](notification-preferences.md).
+[single-player disable/enable and verification recipe](notification-preferences.md#disable-or-enable-one-player-and-verify-delivery)
+and [persistence, compatibility and recovery details](notification-preferences.md).
 
 ## Installation and connection
 
@@ -1265,8 +1276,19 @@ archive query is reported as `not_requested` and does not claim archive coverage
 
 ## Provider settings
 
-A `provider-config` file contains `provider` and `settings`. Select the intended
-provider with `provider` first. Supplied fields are updated; other fields are
+For individual application/provider preferences, use `ott f settings` to list
+the runtime schema, `ott f setting bufSize` to read, and `ott f setting bufSize 3`
+or `ott f setting players hls.js` to save with revision checks. See the
+[typed settings guide](player-settings.md) for scopes, limits, effect timing,
+private value files and recovery. Install `player_settings.py` beside `ott.py`.
+Use `settings patch command_server|local_http [--value-file FILE]` to inspect or
+atomically change a connection. Use `setting plexFolderPaths` for the full Plex
+folder selection, with `add PATH TITLE`, `remove PATH`, or `clear` (all libraries).
+
+A `provider-config` file contains `provider` and `settings`. Except for the new
+bound VPortal slot API, select the intended provider with `provider` first.
+VPortal files contain `profile`, `vportal`, and optional `name`; they can save an
+inactive slot without selecting VPortal. Supplied fields are updated; others are
 preserved. Credentials are not echoed in status, provider lists or
 acknowledgements. Save these files with mode 600 and use HTTPS outside a trusted
 local network.
@@ -1349,15 +1371,16 @@ OTTClub's `server` field takes a hostname with an optional port, without
 
 Settings use the existing save and reload drivers. Parental settings locks and
 platform restrictions still apply; unlock the settings on the player first.
-Other providers currently require their own settings UI.
+For other providers, use `settings` and the live typed schema when advertised;
+only preferences absent from that schema require their local workflow.
 
 ## Plex libraries by name
 
-Play a whole movie or show library using the player's saved Plex connection:
+Play items from a movie or show library using the player's saved Plex connection:
 
 ```sh
 ott l plex libraries                         # list library IDs, names and types
-ott l plex shuffle "Tom and Jerry"            # shuffle the entire library once
+ott l plex shuffle "Tom and Jerry"            # shuffle up to 500 library items once
 ott l plex library "Tom and Jerry"            # play in library order
 ott l plex library --preview "Tom and Jerry"  # check without changing playback
 ott l plex library --shuffle --preview id:16  # preview one new shuffled order
@@ -1396,12 +1419,32 @@ inside another library or a filesystem folder. For example, a dedicated
 Show libraries include their episodes. Lookup happens on the player using its
 own saved Plex server and token; local CLI presets are not used or applied.
 
-The player collects the complete library before preparing a queue. Discovery
-supports servers with up to 1000 library sections and lists only movie/show
-libraries. Up to 500 items can be queued, subject to
-the advertised limit. A missing, ambiguous, oversized or incomplete library
-fails without starting a partial queue. The selected library and generated ID
-order are returned in `--json` output. A shuffled preview and a later play are
+Discovery supports servers with up to 1000 library sections and lists only
+movie/show libraries. Up to 500 items can be queued. With updated CLI, controller
+and player support, a larger library uses the first 500 items in library order
+and prints this warning before the usual queue result:
+
+```text
+Warning: The Plex library exceeds the 500-item queue limit; using 500 items.
+```
+
+For example, `ott -t 45 lg2 plex shuffle MultCocomelonALl` starts a shuffled
+500-item queue when that library exceeds the limit. Shuffle randomizes the
+selected 500, not a sample of the whole oversized library. Remaining items are
+not appended automatically. Exactly 500 items need no warning. Preview applies
+the same limit but does not start playback. `--json` remains JSON-only and adds
+`"truncated": true` to the successful library result when the limit was applied;
+that field is absent for a complete library.
+
+The player advertises this behavior separately as
+`plex_library_truncation: {"version": 1}` alongside its 500-item `plex_library`
+capability. The CLI opts in automatically only when advertised. Install the
+updated controller before deploying the new player and CLI: older controllers
+reject the new opt-in request, and older players keep reporting an oversized
+library error. A missing, ambiguous, malformed or incompletely fetched selected
+set still fails without starting a queue; truncation is not a retry after an
+error. The selected library and generated ID order are returned in `--json`
+output. A shuffled preview and a later play are
 separate requests and can produce different orders; to reuse a preview's exact
 order, pass its `queue.ids` to the existing `plex play ID...` command.
 
@@ -1478,8 +1521,12 @@ does not prove that playback never started.
 
 - For a missing or ambiguous library, use `plex libraries`, then `plex library
   --preview id:NUMBER`. A series title inside a library is not a library name.
-- An incomplete or oversized library is not truncated. Check that the library
-  is stable and within the item limit; use an explicit smaller ID queue when needed.
+- An incomplete library is not started. Check that the library
+  is stable and reachable; use an explicit smaller ID queue when needed.
+- An oversized library should start or preview 500 items with a warning on
+  updated installations. If it still reports `no partial queue was started`,
+  check for `plex_library_truncation` in `caps` and update the player and CLI.
+  If the controller rejects the opt-in request, update the controller as well.
 - `plex_library` requires newer support than `plex_queue`. Updating only the
   Python CLI cannot add library lookup to a TV that does not advertise it.
 
@@ -1914,19 +1961,25 @@ must include `number`, `name`, `playlist` and `history_hours`; numbers
 must be unique integers from 1 to 15. `active_profile` must refer to an included
 slot. Playlist URLs must be nonempty HTTP(S) addresses. Use IPv4 addresses in
 four decimal octets (for example, `127.0.0.1`), not shortened or hexadecimal
-forms. A legacy `vportal` string in an M3U setup entry is accepted but ignored:
-it is omitted from requests, comparisons and the normalized setup fingerprint.
-Remove it from the local file when convenient; loading does not erase old links
-on devices. An old resume checkpoint whose fingerprint included this field is
-rejected as a setup revision mismatch; inspect the device state before starting
-a new load. Plex requires both `server` and `token`.
+forms. A nonempty legacy `vportal` string in an M3U setup entry is normalized
+into the same numbered **dedicated VPortal slot**, preserving that slot's name.
+It participates in comparisons and the setup fingerprint and is never sent as
+an M3U field. An optional explicit `vportal` list accepts `number`, `vportal` and
+optional `name`. Equal links deduplicate; conflicting explicit/legacy links fail
+before writes. The local file is not rewritten. Old checkpoints that omitted
+these required VPortal settings fail with a revision mismatch. See
+[VPortal migration and examples](player-settings.md#independent-vportal-configuration).
+Plex requires both `server` and `token`.
 The existing provider length and request-size limits apply.
 
-Loading selects Plex, waits for its settings handler, saves its credentials,
+When VPortal slots are present, loading preflights all of them and performs
+source-bound saves without switching provider or opening UI. Old players fail
+before the first preset mutation. Loading then selects Plex, waits for its settings handler, saves its credentials,
 then selects M3U and waits for the profile handler. It saves inactive slots
 first and selects `active_profile`. If the previously active slot also needs
 updating, it saves that slot after switching, avoiding an unnecessary playlist
-reload. Finally, it checks the resulting M3U metadata. Unlisted M3U slots remain
+reload. Finally, it checks the resulting M3U metadata and exact VPortal fields.
+Unlisted M3U and VPortal slots remain
 unchanged. Each change uses the existing
 request/acknowledgement API; the next change is sent only after the preceding
 one is confirmed. A provider's empty library or unavailable playlist does not

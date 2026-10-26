@@ -11,9 +11,10 @@ import (
 
 // Discovery is opt-in; neither a resolver nor a domain can be chosen by an HTTP caller.
 type Discovery struct {
-	Domain     string `json:"domain,omitempty"`
-	Nameserver string `json:"nameserver,omitempty"`
-	PublicURL  string `json:"public_url"`
+	Domain        string   `json:"domain,omitempty"`
+	Nameserver    string   `json:"nameserver,omitempty"`
+	PublicURL     string   `json:"public_url"`
+	PublicAliases []string `json:"public_aliases,omitempty"`
 }
 
 var dnsLabel = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
@@ -81,6 +82,20 @@ func (d Discovery) Validate() error {
 			return errors.New("discovery nameserver must be an IP:port address")
 		}
 	}
-	_, err := HTTPSBase(d.PublicURL)
-	return err
+	canonical, err := HTTPSBase(d.PublicURL)
+	if err != nil {
+		return err
+	}
+	if len(d.PublicAliases) > 8 {
+		return errors.New("discovery permits at most 8 public aliases")
+	}
+	seen := map[string]bool{canonical: true}
+	for _, alias := range d.PublicAliases {
+		value, err := HTTPSBase(alias)
+		if err != nil || seen[value] {
+			return errors.New("discovery public aliases must be unique HTTPS bases")
+		}
+		seen[value] = true
+	}
+	return nil
 }

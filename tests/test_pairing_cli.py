@@ -13,6 +13,9 @@ spec.loader.exec_module(ott)
 
 class PairingCliTest(unittest.TestCase):
     def setUp(self):
+        legacy = mock.patch.object(ott, 'registry_management', return_value=False)
+        legacy.start()
+        self.addCleanup(legacy.stop)
         self.client = mock.Mock()
         self.client.device.return_value = 'dev_tv'
         self.client.config = {'players': {'l': 'dev_tv'}}

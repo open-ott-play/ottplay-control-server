@@ -20,6 +20,11 @@ type requestResult struct {
 	inspect              *inspectRequest
 	aspect               *aspectRequest
 	notificationSettings *notificationsRequest
+	playerSettings       *playerSettingsRequest
+	plexFolders          *plexFoldersRequest
+	settingsPatch        *settingsPatchRequest
+	perfCapture          *perfCaptureRequest
+	vportalSettings      *vportalSettingsRequest
 	category             *categoryRequest
 	randomPlay           *randomPlayRequest
 	plexLibrary          *plexLibraryRequest
@@ -37,7 +42,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		return
 	}
 	if d == nil {
-		for _, candidate := range s.devices {
+		for _, candidate := range s.currentDevices() {
 			if candidate.id == q.Get("device_id") {
 				d = candidate
 			}
@@ -143,6 +148,14 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parseAspectRequest(params) != nil
 	case "notifications":
 		ok = parseNotificationsRequest(params) != nil
+	case "player_settings":
+		ok = parsePlayerSettingsRequest(params) != nil
+	case "plex_folders":
+		ok = parsePlexFoldersRequest(params) != nil
+	case "player_settings_patch":
+		ok = parseSettingsPatchRequest(params) != nil
+	case "perf_capture":
+		ok = parsePerfCaptureRequest(params) != nil
 	case "categories":
 		ok = parseCategoryRequest(action, params) != nil
 	case "inspect":
@@ -219,6 +232,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		var provider string
 		_, fieldsErr := decodeObject(params["settings"])
 		ok = len(params) == 2 && json.Unmarshal(params["provider"], &provider) == nil && fieldsErr == nil && (provider == "m3u" || provider == "xtream" || provider == "stalker" || provider == "ottclub" || provider == "plex")
+		if settingString(params["provider"]) == "vportal" {
+			ok = parseVPortalSettingsRequest(action, params) != nil
+		}
 	default:
 		ok = false
 	}
@@ -269,6 +285,21 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "notifications" {
 		e.notificationSettings = parseNotificationsRequest(params)
+	}
+	if action == "player_settings" {
+		e.playerSettings = parsePlayerSettingsRequest(params)
+	}
+	if action == "plex_folders" {
+		e.plexFolders = parsePlexFoldersRequest(params)
+	}
+	if action == "player_settings_patch" {
+		e.settingsPatch = parseSettingsPatchRequest(params)
+	}
+	if action == "perf_capture" {
+		e.perfCapture = parsePerfCaptureRequest(params)
+	}
+	if (action == "provider_settings" || action == "settings_compare") && settingString(params["provider"]) == "vportal" {
+		e.vportalSettings = parseVPortalSettingsRequest(action, params)
 	}
 	if action == "categories" || action == "channels" {
 		e.category = parseCategoryRequest(action, params)
@@ -399,6 +430,12 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var inspect *inspectRequest
 	var aspect *aspectRequest
 	var notificationSettings *notificationsRequest
+	var playerSettings *playerSettingsRequest
+	var plexFolders *plexFoldersRequest
+	var settingsPatch *settingsPatchRequest
+	var perfCapture *perfCaptureRequest
+	capabilitiesResult := d.results[id].permission == "capabilities"
+	var vportalSettings *vportalSettingsRequest
 	var category *categoryRequest
 	var randomPlay *randomPlayRequest
 	playbackOperation := ""
@@ -414,6 +451,12 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			inspect = pending.inspect
 			aspect = pending.aspect
 			notificationSettings = pending.notificationSettings
+			playerSettings = pending.playerSettings
+			plexFolders = pending.plexFolders
+			settingsPatch = pending.settingsPatch
+			perfCapture = pending.perfCapture
+			capabilitiesResult = pending.permission == "capabilities"
+			vportalSettings = pending.vportalSettings
 			category = pending.category
 			randomPlay = pending.randomPlay
 			break
@@ -427,6 +470,21 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if notificationSettings == nil {
 		notificationSettings = d.results[id].notificationSettings
+	}
+	if playerSettings == nil {
+		playerSettings = d.results[id].playerSettings
+	}
+	if plexFolders == nil {
+		plexFolders = d.results[id].plexFolders
+	}
+	if settingsPatch == nil {
+		settingsPatch = d.results[id].settingsPatch
+	}
+	if perfCapture == nil {
+		perfCapture = d.results[id].perfCapture
+	}
+	if vportalSettings == nil {
+		vportalSettings = d.results[id].vportalSettings
 	}
 	if category == nil {
 		category = d.results[id].category
@@ -451,6 +509,25 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	// requested page. An older or unrelated queue consumer cannot close the
 	// request with an unbound unsupported response. This is result fencing, not
 	// routing: a protocol-1 device queue still supports only one consumer.
+	if perfCapture != nil && (len(b) > maxPerfOuterBytes || !validPerfCaptureResult(m["data"], status, perfCapture)) {
+		failure(w, 400, "invalid performance capture result")
+		return
+	}
+	if capabilitiesResult && status == "ok" {
+		capabilities, err := decodeObject(m["data"])
+		if err != nil {
+			failure(w, 400, "invalid capabilities result")
+			return
+		}
+		if marker, exists := capabilities["perf_capture"]; exists && !validPerfCapability(marker) {
+			failure(w, 400, "invalid performance capture capability")
+			return
+		}
+		if marker, exists := capabilities["perf_capture_hls"]; exists && (!validPerfHLSCapability(marker) || !validPerfCapability(capabilities["perf_capture"])) {
+			failure(w, 400, "invalid HLS performance capture capability")
+			return
+		}
+	}
 	if inspect != nil && (len(b) > maxInspectResultBytes || !validInspectResult(m["data"], status, inspect)) {
 		failure(w, 400, "invalid inspect result")
 		return
@@ -463,6 +540,22 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if notificationSettings != nil && (len(m["data"]) > 1024 || !validNotificationsResult(m["data"], status, notificationSettings)) {
 		failure(w, 400, "invalid notifications result")
+		return
+	}
+	if playerSettings != nil && !validPlayerSettingsResult(m["data"], status, playerSettings) {
+		failure(w, 400, "invalid player settings result")
+		return
+	}
+	if plexFolders != nil && !validPlexFoldersResult(m["data"], status, plexFolders) {
+		failure(w, 400, "invalid Plex folder settings result")
+		return
+	}
+	if settingsPatch != nil && !validSettingsPatchResult(m["data"], status, settingsPatch) {
+		failure(w, 400, "invalid grouped settings result")
+		return
+	}
+	if vportalSettings != nil && !validVPortalSettingsResult(m["data"], status, vportalSettings) {
+		failure(w, 400, "invalid VPortal settings result")
 		return
 	}
 	if category != nil && !validCategoryResult(m["data"], status, category) {
@@ -526,7 +619,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

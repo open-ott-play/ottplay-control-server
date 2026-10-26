@@ -606,7 +606,7 @@ class ProvisionTest(unittest.TestCase):
 
     def add(self, name='tv', device='dev_tv'):
         client = ott.Client(ott.read_json(self.config_path))
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(client, 'api', side_effect=ott.HTTPError(404)):
             ott.management(client, self.config_path, ['add', name, device])
 
     def assert_recovered(self, token):

@@ -30,18 +30,24 @@ type discoveryFlight struct {
 }
 
 type discovery struct {
-	publicURL string
-	mu        sync.Mutex
-	cached    []discoveredServer
-	expires   time.Time
-	err       error
-	flight    *discoveryFlight
-	lookup    func(context.Context) ([]discoveredServer, time.Duration, error)
+	publicURL     string
+	publicAliases map[string]bool
+	mu            sync.Mutex
+	cached        []discoveredServer
+	expires       time.Time
+	err           error
+	flight        *discoveryFlight
+	lookup        func(context.Context) ([]discoveredServer, time.Duration, error)
 }
 
 func newDiscovery(c config.Discovery) *discovery {
 	publicURL, _ := config.HTTPSBase(c.PublicURL)
-	return &discovery{publicURL: publicURL, lookup: func(ctx context.Context) ([]discoveredServer, time.Duration, error) { return discoverDNS(ctx, c) }}
+	aliases := map[string]bool{publicURL: true}
+	for _, alias := range c.PublicAliases {
+		normalized, _ := config.HTTPSBase(alias)
+		aliases[normalized] = true
+	}
+	return &discovery{publicURL: publicURL, publicAliases: aliases, lookup: func(ctx context.Context) ([]discoveredServer, time.Duration, error) { return discoverDNS(ctx, c) }}
 }
 
 // Concurrent callers share one bounded lookup. Approval and redemption force a

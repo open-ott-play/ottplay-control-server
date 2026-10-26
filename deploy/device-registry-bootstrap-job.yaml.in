@@ -1,0 +1,72 @@
+# Render only after verifying the exact release image and staging private config.
+# Re-running this Job against an existing store deliberately fails initialization.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ottplay-control-registry-init
+  namespace: ${OTT_NAMESPACE}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      # Copy the live Deployment's scheduling constraints before first consumer binding.
+      nodeSelector: ${OTT_NODE_SELECTOR_JSON}
+      affinity: ${OTT_AFFINITY_JSON}
+      tolerations: ${OTT_TOLERATIONS_JSON}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: initialize
+          image: "${OTT_VERIFIED_IMAGE}"
+          imagePullPolicy: IfNotPresent
+          args: [registry-init, --config, /etc/ottplay-control-server/config.json]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 25m, memory: 16Mi}
+            limits: {cpu: 500m, memory: 64Mi}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ottplay-control-server
+              readOnly: true
+            - name: registry
+              mountPath: /var/lib/ottplay-control
+      containers:
+        - name: validate
+          image: "${OTT_VERIFIED_IMAGE}"
+          imagePullPolicy: IfNotPresent
+          args: [validate, --config, /etc/ottplay-control-server/config.json]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 25m, memory: 16Mi}
+            limits: {cpu: 500m, memory: 64Mi}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ottplay-control-server
+              readOnly: true
+            - name: registry
+              mountPath: /var/lib/ottplay-control
+      volumes:
+        - name: config
+          secret:
+            secretName: ${OTT_CONFIG_SECRET}
+            defaultMode: 0440
+        - name: registry
+          persistentVolumeClaim:
+            claimName: ottplay-control-registry

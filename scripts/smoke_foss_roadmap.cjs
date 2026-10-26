@@ -66,7 +66,7 @@ function moduleOf(file, dependency, host) {
         const storage = { m3um3uArr: JSON.stringify(configuration), plexcfg: JSON.stringify({ address: plex.server, token: plex.token }),
             stalkerstalker_data: JSON.stringify({ name: stalker.name, portal: stalker.server, mac: stalker.mac }) };
         const beforeStorage = JSON.stringify(storage);
-        const plays = [], responses = [], received = [], transportFailures = [];
+        const plays = [], responses = [], received = [], transportFailures = [], loadedAssets = [];
         const host = { setTimeout, clearTimeout, location: { protocol: 'http:' }, deviceUUID: device.id,
             __ottActiveProviderDriver: { id: 'm3u', configuration: () => clone(configuration), fixedSlot: () => -1, saveConfiguration: unexpected },
             __ottParental: { needs: () => false }, parentalArray: [], p_pref: 'm3u', m3uArr: configuration,
@@ -85,8 +85,30 @@ function moduleOf(file, dependency, host) {
         host.channels[rowID].rec = 24;
         const state = { phase: 'playing', position: 30, target: { kind: 'live', channelId: String(rowID), sourceId: host.__ottSourceIdentity.current(host) } };
         host.__ottClassicPlayback = { snapshot: () => state };
+        const optionalAssets = {
+            'remote-settings-lifecycle': ['remote-settings', 'remote-settings-dispatch', 'remote-settings-host', 'remote-settings-lifecycle'],
+            'remote-settings': ['remote-notification-settings', 'remote-handoff', 'remote-provider-settings', 'remote-legacy-settings'],
+        };
+        function loadAsset(url, done, error) {
+            const match = /^\/dist\/([a-z-]+)\.js\?/.exec(url);
+            assert(match && optionalAssets[match[1]], 'only declared optional settings assets may load: ' + url);
+            loadedAssets.push(match[1]);
+            try {
+                for (const file of optionalAssets[match[1]]) moduleOf('plugins/' + file, unexpected, host);
+            } catch (reason) { error(); throw reason; }
+            done();
+        }
+        host.document = {
+            createElement: () => ({}),
+            head: { appendChild(script) {
+                script.parentNode = { removeChild() {} };
+                loadAsset(script.src, () => script.onload(), () => script.onerror());
+            } },
+        };
         const dependency = name => {
-            if (name === './remote-handoff' || name === './remote-profiles') return moduleOf('commands/' + name.slice(2), dependency, host);
+            if (['./remote-handoff', './remote-profiles', './remote-settings', './remote-restart', './remote-feature'].includes(name))
+                return moduleOf('commands/' + name.slice(2), dependency, host);
+            if (name === '../utils/helpers') return { getScriptDOM: loadAsset };
             if (name === '../provider') return { isProviderAllowed: () => true, checkProviderUrl: () => true };
             if (name === '../plugins/vportal') return { parseVPortalLink: value => { assert.equal(value, ''); return null; } };
             // Other actions must not be involved in this focused smoke.
@@ -118,7 +140,7 @@ function moduleOf(file, dependency, host) {
         });
         controller.configure({ address, enabled: true, token: device.token });
         controllers.push(controller);
-        return { host, state, plays, responses, received, transportFailures, storage, beforeStorage };
+        return { host, state, plays, responses, received, transportFailures, storage, beforeStorage, loadedAssets };
     }
     const one = player(config.devices[0], 101), two = player(config.devices[1], 909);
     async function cli(args, fail = false) {
@@ -141,6 +163,7 @@ function moduleOf(file, dependency, host) {
     }
     const verified = await cli(['one', 'load', 'Local', 'verify']);
     assert.equal(verified.status, 'verified');
+    assert.deepEqual(one.loadedAssets, ['remote-settings-lifecycle', 'remote-settings'], 'verification loads the real optional dispatcher and handlers');
     assert.equal(verified.comparisons.length, 3);
     assert(verified.comparisons.every(row => row.matched));
     one.storage.plexcfg = JSON.stringify({ address: plex.server, token: 'different' });
@@ -179,6 +202,7 @@ function moduleOf(file, dependency, host) {
     await cli(['handoff', 'one', 'two'], true);
     assert.equal(two.plays.length, 3, 'failed archive resolution must not select or play');
     assert.deepEqual(one.transportFailures, []); assert.deepEqual(two.transportFailures, []);
+    assert.deepEqual(two.loadedAssets, ['remote-settings-lifecycle', 'remote-settings'], 'handoff loads the same real optional dispatch path');
     assert.equal(JSON.stringify(one.storage), one.beforeStorage);
     assert.equal(JSON.stringify(two.storage), two.beforeStorage);
     console.log('PASS archive seek offset and failed-resolution fence; every FOSS response passed Go validation');

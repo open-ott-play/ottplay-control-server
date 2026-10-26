@@ -1,0 +1,263 @@
+{
+  "version": 1,
+  "action": "player_settings",
+  "capability": {
+    "version": 1,
+    "operations": [
+      "schema",
+      "get",
+      "set"
+    ],
+    "max_page_size": 20
+  },
+  "limits": {
+    "result_bytes": 65536,
+    "string_utf8_bytes": 4096,
+    "array_items": 64,
+    "choices": 256,
+    "receipt_ttl_seconds": 120
+  },
+  "reasons": [
+    "invalid_request",
+    "unknown_setting",
+    "invalid_value",
+    "runtime_changed",
+    "source_changed",
+    "revision_conflict",
+    "policy_restricted",
+    "local_only",
+    "unsupported",
+    "storage_failed",
+    "effect_failed",
+    "atomic_patch_required"
+  ],
+  "access_reasons": [
+    "policy_restricted",
+    "local_only",
+    "unsupported",
+    "storage_failed",
+    "device_forced_auto",
+    "lifecycle_required",
+    "local_action_required"
+  ],
+  "application_reasons": [
+    "next_stream",
+    "manual",
+    "effect_failed",
+    "after_ack"
+  ],
+  "requests": {
+    "schema": {
+      "op": "schema",
+      "runtime": "page-123",
+      "limit": 20
+    },
+    "get": {
+      "op": "get",
+      "runtime": "page-123",
+      "id": "bufSize"
+    },
+    "set": {
+      "op": "set",
+      "runtime": "page-123",
+      "id": "bufSize",
+      "context": "context-1",
+      "revision": "revision-1",
+      "value": 3
+    }
+  },
+  "descriptor": {
+    "id": "bufSize",
+    "type": "integer",
+    "scope": "application",
+    "sensitive": false,
+    "access": {
+      "read": true,
+      "write": true
+    },
+    "constraints": {
+      "minimum": 0,
+      "maximum": 3600
+    },
+    "default_value": 0,
+    "apply": "next_stream",
+    "unit": "seconds",
+    "description": "1 to 120 seconds sets the buffer; 0 or a value above 120 uses automatic buffering."
+  },
+  "context": {
+    "token": "context-1",
+    "provider": "m3u",
+    "profile": 1
+  },
+  "responses": {
+    "get": {
+      "version": 1,
+      "op": "get",
+      "runtime": "page-123",
+      "context": {
+        "token": "context-1",
+        "provider": "m3u",
+        "profile": 1
+      },
+      "descriptor": {
+        "id": "bufSize",
+        "type": "integer",
+        "scope": "application",
+        "sensitive": false,
+        "access": {
+          "read": true,
+          "write": true
+        },
+        "constraints": {
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "default_value": 0,
+        "apply": "next_stream",
+        "unit": "seconds"
+      },
+      "setting": {
+        "id": "bufSize",
+        "revision": "revision-1",
+        "storage": "stored",
+        "value": 0,
+        "persisted_value": 0
+      }
+    },
+    "set": {
+      "version": 1,
+      "op": "set",
+      "runtime": "page-123",
+      "context": {
+        "token": "context-1",
+        "provider": "m3u",
+        "profile": 1
+      },
+      "setting": {
+        "id": "bufSize",
+        "revision": "revision-2",
+        "storage": "stored",
+        "value": 3,
+        "persisted_value": 3
+      },
+      "changed": true,
+      "persisted": true,
+      "application": {
+        "state": "deferred",
+        "reason": "next_stream"
+      }
+    },
+    "error": {
+      "version": 1,
+      "op": "set",
+      "runtime": "page-123",
+      "error": "The setting changed before saving.",
+      "reason": "revision_conflict"
+    }
+  },
+  "application_matrix": {
+    "completed": [
+      null
+    ],
+    "deferred": [
+      "next_stream",
+      "manual",
+      "after_ack"
+    ],
+    "failed": [
+      "effect_failed"
+    ]
+  },
+  "alias_pattern": "^[A-Za-z0-9_.+\\-]{1,64}$",
+  "invalid_descriptor_overrides": [
+    {
+      "constraints": {
+        "minimum": 9,
+        "maximum": 3
+      }
+    },
+    {
+      "choices": [
+        {
+          "value": 1,
+          "label": "One",
+          "aliases": [
+            ""
+          ]
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "value": 1,
+          "label": "One",
+          "aliases": [
+            "HLS",
+            "hls"
+          ]
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "value": 1,
+          "label": "One",
+          "aliases": [
+            "ß"
+          ]
+        }
+      ]
+    },
+    {
+      "sensitive": true
+    },
+    {
+      "access": {
+        "read": true,
+        "write": true,
+        "reason": "unknown"
+      }
+    }
+  ],
+  "invalid_applications": [
+    {
+      "state": "completed",
+      "reason": "effect_failed"
+    },
+    {
+      "state": "deferred"
+    },
+    {
+      "state": "failed"
+    },
+    {
+      "state": "failed",
+      "reason": "next_stream"
+    },
+    {
+      "state": "deferred",
+      "reason": "automatic_buffer"
+    }
+  ],
+  "valid_provider_ids": [
+    "m3u",
+    "bestlist/stalker",
+    "d/maxtv",
+    "iptv-ott.ru",
+    "shara.club"
+  ],
+  "invalid_provider_ids": [
+    "",
+    "/m3u",
+    "m3u/",
+    "a//b",
+    "a/../b",
+    "a..b",
+    "UPPER",
+    "a b",
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    42
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "authority": "administrator Bearer credential; never available through device-transport",
+  "formats": {
+    "operation_id": "^[a-f0-9]{32}$",
+    "generation": "^[a-f0-9]{32}$",
+    "store_id": "^[a-f0-9]{32}$",
+    "static_fingerprint": "^[a-f0-9]{64}$"
+  },
+  "limits": {
+    "active_devices": 64,
+    "inventory_devices": 1088,
+    "records": 1024,
+    "revoked_hashes": 64,
+    "approved_claims": 64,
+    "operations": 192,
+    "ordinary_operations": 128,
+    "reserved_revocations": 64,
+    "store_bytes": 4194304,
+    "operation_ttl_seconds": 86400,
+    "pairing_ttl_seconds": 600,
+    "public_aliases": 8
+  },
+  "endpoints": [
+    {"method":"GET","path":"/api/device-registry","query":[]},
+    {"method":"GET","path":"/api/device-registry/operations","query":["id"]},
+    {"method":"GET","path":"/api/device-registry/credential","query":["device_id","generation"]},
+    {"method":"POST","path":"/api/device-registry/add","query":[]},
+    {"method":"POST","path":"/api/device-registry/revoke","query":[]},
+    {"method":"POST","path":"/api/device-registry/rotate","query":[]},
+    {"method":"POST","path":"/api/device-registry/reconcile","query":[]}
+  ],
+  "requests": {
+    "add": {"version":1,"operation_id":"00000000000000000000000000000001","device_id":"new-tv","diagnostics_enabled":false},
+    "revoke": {"version":1,"operation_id":"00000000000000000000000000000002","device_id":"new-tv","expected_generation":"11111111111111111111111111111111"},
+    "rotate": {"version":1,"operation_id":"00000000000000000000000000000003","device_id":"new-tv","expected_generation":"11111111111111111111111111111111"},
+    "reconcile": {"version":1,"operation_id":"00000000000000000000000000000004","device_id":"static-tv","expected_generation":"11111111111111111111111111111111","observed_static_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "convert_absent_static": {"version":1,"operation_id":"00000000000000000000000000000005","device_id":"static-tv","diagnostics_enabled":false,"convert_to_dynamic":true,"expected_generation":"11111111111111111111111111111111"},
+    "pairing_create": {"device_id":"unknown-tv","server_address":"https://player.example/ott-control"},
+    "pairing_approve": {"id":"00000000000000000000000000000006","code":"ABCDEFGH","operation_id":"00000000000000000000000000000007","diagnostics_enabled":false}
+  },
+  "responses": {
+    "receipt": {"version":1,"operation_id":"00000000000000000000000000000001","device_id":"new-tv","generation":"11111111111111111111111111111111","state":"active","persisted":true},
+    "revoke_receipt": {"version":1,"operation_id":"00000000000000000000000000000002","device_id":"new-tv","generation":"22222222222222222222222222222222","state":"revoked","persisted":true,"device_stop_confirmed":false},
+    "identity": {"device_id":"new-tv","generation":"11111111111111111111111111111111","origin":"dynamic","state":"active","diagnostics_enabled":false},
+    "credential": {"version":1,"device_id":"new-tv","generation":"11111111111111111111111111111111","token":"example_credential_not_for_any_live_device_1"}
+  },
+  "invalid_add": [
+    {},
+    {"version":1,"operation_id":"00000000000000000000000000000001","device_id":"new-tv","diagnostics_enabled":null},
+    {"version":1,"operation_id":"00000000000000000000000000000001","device_id":"new-tv","diagnostics_enabled":false,"token":"caller-supplied-credentials-are-not-accepted"},
+    {"version":1,"operation_id":"00000000000000000000000000000001","device_id":"new-tv","diagnostics_enabled":false,"expected_generation":"11111111111111111111111111111111"},
+    {"version":1,"operation_id":"00000000000000000000000000000001","device_id":"new-tv","diagnostics_enabled":false,"convert_to_dynamic":false},
+    {"version":1,"operation_id":"00000000000000000000000000000001","device_id":"new-tv","diagnostics_enabled":false,"convert_to_dynamic":true}
+  ],
+  "recovery": [
+    "Bind local operation checkpoints to the selected controller address, administrator profile, and store_id.",
+    "Persist the operation_id and canonical request before sending the mutation.",
+    "On uncertain delivery, inspect the receipt and current identity; a receipt describes its original operation, not necessarily the current generation.",
+    "Read a credential only for the confirmed current active generation. Never write Kubernetes Secret data as a fallback.",
+    "Reusing an operation_id with changed request fields is rejected. Receipts expire after 24 hours; do not blindly retry a mutation after that recovery window."
+  ]
+}

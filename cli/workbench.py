@@ -129,12 +129,19 @@ def debug_native(value):
 
 
 def debug_metadata(raw, runtime, version=1):
-    check(type(version) is int and version in (1, 2))
+    check(type(version) is int and version in (1, 2, 3))
     lane = {"lane": enum(["main", "pip"]), "generation": nullable(number(integral=True)),
             "handleId": nullable(number(integral=True)),
             "metrics": debug_metrics(MEDIA_NUMBERS, MEDIA_BOOLS, {"volume": 1, "readyState": 4, "networkState": 3, "mediaErrorCode": 4})}
-    if version == 2:
+    if version >= 2:
         lane["engine"] = nullable(enum(["hls.js", "shaka", "html5"]))
+    if version == 3:
+        attempt = {key: number(integral=True) for key in
+                   ("attachment", "engineStarts", "fatalErrors", "nativeFallbacks", "streamRetries")}
+        lane["attempt"] = nullable(lambda value: exact(value, attempt))
+        retired = dict(attempt, handleId=number(integral=True), generation=nullable(number(integral=True)),
+                       reason=enum(["ended", "disposed", "suspended"]))
+        lane["lastAttempt"] = nullable(lambda value: exact(value, retired))
     result = exact(inspection_data(raw, runtime, "debug", version), {
         "version": number(version, version, True), "runtime": token, "capturedAt": number(integral=True),
         "platform": enum("browser webos capacitor-android capacitor-ios tauri unknown".split()),
@@ -179,7 +186,7 @@ SNAPSHOT = {
 
 
 def inspection_data(raw, runtime, section, version=1):
-    check(type(version) is int and (version == 1 or version == 2 and section == "debug"))
+    check(type(version) is int and (version == 1 or version in (2, 3) and section == "debug"))
     check(isinstance(raw, dict) and raw.get("version") == version and type(raw.get("version")) is int)
     check(set(raw) == {"version", "runtime", "section", "error" if "error" in raw else "data"})
     check(len(json.dumps(raw, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) <= 32768)
@@ -207,7 +214,7 @@ def operation_metadata(raw, runtime, operation_id):
     result = project(inspection_data(raw, runtime, "operation"), {
         "operation_id": enum([operation_id]),
         "state": enum("unknown accepted invoked observed rejected unsupported expired".split()),
-        "action": nullable(enum("command play provider profile profile_settings provider_settings kiosk restart lifecycle input playback aspect play_catalog play_archive_catalog vportal vportal_search vportal_random plex_queue plex_library favorites vportal_queue maintenance".split())),
+        "action": nullable(enum("command play provider profile profile_settings provider_settings player_settings player_settings_patch plex_folders kiosk restart lifecycle input playback aspect play_catalog play_archive_catalog vportal vportal_search vportal_random plex_queue plex_library favorites vportal_queue maintenance".split())),
         "evidence": {"kind": enum("none handler_completed media_progress runtime_changed".split()),
                      "generation": nullable(number(integral=True)), "position": nullable(number(0, 315576000))},
     })
@@ -354,6 +361,10 @@ class Workbench:
                 if not supported:
                     raise ObservationError("unsupported")
                 if section == "debug" and debug_version == 2 and caps.get("debug_versions") != [1, 2]:
+                    raise ObservationError("unsupported")
+                if section == "debug" and debug_version == 2 and caps.get("debug_attempts") == {"version": 3}:
+                    debug_version = 3
+                if section == "debug" and debug_version == 3 and caps.get("debug_attempts") != {"version": 3}:
                     raise ObservationError("unsupported")
                 params = {"version": debug_version if section == "debug" else 1, "runtime": caps["player"]["runtime"], "section": section}
                 if section == "operation":
@@ -595,7 +606,7 @@ def arguments(words, json_output):
     lanes = {"debug": ("web",), "operation": ("web", "native")}.get(command, ("auto", "web", "native"))
     parser.add_argument("--lane", choices=lanes, default="web" if command in ("debug", "operation") else "auto")
     if command == "debug":
-        parser.add_argument("--engine", action="store_true", help="request debug v2 attached-engine evidence (requires updated player and controller)")
+        parser.add_argument("--engine", action="store_true", help="request attached-engine evidence and negotiated v3 attempt counters (requires updated player and controller)")
     if command == "inspect":
         parser.add_argument("--view", default="ui,media")
     elif command == "operation":

@@ -97,7 +97,7 @@ func parseInspectRequest(params map[string]json.RawMessage) *inspectRequest {
 	runtime, ok := inspectToken(params["runtime"], 96)
 	maximumVersion := float64(1)
 	if inspectEnum(params["section"], "debug") {
-		maximumVersion = 2
+		maximumVersion = 3
 	}
 	if !ok || !inspectNumber(params["version"], 1, maximumVersion, true, false) || !inspectEnum(params["section"], "doctor", "snapshot", "operation", "debug") {
 		return nil
@@ -155,7 +155,7 @@ func validInspectOperation(raw json.RawMessage, operationID string) bool {
 	if !ok || !inspectEnum(m["operation_id"], operationID) || !inspectEnum(m["state"], "unknown", "accepted", "invoked", "observed", "rejected", "unsupported", "expired") {
 		return false
 	}
-	if !inspectNull(m["action"]) && !inspectEnum(m["action"], "command", "play", "provider", "profile", "profile_settings", "profile_save", "profile_import", "provider_settings", "kiosk", "restart", "lifecycle", "input", "playback", "aspect", "categories", "play_catalog", "play_archive_catalog", "vportal", "vportal_search", "vportal_random", "plex_queue", "plex_library", "favorites", "vportal_queue", "maintenance") {
+	if !inspectNull(m["action"]) && !inspectEnum(m["action"], "command", "play", "provider", "profile", "profile_settings", "profile_save", "profile_import", "provider_settings", "player_settings", "kiosk", "restart", "lifecycle", "input", "playback", "aspect", "categories", "play_catalog", "play_archive_catalog", "vportal", "vportal_search", "vportal_random", "plex_queue", "plex_library", "favorites", "vportal_queue", "maintenance") {
 		return false
 	}
 	evidence, ok := inspectObject(m["evidence"], "kind", "generation", "position")

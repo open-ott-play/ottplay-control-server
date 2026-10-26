@@ -28,6 +28,8 @@ or `ott t1,t2,t3,t4 notifications on`. This leaves IPTV/Plex playback unchanged.
 Optional [reliable control](docs/reliable-control.md) adds scoped integration
 credentials, bounded durable command outcomes, resumable Local/Home application
 with exact settings verification, and explicit live/archive playback handoff.
+The [typed settings guide](docs/player-settings.md) covers `setting KEY VALUE`,
+runtime schema discovery, conditional saves and dedicated VPortal presets.
 These features require controller and CLI revisions containing this guide.
 Exact settings verification and handoff also require an updated player. The older
 installation pin below does not include these features. The [architecture diagram](docs/assets/reliable-control.svg)
@@ -82,6 +84,15 @@ Optional [DNS-SD discovery and pairing](docs/discovery.md) lets players find the
 controller through their network domain and receive an individual device token
 after `ott approve NAME CODE`. DNS contains service metadata only. Existing
 manual connections continue to work without enabling discovery.
+
+The optional [durable device registry](docs/device-registry.md) can register an
+unknown player after administrator approval, retain approved claims across
+restarts, and revoke or rotate credentials without rewriting the static Secret.
+Initialize its private persistent store explicitly before enabling it.
+
+[Hosted device transport](docs/device-transport.md) carries device polling,
+acknowledgements, notifications, pairing and runtime diagnostics through one
+bounded JSON POST endpoint. Existing credentials, approval and route limits apply.
 
 Use the Python CLI for player aliases, live volume, channel search, current EPG,
 provider selection and supported provider configuration: [CLI guide](docs/cli.md).
@@ -166,7 +177,7 @@ ott l plex queue                     # current item and preparation/playback sta
 ott l plex next                      # advance once; no wrap at the last item
 ott l plex stop                      # stop and clear this queue
 ott l plex libraries                 # list libraries (requires plex_library support)
-ott l plex shuffle "Tom and Jerry"   # shuffle one complete library, up to 500 items
+ott l plex shuffle "Tom and Jerry"   # shuffle up to 500 items from the library
 ott l plex library --preview id:16    # read-only check of an explicit library
 ```
 
@@ -186,7 +197,11 @@ switches the provider or replaces current playback. See
 [Plex queue commands](docs/cli.md#ordered-plex-queues) for limits and readiness.
 Library lookup additionally requires an updated player and controller advertising
 `plex_library`; it uses the player's saved Plex connection and rejects ambiguous
-or incomplete selections. See [Plex libraries by name](docs/cli.md#plex-libraries-by-name).
+or incomplete selections. With updated CLI, controller and player support, a
+library larger than 500 items starts a 500-item queue and prints a limit warning.
+The first 500 items are selected in library order, then shuffled when requested;
+remaining items are not appended automatically. See
+[Plex libraries by name](docs/cli.md#plex-libraries-by-name).
 
 ### Save Local videos profiles
 

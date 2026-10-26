@@ -47,6 +47,9 @@ class PresetController:
             for number in range(1, 16)
         }
         self.plex_attempts = 0
+        self.portal_slots = {n: {'name': f'VPortal {n}', 'vportal': ''} for n in range(1, 16)}
+        self.portal_revision = 0
+        self.portal_writes = []
         self.plex_writes = []
         self.profile_writes = []
         self.profile_selections = []
@@ -73,7 +76,25 @@ class PresetController:
 
     def execute(self, request):
         action, params = request['action'], request['params']
-        if action == 'provider':
+        if action == 'capabilities':
+            data = {'version':1,'player':{'version':'1.1.60','platform':'browser','runtime':'page-123'},
+                    'lifecycle':[],'input':[],'playback':[],'vportal_settings':{'version':1}}
+        elif action == 'settings_compare' and params['provider'] == 'vportal':
+            number = params['number']
+            return {'status':'ok','data':{'provider':'vportal','number':number,'runtime':'page-123',
+                'context':'portal-source','revision':'portal-' + str(self.portal_revision),
+                'matched':all(self.portal_slots[number][key] == value for key,value in params['settings'].items())}}
+        elif action == 'provider_settings' and params['provider'] == 'vportal':
+            assert params['context'] == 'portal-source'
+            assert params['revision'] == 'portal-' + str(self.portal_revision)
+            row = params['settings']; number = row['profile']
+            self.portal_writes.append((number,self.provider))
+            self.portal_slots[number].update({key:value for key,value in row.items() if key != 'profile'})
+            self.portal_revision += 1
+            return {'status':'ok','data':{'provider':'vportal','profile':number,'runtime':'page-123',
+                'context':'portal-source','revision':'portal-' + str(self.portal_revision),'fields':list(row),
+                'saved':True,'reloaded':False,'reload_required':False}}
+        elif action == 'provider':
             self.provider = params['query']
             data = {'provider': self.provider, 'dispatched': True}
         elif action == 'status':
@@ -247,6 +268,10 @@ class PresetTransportTest(unittest.TestCase):
                     self.assertIn('verify_profiles', receipt['completed'])
                 self.assertEqual(fixture.plex_attempts, 2)
                 self.assertEqual(fixture.plex_writes, [PRESET['plex']])
+                self.assertEqual(fixture.portal_writes, [(1,'m3u'),(2,'m3u')])
+                for row in PRESET['m3u']:
+                    self.assertEqual(fixture.portal_slots[row['number']],
+                        {'name':f"VPortal {row['number']}",'vportal':row['vportal']})
                 self.assertEqual([number for number, _ in fixture.profile_writes], [1, 2])
                 self.assertEqual(fixture.profile_selections, [1])
                 self.assertEqual((fixture.active_profile, fixture.reloads), (1, 1))
@@ -262,6 +287,7 @@ class PresetTransportTest(unittest.TestCase):
                 self.assertEqual(mutations, [('profile_settings', 1), ('profile', 1), ('profile_settings', 2)])
                 successful_plex_id = next(request_id for request_id, request in fixture.posts
                                           if request['action'] == 'provider_settings'
+                                          and request['params']['provider'] == 'plex'
                                           and fixture.receipts[request_id]['result']['status'] == 'ok')
                 self.assertEqual([code for request_id, code in fixture.gets if request_id == successful_plex_id],
                                  [202, 503, 200])

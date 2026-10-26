@@ -298,7 +298,7 @@ func (s *Server) serveDiagnostics(w http.ResponseWriter, r *http.Request, path s
 	}
 	d.mu.Lock()
 	b := &d.globalControl
-	limit := len(s.devices)*4*240 + 240
+	limit := len(s.currentDevices())*4*240 + 240
 	if path == diagnosticsPrefix+"/events" {
 		b = &d.globalEvents
 	}
