@@ -24,6 +24,44 @@ instead of assuming success or blindly repeating it. Separate installations that
 reuse a device credential still have separate storage: use a unique registration
 for each player. Clearing application data resets this preference to its default.
 
+## Disable or enable one player and verify delivery
+
+Use the target's CLI alias, for example `f`. Find its registered device ID with
+`ott devices` so you can identify the same player in the controller status.
+The command changes only that installation; other players keep their preferences.
+There is no need to disable the shared HA bridge or restart the player.
+
+To disable both HA banners and notification camera media on that player:
+
+```sh
+ott -j f notifications off
+ott -j f notifications
+ott -j ha status
+```
+
+The direct player read should return `enabled: false` and `persisted: true`.
+After the controller receives the updated presence, the matching entry in
+`players` should report `notifications_enabled: false`, `active: false` and
+`pending: 0`. If status has not caught up, read it again after the next presence
+update. `active: false` alone does not prove that the preference is off: a hidden,
+offline or standby player can also be inactive. `media_jpeg: true` describes
+client capability and does not override the disabled preference.
+
+To enable future notifications again:
+
+```sh
+ott -j f notifications on
+ott -j f notifications
+ott -j ha status
+```
+
+Confirm `enabled: true` and `persisted: true` on the player, then
+`notifications_enabled: true` in its controller entry. Delivery also requires
+the player to be connected, visible and active; enabling the preference does
+not wake it or replay old events. The controller's shared HA counters and camera
+requests may continue while another player remains eligible, even when `f` is
+disabled. Use the individual entry to check this player's delivery state.
+
 ## Protocol and persistence
 
 [The exact v1 examples](../contracts/notifications-v1.json) define the capability,
