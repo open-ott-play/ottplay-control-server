@@ -176,14 +176,14 @@ class Session:
         self.save()
 
 
-def run(api, config, words, timeout, json_output, on_receipt):
+def run(api, config, words, timeout, json_output, on_receipt, *, client=None, device=None):
     if len(words) not in (4, 6) or words[3] not in ("plan", "apply", "resume", "verify") or (len(words) == 6 and words[4] != "--checkpoint"):
         raise api.Error("Use PLAYER load PRESET plan|apply|resume|verify [--checkpoint FILE]")
     name, preset = api.validate_preset(config, words[2])
     mode = words[3]
-    client = api.Client(config, timeout)
+    client = client if client is not None else api.Client(config, timeout)
     client.on_receipt = on_receipt
-    device = client.device(words[0])
+    device = device if device is not None else client.device(words[0])
     if mode == "plan":
         result = {"preset": name, "device": device, "status": "planned", "revision": digest(preset),
                   "settings": [label for label, _ in comparisons(preset)], "active_profile": preset["active_profile"]}
