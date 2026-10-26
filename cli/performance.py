@@ -373,7 +373,8 @@ class Capture:
             item.update(state="unconfirmed", reason=reason)
             raise Failure(reason, uncertain=mutation) from None
         except self.api.HTTPError as error:
-            reason = "unauthorized" if error.code in (401, 403) else "unsupported_controller" if error.code in (400, 404, 405, 422) else "transport_error"
+            reason = ("unauthorized" if error.code in (401, 403) else "rate_limited" if error.code == 429
+                      else "unsupported_controller" if error.code in (400, 404, 405, 422) else "transport_error")
             item.update(state="unconfirmed", reason=reason)
             raise Failure(reason, uncertain=mutation) from None
         except Failure as error:

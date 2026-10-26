@@ -186,6 +186,26 @@ class PerformanceReportTest(unittest.TestCase):
                 self.assertEqual(code, 3, checked)
                 self.assertIn(expected, checked["partial_reasons"])
 
+    def test_enqueue_rate_limit_is_distinct_and_verifies_without_retry(self):
+        for stage in ("capabilities", "read"):
+            with self.subTest(stage=stage):
+                self.path = self.path.parent / ("rate-limit-" + stage)
+                self.client = fixtures.PerfClient(self.clock)
+                self.run_perf(["start", "--session", SID])
+                original, attempts = self.client.call_receipt, []
+                def response(target, action, params):
+                    if action == stage or action == "perf_capture" and params["op"] == stage:
+                        attempts.append(params)
+                        raise ott.HTTPError(429)
+                    return original(target, action, params)
+                self.client.call_receipt = response
+                code, live = self.capture(start=False)
+                self.assertEqual((code, len(attempts)), (3, 1))
+                self.assertNotIn("transport_error", json.dumps(live))
+                code, checked = self.invoke()
+                self.assertEqual(code, 3, checked)
+                self.assertIn("rate_limited", checked["partial_reasons"])
+
     def test_changed_or_regressed_boundary_retains_partial_evidence(self):
         for changed in ("identity", "clock"):
             with self.subTest(changed=changed):
