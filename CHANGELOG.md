@@ -73,6 +73,13 @@
 
 ### Changes
 
+- Extend explicit player lists to player commands beyond provider switching:
+  `ott t1,t2,t3,t4 R`, volume, playback, lifecycle, settings, Plex, presets,
+  diagnostics and supported Android operations. Resolve and deduplicate targets
+  before execution, validate local arguments and output destinations, preserve
+  each command's capability checks and report individual outcomes without retries.
+  Explicit exports and checkpoints receive separate per-player paths;
+  interruption stops remaining commands. Android binding remains one-to-one.
 - Confirm kiosk policy changes when offline playback is screen-suspended while
   the kiosk policy is waiting or off. Keep enabled/disabled and strict-state
   checks, and accept media startup grace for older channel-backed Plex/VPortal
