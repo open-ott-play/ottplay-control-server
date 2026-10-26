@@ -97,7 +97,7 @@ func parseInspectRequest(params map[string]json.RawMessage) *inspectRequest {
 	runtime, ok := inspectToken(params["runtime"], 96)
 	maximumVersion := float64(1)
 	if inspectEnum(params["section"], "debug") {
-		maximumVersion = 2
+		maximumVersion = 3
 	}
 	if !ok || !inspectNumber(params["version"], 1, maximumVersion, true, false) || !inspectEnum(params["section"], "doctor", "snapshot", "operation", "debug") {
 		return nil

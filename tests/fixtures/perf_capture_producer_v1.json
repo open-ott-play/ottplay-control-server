@@ -1,0 +1,427 @@
+[
+  {
+    "params": {
+      "version": 1,
+      "op": "start",
+      "runtime": "runtime-1",
+      "session_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "response": {
+      "data": {
+        "op": "start",
+        "runtime": "runtime-1",
+        "session": {
+          "clock": "performance",
+          "duration_seconds": 120,
+          "elapsed_ms": 0,
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": null,
+          "remaining_ms": 120000,
+          "requested": {
+            "long_tasks": true,
+            "raf": false
+          },
+          "sample_interval_ms": 1000,
+          "started_at_unix_ms": 1700000000000,
+          "state": "active",
+          "supported": {
+            "long_tasks": true,
+            "notification_stages": [
+              "received",
+              "dom_created",
+              "media_fetch_start",
+              "media_received",
+              "image_loaded",
+              "shown",
+              "updated",
+              "hidden",
+              "dropped"
+            ],
+            "notification_timings": [
+              "fetch_ms",
+              "base64_ms",
+              "validation_ms",
+              "blob_ms",
+              "image_load_decode_ms"
+            ],
+            "raf": true
+          },
+          "first_seq": 1,
+          "next_seq": 3,
+          "event_count": 2,
+          "rate_dropped": 0,
+          "ring_dropped": 0,
+          "oversized_dropped": 0,
+          "dropped_events": 0,
+          "bytes": 285
+        },
+        "version": 1
+      },
+      "status": "ok"
+    }
+  },
+  {
+    "params": {
+      "version": 1,
+      "op": "stop",
+      "runtime": "runtime-1",
+      "session_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "response": {
+      "data": {
+        "op": "stop",
+        "runtime": "runtime-1",
+        "session": {
+          "clock": "performance",
+          "duration_seconds": 120,
+          "elapsed_ms": 1000,
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": "requested",
+          "remaining_ms": 0,
+          "requested": {
+            "long_tasks": true,
+            "raf": false
+          },
+          "sample_interval_ms": 1000,
+          "started_at_unix_ms": 1700000000000,
+          "state": "stopped",
+          "supported": {
+            "long_tasks": true,
+            "notification_stages": [
+              "received",
+              "dom_created",
+              "media_fetch_start",
+              "media_received",
+              "image_loaded",
+              "shown",
+              "updated",
+              "hidden",
+              "dropped"
+            ],
+            "notification_timings": [
+              "fetch_ms",
+              "base64_ms",
+              "validation_ms",
+              "blob_ms",
+              "image_load_decode_ms"
+            ],
+            "raf": true
+          },
+          "first_seq": 1,
+          "next_seq": 12,
+          "event_count": 11,
+          "rate_dropped": 0,
+          "ring_dropped": 0,
+          "oversized_dropped": 0,
+          "dropped_events": 0,
+          "bytes": 3103
+        },
+        "version": 1
+      },
+      "status": "ok"
+    }
+  },
+  {
+    "params": {
+      "version": 1,
+      "op": "read",
+      "runtime": "runtime-1",
+      "session_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "after_seq": 0
+    },
+    "response": {
+      "data": {
+        "events": [
+          {
+            "at_ms": 0,
+            "data": {
+              "event": "started",
+              "reason": null
+            },
+            "generation": null,
+            "handle_id": null,
+            "kind": "session",
+            "lane": null,
+            "seq": 1,
+            "source_id": null
+          },
+          {
+            "at_ms": 0,
+            "data": {
+              "event": "source_changed",
+              "reason": null
+            },
+            "generation": 1,
+            "handle_id": 1,
+            "kind": "session",
+            "lane": "main",
+            "seq": 2,
+            "source_id": "s1"
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "attempt": {
+                "attachment": 1,
+                "engineStarts": 1,
+                "fatalErrors": 0,
+                "nativeFallbacks": 0,
+                "streamRetries": 0
+              },
+              "buffer_ahead_seconds": 16,
+              "buffered": {
+                "range_count": 1,
+                "ranges": [
+                  {
+                    "end_seconds": 20,
+                    "index": 0,
+                    "start_seconds": 0
+                  }
+                ],
+                "truncated_count": 0
+              },
+              "ended": false,
+              "frames": {
+                "corrupted": 0,
+                "dropped": 0,
+                "source": "quality",
+                "total": 0
+              },
+              "height": 1080,
+              "last_attempt": null,
+              "network_state": 2,
+              "paused": false,
+              "playback_rate": 1,
+              "position_seconds": 4,
+              "ready_state": 4,
+              "seeking": false,
+              "width": 1920
+            },
+            "generation": 1,
+            "handle_id": 1,
+            "kind": "sample",
+            "lane": "main",
+            "seq": 3,
+            "source_id": "s1"
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "long_task_entries_dropped": 0,
+              "long_tasks": 0,
+              "long_tasks_max_ms": 0,
+              "long_tasks_total_ms": 0,
+              "max_delay_ms": 0,
+              "raf_callbacks": null,
+              "raf_max_gap_ms": null,
+              "samples": 1,
+              "window_ms": 1000
+            },
+            "generation": null,
+            "handle_id": null,
+            "kind": "loop",
+            "lane": null,
+            "seq": 4,
+            "source_id": null
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "error_code": null,
+              "event": "waiting",
+              "reason": null
+            },
+            "generation": 1,
+            "handle_id": 1,
+            "kind": "media",
+            "lane": "main",
+            "seq": 5,
+            "source_id": "s1"
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "automatic": true,
+              "bitrate": 4000,
+              "from_level": null,
+              "height": 360,
+              "to_level": 0,
+              "width": 640
+            },
+            "generation": 1,
+            "handle_id": 1,
+            "kind": "abr",
+            "lane": "main",
+            "seq": 6,
+            "source_id": "s1"
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "buffer_duration_ms": 1,
+              "bytes": 123,
+              "category": null,
+              "detail": null,
+              "event": "fragment_buffered",
+              "fatal": null,
+              "first_byte_at_ms": 2,
+              "first_byte_duration_ms": 1,
+              "fragment_sequence": 1,
+              "http_status": null,
+              "level": 0,
+              "load_duration_ms": 2,
+              "load_end_ms": 3,
+              "load_start_ms": 1,
+              "parse_duration_ms": 1,
+              "part_index": null,
+              "retries": 0,
+              "timing_source": "performance"
+            },
+            "generation": 1,
+            "handle_id": 1,
+            "kind": "hls",
+            "lane": "main",
+            "seq": 7,
+            "source_id": "s1"
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "attempt": {
+                "attachment": 1,
+                "engineStarts": 1,
+                "fatalErrors": 0,
+                "nativeFallbacks": 0,
+                "streamRetries": 0
+              },
+              "event": "engine_start"
+            },
+            "generation": 1,
+            "handle_id": 1,
+            "kind": "recovery",
+            "lane": "main",
+            "seq": 8,
+            "source_id": "s1"
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "active_count": 0,
+              "base64_ms": null,
+              "blob_ms": null,
+              "decode_ms": null,
+              "fetch_ms": null,
+              "image_bytes": null,
+              "image_height": null,
+              "image_load_decode_ms": null,
+              "image_width": null,
+              "media": "none",
+              "notification_id": "n1",
+              "queue_ms": null,
+              "reason": null,
+              "stage": "received",
+              "validation_ms": null
+            },
+            "generation": null,
+            "handle_id": null,
+            "kind": "notification",
+            "lane": null,
+            "seq": 9,
+            "source_id": null
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "active_count": 0,
+              "base64_ms": null,
+              "blob_ms": null,
+              "decode_ms": null,
+              "fetch_ms": null,
+              "image_bytes": null,
+              "image_height": null,
+              "image_load_decode_ms": null,
+              "image_width": null,
+              "media": "none",
+              "notification_id": "n1",
+              "queue_ms": null,
+              "reason": null,
+              "stage": "shown",
+              "validation_ms": null
+            },
+            "generation": null,
+            "handle_id": null,
+            "kind": "notification",
+            "lane": null,
+            "seq": 10,
+            "source_id": null
+          },
+          {
+            "at_ms": 1000,
+            "data": {
+              "event": "stopped",
+              "reason": "requested"
+            },
+            "generation": null,
+            "handle_id": null,
+            "kind": "session",
+            "lane": null,
+            "seq": 11,
+            "source_id": null
+          }
+        ],
+        "lost_before": 0,
+        "more": false,
+        "next_after_seq": 11,
+        "op": "read",
+        "runtime": "runtime-1",
+        "session": {
+          "clock": "performance",
+          "duration_seconds": 120,
+          "elapsed_ms": 1000,
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "reason": "requested",
+          "remaining_ms": 0,
+          "requested": {
+            "long_tasks": true,
+            "raf": false
+          },
+          "sample_interval_ms": 1000,
+          "started_at_unix_ms": 1700000000000,
+          "state": "stopped",
+          "supported": {
+            "long_tasks": true,
+            "notification_stages": [
+              "received",
+              "dom_created",
+              "media_fetch_start",
+              "media_received",
+              "image_loaded",
+              "shown",
+              "updated",
+              "hidden",
+              "dropped"
+            ],
+            "notification_timings": [
+              "fetch_ms",
+              "base64_ms",
+              "validation_ms",
+              "blob_ms",
+              "image_load_decode_ms"
+            ],
+            "raf": true
+          },
+          "first_seq": 1,
+          "next_seq": 12,
+          "event_count": 11,
+          "rate_dropped": 0,
+          "ring_dropped": 0,
+          "oversized_dropped": 0,
+          "dropped_events": 0,
+          "bytes": 3103
+        },
+        "version": 1
+      },
+      "status": "ok"
+    }
+  }
+]

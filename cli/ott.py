@@ -139,6 +139,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME caps                      show runtime identity and supported controls
   ott NAME doctor [-j]                read web/native identity and diagnostic capabilities
   ott NAME debug [--engine] [-j]      read bounded runtime/native diagnostics (alias: dbg)
+  ott NAME perf --help               opt-in bounded performance capture and safe notification trials
   ott NAME inspect --view ui,media    observe the interface and media without changing playback
   ott NAME operation REQUEST_ID      read a web operation receipt without repeating its effect
   ott NAME bundle --out DIRECTORY    save private, bounded diagnostic evidence
@@ -271,7 +272,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "categories", "favorites", "aspect",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -3218,6 +3219,21 @@ def capabilities_metadata(data):
                 or versions != [1, 2]):
             raise Error(invalid)
         result["debug_versions"] = list(versions)
+    if "debug_attempts" in data:
+        attempts = data["debug_attempts"]
+        if (result.get("debug_versions") != [1, 2] or not isinstance(attempts, dict)
+                or set(attempts) != {"version"} or type(attempts["version"]) is not int
+                or attempts["version"] != 3):
+            raise Error(invalid)
+        result["debug_attempts"] = {"version": 3}
+    if "perf_capture" in data:
+        capture = data["perf_capture"]
+        expected = {"version": 1, "default_duration_seconds": 120, "max_duration_seconds": 600,
+                    "max_events": 1024, "max_bytes": 524288, "max_read_events": 64}
+        if (not isinstance(capture, dict) or set(capture) != set(expected)
+                or any(type(capture[key]) is not int or capture[key] != value for key, value in expected.items())):
+            raise Error(invalid)
+        result["perf_capture"] = dict(expected)
     return result
 
 
@@ -3387,6 +3403,11 @@ def print_player_help(data, name):
     if "set" in notifications:
         print(f"  {prefix} notifications on / off  — save one preference for banners and camera media")
         print("    Multiple players: ott t1,t2,t3,t4 notifications off")
+    if "perf_capture" in controls:
+        print(f"  {prefix} perf start / status / stop SESSION  — temporary bounded performance capture")
+        print(f"  {prefix} perf export SESSION --out NEW_DIRECTORY  — save private numerical evidence")
+        if "player_settings" in controls and controls.get("debug_versions") == [1, 2]:
+            print(f"  ott -t 240 {quoted_name} perf trial notifications --out NEW_DIRECTORY  — guarded A–B–A trial")
     update = controls.get("app_update", {}).get("operations", [])
     if update:
         print(f"  {prefix} update status  — read installed and pending APK versions")
@@ -3396,7 +3417,7 @@ def print_player_help(data, name):
         print(f"  {prefix} update install SHA256  — request installation of the staged APK")
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update):
+            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:
@@ -4767,6 +4788,18 @@ def main(argv=None):
                 spec.loader.exec_module(module)
                 modules.append(module)
             return modules[1].main(args.words[1:], SimpleNamespace(**globals()), modules[0], args.json)
+        if len(args.words) >= 3 and args.words[1].casefold() == "perf" and args.words[-1] in ("--help", "-h"):
+            path = Path(__file__).resolve().with_name("performance.py")
+            if not path.is_file():
+                raise Error("Install all CLI Python files from the same revision to use performance capture")
+            spec = importlib.util.spec_from_file_location("ott_performance", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            try:
+                module.arguments(args.words[2:])
+            except module.Failure:
+                raise Error("Invalid performance arguments; use ott PLAYER perf --help") from None
+            return 0
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
             raise Error("--timeout must be between 1 and 300 seconds")
         config = read_json(args.config)
@@ -4801,6 +4834,14 @@ def main(argv=None):
             return provider_group_command(client, targets, args.words[1:], args.json)
         device = client.device(args.words[0])
         words = args.words[1:]
+        if words and words[0].casefold() == "perf":
+            path = Path(__file__).resolve().with_name("performance.py")
+            if not path.is_file():
+                raise Error("Install all CLI Python files from the same revision to use performance capture")
+            spec = importlib.util.spec_from_file_location("ott_performance", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.run(SimpleNamespace(**globals()), client, device, words[1:], args.timeout, args.json)
         if words and words[0].casefold() in ("setting", "settings"):
             module_path = Path(__file__).resolve().with_name("player_settings.py")
             if not module_path.is_file():
