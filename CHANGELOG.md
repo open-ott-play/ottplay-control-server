@@ -54,13 +54,6 @@
 
 ### Fixed
 
-- Confirm kiosk policy changes when offline playback is screen-suspended while
-  the kiosk policy is waiting or off. Keep enabled/disabled and strict-state
-  checks, and accept media startup grace for older channel-backed Plex/VPortal
-  queues as well as explicit media queues.
-- Resolve Android updates from stable releases that preserve their promoted RC
-  manifest, verifying both publications against the same source, frozen plan
-  and APK digests before selecting the stable download URL.
 - Distinguish controller transport/HTTP failures, pending request timeouts,
   missing receipts, authorization and rate limits instead of attributing every
   timeout to the player. Mutations are still submitted only once.
@@ -80,6 +73,13 @@
 
 ### Changes
 
+- Confirm kiosk policy changes when offline playback is screen-suspended while
+  the kiosk policy is waiting or off. Keep enabled/disabled and strict-state
+  checks, and accept media startup grace for older channel-backed Plex/VPortal
+  queues as well as explicit media queues.
+- Resolve Android updates from stable releases that preserve their promoted RC
+  manifest, verifying both publications against the same source, frozen plan
+  and APK digests before selecting the stable download URL.
 - Add optional durable device registration with administrator approval for
   unknown pairing requests, generation-bound revocation/rotation, explicit
   static-configuration reconciliation and receipt-based recovery. `ott registry`

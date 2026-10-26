@@ -21,7 +21,7 @@ change the configured nightly policy.
 
 ## Local checks
 
-Use Python 3.11+ for the CLI and the project toolchains documented in `scripts/ci.sh`.
+Use CPython 3.12+ for the CLI and the project toolchains documented in `scripts/ci.sh`.
 The scripts fail on missing dependencies and do not publish anything during checks.
 
 ```bash
