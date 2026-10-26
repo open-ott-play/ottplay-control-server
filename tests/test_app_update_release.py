@@ -1,6 +1,8 @@
 """High-level Android OTA pins official release identity and never replays install."""
 import copy
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -42,6 +44,30 @@ def metadata(tag=TAG):
                     package_versions=[dict(path=APK, field="version", version=tag[1:]),
                                       dict(path=APK, field="versionCode", version="10438")])
     return release, manifest
+
+
+def promotion_metadata():
+    """Stable publication retains the RC manifest and final package version."""
+    tag, candidate_tag = "v1.1.60", "v1.1.60-rc.1"
+    stable, _ = metadata(tag)
+    candidate, manifest = metadata(candidate_tag)
+    stable["prerelease"] = False
+    policy = {"versioning": {"promotion": "promote-bytes"}}
+    digest = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    plan = dict(schema_version=1, base_version="1.1.60", version="1.1.60-rc.1", channel="rc",
+                sequence=1, tag=candidate_tag, source_sha=SOURCE, build_number=10497,
+                promotion="promote-bytes", policy_sha256=digest(policy))
+    manifest.update(channel="rc", version="1.1.60", version_plan=plan,
+                    source_policy={"data": policy}, plan_sha256=digest(plan))
+    manifest["package_versions"] = [
+        dict(path=APK, field="version", version="1.1.60", plan_sha256=digest(plan)),
+        dict(path=APK, field="versionCode", version="10497", plan_sha256=digest(plan)),
+    ]
+    for release in (stable, candidate):
+        release["assets"][0]["digest"] = "sha256:" + digest(manifest)
+        release["assets"][1]["digest"] = "sha256:" + SHA
+    return dict(stable=stable, candidate=candidate, manifest=manifest,
+                candidate_manifest=copy.deepcopy(manifest), stable_source=SOURCE, candidate_source=SOURCE)
 
 
 class Client:
@@ -129,6 +155,122 @@ class ReleaseTests(unittest.TestCase):
         for mutate in mutations:
             with self.subTest(mutate=mutate), self.assertRaises(ott.Error):
                 self.resolve(mutate, explicit=True)
+
+    def resolve_promotion(self, mutate=None, *, annotated=()):
+        proof = promotion_metadata()
+        if mutate:
+            mutate(proof)
+        stable_url = "https://github.com/" + ota.REPOSITORY + "/releases/download/v1.1.60/"
+        candidate_url = "https://github.com/" + ota.REPOSITORY + "/releases/download/v1.1.60-rc.1/"
+        replies = {
+            ota.API + "/releases/tags/v1.1.60": proof["stable"],
+            ota.API + "/releases/tags/v1.1.60-rc.1": proof["candidate"],
+            stable_url + "release-manifest.json": proof["manifest"],
+            candidate_url + "release-manifest.json": proof["candidate_manifest"],
+            ota.API + "/git/ref/tags/v1.1.60": {"object": {"type": "commit", "sha": proof["stable_source"]}},
+            ota.API + "/git/ref/tags/v1.1.60-rc.1": {"object": {"type": "commit", "sha": proof["candidate_source"]}},
+        }
+        for name in annotated:
+            tag, tag_sha = {"stable": ("v1.1.60", "d" * 40),
+                            "candidate": ("v1.1.60-rc.1", "e" * 40)}[name]
+            replies[ota.API + "/git/ref/tags/" + tag] = {"object": {"type": "tag", "sha": tag_sha}}
+            replies[ota.API + "/git/tags/" + tag_sha] = {
+                "object": {"type": "commit", "sha": proof[name + "_source"]}}
+        def fetch(url, error, limit=None, deadline=None):
+            self.assertEqual(deadline, 123)
+            self.assertIn(url, replies)
+            return replies[url]
+        with patch.object(ota, "request_json", side_effect=fetch) as request:
+            target = ota.release_target(self.opts("--version", "v1.1.60"), ott.Error, deadline=123)
+        self.assertEqual(request.call_count, 6 + len(annotated))
+        return target
+
+    def test_stable_byte_promotion_retains_rc_evidence_and_final_package_version(self):
+        target = self.resolve_promotion()
+        self.assertEqual(target, dict(tag="v1.1.60", variant="api22", version_code=10497,
+                                      source_sha=SOURCE, sha256=SHA,
+                                      url="https://github.com/" + ota.REPOSITORY +
+                                          "/releases/download/v1.1.60/" + APK))
+
+    def test_stable_promotion_dereferences_annotated_tags_with_the_same_deadline(self):
+        for annotated in (("stable",), ("candidate",), ("stable", "candidate")):
+            with self.subTest(annotated=annotated):
+                target = self.resolve_promotion(annotated=annotated)
+                self.assertEqual(target["source_sha"], SOURCE)
+                self.assertEqual(target["tag"], "v1.1.60")
+
+    def test_stable_promotion_rejects_a_different_annotated_commit(self):
+        for name in ("stable", "candidate"):
+            def mutate(proof):
+                proof[name + "_source"] = "c" * 40
+            with self.subTest(name=name), self.assertRaises(ott.Error):
+                self.resolve_promotion(mutate, annotated=("stable", "candidate"))
+
+    def test_stable_promotion_rejects_mismatched_source_plan_or_package(self):
+        mutations = {
+            "stable tag source": lambda p: p.update(stable_source="c" * 40),
+            "candidate tag source": lambda p: p.update(candidate_source="c" * 40),
+            "manifest source": lambda p: p["manifest"].update(source_sha="c" * 40),
+            "plan source": lambda p: p["manifest"]["version_plan"].update(source_sha="c" * 40),
+            "plan digest": lambda p: p["manifest"].update(plan_sha256="c" * 64),
+            "policy digest": lambda p: p["manifest"]["version_plan"].update(policy_sha256="c" * 64),
+            "policy profile": lambda p: p["manifest"]["source_policy"]["data"]["versioning"].update(promotion="final-build"),
+            "plan profile": lambda p: p["manifest"]["version_plan"].update(promotion="final-build"),
+            "base version": lambda p: p["manifest"]["version_plan"].update(base_version="1.1.61"),
+            "manifest version": lambda p: p["manifest"].update(version="1.1.61"),
+            "candidate identity": lambda p: p["manifest"].update(tag="v1.1.61-rc.1"),
+            "beta promotion": lambda p: p["manifest"].update(tag="v1.1.60-beta.1", channel="beta"),
+            "sequence type": lambda p: p["manifest"]["version_plan"].update(sequence=True),
+            "sequence mismatch": lambda p: p["manifest"]["version_plan"].update(sequence=2),
+            "extra plan field": lambda p: p["manifest"]["version_plan"].update(unrecognized=True),
+            "wrong package version": lambda p: p["manifest"]["package_versions"][0].update(version="1.1.60-rc.1"),
+            "wrong package plan": lambda p: p["manifest"]["package_versions"][1].update(plan_sha256="c" * 64),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), self.assertRaises(ott.Error):
+                self.resolve_promotion(mutate)
+
+    def test_stable_promotion_requires_matching_published_rc_manifest_and_apk(self):
+        mutations = {
+            "stable prerelease": lambda p: p["stable"].update(prerelease=True),
+            "candidate draft": lambda p: p["candidate"].update(draft=True),
+            "candidate stable": lambda p: p["candidate"].update(prerelease=False),
+            "candidate unpublished": lambda p: p["candidate"].update(published_at=None),
+            "candidate manifest digest": lambda p: p["candidate"]["assets"][0].update(digest="sha256:" + "c" * 64),
+            "candidate manifest contents": lambda p: p["candidate_manifest"].update(run_id=999),
+            "candidate manifest type": lambda p: p["candidate_manifest"].update(schema=True),
+            "candidate manifest size": lambda p: p["candidate"]["assets"][0].update(size=1001),
+            "missing manifest digest": lambda p: p["stable"]["assets"][0].pop("digest"),
+            "stable apk digest": lambda p: p["stable"]["assets"][1].update(digest="sha256:" + "c" * 64),
+            "candidate apk digest": lambda p: p["candidate"]["assets"][1].update(digest="sha256:" + "c" * 64),
+            "candidate apk size": lambda p: p["candidate"]["assets"][1].update(size=12000001),
+            "candidate apk path": lambda p: p["candidate"]["assets"][1].update(browser_download_url="https://example.test/app.apk"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), self.assertRaises(ott.Error):
+                self.resolve_promotion(mutate)
+
+    def test_promoted_package_rows_still_require_the_final_version_and_same_plan(self):
+        for row, key, value in ((0, "version", "1.1.60-rc.1"),
+                                (1, "version", "10498"),
+                                (0, "plan_sha256", "c" * 64)):
+            def mutate(proof):
+                for name in ("manifest", "candidate_manifest"):
+                    proof[name]["package_versions"][row][key] = value
+            with self.subTest(row=row, key=key), self.assertRaisesRegex(ott.Error, "APK version metadata"):
+                self.resolve_promotion(mutate)
+
+    def test_direct_stable_release_still_uses_its_own_plan(self):
+        tag = "v1.1.60"
+        release, manifest = metadata(tag)
+        release["prerelease"] = False
+        manifest["channel"] = manifest["version_plan"]["channel"] = "stable"
+        with patch.object(ota, "request_json", side_effect=[
+            release, manifest, {"object": {"type": "commit", "sha": SOURCE}},
+        ]) as fetch:
+            selected = ota.release_target(self.opts("--version", tag), ott.Error)
+        self.assertEqual(selected["tag"], tag)
+        self.assertEqual(fetch.call_count, 3)
 
     def workflow(self, replies, *tail):
         client = Client(replies)
