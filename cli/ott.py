@@ -3234,6 +3234,12 @@ def capabilities_metadata(data):
                 or any(type(capture[key]) is not int or capture[key] != value for key, value in expected.items())):
             raise Error(invalid)
         result["perf_capture"] = dict(expected)
+    if "perf_capture_hls" in data:
+        capture = data["perf_capture_hls"]
+        if ("perf_capture" not in result or not isinstance(capture, dict) or set(capture) != {"version"}
+                or type(capture["version"]) is not int or capture["version"] != 2):
+            raise Error(invalid)
+        result["perf_capture_hls"] = {"version": 2}
     return result
 
 
@@ -3406,6 +3412,8 @@ def print_player_help(data, name):
     if "perf_capture" in controls:
         print(f"  {prefix} perf start / status / stop SESSION  — temporary bounded performance capture")
         print(f"  {prefix} perf export SESSION --out NEW_DIRECTORY  — save private numerical evidence")
+        if "perf_capture_hls" in controls:
+            print(f"  {prefix} perf start --hls-details  — include HLS track buffers, fragment PTS and live position")
         if "player_settings" in controls and controls.get("debug_versions") == [1, 2]:
             print(f"  ott -t 240 {quoted_name} perf trial notifications --out NEW_DIRECTORY  — guarded A–B–A trial")
     update = controls.get("app_update", {}).get("operations", [])

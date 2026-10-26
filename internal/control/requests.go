@@ -523,6 +523,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 400, "invalid performance capture capability")
 			return
 		}
+		if marker, exists := capabilities["perf_capture_hls"]; exists && (!validPerfHLSCapability(marker) || !validPerfCapability(capabilities["perf_capture"])) {
+			failure(w, 400, "invalid HLS performance capture capability")
+			return
+		}
 	}
 	if inspect != nil && (len(b) > maxInspectResultBytes || !validInspectResult(m["data"], status, inspect)) {
 		failure(w, 400, "invalid inspect result")
