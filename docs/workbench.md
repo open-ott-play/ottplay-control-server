@@ -32,6 +32,7 @@ ott a1 test run health --report ./a1-health
 ott -t 45 a1 test run media-progress --lane web --duration 5 --report ./a1-progress --json
 ott -t 45 a1 test run media-progress --lane native --duration 5 --report ./a1-native-progress --json
 ott report verify ./a1-progress --json
+ott a1,t1 watch --duration 30 --interval 5 --json        # finite group observation
 ott server debug --json                                # controller process and stored queue counts
 ```
 
@@ -41,6 +42,8 @@ scenario proves a visible picture or audible sound. See [lanes](#observations-an
 [scenario verdicts](#fixed-scenarios), [bundle contents and exit codes](#bundles-and-machine-output),
 [offline verification](#verify-saved-evidence-offline) and
 [troubleshooting](#troubleshooting) before interpreting a result.
+The [monitoring runbook](monitoring-runbook.md) combines group observations,
+saved evidence and deliberate repair without an automatic restart loop.
 
 `-j`/`--json` works before the player name or after a workbench command. Global
 `-t`/`--timeout` and `-c`/`--config` still precede the player name. Commands use
@@ -93,7 +96,8 @@ then includes `engine`: `hls.js`, `shaka`, `html5`, or null when no current atta
 engine can be observed. This describes actual ownership, not the selected player
 preference, decoded frames, or physical display output. The CLI rejects unknown
 values and does not downgrade the request if the controller or player lacks
-support. Ordinary `debug` and bundle reads retain the exact version 1 schema.
+support. Ordinary `debug` retains the exact version 1 schema. Bundles negotiate
+the strongest advertised version as described below.
 
 Version 3 adds nullable `attempt` and `lastAttempt` objects. Their counters are
 `attachment`, `engineStarts`, `fatalErrors`, `nativeFallbacks`, and `streamRetries`.
@@ -105,14 +109,20 @@ request is reported without retrying or silently downgrading. The legacy
 `debug_versions` array stays unchanged so older controllers/CLIs can keep using
 their supported schemas.
 
-Bundles use evaluator `workbench-v3` and keep exactly `manifest.json` and
-`result.json`. The latter contains separate `debug_observations`; a native-only
-bundle has an empty array. The ordinary observations retain three quarters of
-the total timeout and debug gets the remaining time. Each snapshot keeps its own
-runtime and request receipts; snapshots are not assumed simultaneous. Debug data
-does not promote the bundle verdict or prove an operation's effect. The current
-verifier accepts legacy, `workbench-v2`, and `workbench-v3` reports; old verifiers
-explicitly reject the new evaluator instead of silently skipping debug evidence.
+New bundles use evaluator `workbench-v4` and keep exactly `manifest.json` and
+`result.json`. They request debug v3 when both `debug_versions: [1, 2]` and
+`debug_attempts: {"version":3}` are advertised, otherwise v2 with
+`debug_versions: [1, 2]`, or v1 with the base debug capability. A rejected request
+stays unknown; it is not retried with a lower version. The result contains
+separate `debug_observations`; a native-only bundle has an empty array.
+For bundles containing web observations, snapshot collection can use up to
+three quarters of the total timeout and debug gets the remaining time. Each
+snapshot keeps its own runtime and request receipts; snapshots are not assumed
+simultaneous. Debug data does not promote the bundle verdict or prove an
+operation's effect. The verifier accepts legacy and `workbench-v2/v3/v4`
+reports. Historical v3 bundles retain debug v1; v4 verification also checks
+that the saved debug version matches the advertised capabilities. Old verifiers
+reject the new evaluator instead of silently skipping its evidence.
 
 `ott server debug` is a single administrator read of the controller's own
 process, queue, result-storage and diagnostics-service counters. Sections are
@@ -310,9 +320,10 @@ ott --json report verify ./a1-case
 ```
 
 Verification works without CLI configuration, credentials, a controller or a
-running player. It reads only the selected directory's `manifest.json` and
-`result.json`; keep other files outside that export directory. It rejects
-incomplete exports, extra files, size or hash mismatches, symlinks,
+running player. Workbench reports contain `manifest.json` and `result.json`;
+performance exports additionally contain their declared request journal files.
+Keep unrelated files outside the export directory. The verifier rejects
+incomplete file exports, extra files, size or hash mismatches, symlinks,
 special files, duplicate JSON keys and unsupported report formats. It never
 executes commands found in a report, contacts a device or repeats an operation.
 On Windows, use a local drive path; UNC shares and device paths are rejected.
@@ -324,11 +335,22 @@ accepted when the observations disagree. Exit codes retain their meaning:
 and `1` for an invalid export or inconsistent result. Read the JSON verdict as
 well as the integrity field; intact files can still contain invalid evidence.
 
-New bundle reports identify their evaluator as `workbench-v3`; test reports use
-`workbench-v2`. Both are supported. Reports without that field use the supported
-legacy web evaluator; old native-only progress reports
+New bundle reports identify their evaluator as `workbench-v4` and negotiate
+debug v3 (engine and attempts), v2 (engine) or v1 according to the player's
+advertised capabilities. This does not start a performance capture. Test reports
+use `workbench-v2`; older v2/v3 bundles remain supported. Reports without that
+field use the supported legacy web evaluator; old native-only progress reports
 are not reinterpreted as passing native tests. Unknown evaluators are rejected.
 Keep all `cli/*.py` modules from the same revision together when updating.
+
+`ott report verify ./capture-directory --json` also supports bounded
+[performance exports](performance-capture.md#bounded-export), including HLS v2.
+It revalidates their sessions, events, request journal and completeness. A valid
+partial capture remains a valid report but returns exit `3` for insufficient
+evidence; a complete capture returns exit `0`, without certifying playback. The
+notification A–B–A trial format is not accepted by this export evaluator.
+Plain `watch --json` output is not a manifest-backed report and is not accepted
+by `report verify`.
 
 A matching SHA-256 proves that the files agree with their manifest. It does not
 prove their origin: anyone who can change both can recalculate the hash. The
@@ -351,14 +373,22 @@ decoder progress certifies the physical screen or audible sound.
   web/Tauri-only setup. If native observations are needed on the supported Android
   device, [provision a separate agent](../native/android-agent/README.md#bootstrap),
   then use `ott a1 android bind a1-native`. Never share the web player's queue/token.
-- `invalid_response`: the device returned an incompatible, oversized or malformed
-  snapshot; the raw response is intentionally not copied into a bundle.
+- `controller_unavailable` or `controller_http_error`: controller transport or
+  HTTP failure; this does not establish that the player is offline.
+- `request_pending_timeout`: the controller accepted the request, but no completed
+  player response arrived within the budget. `receipt_missing` means the saved
+  request receipt is missing or expired. Neither permits replaying a mutation.
+- `unauthorized` or `rate_limited`: check the configured access scope or reduce
+  request frequency. Restarting the player does not repair these conditions.
+- `invalid_response`: an incompatible, oversized or malformed controller reply
+  or player snapshot; the raw response is not copied into a bundle.
 - `media_identity_changed_or_unavailable`: playback changed during collection, or
   the adapter cannot identify its backend handle. Do not infer a frozen screen.
 - `output_exists`: keep the previous evidence and select a new output directory.
 - `insufficient_timeout`: increase `ott -t SECONDS ...` or shorten `--duration`.
-- Offline verification exits `1`: check that the original `manifest.json` and
-  `result.json` are present, unmodified and alone in the export directory. Read
+- Offline verification exits `1`: check that the original `manifest.json`,
+  `result.json` and, for perf exports, the declared request journal files are
+  present and unmodified, with no unrelated files in the directory. Read
   [verification requirements](#verify-saved-evidence-offline); do not edit a verdict
   or regenerate its hash to turn failed evidence into a pass.
 - Scenario exits `2` or `3`: inspect its JSON `verdict`, `reason` and lane statuses.

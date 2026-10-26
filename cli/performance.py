@@ -19,6 +19,8 @@ SESSION_ID = r"[a-f0-9]{32}"
 RUNTIME = r"[A-Za-z0-9_.:-]{1,128}"
 REASONS = (None, "requested", "expired", "disconnected", "page_hidden", "runtime_changed", "unsupported")
 ERRORS = ("invalid_request", "runtime_mismatch", "unsupported", "not_found", "busy", "disconnected", "expired")
+REQUEST_FAILURE_REASONS = ("controller_unavailable", "controller_http_error", "request_pending_timeout",
+                           "receipt_missing", "unauthorized", "rate_limited", "invalid_response")
 STAGES = ("received", "queued", "dom_created", "media_fetch_start", "media_received", "image_loaded",
           "shown", "updated", "hidden", "dropped", "coalesced")
 TIMINGS = ("fetch_ms", "base64_ms", "validation_ms", "blob_ms", "image_load_decode_ms", "decode_ms", "queue_ms")
@@ -312,7 +314,9 @@ class Journal:
         self.files.append({"name": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
 
     def finish(self, result):
-        self.write("result.json", result)
+        # The destination is useful to the local caller, but is not evidence.
+        # Keep usernames and private directory names out of portable reports.
+        self.write("result.json", {key: value for key, value in result.items() if key != "output"})
         self.write("manifest.json", {"version": 1, "complete": True, "files": list(self.files),
                                      "capture_complete": result.get("capture", {}).get("complete", False),
                                      "physical_display_verified": False})
@@ -364,8 +368,13 @@ class Capture:
                 reason = "unsupported"
             item.update(state="rejected", reason=reason)
             raise Failure(reason) from None
+        except self.api.RequestError as error:
+            reason = error.reason if error.reason in REQUEST_FAILURE_REASONS else "transport_error"
+            item.update(state="unconfirmed", reason=reason)
+            raise Failure(reason, uncertain=mutation) from None
         except self.api.HTTPError as error:
-            reason = "unauthorized" if error.code in (401, 403) else "unsupported_controller" if error.code in (400, 404, 405, 422) else "transport_error"
+            reason = ("unauthorized" if error.code in (401, 403) else "rate_limited" if error.code == 429
+                      else "unsupported_controller" if error.code in (400, 404, 405, 422) else "transport_error")
             item.update(state="unconfirmed", reason=reason)
             raise Failure(reason, uncertain=mutation) from None
         except Failure as error:
@@ -497,8 +506,17 @@ def brief(result):
         print("Performance capture is off; no retained session.")
     if result.get("session_id") and not session:
         print("Session: " + result["session_id"])
+    capture = result.get("capture")
+    if capture is not None:
+        print("Capture: " + ("complete" if capture["complete"] else "partial") +
+              "; " + str(len(capture["events"])) + " exported events.")
+        if capture["partial_reasons"]:
+            print("Partial reasons: " + ", ".join(capture["partial_reasons"]))
+    if result.get("evidence_error"):
+        print("Evidence error: " + result["evidence_error"] + ". The export is not confirmed complete.")
     if result.get("output"):
-        print("Private evidence: " + result["output"])
+        print(("Evidence directory (preserve for inspection): " if result.get("evidence_error") else
+               "Private evidence: ") + result["output"])
     if "policy_restored" in result:
         if result.get("policy_write_attempted"):
             print("Original notification policy: " + ("confirmed restored" if result["policy_restored"] is True else "not confirmed restored"))

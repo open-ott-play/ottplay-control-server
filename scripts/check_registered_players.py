@@ -4,13 +4,11 @@ import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import copy
-from datetime import datetime
 import importlib.util
 import json
 import math
 import os
 from pathlib import Path
-import re
 import sys
 import time
 
@@ -25,8 +23,8 @@ def load_module(name, filename):
 
 ott = load_module("registered_player_ott", "ott.py")
 history = load_module("registered_player_history", "programme_search.py")
+fleet = load_module("registered_player_fleet", "fleet.py")
 READ_ACTIONS = frozenset(("channels", "epg_catalog", "resolve_archive", "capabilities"))
-DEVICE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 GAPS = frozenset(("unsupported", "rejected", "unresponsive", "empty_catalog", "empty_channels",
                   "not_checked", "epg_not_configured", "archive_unsupported", "no_archive_channels",
                   "no_matches", "live_match"))
@@ -64,46 +62,14 @@ class ReadOnlyClient:
 
 
 def inventory(client, config):
-    _, data = client.api("/api/devices")
-    if not isinstance(data, dict) or not isinstance(data.get("devices"), list) or len(data["devices"]) > 128:
+    status, data = client.api("/api/devices")
+    if status != 200:
         raise InvalidResponse()
-    registered = {}
-    for row in data["devices"]:
-        if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
-                or not DEVICE_ID.fullmatch(row["id"]) or type(row.get("pending")) is not int
-                or row["pending"] < 0):
-            raise InvalidResponse()
-        seen = row.get("last_seen")
-        if seen is not None:
-            if not isinstance(seen, str) or len(seen) > 40:
-                raise InvalidResponse()
-            try:
-                stamp = datetime.fromisoformat(seen.replace("Z", "+00:00"))
-                if stamp.tzinfo is None:
-                    raise ValueError()
-                seen = stamp.isoformat()
-            except ValueError:
-                raise InvalidResponse() from None
-        registered[row["id"]] = {"id": row["id"], "aliases": [], "last_seen": seen,
-                                 "pending": row["pending"]}
-    aliases = config.get("players", {})
-    if not isinstance(aliases, dict):
-        raise InvalidResponse()
-    stale = []
-    for alias, device in aliases.items():
-        if (not ott.epg_text(alias, 512, "utf-8") or not alias.strip()
-                or not isinstance(device, str) or not DEVICE_ID.fullmatch(device)):
-            raise InvalidResponse()
-        alias = ott.clean(alias).strip()
-        if re.search(r"[A-Za-z][A-Za-z0-9+.-]*://", alias):
-            alias = "[redacted alias]"
-        if device in registered:
-            registered[device]["aliases"].append(alias)
-        else:
-            stale.append({"alias": alias, "id": device})
-    for row in registered.values():
-        row["aliases"].sort(key=str.casefold)
-    return [registered[key] for key in sorted(registered)], sorted(stale, key=lambda row: row["alias"].casefold())
+    try:
+        result = fleet.inventory_metadata(data, config)
+    except fleet.Failure:
+        raise InvalidResponse() from None
+    return result["devices"], result["stale_aliases"]
 
 
 def catalog_summary(data):
@@ -159,12 +125,12 @@ def failure_status(error):
         return "read_only_violation"
     if isinstance(error, InvalidResponse):
         return "invalid_response"
+    if isinstance(error, ott.RequestError):
+        return "unresponsive" if error.reason == "request_pending_timeout" else error.reason
     if isinstance(error, ott.TransportError):
         return "transport_error"
     if isinstance(error, ott.HTTPError):
         return "http_error"
-    if isinstance(error, ott.Error) and str(error).startswith("The player did not respond."):
-        return "unresponsive"
     return "search_failed"
 
 

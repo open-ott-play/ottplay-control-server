@@ -4,6 +4,15 @@
 
 ### Added
 
+- Finite read-only `watch` for one player or an explicit comma-separated group,
+  with per-device budgets, runtime/media identity checks and separate controller,
+  observation and decoder-progress evidence. `ott -j devices` provides a
+  validated machine-readable inventory.
+- Offline verification of bounded performance exports (v1/v2), including
+  request journals and capture completeness. Diagnostic bundles negotiate the
+  strongest supported debug schema while retaining old report compatibility.
+- A monitoring and repair runbook with single-player/group examples, evidence
+  collection, platform limits and interpretation of uncertain outcomes.
 - Negotiate capped Plex library queues with updated players. Libraries larger
   than 500 items can start their first 500 items, with an explicit CLI warning;
   shuffle applies to that selected set. Existing clients retain their previous
@@ -45,6 +54,11 @@
 
 ### Fixed
 
+- Distinguish controller transport/HTTP failures, pending request timeouts,
+  missing receipts, authorization and rate limits instead of attributing every
+  timeout to the player. Mutations are still submitted only once.
+- Print performance export completeness and partial reasons; keep the local
+  output directory path out of newly saved portable evidence.
 - Preserve workbench diagnostic verdicts when report export fails. Return a
   separate `report_error` and exit code 1 while retaining the observations;
   continue refusing symlinked output paths and existing destinations.

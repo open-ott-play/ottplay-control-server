@@ -193,7 +193,7 @@ class WorkbenchTest(unittest.TestCase):
         code, result, text = self.execute(["doctor", "--json"])
         self.assertEqual(code, 0)
         web, native_row = result["observations"]
-        self.assertEqual(web["reason"], "unavailable")
+        self.assertEqual(web["reason"], "controller_unavailable")
         self.assertEqual(native_row["status"], "observed")
         self.assertEqual(self.client.calls[0][3], 10)
         self.assertEqual(self.client.calls[-1][3], 10)
@@ -285,7 +285,7 @@ class WorkbenchTest(unittest.TestCase):
         self.client.consume_web_timeout = True
         code, result, text = self.execute(["doctor", "--json"])
         self.assertEqual(code, 0)
-        self.assertEqual(result["observations"][0]["reason"], "unavailable")
+        self.assertEqual(result["observations"][0]["reason"], "controller_unavailable")
         self.assertEqual(result["observations"][1]["status"], "observed")
         self.assertEqual([call[3] for call in self.client.calls], [10, 10, 10])
         self.assertEqual(self.client.timeout, 20)

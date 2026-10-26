@@ -3,7 +3,7 @@
 Performance capture is off by default. It records bounded numerical evidence for
 playback freezes and notification load, using the player's enabled remote-control
 connection. It does not enable the local debug HUD, upload arbitrary logs, or
-change playback recovery. Install all twelve `cli/*.py` modules from one revision,
+change playback recovery. Install all `cli/*.py` modules from one revision,
 including `performance.py`; update the controller before the player and CLI.
 
 ```sh
@@ -91,9 +91,35 @@ file descriptors and these permissions; unsupported systems fail before requests
 
 Sequence gaps, dropped events, timeout, a replaced session, or a page/size limit
 produce an explicitly partial report and nonzero exit status. A complete manifest
-means the export files were committed; consult `capture_complete` and the report's
-`partial_reasons` for the actual capture completeness. Keep an incomplete
-directory for inspection rather than deleting it and blindly repeating a write.
+means the export files were committed; consult its `capture_complete` and the
+result's `capture.complete` / `capture.partial_reasons` for capture completeness.
+Complete means that the frozen sequence range was exported without recorded
+loss; it does not mean the configured capture duration has elapsed. Keep an
+incomplete directory for inspection rather than deleting it and blindly repeating
+a write.
+
+Plain output explicitly states whether the capture is complete and lists partial
+reasons. A local output path is printed for convenience but is not embedded in
+new portable `result.json` files. Offline verification checks exported v1/v2
+captures without credentials or a player connection:
+
+```sh
+ott report verify ./capture-01 --json
+```
+
+The verifier checks the bounded file inventory, hashes, request journal, protocol
+data and capture completeness. It accepts at most 1 MiB across the saved files,
+with at most 32 read pages, 1,024 events and 512 KiB of encoded events. A valid
+partial capture remains partial; matching hashes do not authenticate its origin.
+For perf exports, verification returns `0` for a complete capture, `3` for valid
+partial or unavailable capture evidence, and `1` for an invalid export or
+inconsistent evidence. A late response or a deadline before the first request
+can therefore produce a valid report with insufficient evidence. A complete
+capture does not establish smooth playback or a working physical display.
+Notification trial verification is not supported by this evaluator: preserve
+its plan and restoration evidence and
+inspect the trial result separately. See the [monitoring runbook](monitoring-runbook.md)
+for diagnosis before repair.
 
 ## A–B–A notification trial
 
@@ -166,6 +192,14 @@ The protocol-2 diagnostics operator/consent system is separate and is not bypass
   setting and saved receipts. Do not repeat the old restore against a fresh revision.
 - Partial export: inspect drop counters and limits. A quieter, shorter new capture
   may provide complete evidence; the existing report remains useful as partial data.
+- `controller_unavailable`, `controller_http_error`, `request_pending_timeout`,
+  `receipt_missing`, `unauthorized` or `rate_limited`: inspect the saved bounded
+  failure reason. The CLI preserves these distinctions when the request client
+  supplies them and does not repeat a capture or policy mutation. A transport
+  failure alone does not establish that the player is offline.
+- `evidence_incomplete_preserve_directory`: file export did not finish. Keep the
+  directory for inspection; a printed destination is not proof that a valid
+  manifest was committed. Choose a new directory for a later export.
 
 The exact wire schema and semantics are in
 [`contracts/perf-capture-v1.json`](../contracts/perf-capture-v1.json).

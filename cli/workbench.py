@@ -330,11 +330,19 @@ class Workbench:
         if isinstance(exc, self.api.PlayerRejected):
             reason = exc.data.get("error") if isinstance(exc.data, dict) else None
             return reason if reason in ("invalid_request", "runtime_mismatch", "unsupported", "unavailable") else "rejected"
+        if isinstance(exc, self.api.RequestError):
+            return exc.reason if exc.reason in ("controller_unavailable", "controller_http_error", "request_pending_timeout",
+                                                "receipt_missing", "unauthorized", "rate_limited", "invalid_response") else "unavailable"
+        if isinstance(exc, self.api.TransportError):
+            return "controller_unavailable"
         if isinstance(exc, self.api.HTTPError):
             if exc.code in (400, 404, 405, 422):
                 return "unsupported_controller"
             if exc.code in (401, 403):
                 return "unauthorized"
+            if exc.code == 429:
+                return "rate_limited"
+            return "controller_http_error"
         return "unavailable"
 
     def observe_lane(self, lane, section, deadline, logs=False, operation_id=None, debug_version=1):
@@ -360,6 +368,10 @@ class Workbench:
                 supported = "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", [])
                 if not supported:
                     raise ObservationError("unsupported")
+                if section == "debug" and debug_version == "auto":
+                    # Bundles preserve the richest explicitly advertised evidence.
+                    # This is selection before dispatch, never a retry/downgrade.
+                    debug_version = 2 if caps.get("debug_versions") == [1, 2] else 1
                 if section == "debug" and debug_version == 2 and caps.get("debug_versions") != [1, 2]:
                     raise ObservationError("unsupported")
                 if section == "debug" and debug_version == 2 and caps.get("debug_attempts") == {"version": 3}:
@@ -653,7 +665,7 @@ def run(api, client, device, words, timeout, json_output=False):
         else:
             bench = Workbench(api, client, device, timeout)
             if command == "bundle":
-                result["evaluator"] = "workbench-v3"
+                result["evaluator"] = "workbench-v4"
             if command == "test" and args.scenario == "media-progress":
                 if timeout <= args.duration + 1:
                     raise ObservationError("insufficient_timeout")
@@ -683,7 +695,7 @@ def run(api, client, device, words, timeout, json_output=False):
                                              debug_version=2 if command == "debug" and args.engine else 1)
                 bench.deadline = final_deadline
                 if command == "bundle":
-                    result["debug_observations"] = bench.observe("web", "debug") if args.lane != "native" else []
+                    result["debug_observations"] = bench.observe("web", "debug", debug_version="auto") if args.lane != "native" else []
                 verdict = "observed" if any(row["status"] == "observed" for row in observations) else "unknown"
                 if command == "operation":
                     result["operation_id"] = args.operation_id

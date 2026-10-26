@@ -256,13 +256,13 @@ class DebugCLITest(unittest.TestCase):
             path = Path(directory).resolve() / "bundle"
             code, result = self.run_debug(["bundle", "--out", str(path)])
             self.assertEqual(code, 0)
-            self.assertEqual(result["evaluator"], "workbench-v3")
+            self.assertEqual(result["evaluator"], "workbench-v4")
             self.assertEqual(set(p.name for p in path.iterdir()), {"manifest.json", "result.json"})
             report = json.loads((path / "result.json").read_text())
             self.assertEqual(verify.evaluate_report(report, ott, wb)["verdict"], "observed")
             with contextlib.redirect_stdout(io.StringIO()) as out, mock.patch.object(ott, "Client", side_effect=AssertionError("offline")):
                 self.assertEqual(verify.main(["verify", str(path), "-j"], ott, wb), 0)
-            self.assertEqual(json.loads(out.getvalue())["evaluation_policy"], "workbench-v3")
+            self.assertEqual(json.loads(out.getvalue())["evaluation_policy"], "workbench-v4")
             self.assertEqual(report["debug_observations"][0]["data"], self.client.debug)
             self.assertFalse(report["physical_display_verified"])
             report["debug_observations"][0]["data"]["metrics"]["url"] = SECRET

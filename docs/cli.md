@@ -3,7 +3,7 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py`, `device_registry.py` and `performance.py`. Python 3.12 is the version used by CI. Commands take a short
+`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py` and `fleet.py`. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -12,6 +12,11 @@ command queue.
 For opt-in performance recording, bounded export and guarded notification A–B–A
 trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
 perf --help` works without loading credentials; recording is off by default.
+
+For a finite read-only observation of one player or an explicit group, use
+`ott d1 watch` or `ott t1,t2,t3,t4 watch --duration 60 --interval 5`. The
+[monitoring runbook](monitoring-runbook.md) explains controller failures,
+standby, decoder progress, saved evidence and deliberate repair.
 
 For dynamic registration, removal, credential rotation and recovery, see the
 [device registry CLI workflow](device-registry.md#cli-workflow). `ott remove NAME`
@@ -39,6 +44,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
 - [Home Assistant connection and event delivery status](#home-assistant-event-status), [per-player notification preference](#per-player-notification-preference)
 - [Read-only doctor, inspect, debug, bundles and test scenarios](workbench.md)
+- [Monitor one player or a group and diagnose failures](monitoring-runbook.md)
 - [Verify saved reports offline](workbench.md#verify-saved-evidence-offline)
 - [Troubleshooting](#troubleshooting)
 
@@ -135,9 +141,10 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
-reviewed source revision
-[`ddfcd0f28423b1c501133f43d367be37139f77ae`](https://github.com/open-ott-play/ottplay-control-server/commit/ddfcd0f28423b1c501133f43d367be37139f77ae).
-It contains the complete CLI module set, including the local `resolve` command,
+source from release
+[`v0.1.6-beta.10`](https://github.com/open-ott-play/ottplay-control-server/releases/tag/v0.1.6-beta.10).
+It contains the complete CLI module set, including finite group `watch`,
+performance-export verification, negotiated debug bundles and the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
 OTA workflow (`app_update.py`), Local videos profile save/load/import/export, and
 `standby` / `go` controls. It also includes media categories, stable-ID playback
@@ -146,8 +153,8 @@ changes such as `ott t1,t2,t3,t4 provider m3u`, with optional channel numbers,
 `R` / `random` or title selection after switching. Update the controller and
 player too; confirm support with `ott PLAYER caps`.
 
-The pinned revision is an exact installation example, not a moving latest
-version. Older CLI revisions may lack `go`, Local videos profile commands or
+The release reference is resolved to one exact commit before checkout. Record
+`git rev-parse HEAD` with diagnostic results; this is not a moving latest version. Older CLI revisions may lack `go`, Local videos profile commands or
 high-level Android release updates. A server's `version` output, the repository's `VERSION` file and
 a player's reported version identify different components; none substitutes for
 checking this CLI checkout's commit. Follow the
@@ -165,8 +172,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_revision=ddfcd0f28423b1c501133f43d367be37139f77ae
-  ott_source="$HOME/.local/share/ottplay-control-server-ddfcd0f2"
+  ott_ref=v0.1.6-beta.10
+  ott_source="$HOME/.local/share/ottplay-control-server-0.1.6-beta.10"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -174,6 +181,7 @@ contacting a controller:
     exit 1
   fi
   git clone --no-checkout https://github.com/open-ott-play/ottplay-control-server.git "$ott_source"
+  ott_revision="$(git -C "$ott_source" rev-parse "$ott_ref^{commit}")"
   git -C "$ott_source" checkout --detach "$ott_revision"
   test "$(git -C "$ott_source" rev-parse HEAD)" = "$ott_revision"
   python3 "$ott_source/cli/ott.py" --help
@@ -185,7 +193,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-ddfcd0f2/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.10/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -199,7 +207,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-ddfcd0f2/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-0.1.6-beta.10/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -221,8 +229,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRevision = 'ddfcd0f28423b1c501133f43d367be37139f77ae'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-ddfcd0f2'
+$ottRef = 'v0.1.6-beta.10'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.10'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -230,6 +238,8 @@ py -3 --version
 if ($LASTEXITCODE -ne 0) { throw 'Python is unavailable.' }
 git clone --no-checkout https://github.com/open-ott-play/ottplay-control-server.git $ottSource
 if ($LASTEXITCODE -ne 0) { throw 'Clone failed.' }
+$ottRevision = git -C $ottSource rev-parse "$ottRef^{commit}"
+if ($LASTEXITCODE -ne 0) { throw 'Release revision is unavailable.' }
 git -C $ottSource checkout --detach $ottRevision
 if ($LASTEXITCODE -ne 0) { throw 'Checkout failed.' }
 $ottActualRevision = git -C $ottSource rev-parse HEAD
@@ -265,12 +275,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-ddfcd0f2/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.10/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-ddfcd0f2\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.10\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -299,7 +309,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-ddfcd0f2`, stages the replacement beside it, then switches atomically.
+`ott.before-0.1.6-beta.10`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -311,9 +321,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-ddfcd0f2")
-staged = launcher.with_name("ott.switch-ddfcd0f2")
-reviewed = Path.home() / ".local/share/ottplay-control-server-ddfcd0f2/cli/ott.py"
+backup = launcher.with_name("ott.before-0.1.6-beta.10")
+staged = launcher.with_name("ott.switch-0.1.6-beta.10")
+reviewed = Path.home() / ".local/share/ottplay-control-server-0.1.6-beta.10/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):

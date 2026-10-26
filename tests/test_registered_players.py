@@ -84,7 +84,7 @@ class RegisteredPlayersTest(unittest.TestCase):
     def test_unsupported_unresponsive_and_empty_are_distinct_without_status_gate(self):
         client = FakeClient(("working", "legacy", "sleepy", "empty"))
         client.errors[("legacy", "epg_catalog")] = checks.ott.PlayerUnsupported(PRIVATE)
-        client.errors[("sleepy", "epg_catalog")] = checks.ott.Error("The player did not respond. " + PRIVATE)
+        client.errors[("sleepy", "epg_catalog")] = checks.ott.RequestError("request_pending_timeout", "receipt", PRIVATE)
         client.empty.add("empty")
         with patch.object(checks.ott, "server_programs", side_effect=current):
             report, status = checks.run_checks(client, client.config)
