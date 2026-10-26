@@ -14,6 +14,7 @@ SAFE = 9007199254740991
 MAX_DATA, MAX_EVENT, MAX_EXPORT = 60 * 1024, 2048, 1024 * 1024
 CAPABILITY = {"version": 1, "default_duration_seconds": 120, "max_duration_seconds": 600,
               "max_events": 1024, "max_bytes": 524288, "max_read_events": 64}
+HLS_CAPABILITY = {"version": 2}
 SESSION_ID = r"[a-f0-9]{32}"
 RUNTIME = r"[A-Za-z0-9_.:-]{1,128}"
 REASONS = (None, "requested", "expired", "disconnected", "page_hidden", "runtime_changed", "unsupported")
@@ -130,8 +131,33 @@ EVENT_DATA = {
 }
 
 
-def validate_session(value):
-    SESSION(value)
+TRACK = one("audio", "video", "audiovideo")
+HLS_LEVEL = fields(index=nullable(num(-1, 65535, True)), bitrate=NN, max_bitrate=NN)
+HLS_EVENT_DATA = {
+    "hls_buffer": fields(track=TRACK, position_seconds=SIGNED, buffered=BUFFER),
+    "hls_fragment": fields(event=one("fragment", "fragment_buffered"), level=NI, part_index=NI,
+                           fragment_sequence=NI, discontinuity_counter=NI, start_seconds=SIGNED, end_seconds=SIGNED,
+                           start_pts_seconds=SIGNED, end_pts_seconds=SIGNED,
+                           elementary_streams=array(fields(track=TRACK, start_pts_seconds=SIGNED, end_pts_seconds=SIGNED), 3)),
+    "hls_config": fields(max_buffer_length_seconds=NN, max_max_buffer_length_seconds=NN, max_buffer_size_bytes=NI,
+                         back_buffer_length_seconds=NN, max_buffer_hole_seconds=NN,
+                         high_buffer_watchdog_period_seconds=NN, nudge_offset_seconds=NN, nudge_max_retry=NI,
+                         live_sync_duration_seconds=NN, live_sync_duration_count=NN,
+                         live_max_latency_duration_seconds=NN, live_max_latency_duration_count=NN),
+    "hls_live": fields(position_seconds=SIGNED, target_duration_seconds=NN, edge_seconds=SIGNED,
+                       live_sync_position_seconds=SIGNED, latency_seconds=SIGNED,
+                       target_latency_seconds=NN, max_latency_seconds=NN, effective_buffer_length_seconds=NN,
+                       current_level=HLS_LEVEL, load_level=HLS_LEVEL),
+}
+
+
+def validate_session(value, version=1):
+    if version == 2:
+        check(isinstance(value, dict) and "capture_version" in value)
+        one(1, 2)(value["capture_version"])
+        SESSION({key: item for key, item in value.items() if key != "capture_version"})
+    else:
+        SESSION(value)
     check(value["first_seq"] <= value["next_seq"])
     check((value["event_count"] != 0 or value["first_seq"] == value["next_seq"]) and
           value["event_count"] <= value["next_seq"] - value["first_seq"])
@@ -142,10 +168,28 @@ def validate_session(value):
           (value["state"] == "stopped" and value["reason"] is not None and value["remaining_ms"] == 0))
 
 
+def validate_buffer(buffer):
+    count, ranges = buffer["range_count"], buffer["ranges"]
+    if count is None:
+        check(buffer["truncated_count"] is None and ranges == [])
+    else:
+        check(buffer["truncated_count"] == count - len(ranges))
+        previous = -1
+        for row in ranges:
+            check(previous < row["index"] < count and row["start_seconds"] <= row["end_seconds"])
+            check(previous < 0 or row["index"] == previous + 1)
+            previous = row["index"]
+
+
+def ordered_pair(value, start, end):
+    check(value[start] is None or value[end] is None or value[start] <= value[end])
+
+
 def validate_event(value, session):
-    check(isinstance(value, dict) and isinstance(value.get("kind"), str) and value["kind"] in EVENT_DATA)
-    fields(seq=num(1, SAFE, True), at_ms=N, kind=one(*EVENT_DATA), lane=one(None, "main", "pip"), generation=NI,
-           handle_id=NI, source_id=nullable(matching(r"s[1-9][0-9]{0,9}")), data=EVENT_DATA[value["kind"]])(value)
+    rules = dict(EVENT_DATA, **HLS_EVENT_DATA) if session.get("capture_version") == 2 else EVENT_DATA
+    check(isinstance(value, dict) and isinstance(value.get("kind"), str) and value["kind"] in rules)
+    fields(seq=num(1, SAFE, True), at_ms=N, kind=one(*rules), lane=one(None, "main", "pip"), generation=NI,
+           handle_id=NI, source_id=nullable(matching(r"s[1-9][0-9]{0,9}")), data=rules[value["kind"]])(value)
     check(len(encoded(value)) - 1 <= MAX_EVENT)
     check(value["seq"] < session["next_seq"] and value["at_ms"] <= session["elapsed_ms"])
     data = value["data"]
@@ -155,16 +199,7 @@ def validate_event(value, session):
             check(all(frames[key] is None for key in ("total", "dropped", "corrupted")))
         if frames["total"] is not None and frames["dropped"] is not None:
             check(frames["dropped"] <= frames["total"])
-        count, ranges = buffer["range_count"], buffer["ranges"]
-        if count is None:
-            check(buffer["truncated_count"] is None and ranges == [])
-        else:
-            check(buffer["truncated_count"] == count - len(ranges))
-            previous = -1
-            for row in ranges:
-                check(previous < row["index"] < count and row["start_seconds"] <= row["end_seconds"])
-                check(previous < 0 or row["index"] == previous + 1)
-                previous = row["index"]
+        validate_buffer(buffer)
     elif value["kind"] == "notification":
         check(data["stage"] in session["supported"]["notification_stages"])
         check(all(data[key] is None or key in session["supported"]["notification_timings"] for key in TIMINGS))
@@ -173,26 +208,46 @@ def validate_event(value, session):
             check(data["raf_callbacks"] is None and data["raf_max_gap_ms"] is None)
         if not (session["requested"]["long_tasks"] and session["supported"]["long_tasks"]):
             check(all(data[key] is None for key in ("long_tasks", "long_tasks_total_ms", "long_tasks_max_ms", "long_task_entries_dropped")))
+    elif value["kind"] in HLS_EVENT_DATA:
+        check(value["lane"] is not None and value["source_id"] is not None)
+        if value["kind"] == "hls_buffer":
+            validate_buffer(data["buffered"])
+        elif value["kind"] == "hls_fragment":
+            ordered_pair(data, "start_seconds", "end_seconds")
+            ordered_pair(data, "start_pts_seconds", "end_pts_seconds")
+            check(len({row["track"] for row in data["elementary_streams"]}) == len(data["elementary_streams"]))
+            for row in data["elementary_streams"]:
+                ordered_pair(row, "start_pts_seconds", "end_pts_seconds")
+        elif value["kind"] == "hls_live":
+            for key in ("current_level", "load_level"):
+                level = data[key]
+                if level["index"] is None or level["index"] < 0:
+                    check(level["bitrate"] is None and level["max_bitrate"] is None)
 
 
 def metadata(raw, request, rejected=False):
     try:
         check(len(encoded(raw)) - 1 <= MAX_DATA)
-        common = {"version": one(1), "op": one(request["op"]), "runtime": one(request["runtime"])}
+        version = request["version"]
+        one(1, 2)(version)
+        common = {"version": one(version), "op": one(request["op"]), "runtime": one(request["runtime"])}
+        def session_rule(value):
+            validate_session(value, version)
         if rejected:
             fields(**common, error=one(*ERRORS))(raw)
             return raw
         if request["op"] == "read":
-            fields(**common, session=validate_session, events=array(lambda v: None, 64), next_after_seq=I,
+            fields(**common, session=session_rule, events=array(lambda v: None, 64), next_after_seq=I,
                    more=B, lost_before=I)(raw)
         else:
-            rule = nullable(validate_session) if request["op"] == "status" and "session_id" not in request else validate_session
+            rule = nullable(session_rule) if request["op"] == "status" and "session_id" not in request else session_rule
             fields(**common, session=rule)(raw)
         session = raw["session"]
         if session is None:
             return raw
         check("session_id" not in request or session["id"] == request["session_id"])
         if request["op"] == "start":
+            check(session.get("capture_version", 1) == version)
             check(session["duration_seconds"] == request.get("duration_seconds", 120))
             check(session["requested"] == {"raf": request.get("raf", False), "long_tasks": request.get("long_tasks", True)})
         if request["op"] == "stop":
@@ -273,6 +328,7 @@ class Capture:
         self.api, self.client, self.device, self.journal = api, client, device, journal
         self.deadline = time.monotonic() + timeout
         self.receipts, self.runtime, self.caps = [], None, None
+        self.version = 1
 
     def rpc(self, action, params, validator):
         self.last_attempted = False
@@ -333,7 +389,7 @@ class Capture:
         self.runtime = self.caps["player"]["runtime"]
 
     def call(self, op, **values):
-        request = dict(values, version=1, op=op, runtime=self.runtime)
+        request = dict(values, version=self.version, op=op, runtime=self.runtime)
         return self.rpc("perf_capture", request, lambda raw: metadata(raw, request))
 
     def collect(self, session_id):
@@ -353,6 +409,7 @@ class Capture:
                 check(tuple(last[key] for key in ("id", "started_at_unix_ms", "duration_seconds", "clock")) == identity,
                       "session_changed")
                 check(last["requested"] == first["requested"] and last["supported"] == first["supported"], "session_changed")
+                check(last.get("capture_version", 1) == first.get("capture_version", 1), "session_changed")
                 if data["lost_before"]:
                     reasons.append("discarded_prefix")
                 for event in data["events"]:
@@ -378,7 +435,7 @@ class Capture:
             reasons.append("events_dropped")
         if highwater and (not events or events[-1]["seq"] < highwater):
             reasons.append("missing_tail")
-        result = {"version": 1, "runtime": self.runtime, "session_id": session_id,
+        result = {"version": self.version, "runtime": self.runtime, "session_id": session_id,
                   "scope": "frozen_highwater", "highwater": highwater, "pages": pages,
                   "first_session": first, "last_session": last, "events": events,
                   "complete": not reasons, "partial_reasons": sorted(set(reasons))}
@@ -403,6 +460,7 @@ def arguments(words):
             command.add_argument("--session", dest="session_id")
         if operation == "start":
             command.add_argument("--duration", type=int, default=120)
+            command.add_argument("--hls-details", action="store_true", help="collect bounded HLS track buffers, fragment PTS and effective config")
         if operation in ("start", "trial"):
             command.add_argument("--raf", action="store_true")
             command.add_argument("--no-long-tasks", dest="long_tasks", action="store_false", default=True)
@@ -429,7 +487,8 @@ def arguments(words):
 
 def brief(result):
     if result.get("reason"):
-        print("Performance capture: " + result["reason"].replace("_", " ") + ". No request was retried.")
+        message = "update the controller; this protocol is not supported" if result["reason"] == "unsupported_controller" else result["reason"].replace("_", " ")
+        print("Performance capture: " + message + ". No request was retried.")
     session = result.get("data", {}).get("session")
     if session:
         print("Session " + session["id"] + ": " + session["state"] + "; " + str(session["event_count"]) +
@@ -752,6 +811,13 @@ def run(api, client, device, words, timeout, json_output=False):
             result["output"] = str(journal.path)
         capture = Capture(api, client, device, timeout, journal)
         capture.setup()
+        if args.operation == "start" and args.hls_details:
+            check(capture.caps.get("perf_capture_hls") == HLS_CAPABILITY, "unsupported")
+            capture.version = 2
+        elif args.operation not in ("start", "trial") and capture.caps.get("perf_capture_hls") == HLS_CAPABILITY:
+            capture.version = 2
+        if capture.version == 2:
+            result.update(version=2, evaluator="performance-v2")
         if args.operation == "start":
             result["session_id"] = args.session_id or secrets.token_hex(16)
             result["data"] = capture.call("start", session_id=result["session_id"], duration_seconds=args.duration,

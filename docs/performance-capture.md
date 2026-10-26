@@ -169,3 +169,80 @@ The protocol-2 diagnostics operator/consent system is separate and is not bypass
 
 The exact wire schema and semantics are in
 [`contracts/perf-capture-v1.json`](../contracts/perf-capture-v1.json).
+
+## HLS gaps and live catch-up
+
+For periodic freezes at segment boundaries, explicitly request the additional
+HLS measurements. Install the updated controller first, then the player and CLI.
+The player must advertise `perf_capture_hls: {"version": 2}` in addition to the
+unchanged `perf_capture` version 1 capability.
+
+```sh
+ott f caps
+ott f perf start --duration 120 --hls-details
+ott f perf status --session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ott f perf stop aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ott -t 90 f perf export aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --out ./hls-freeze-01
+```
+
+Use the session ID returned by `start`. The flag is accepted only by `start`;
+status, read, stop and export negotiate the reader automatically. Ordinary
+`perf start` and notification trials keep their original version 1 behavior.
+Neither a capability lookup nor a reader enables HLS instrumentation. A missing
+marker prevents dispatch of the capture request. Do not run simultaneous trials
+while measuring the original fault: collect the baseline before changing policy,
+buffer settings, channel or playback engine.
+
+Version 2 keeps the same duration, rate, event, ring, export and cleanup limits.
+Its session metadata reports `capture_version`. A version 2 reader can read or
+stop either session version without filtering events or changing sequence counts.
+An older version 1 reader cannot access or stop a version 2 session; the player
+returns `unsupported` before changing it. Once a version 2 session has stopped,
+a fresh version 1 start with a different ID may replace the retained report.
+Reusing an existing ID with a different capture version never upgrades or
+downgrades that capture. Export the evidence before starting its replacement.
+
+The additional events contain only bounded numerical observations:
+
+- `hls_buffer`: actual per-track `audio`, `video` or `audiovideo` ranges from
+  public HLS `BUFFER_APPENDED` callbacks, with the observed media position.
+  Each event preserves up to eight adjacent ranges and the truncation count.
+  Before a track callback arrives there is no observation; a missing event
+  must not be interpreted as an empty buffer.
+- `hls_fragment`: fragment sequence, level, part index, discontinuity counter,
+  fragment interval and observed PTS bounds, plus available elementary-stream
+  PTS for at most three distinct tracks. Join these with the existing `hls`
+  load and append timing events by source, lane and fragment identity.
+- `hls_config`: the effective HLS buffer lengths and byte budget, buffer-hole
+  tolerance, watchdog and nudge settings, and live synchronization/maximum
+  latency settings. It records attachment and changes observed during the
+  existing one-second sampling loop. It does not change any setting.
+- `hls_live`: observed media position, latest level target duration and edge,
+  live synchronization position, actual/target/maximum latency, effective
+  buffer-length target and current/loading level indices and
+  advertised bitrates. These observations help separate
+  a hole in track buffers from a jump toward the live edge. Negative finite
+  latency is retained: it can occur after overshoot or with a stale playlist.
+  Advertised bitrate is playlist metadata, not measured network throughput;
+  compare it with actual fragment bytes and load durations before drawing a
+  conclusion about buffer sizing. The diagnostic does not query the next ABR
+  choice: that getter can change the ABR state.
+
+Unavailable values, including non-finite HLS configuration values, are null.
+These events do not include source URLs, codec strings, media bytes or arbitrary
+configuration. Correlate actual position and frame advancement with raw ranges;
+an accepted capture, a nearby error, or a missing observation does not establish
+the cause of a freeze. An HLS `stalled`/nudge error also does not by itself prove
+that a particular subsequent seek came from that recovery path.
+
+An updated player with an old controller can still advertise the new marker,
+but that controller rejects version 2 requests before dispatch. The CLI reports
+that the controller needs an update and does not retry a start using version 1.
+In this mixed deployment an ordinary version 1 start may work while an automatic
+version 2 reader fails; finish the controller-first upgrade before measuring.
+Do not confuse the CLI's conservative `unknown_outcome` for an HTTP error with
+proof that a rejected request ran on the player.
+
+The separate exact schema is
+[`contracts/perf-capture-v2.json`](../contracts/perf-capture-v2.json); the original
+version 1 schema remains unchanged.

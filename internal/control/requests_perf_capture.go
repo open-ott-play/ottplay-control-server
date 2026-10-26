@@ -20,6 +20,7 @@ type perfCaptureRequest struct {
 	Runtime, Op, Session string
 	After                int64
 	Duration, Limit      int
+	Version              int
 	RAF, LongTasks       bool
 }
 
@@ -55,9 +56,10 @@ func perfTrue(raw json.RawMessage) bool     { var v bool; _ = json.Unmarshal(raw
 
 func parsePerfCaptureRequest(m map[string]json.RawMessage) *perfCaptureRequest {
 	v := &perfCaptureRequest{Runtime: settingString(m["runtime"]), Op: settingString(m["op"]), Session: settingString(m["session_id"]), Duration: 120, Limit: 64, LongTasks: true}
-	if !inspectNumber(m["version"], 1, 1, true, false) || !settingToken.MatchString(v.Runtime) {
+	if !inspectNumber(m["version"], 1, 2, true, false) || !settingToken.MatchString(v.Runtime) {
 		return nil
 	}
+	v.Version = int(perfInteger(m["version"]))
 	base := []string{"version", "op", "runtime"}
 	switch v.Op {
 	case "start":
@@ -122,6 +124,11 @@ func validPerfCapability(raw json.RawMessage) bool {
 	return ok
 }
 
+func validPerfHLSCapability(raw json.RawMessage) bool {
+	_, ok := perfObject(raw, map[string]perfRule{"version": perfNumber(2, 2, true, false)})
+	return ok
+}
+
 func perfSet(raw json.RawMessage, values []string) (map[string]bool, bool) {
 	rows, ok := inspectArray(raw, len(values))
 	if !ok {
@@ -144,6 +151,7 @@ type perfSession struct {
 	Elapsed            float64
 	Stages, Timings    map[string]bool
 	RAF, LongTasks     bool
+	CaptureVersion     int
 }
 
 func validPerfSession(raw json.RawMessage, expected *perfCaptureRequest) *perfSession {
@@ -169,11 +177,21 @@ func validPerfSession(raw json.RawMessage, expected *perfCaptureRequest) *perfSe
 	for _, key := range []string{"dropped_events", "rate_dropped", "ring_dropped", "oversized_dropped"} {
 		fields[key] = perfNumber(0, inspectMaxInteger, true, false)
 	}
+	if expected.Version == 2 {
+		fields["capture_version"] = perfNumber(1, 2, true, false)
+	}
 	m, ok := perfObject(raw, fields)
 	if !ok {
 		return nil
 	}
 	v := &perfSession{ID: settingString(m["id"]), State: settingString(m["state"]), First: perfInteger(m["first_seq"]), Next: perfInteger(m["next_seq"]), Count: perfInteger(m["event_count"]), Elapsed: perfFloat(m["elapsed_ms"])}
+	v.CaptureVersion = 1
+	if expected.Version == 2 {
+		v.CaptureVersion = int(perfInteger(m["capture_version"]))
+	}
+	if expected.Op == "start" && v.CaptureVersion != expected.Version {
+		return nil
+	}
 	if expected.Session != "" && v.ID != expected.Session || v.First > v.Next || v.Count > v.Next-v.First || (v.Count == 0) != (v.First == v.Next) ||
 		(v.State == "active") != inspectNull(m["reason"]) || v.State == "stopped" && perfFloat(m["remaining_ms"]) != 0 ||
 		perfFloat(m["remaining_ms"]) > float64(perfInteger(m["duration_seconds"]))*1000 ||
@@ -248,6 +266,8 @@ func validPerfEventData(kind string, raw json.RawMessage, session *perfSession) 
 	integer := perfNumber(0, inspectMaxInteger, true, true)
 	fields := map[string]perfRule{}
 	switch kind {
+	case "hls_buffer", "hls_fragment", "hls_config", "hls_live":
+		return session.CaptureVersion == 2 && validPerfHLSData(kind, raw)
 	case "sample":
 		fields = map[string]perfRule{
 			"position_seconds": perfNumber(-inspectMaxInteger, inspectMaxInteger, false, true), "buffer_ahead_seconds": number,
@@ -334,6 +354,9 @@ func validPerfEvent(raw json.RawMessage, session *perfSession) (int64, float64, 
 		return 0, 0, false
 	}
 	seq := perfInteger(m["seq"])
+	if isPerfHLSDetail(settingString(m["kind"])) && (inspectNull(m["lane"]) || inspectNull(m["source_id"])) {
+		return 0, 0, false
+	}
 	return seq, perfFloat(m["at_ms"]), seq >= session.First && seq < session.Next
 }
 
@@ -342,7 +365,7 @@ func validPerfCaptureResult(raw json.RawMessage, status string, expected *perfCa
 		return false
 	}
 	m, err := decodeObject(raw)
-	if err != nil || !inspectNumber(m["version"], 1, 1, true, false) || settingString(m["op"]) != expected.Op || settingString(m["runtime"]) != expected.Runtime {
+	if err != nil || !inspectNumber(m["version"], float64(expected.Version), float64(expected.Version), true, false) || settingString(m["op"]) != expected.Op || settingString(m["runtime"]) != expected.Runtime {
 		return false
 	}
 	if status != "ok" {
