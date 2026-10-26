@@ -12,6 +12,10 @@ command queue.
 For opt-in performance recording, bounded export and guarded notification A–B–A
 trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
 perf --help` works without loading credentials; recording is off by default.
+`ott d1 perf start --hls-policy-details` selects version 3 HLS policy evidence
+when supported; `--hls-details` continues to select version 2. See the
+[buffer-policy runbook](performance-capture.md#hls-buffer-policy-and-retry-evidence)
+for capture, export, verification and the limits of retry/cause observations.
 
 For a finite read-only observation of one player or an explicit group, use
 `ott d1 watch` or `ott t1,t2,t3,t4 watch --duration 60 --interval 5`. The

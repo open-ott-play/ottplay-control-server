@@ -19,7 +19,7 @@ FILES = frozenset(("manifest.json", "result.json"))
 POLICY = "workbench-v2"
 DEBUG_POLICY = "workbench-v3"
 ENGINE_POLICY = "workbench-v4"
-PERFORMANCE_POLICIES = ("performance-v1", "performance-v2")
+PERFORMANCE_POLICIES = ("performance-v1", "performance-v2", "performance-v3")
 MAX_PERFORMANCE_BYTES = 1024 * 1024
 MAX_PERFORMANCE_MANIFEST = 16 * 1024
 PERFORMANCE_FILES = FILES | {"trial-plan.json"} | {"request-%03d.json" % index for index in range(96)}
@@ -467,7 +467,7 @@ def evaluate_performance_report(report, manifest, extra_files, api):
                     "completed_at_unix_ms", "operation", "read_only", "requests"}
         require(required <= set(report) <= required | {"session_id", "capture", "reason", "unknown_outcome",
                                                        "confirmed_late_result", "output"})
-        perf.one(1, 2)(report["version"])
+        perf.one(1, 2, 3)(report["version"])
         require(report["evaluator"] == "performance-v" + str(report["version"]))
         require(report["read_only"] is True and report["physical_display_verified"] is False)
         perf.matching(perf.RUNTIME)(report["device_id"])

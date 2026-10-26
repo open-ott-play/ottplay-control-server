@@ -5,25 +5,29 @@ import "encoding/json"
 var perfHLSConfigFields = []string{"max_buffer_length_seconds", "max_max_buffer_length_seconds", "back_buffer_length_seconds", "max_buffer_hole_seconds", "high_buffer_watchdog_period_seconds", "nudge_offset_seconds", "live_sync_duration_seconds", "live_sync_duration_count", "live_max_latency_duration_seconds", "live_max_latency_duration_count"}
 
 func isPerfHLSDetail(kind string) bool {
-	return kind == "hls_buffer" || kind == "hls_fragment" || kind == "hls_config" || kind == "hls_live"
+	return kind == "hls_buffer" || kind == "hls_fragment" || kind == "hls_config" || kind == "hls_live" || kind == "hls_buffer_policy" || kind == "hls_error_action"
 }
 
 func perfOrderedPair(m map[string]json.RawMessage, start, end string) bool {
 	return inspectNull(m[start]) || inspectNull(m[end]) || perfFloat(m[start]) <= perfFloat(m[end])
 }
 
-func validPerfElementaryStreams(raw json.RawMessage) bool {
+func validPerfElementaryStreams(raw json.RawMessage, version int) bool {
 	rows, ok := inspectArray(raw, 3)
 	if !ok {
 		return false
 	}
 	seen := map[string]bool{}
 	for _, row := range rows {
-		m, ok := perfObject(row, map[string]perfRule{
+		fields := map[string]perfRule{
 			"track":             perfEnum(false, "audio", "video", "audiovideo"),
 			"start_pts_seconds": perfNumber(-inspectMaxInteger, inspectMaxInteger, false, true),
 			"end_pts_seconds":   perfNumber(-inspectMaxInteger, inspectMaxInteger, false, true),
-		})
+		}
+		if version == 3 {
+			fields["partial"] = perfBoolean(true)
+		}
+		m, ok := perfObject(row, fields)
 		if !ok || !perfOrderedPair(m, "start_pts_seconds", "end_pts_seconds") {
 			return false
 		}
@@ -36,16 +40,19 @@ func validPerfElementaryStreams(raw json.RawMessage) bool {
 	return true
 }
 
-func validPerfHLSData(kind string, raw json.RawMessage) bool {
+func validPerfHLSData(kind string, raw json.RawMessage, version int) bool {
 	signed := perfNumber(-inspectMaxInteger, inspectMaxInteger, false, true)
 	fields := map[string]perfRule{}
 	switch kind {
 	case "hls_buffer":
 		fields = map[string]perfRule{"track": perfEnum(false, "audio", "video", "audiovideo"), "position_seconds": signed, "buffered": validPerfBuffered}
 	case "hls_fragment":
-		fields = map[string]perfRule{"event": perfEnum(false, "fragment", "fragment_buffered"), "elementary_streams": validPerfElementaryStreams}
+		fields = map[string]perfRule{"event": perfEnum(false, "fragment", "fragment_buffered"), "elementary_streams": func(raw json.RawMessage) bool { return validPerfElementaryStreams(raw, version) }}
 		perfAdd(fields, "level part_index fragment_sequence discontinuity_counter", perfNumber(0, inspectMaxInteger, true, true))
 		perfAdd(fields, "start_seconds end_seconds start_pts_seconds end_pts_seconds", signed)
+		if version == 3 {
+			perfAdd(fields, "fragment_gap part_gap part_independent", perfBoolean(true))
+		}
 	case "hls_config":
 		for _, key := range perfHLSConfigFields {
 			fields[key] = perfNumber(0, inspectMaxInteger, false, true)

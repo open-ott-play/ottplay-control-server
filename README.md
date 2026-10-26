@@ -111,6 +111,9 @@ Use [finite group monitoring](docs/monitoring-runbook.md) to distinguish control
 access failures, unavailable observations, standby and decoder progress before
 repairing a player. Saved diagnostic bundles and performance exports can be
 verified offline.
+For buffer starvation, use the explicitly selected
+[HLS policy capture](docs/performance-capture.md#hls-buffer-policy-and-retry-evidence)
+to distinguish constructor settings, observed cap changes and mutable retry statistics.
 Once installed and configured:
 
 ```sh

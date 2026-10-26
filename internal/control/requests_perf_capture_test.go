@@ -182,7 +182,7 @@ func TestPerfCaptureActualPlayerProducerCorpus(t *testing.T) {
 
 func TestPerfCaptureRequestBoundsAndOperationScopes(t *testing.T) {
 	for _, edit := range []func(map[string]any){
-		func(p map[string]any) { p["version"] = true }, func(p map[string]any) { p["version"] = 3 },
+		func(p map[string]any) { p["version"] = true }, func(p map[string]any) { p["version"] = 4 },
 		func(p map[string]any) { p["session_id"] = nil }, func(p map[string]any) { p["session_id"] = "not-a-session" },
 		func(p map[string]any) { p["runtime"] = "secret/invalid" }, func(p map[string]any) { p["extra"] = 1 },
 		func(p map[string]any) { p["duration_seconds"] = 9 }, func(p map[string]any) { p["duration_seconds"] = 601 },

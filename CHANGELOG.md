@@ -4,6 +4,11 @@
 
 ### Added
 
+- Explicit version 3 HLS policy captures (`perf start --hls-policy-details`),
+  separating mutable statistics, observed error actions, fragment/part flags
+  and initial/current buffer policy. Preserve version 1/2 captures and add
+  strict controller, CLI and offline report validation without inferring
+  network retries or buffer-cap causes.
 - Finite read-only `watch` for one player or an explicit comma-separated group,
   with per-device budgets, runtime/media identity checks and separate controller,
   observation and decoder-progress evidence. `ott -j devices` provides a
