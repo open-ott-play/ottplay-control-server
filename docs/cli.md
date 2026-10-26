@@ -2931,6 +2931,16 @@ APK's package, signature and strictly increasing versionCode. Selecting an older
 version fails; selecting the already installed versionCode does nothing and is
 not proof of byte-for-byte equality.
 
+Stable releases promoted from an RC retain the original RC manifest and version
+plan. The CLI accepts this only for a matching `promote-bytes` plan, published RC
+and stable tags pointing to the same source, identical manifest evidence, and
+matching APK size/digests. The APK keeps the final package version and original
+versionCode; its download URL uses the selected stable tag. For example:
+
+```sh
+ott k8c update --version v1.1.60 --variant api22 --prepare-only
+```
+
 The command polls preparation, requests installation once, then reports verified
 installed versionCode, pending permission/confirmation, or unconfirmed reconnect.
 `--wait SECONDS` bounds the entire operation (default 300, maximum 900); metadata

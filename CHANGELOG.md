@@ -54,6 +54,9 @@
 
 ### Fixed
 
+- Resolve Android updates from stable releases that preserve their promoted RC
+  manifest, verifying both publications against the same source, frozen plan
+  and APK digests before selecting the stable download URL.
 - Distinguish controller transport/HTTP failures, pending request timeouts,
   missing receipts, authorization and rate limits instead of attributing every
   timeout to the player. Mutations are still submitted only once.
