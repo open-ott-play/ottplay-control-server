@@ -175,6 +175,26 @@ class LocalMediaTest(unittest.TestCase):
         self.assertEqual(client.call.call_count, 2)
         self.assertEqual(client.timeout, 10)
 
+    def test_empty_source_explains_formats_and_profile_without_retry(self):
+        data = dict(CONTRACT['error_result'], error='empty_source')
+        for reply in (data, ott.PlayerRejected('private player details', data)):
+            with self.subTest(reply=type(reply).__name__):
+                code, out, err, calls = self.run_cli(['local', 'shuffle', 'Movies'], [caps(), reply])
+                self.assertEqual((code, out, len(calls)), (1, '', 2))
+                self.assertIn('No supported playable items', err)
+                self.assertIn('selected source or active Local profile', err)
+                self.assertIn('check file formats and profile selection', err)
+                self.assertIn('The request was not repeated', err)
+                self.assertNotIn('private player details', err)
+                self.assertNotIn('empty directory', err)
+
+        stale = dict(data, runtime='previous-page')
+        for reply in (stale, ott.PlayerRejected('private player details', stale)):
+            code, out, err, calls = self.run_cli(['local', 'shuffle', 'Movies'], [caps(), reply])
+            self.assertEqual((code, out, len(calls)), (1, '', 2))
+            self.assertNotIn('check file formats and profile selection', err)
+            self.assertNotIn('private player details', err)
+
     def test_connect_can_use_preset_session_without_duplicate_dispatch(self):
         client = mock.Mock(timeout=45)
         client.call.return_value = caps()

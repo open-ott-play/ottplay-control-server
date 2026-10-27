@@ -283,7 +283,10 @@ LOCAL_MEDIA_ERRORS = {
     "source_unavailable": "The local source is unavailable; reconnect the drive or restore its read permission",
     "catalog_loading": "The local source is still being scanned; wait for the scan to finish",
     "catalog_unavailable": "The local catalogue could not be loaded",
-    "empty_source": "The selected local source contains no playable videos",
+    "empty_source": (
+        "No supported playable items were found in the selected source or active Local profile; "
+        "check file formats and profile selection"
+    ),
     "too_many_items": "The selected local source exceeds the supported item limit; no partial queue was started",
     "operation_in_progress": "Another local media operation is still in progress",
     "native_error": "The native player could not open the local source",
