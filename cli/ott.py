@@ -3290,6 +3290,12 @@ def capabilities_metadata(data):
                 or type(capture["version"]) is not int or capture["version"] != 2):
             raise Error(invalid)
         result["perf_capture_hls"] = {"version": 2}
+    if "perf_capture_hls_policy" in data:
+        capture = data["perf_capture_hls_policy"]
+        if ("perf_capture" not in result or not isinstance(capture, dict) or set(capture) != {"version"}
+                or type(capture["version"]) is not int or capture["version"] != 3):
+            raise Error(invalid)
+        result["perf_capture_hls_policy"] = {"version": 3}
     return result
 
 
@@ -3464,6 +3470,8 @@ def print_player_help(data, name):
         print(f"  {prefix} perf export SESSION --out NEW_DIRECTORY  — save private numerical evidence")
         if "perf_capture_hls" in controls:
             print(f"  {prefix} perf start --hls-details  — include HLS track buffers, fragment PTS and live position")
+        if "perf_capture_hls_policy" in controls:
+            print(f"  {prefix} perf start --hls-policy-details  — include retry observations, fragment flags and buffer-policy changes")
         if "player_settings" in controls and controls.get("debug_versions") == [1, 2]:
             print(f"  ott -t 240 {quoted_name} perf trial notifications --out NEW_DIRECTORY  — guarded A–B–A trial")
     update = controls.get("app_update", {}).get("operations", [])

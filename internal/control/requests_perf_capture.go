@@ -56,7 +56,7 @@ func perfTrue(raw json.RawMessage) bool     { var v bool; _ = json.Unmarshal(raw
 
 func parsePerfCaptureRequest(m map[string]json.RawMessage) *perfCaptureRequest {
 	v := &perfCaptureRequest{Runtime: settingString(m["runtime"]), Op: settingString(m["op"]), Session: settingString(m["session_id"]), Duration: 120, Limit: 64, LongTasks: true}
-	if !inspectNumber(m["version"], 1, 2, true, false) || !settingToken.MatchString(v.Runtime) {
+	if !inspectNumber(m["version"], 1, 3, true, false) || !settingToken.MatchString(v.Runtime) {
 		return nil
 	}
 	v.Version = int(perfInteger(m["version"]))
@@ -129,6 +129,11 @@ func validPerfHLSCapability(raw json.RawMessage) bool {
 	return ok
 }
 
+func validPerfHLSPolicyCapability(raw json.RawMessage) bool {
+	_, ok := perfObject(raw, map[string]perfRule{"version": perfNumber(3, 3, true, false)})
+	return ok
+}
+
 func perfSet(raw json.RawMessage, values []string) (map[string]bool, bool) {
 	rows, ok := inspectArray(raw, len(values))
 	if !ok {
@@ -177,8 +182,8 @@ func validPerfSession(raw json.RawMessage, expected *perfCaptureRequest) *perfSe
 	for _, key := range []string{"dropped_events", "rate_dropped", "ring_dropped", "oversized_dropped"} {
 		fields[key] = perfNumber(0, inspectMaxInteger, true, false)
 	}
-	if expected.Version == 2 {
-		fields["capture_version"] = perfNumber(1, 2, true, false)
+	if expected.Version >= 2 {
+		fields["capture_version"] = perfNumber(1, float64(expected.Version), true, false)
 	}
 	m, ok := perfObject(raw, fields)
 	if !ok {
@@ -186,7 +191,7 @@ func validPerfSession(raw json.RawMessage, expected *perfCaptureRequest) *perfSe
 	}
 	v := &perfSession{ID: settingString(m["id"]), State: settingString(m["state"]), First: perfInteger(m["first_seq"]), Next: perfInteger(m["next_seq"]), Count: perfInteger(m["event_count"]), Elapsed: perfFloat(m["elapsed_ms"])}
 	v.CaptureVersion = 1
-	if expected.Version == 2 {
+	if expected.Version >= 2 {
 		v.CaptureVersion = int(perfInteger(m["capture_version"]))
 	}
 	if expected.Op == "start" && v.CaptureVersion != expected.Version {
@@ -267,7 +272,9 @@ func validPerfEventData(kind string, raw json.RawMessage, session *perfSession) 
 	fields := map[string]perfRule{}
 	switch kind {
 	case "hls_buffer", "hls_fragment", "hls_config", "hls_live":
-		return session.CaptureVersion == 2 && validPerfHLSData(kind, raw)
+		return session.CaptureVersion >= 2 && validPerfHLSData(kind, raw, session.CaptureVersion)
+	case "hls_buffer_policy", "hls_error_action":
+		return session.CaptureVersion == 3 && validPerfHLSPolicyData(kind, raw)
 	case "sample":
 		fields = map[string]perfRule{
 			"position_seconds": perfNumber(-inspectMaxInteger, inspectMaxInteger, false, true), "buffer_ahead_seconds": number,
@@ -284,9 +291,14 @@ func validPerfEventData(kind string, raw json.RawMessage, session *perfSession) 
 		fields = map[string]perfRule{
 			"event": perfEnum(false, "fragment", "playlist", "error", "fragment_buffered"), "http_status": perfNumber(100, 599, true, true),
 			"timing_source": perfEnum(false, "performance", "unavailable"), "fatal": perfBoolean(true), "category": perfEnum(true, "network", "media", "other"),
-			"detail": perfEnum(true, "manifest_load_error", "manifest_load_timeout", "level_load_error", "level_load_timeout", "level_empty_error", "frag_load_error", "frag_load_timeout", "frag_parsing_error", "buffer_append_error", "buffer_stalled_error", "buffer_nudge_on_stall", "buffer_seek_over_hole", "other"),
+			"detail": perfHLSDetailRule(session.CaptureVersion),
 		}
-		perfAdd(fields, "level part_index fragment_sequence bytes retries", integer)
+		perfAdd(fields, "level part_index fragment_sequence bytes", integer)
+		if session.CaptureVersion == 3 {
+			fields["stats_retry"] = integer
+		} else {
+			fields["retries"] = integer
+		}
 		perfAdd(fields, "load_start_ms first_byte_at_ms load_end_ms", perfNumber(-inspectMaxInteger, inspectMaxInteger, false, true))
 		perfAdd(fields, "load_duration_ms first_byte_duration_ms parse_duration_ms buffer_duration_ms", number)
 	case "abr":

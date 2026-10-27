@@ -100,7 +100,7 @@ a write.
 
 Plain output explicitly states whether the capture is complete and lists partial
 reasons. A local output path is printed for convenience but is not embedded in
-new portable `result.json` files. Offline verification checks exported v1/v2
+new portable `result.json` files. Offline verification checks exported v1/v2/v3
 captures without credentials or a player connection:
 
 ```sh
@@ -280,3 +280,85 @@ proof that a rejected request ran on the player.
 The separate exact schema is
 [`contracts/perf-capture-v2.json`](../contracts/perf-capture-v2.json); the original
 version 1 schema remains unchanged.
+
+## HLS buffer policy and retry evidence
+
+This version 3 extension is unreleased and is not included in the beta.12 CLI
+installation pinned in the [installation guide](cli.md#installation-and-connection).
+
+Use the explicitly selected version 3 capture when an effective buffer limit has
+shrunk, or a fragment's retry counter changes between loading and buffering:
+
+```sh
+ott d1 caps
+ott d1 perf start --duration 120 --hls-policy-details
+# Replace SESSION with the returned ID.
+ott d1 perf stop SESSION
+ott -t 90 d1 perf export SESSION --out ./hls-policy-01
+ott report verify ./hls-policy-01 --json
+```
+
+This requires `perf_capture_hls_policy: {"version": 3}` and a controller that
+accepts version 3. Upgrade the controller before the player and CLI. The flag
+cannot be combined with `--hls-details`, which continues to select version 2.
+Ordinary starts and notification trials continue to select version 1. Nothing
+starts automatically and a rejected start is not repeated with fewer features.
+A version 3 reader can preserve and export sessions of versions 1, 2 or 3; older
+readers reject a version 3 session without modifying it. Offline verification
+checks the saved session's actual version, including historical exports.
+
+Version 3 distinguishes observations that must not be combined into one claim:
+
+- `hls.stats_retry` is the raw, mutable hls.js statistics counter at that callback.
+  It replaces the ambiguous version 1/2 name `retries` only in version 3 captures.
+  It can increase during gap recovery without another network request.
+- `hls_error_action` copies the public error-action snapshot at this listener's
+  callback: a bounded action, flags, `retry_budget_count` and `resolved`, with
+  error category/detail and fragment identity. `retry_request` describes an
+  observed decision, not a completed or even started request. Other listeners
+  may still change the action. The budget count can be shared across levels or
+  tracks. `resolved` means the error was handled; it does not prove network
+  success. Missing or unrecognized fields are null. Actual network retries are
+  not measured by this API and no inferred total is exported.
+- `hls_fragment` adds observed `fragment_gap`, `part_gap`, `part_independent`
+  and per-elementary-stream `partial` flags. Gap flags can be changed by recovery;
+  they are not exclusively playlist tags. The part's independent marker does
+  not prove independent decoding. The stream partial flag does not establish
+  whole-fragment or current SourceBuffer completeness.
+- `hls_buffer_policy` separates four initial merged configuration values from
+  the current values: maximum buffer length, `maxMaxBufferLength` limit,
+  byte budget and back-buffer length. Core main/PiP engines copy these four
+  numbers immediately after construction, before loading. This fixed metadata
+  adds no timer or listener while capture is off. It is bound to that engine;
+  unsupported engines report `initial_source: "unavailable"` and null initial
+  values instead of reconstructing history from mutable configuration.
+
+The first policy event is a capture `snapshot`, not proof that the engine was
+just created. Later `cap_observation_changed` events report differences in the
+observed `maxMaxBufferLength` limit, using existing HLS callbacks and the
+existing one-second loop. They include the previous observation and the
+observation source. A transition involving null changes availability and does
+not prove a numeric limit change. These are samples: changes between observations
+can be missed. `cause` is always `unknown`, because hls.js exposes no public
+buffer-cap change event with a reliable cause. Nearby errors are context, not
+causal attribution. Version 3 additionally preserves the bounded error details
+`buffer_full_error`, `buffer_append_no_progress`, `buffer_add_codec_error` and
+`internal_exception`; arbitrary error text is excluded.
+
+For example, an initial maximum of 60 seconds and a first observed maximum of
+5 seconds establish that the values differ, not when or why they changed. A
+counter moving from 0 at `fragment` to 1 at `fragment_buffered` establishes only
+that the mutable counter changed. Start the next capture before reproducing the
+fault to improve temporal evidence; do not replay a start or restart playback
+merely to fill a missing observation.
+
+Duration, event/ring/byte limits, drop accounting and cleanup are unchanged.
+The additional events share the same budget, so inspect completeness before
+interpreting absent events. There is no internal-method patch, extra poller,
+automatic repair or capture of media URLs, payloads or error messages. The exact
+schema is [`contracts/perf-capture-v3.json`](../contracts/perf-capture-v3.json).
+
+The interpretation follows the pinned hls.js 1.7.3 implementation: its
+[gap recovery mutates the statistics counter](https://github.com/video-dev/hls.js/blob/v1.7.3/src/controller/stream-controller.ts#L978-L986),
+[error actions have shared retry budgets](https://github.com/video-dev/hls.js/blob/v1.7.3/src/controller/error-controller.ts#L320-L350),
+and [buffer reduction can happen without a public error event](https://github.com/video-dev/hls.js/blob/v1.7.3/src/controller/base-stream-controller.ts#L611-L634).

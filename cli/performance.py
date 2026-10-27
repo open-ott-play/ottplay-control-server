@@ -15,6 +15,7 @@ MAX_DATA, MAX_EVENT, MAX_EXPORT = 60 * 1024, 2048, 1024 * 1024
 CAPABILITY = {"version": 1, "default_duration_seconds": 120, "max_duration_seconds": 600,
               "max_events": 1024, "max_bytes": 524288, "max_read_events": 64}
 HLS_CAPABILITY = {"version": 2}
+HLS_POLICY_CAPABILITY = {"version": 3}
 SESSION_ID = r"[a-f0-9]{32}"
 RUNTIME = r"[A-Za-z0-9_.:-]{1,128}"
 REASONS = (None, "requested", "expired", "disconnected", "page_hidden", "runtime_changed", "unsupported")
@@ -153,10 +154,39 @@ HLS_EVENT_DATA = {
 }
 
 
+HLS_POLICY_DETAILS = HLS_DETAILS + ("buffer_full_error", "internal_exception", "buffer_append_no_progress", "buffer_add_codec_error")
+BUFFER_POLICY = fields(back_buffer_length_seconds=NN, max_buffer_length_seconds=NN,
+                       max_max_buffer_length_seconds=NN, max_buffer_size_bytes=NI)
+HLS_POLICY_EVENT_DATA = {
+    "hls": fields(event=one("fragment", "fragment_buffered", "playlist", "error"), detail=one(*HLS_POLICY_DETAILS),
+                  level=NI, part_index=NI, fragment_sequence=NI,
+                  http_status=nullable(num(100, 599, True)), timing_source=one("performance", "unavailable"),
+                  load_start_ms=SIGNED, first_byte_at_ms=SIGNED, load_end_ms=SIGNED,
+                  load_duration_ms=NN, first_byte_duration_ms=NN, parse_duration_ms=NN, buffer_duration_ms=NN,
+                  bytes=NI, stats_retry=NI, fatal=NB, category=one(None, "network", "media", "other")),
+    "hls_fragment": fields(event=one("fragment", "fragment_buffered"), level=NI, part_index=NI,
+                           fragment_sequence=NI, discontinuity_counter=NI, start_seconds=SIGNED, end_seconds=SIGNED,
+                           start_pts_seconds=SIGNED, end_pts_seconds=SIGNED,
+                           fragment_gap=NB, part_gap=NB, part_independent=NB,
+                           elementary_streams=array(fields(track=TRACK, start_pts_seconds=SIGNED,
+                                                           end_pts_seconds=SIGNED, partial=NB), 3)),
+    "hls_buffer_policy": fields(event=one("snapshot", "cap_observation_changed"),
+                                initial_source=one("constructor_snapshot", "unavailable"),
+                                initial=BUFFER_POLICY, current=BUFFER_POLICY,
+                                previous_max_max_buffer_length_seconds=NN,
+                                observation=one("attachment", "sample", "hls_event"), cause=one("unknown")),
+    "hls_error_action": fields(category=one("network", "media", "other"), detail=one(*HLS_POLICY_DETAILS),
+                               fragment_sequence=NI, part_index=NI, level=NI,
+                               action=one(None, "do_nothing", "send_end_callback", "send_alternate_to_penalty_box",
+                                          "remove_alternate_permanently", "insert_discontinuity", "retry_request"),
+                               flags=nullable(num(0, 31, True)), retry_budget_count=NI, resolved=NB),
+}
+
+
 def validate_session(value, version=1):
-    if version == 2:
+    if version in (2, 3):
         check(isinstance(value, dict) and "capture_version" in value)
-        one(1, 2)(value["capture_version"])
+        one(*range(1, version + 1))(value["capture_version"])
         SESSION({key: item for key, item in value.items() if key != "capture_version"})
     else:
         SESSION(value)
@@ -188,7 +218,9 @@ def ordered_pair(value, start, end):
 
 
 def validate_event(value, session):
-    rules = dict(EVENT_DATA, **HLS_EVENT_DATA) if session.get("capture_version") == 2 else EVENT_DATA
+    rules = dict(EVENT_DATA, **HLS_EVENT_DATA) if session.get("capture_version") in (2, 3) else EVENT_DATA
+    if session.get("capture_version") == 3:
+        rules = dict(rules, **HLS_POLICY_EVENT_DATA)
     check(isinstance(value, dict) and isinstance(value.get("kind"), str) and value["kind"] in rules)
     fields(seq=num(1, SAFE, True), at_ms=N, kind=one(*rules), lane=one(None, "main", "pip"), generation=NI,
            handle_id=NI, source_id=nullable(matching(r"s[1-9][0-9]{0,9}")), data=rules[value["kind"]])(value)
@@ -210,7 +242,7 @@ def validate_event(value, session):
             check(data["raf_callbacks"] is None and data["raf_max_gap_ms"] is None)
         if not (session["requested"]["long_tasks"] and session["supported"]["long_tasks"]):
             check(all(data[key] is None for key in ("long_tasks", "long_tasks_total_ms", "long_tasks_max_ms", "long_task_entries_dropped")))
-    elif value["kind"] in HLS_EVENT_DATA:
+    elif value["kind"] in HLS_EVENT_DATA or value["kind"] in ("hls_buffer_policy", "hls_error_action"):
         check(value["lane"] is not None and value["source_id"] is not None)
         if value["kind"] == "hls_buffer":
             validate_buffer(data["buffered"])
@@ -220,6 +252,14 @@ def validate_event(value, session):
             check(len({row["track"] for row in data["elementary_streams"]}) == len(data["elementary_streams"]))
             for row in data["elementary_streams"]:
                 ordered_pair(row, "start_pts_seconds", "end_pts_seconds")
+        elif value["kind"] == "hls_buffer_policy":
+            if data["initial_source"] == "unavailable":
+                check(all(item is None for item in data["initial"].values()))
+            previous = data["previous_max_max_buffer_length_seconds"]
+            if data["event"] == "snapshot":
+                check(previous is None)
+            else:
+                check(previous != data["current"]["max_max_buffer_length_seconds"])
         elif value["kind"] == "hls_live":
             for key in ("current_level", "load_level"):
                 level = data[key]
@@ -231,7 +271,7 @@ def metadata(raw, request, rejected=False):
     try:
         check(len(encoded(raw)) - 1 <= MAX_DATA)
         version = request["version"]
-        one(1, 2)(version)
+        one(1, 2, 3)(version)
         common = {"version": one(version), "op": one(request["op"]), "runtime": one(request["runtime"])}
         def session_rule(value):
             validate_session(value, version)
@@ -469,7 +509,9 @@ def arguments(words):
             command.add_argument("--session", dest="session_id")
         if operation == "start":
             command.add_argument("--duration", type=int, default=120)
-            command.add_argument("--hls-details", action="store_true", help="collect bounded HLS track buffers, fragment PTS and effective config")
+            details = command.add_mutually_exclusive_group()
+            details.add_argument("--hls-details", action="store_true", help="collect bounded HLS track buffers, fragment PTS and effective config")
+            details.add_argument("--hls-policy-details", action="store_true", help="include HLS retry observations, fragment flags and buffer-policy changes")
         if operation in ("start", "trial"):
             command.add_argument("--raf", action="store_true")
             command.add_argument("--no-long-tasks", dest="long_tasks", action="store_false", default=True)
@@ -829,13 +871,19 @@ def run(api, client, device, words, timeout, json_output=False):
             result["output"] = str(journal.path)
         capture = Capture(api, client, device, timeout, journal)
         capture.setup()
-        if args.operation == "start" and args.hls_details:
+        if args.operation == "start" and args.hls_policy_details:
+            check(capture.caps.get("perf_capture_hls_policy") == HLS_POLICY_CAPABILITY, "unsupported")
+            capture.version = 3
+        elif args.operation == "start" and args.hls_details:
             check(capture.caps.get("perf_capture_hls") == HLS_CAPABILITY, "unsupported")
             capture.version = 2
-        elif args.operation not in ("start", "trial") and capture.caps.get("perf_capture_hls") == HLS_CAPABILITY:
-            capture.version = 2
-        if capture.version == 2:
-            result.update(version=2, evaluator="performance-v2")
+        elif args.operation not in ("start", "trial"):
+            if capture.caps.get("perf_capture_hls_policy") == HLS_POLICY_CAPABILITY:
+                capture.version = 3
+            elif capture.caps.get("perf_capture_hls") == HLS_CAPABILITY:
+                capture.version = 2
+        if capture.version != 1:
+            result.update(version=capture.version, evaluator="performance-v" + str(capture.version))
         if args.operation == "start":
             result["session_id"] = args.session_id or secrets.token_hex(16)
             result["data"] = capture.call("start", session_id=result["session_id"], duration_seconds=args.duration,
