@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import stat
 import tempfile
@@ -43,10 +44,22 @@ def compare(api, client, device, params):
 def verify(api, client, device, preset):
     rows = [{"step": name, "matched": compare(api, client, device, params)}
             for name, params in comparisons(preset)]
-    metadata = api.profile_metadata(client.call(device, "profiles", {}), "profiles", {}, expected_provider="m3u")
-    active = next(row["number"] for row in metadata["profiles"] if row["active"])
-    return {"status": "verified" if all(row["matched"] for row in rows) and active == preset["active_profile"] else "different",
-            "comparisons": rows, "active_profile": active, "expected_active_profile": preset["active_profile"]}
+    status = client.call(device, "status", {})
+    provider = status.get("provider") if isinstance(status, dict) else None
+    if not isinstance(provider, str) or not re.fullmatch(r"[a-z0-9_-]{1,32}", provider):
+        raise api.Error("The player returned invalid provider status")
+    active = None
+    if provider == "m3u":
+        metadata = api.profile_metadata(client.call(device, "profiles", {}), "profiles", {})
+        # Profiles follow the active provider, which can change after status.
+        # A matching Local/VPortal slot must not confirm an M3U selection.
+        provider = metadata["provider"]
+        if provider == "m3u":
+            active = next(row["number"] for row in metadata["profiles"] if row["active"])
+    return {"status": "verified" if all(row["matched"] for row in rows)
+            and provider == "m3u" and active == preset["active_profile"] else "different",
+            "comparisons": rows, "provider": provider, "expected_provider": "m3u",
+            "active_profile": active, "expected_active_profile": preset["active_profile"]}
 
 
 class Session:
