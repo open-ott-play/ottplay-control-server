@@ -2895,7 +2895,13 @@ def local_media_metadata(data, runtime, params, capability=None):
         if len({row["id"] for row in rows}) != len(rows):
             raise Error(invalid)
         return dict(data, sources=rows)
-    if (set(data) != base | {"source", "count", "shuffled", "accepted", "playback_confirmed"}
+    fields = base | {"source", "count", "shuffled", "accepted", "playback_confirmed"}
+    if "scanning" in data:
+        if (params["op"] not in ("play", "shuffle") or params.get("progressive") is not True
+                or data["scanning"] is not True):
+            raise Error(invalid)
+        fields.add("scanning")
+    if (set(data) != fields
             or type(data["count"]) is not int or not (0 if params["op"] == "connect" else 1) <= data["count"] <= capability["max_items"]
             or type(data["shuffled"]) is not bool or data["shuffled"] != (params["op"] == "shuffle")
             or data["accepted"] is not True or data["playback_confirmed"] is not False):
@@ -2924,12 +2930,31 @@ def local_media_command(client, device, params, timeout, session=None, *, contro
     previous_timeout = client.timeout
     runtime = None
     sent = False
+    progressive_supported = False
+    request_params = params
     try:
         client.timeout = max(0, deadline - time.monotonic())
         # Reuse a validated runtime only for a bounded read-only preset phase.
         # Every mutation still discovers fresh capabilities before dispatch.
         if controls is None or params["op"] != "sources":
-            controls = capabilities_metadata(client.call(device, "capabilities", {}))
+            if params["op"] in ("play", "shuffle"):
+                try:
+                    raw_controls = client.call(device, "capabilities", {"local_media_progressive": True})
+                    progressive_supported = True
+                except HTTPError as exc:
+                    if exc.code != 400:
+                        raise
+                    # Legacy controllers reject this read-only probe before
+                    # enqueueing it. Receipt failures and uncertain outcomes
+                    # must not trigger a second request.
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise Error("Local media capability discovery exceeded --timeout; no local media command was sent") from None
+                    client.timeout = remaining
+                    raw_controls = client.call(device, "capabilities", {})
+                controls = capabilities_metadata(raw_controls)
+            else:
+                controls = capabilities_metadata(client.call(device, "capabilities", {}))
         capability = controls.get("local_media", {})
         if params["op"] not in capability.get("operations", []):
             raise Error("Local media commands require an updated player and controller advertising local_media. No local media command was sent")
@@ -2942,11 +2967,16 @@ def local_media_command(client, device, params, timeout, session=None, *, contro
         client.timeout = remaining
         sent = True
         request_params = dict(params, runtime=runtime)
+        # The request opt-in is negotiated per player and per command, never
+        # inherited from shared group arguments or a prior capability snapshot.
+        request_params.pop("progressive", None)
+        if progressive_supported and "local_media_progressive" in controls:
+            request_params["progressive"] = True
         result = (session.call("local_media", request_params) if session is not None
                   else client.call(device, "local_media", request_params))
         if time.monotonic() >= deadline:
             raise Error("Local media response exceeded --timeout. Acceptance is uncertain; the request was not repeated")
-        result = local_media_metadata(result, runtime, params, capability)
+        result = local_media_metadata(result, runtime, request_params, capability)
         if result["state"] == "error":
             raise Error(LOCAL_MEDIA_ERRORS[result["error"]] + ". The request was not repeated")
         return result
@@ -2954,7 +2984,7 @@ def local_media_command(client, device, params, timeout, session=None, *, contro
         detail = "Local media request was rejected; check the source, current runtime and local restrictions"
         if runtime is not None:
             try:
-                rejected = local_media_metadata(exc.data, runtime, params)
+                rejected = local_media_metadata(exc.data, runtime, request_params)
                 if rejected["state"] == "error":
                     detail = LOCAL_MEDIA_ERRORS[rejected["error"]]
             except Error:
@@ -2983,7 +3013,11 @@ def print_local_media(data, params=None):
     elif data["op"] == "connect":
         print(f"Local source connected: {clean(data['source']['name'])}; {data['count']} catalogued items. Playback was not started.")
     else:
-        print(f"Local source: {clean(data['source']['name'])}; {data['count']} items; " + ("shuffled once." if data["shuffled"] else "source order."))
+        if data.get("scanning") is True:
+            count = data['count']
+            print(f"Local source: {clean(data['source']['name'])}; {count} {'item' if count == 1 else 'items'} discovered so far; scanning continues.")
+        else:
+            print(f"Local source: {clean(data['source']['name'])}; {data['count']} items; " + ("shuffled once." if data["shuffled"] else "source order."))
         print("Playback request accepted; playback has not been confirmed.")
 
 
@@ -3548,6 +3582,13 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["local_media"] = dict(local, operations=list(operations))
+    if "local_media_progressive" in data:
+        progressive = data["local_media_progressive"]
+        if ("local_media" not in result or not isinstance(progressive, dict)
+                or set(progressive) != {"version"} or type(progressive.get("version")) is not int
+                or progressive["version"] != 1):
+            raise Error(invalid)
+        result["local_media_progressive"] = {"version": 1}
     if "plex_library_truncation" in data:
         truncation = data["plex_library_truncation"]
         if ("plex_library" not in result or result["plex_library"]["max_items"] != MAX_PLEX_QUEUE_ITEMS

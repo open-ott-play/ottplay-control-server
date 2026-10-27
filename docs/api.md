@@ -1503,6 +1503,47 @@ one `source` without its private path, integer `count`, boolean `shuffled`,
 or 0–50,000 for connection. `shuffled` is true only for the `shuffle` operation.
 An accepted response is not playback evidence.
 
+#### Progressive Local playback negotiation
+
+The existing `local_media` capability keeps exactly its five fields. A player
+supporting progressive playback adds a separate capability:
+
+```json
+{"local_media_progressive":{"version":1}}
+```
+
+A controller client must also establish server support. Submit the read-only
+probe `{"action":"capabilities","params":{"local_media_progressive":true}}`.
+A supporting server accepts this exact parameter and forwards an ordinary
+`capabilities` request with `{}` parameters to the player. An older server
+rejects the probe with HTTP 400 before allocating or queuing a request. Only
+that enqueue rejection permits one fallback to `capabilities {}`, within the
+same overall deadline. A receipt failure, timeout, HTTP 5xx or player rejection
+does not establish support and must not trigger that fallback.
+
+Only a successful probe **and** a valid player `local_media_progressive` marker
+allow the client to opt in on `play` or `shuffle`:
+
+```json
+{"action":"local_media","params":{"runtime":"page-123","op":"shuffle","source":"Movies","progressive":true}}
+```
+
+If the selected source is still scanning, an accepted result may add
+`"scanning":true` to the usual nine fields. Its `count` is the number of playable
+items discovered so far, from 1 through the advertised limit; it is not a final
+total. The response still uses `state:"ready"`, `accepted:true` and
+`playback_confirmed:false`. A completed scan returns the original nine-field
+result even when the request opted in. The request does not stream later counts
+through the controller.
+
+`progressive` is allowed only as the literal boolean `true` on `play` or
+`shuffle`; it is invalid on `sources` and `connect`. `scanning` is allowed only
+as `true` on an opted-in successful playback result. `false`, `null`, numeric
+substitutes and unsolicited fields are rejected. Error results retain their
+original five fields. Requests without the opt-in retain complete-scan behavior,
+so old CLI, controller and player combinations continue to work. Negotiation is
+independent for each player in a comma-separated group.
+
 Rejected responses retain `version`, `runtime` and `op`, with `state:"error"` and
 a fixed error identifier. See [the shared contract](../contracts/local-media-v1.json)
 for the allowlist and examples. Runtime mismatches, extra fields, malformed source
