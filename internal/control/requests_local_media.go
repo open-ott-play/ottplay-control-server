@@ -26,6 +26,7 @@ type localMediaRequest struct {
 	Source       string
 	Path         string
 	IncludePaths bool
+	Progressive  bool
 }
 
 func localMediaSelector(raw json.RawMessage) bool {
@@ -65,7 +66,15 @@ func parseLocalMediaRequest(params map[string]json.RawMessage) *localMediaReques
 		}
 		return nil
 	}
-	if (v.Op != "play" && v.Op != "shuffle" && v.Op != "connect") || len(params) != 3 || !localMediaSelector(params["source"]) || json.Unmarshal(params["source"], &v.Source) != nil {
+	count := len(params)
+	if raw, exists := params["progressive"]; exists {
+		if (v.Op != "play" && v.Op != "shuffle") || string(raw) != "true" {
+			return nil
+		}
+		v.Progressive = true
+		count--
+	}
+	if (v.Op != "play" && v.Op != "shuffle" && v.Op != "connect") || count != 3 || !localMediaSelector(params["source"]) || json.Unmarshal(params["source"], &v.Source) != nil {
 		return nil
 	}
 	return v
@@ -142,7 +151,19 @@ func validLocalMediaResult(raw json.RawMessage, status string, request *localMed
 	if op == "shuffle" {
 		wantShuffle = "true"
 	}
-	return len(m) == 9 && valid && string(sourceFields["available"]) == "true" && profileInteger(m["count"], minimum, maxLocalMediaItems) && string(m["shuffled"]) == wantShuffle && string(m["accepted"]) == "true" && string(m["playback_confirmed"]) == "false"
+	count := len(m)
+	if scanning, exists := m["scanning"]; exists {
+		if !request.Progressive || (op != "play" && op != "shuffle") || string(scanning) != "true" {
+			return false
+		}
+		count--
+	}
+	return count == 9 && valid && string(sourceFields["available"]) == "true" && profileInteger(m["count"], minimum, maxLocalMediaItems) && string(m["shuffled"]) == wantShuffle && string(m["accepted"]) == "true" && string(m["playback_confirmed"]) == "false"
+}
+
+func validLocalMediaProgressiveCapability(raw json.RawMessage) bool {
+	m, err := decodeObject(raw)
+	return err == nil && len(m) == 1 && profileInteger(m["version"], 1, 1)
 }
 
 func validLocalMediaCapability(raw json.RawMessage) bool {

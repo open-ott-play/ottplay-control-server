@@ -149,7 +149,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`0a1d58e2f4b0627d3269b092becfca966605568f`](https://github.com/open-ott-play/ottplay-control-server/commit/0a1d58e2f4b0627d3269b092becfca966605568f).
+[`722a0f685d583c39c92490bcbd4004618450f3c3`](https://github.com/open-ott-play/ottplay-control-server/commit/722a0f685d583c39c92490bcbd4004618450f3c3).
 This is an exact source pin, not a claim about the latest published release.
 It contains the complete CLI module set, including finite group `watch`,
 performance-export verification, negotiated debug bundles and the local `resolve` command,
@@ -168,7 +168,10 @@ name is `local`; `offline` remains a compatibility alias. Controller support for
 and player too; confirm the requested operation with `ott PLAYER caps`. Native
 paths additionally require the player to advertise `absolute_paths: true`.
 This revision also supports literal colons in Local folder names and avoids
-repeated per-folder reads when loading an already connected Local preset.
+repeated per-folder reads when loading an already connected Local preset. It also
+negotiates progressive Local play/shuffle and labels partial counts. Older
+controllers or players keep complete-scan behavior; upgrade both to enable
+progressive playback.
 
 The full source hash is verified before and after checkout. Record
 `git rev-parse HEAD` with diagnostic results. Older CLI revisions, including
@@ -191,8 +194,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=0a1d58e2f4b0627d3269b092becfca966605568f
-  ott_source="$HOME/.local/share/ottplay-control-server-local-0a1d58e2f4b0"
+  ott_ref=722a0f685d583c39c92490bcbd4004618450f3c3
+  ott_source="$HOME/.local/share/ottplay-control-server-local-722a0f685d58"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -214,7 +217,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-0a1d58e2f4b0/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-722a0f685d58/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -228,7 +231,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-0a1d58e2f4b0/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-722a0f685d58/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -250,8 +253,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '0a1d58e2f4b0627d3269b092becfca966605568f'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-0a1d58e2f4b0'
+$ottRef = '722a0f685d583c39c92490bcbd4004618450f3c3'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-722a0f685d58'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -297,12 +300,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-0a1d58e2f4b0/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-722a0f685d58/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-0a1d58e2f4b0\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-722a0f685d58\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -331,7 +334,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-0a1d58e2f4b0`, stages the replacement beside it, then switches atomically.
+`ott.before-local-722a0f685d58`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -343,9 +346,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-0a1d58e2f4b0")
-staged = launcher.with_name("ott.switch-local-0a1d58e2f4b0")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-0a1d58e2f4b0/cli/ott.py"
+backup = launcher.with_name("ott.before-local-722a0f685d58")
+staged = launcher.with_name("ott.switch-local-722a0f685d58")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-722a0f685d58/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -1928,6 +1931,7 @@ ott t1 local shuffle /Volumes/data/Movies/
 ott t1 local sources --paths
 ott t1 local sources --path /Volumes/data/Movies/ --paths
 ott t1,t2 local shuffle Movies
+ott t1,t2,t3,t4 local shuffle ~/v/data/FFFF/
 ott t1 provider local
 ```
 
@@ -1936,17 +1940,21 @@ player. A duplicate name is rejected; use the ID printed by `local sources`.
 Literal colons are accepted, for example `ott t1 local shuffle "Kids: Cartoons"`,
 when that folder exists on a filesystem permitting the name. Names are limited
 to 512 UTF-8 bytes and cannot contain directory separators or control characters.
-`shuffle` uses only that source, randomizes its complete playable list once and
-starts its first item. `play` uses the source order. This differs from
+`shuffle` uses only that source. With a complete catalogue it randomizes the
+playable list once and starts its first item; progressive playback can start
+from the playable items found so far while discovery continues. `play` uses the
+source order. This differs from
 `provider local R`, which selects just one random item from the current catalogue.
 The normal player repeat setting controls what happens at the end of the list.
-The selected folder and a compact shuffle seed are saved. Reloading the player
-restores the same order while the folder's contents are unchanged; adding or
-removing files produces a new deterministic order from that seed. Running
-`local shuffle` again creates a fresh shuffle.
+The selected folder and a compact shuffle seed are saved. With a complete
+catalogue, reloading restores the same order while the folder's contents are
+unchanged; adding or removing files produces a new deterministic order from
+that seed. Running `local shuffle` again creates a fresh shuffle.
 The maximum is 50,000 playable items per source, or the lower `max_items` limit
-advertised by the player. A larger source is rejected without starting a partial
-queue. Local playback does not send the item list through the control server.
+advertised by the player. In complete-scan mode, a larger source is rejected
+before playback starts. A progressive acknowledgement is not evidence that the
+entire folder has been scanned or fits within the limit. Local playback does not
+send the item list through the control server.
 
 Local discovery and decoding are separate. The current Tauri native catalogue
 indexes `.mp4`, `.m4v`, `.webm`, `.ogv`, `.mp3`, `.m4a` and `.ogg`; it does not
@@ -1982,18 +1990,49 @@ playback. An existing readable directory with no binding returns an empty list;
 invalid or unreadable paths return an error. `--path` requires native path
 support and does not imply `--paths` disclosure.
 
-Updated native players wait for the selected folder's complete scan. For example,
-`Movies` can start while the unrelated `FFFF` folder continues scanning in the
-background. The queue still includes the whole eligible folder within the
-advertised limit; it is not truncated to the files found so far. Older player
-builds without per-source scan state may wait for the entire library scan.
-Completion time depends on the filesystem; an unavailable or stalled disk can
-still cause a timeout.
+With progressive support on both controller and player, `local play` and `local
+shuffle` can return as soon as playable items from the selected source are ready.
+The same source continues scanning; the accepted prefix is not a final catalogue
+or a request to truncate the folder. The CLI reports, for example:
+
+```text
+Local source: FFFF; 46 items discovered so far; scanning continues.
+Playback request accepted; playback has not been confirmed.
+```
+
+Progressive shuffle keeps the existing queue prefix, shuffles newly discovered
+items within each arriving batch using the saved seed, and appends those items.
+The current file continues playing. The initial selection therefore depends on
+which files discovery reaches first, and the incremental order can differ from
+shuffling a complete catalogue after a reload.
+
+At the end of the currently known queue, the ordinary repeat setting applies.
+Repeat All wraps the known items while scanning continues; Repeat Off stops at
+the last known item. Appending another batch does not automatically resume a
+queue that has already stopped. A later scan failure or catalogue overflow means
+the earlier accepted count remains partial; acceptance does not certify a
+complete folder scan.
+
+In JSON output, `scanning: true` marks that partial count. A completed catalogue
+keeps the original response without `scanning`. The response does not stream
+later count updates. Each target in `ott t1,t2,t3,t4 local shuffle ...` negotiates
+support independently, so a group can contain both progressive and older players.
+
+The CLI first probes controller support using a read-only capabilities request
+and also requires the player's separate progressive capability. An older
+controller's explicit HTTP 400 rejection before queuing the probe permits one
+fallback to ordinary capability discovery. Both attempts share the command's
+timeout. Timeouts, server failures and rejected player responses are not retried.
+An older controller or player keeps the complete-scan behavior. Native players
+with per-source scan state can finish `Movies` while unrelated `FFFF` continues
+scanning; older builds may wait for the whole library. Filesystem delays or an
+unavailable disk can still cause a timeout.
 
 The request is tied to the discovered player runtime and is sent once. An
-unavailable source, a scan still incomplete at the deadline, an empty folder or
-an excessive catalogue returns an error rather than playing unrelated files or
-silently truncating the list.
+unavailable source, an empty folder or an excessive catalogue can return an error.
+Before acceptance, an incomplete scan can also reach the deadline: progressive
+mode needs a playable prefix, while complete-scan mode needs the whole selected
+folder. A command never selects an unrelated source to conceal that failure.
 A timeout is an uncertain outcome, not permission to replay a shuffle. Read
 `local sources` and `status` before another mutation. An accepted response
 does not prove that the decoder is rendering video. Update CLI, controller and

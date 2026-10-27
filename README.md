@@ -240,7 +240,13 @@ ott t1 local sources
 ott t1 local shuffle Movies
 ott t1 local shuffle /Volumes/data/Movies/
 ott t1,t2 local shuffle Movies
+ott t1,t2,t3,t4 local shuffle ~/v/data/FFFF/
 ```
+
+With a controller and player supporting progressive Local playback, the command
+can return after discovering playable items while the selected folder continues
+scanning. The CLI labels that count as partial; an accepted request does not
+confirm decoded video. Older combinations keep the complete-scan behavior.
 
 Folder names are exact. Absolute paths refer to the target player's filesystem
 and require native path support; browser players use folders already selected

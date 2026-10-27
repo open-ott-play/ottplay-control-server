@@ -40,6 +40,13 @@ also connect an absolute path on that target computer. Browser players use
 previously selected sources and their browser permissions. The compatible wire
 provider ID remains `offline`; the preferred CLI name is `local`.
 
+When both the controller and player support progressive Local playback, `local
+play` and `local shuffle` can accept a playable prefix while discovery continues.
+The CLI marks the item count as partial. Support is negotiated per player;
+installing a new CLI alone does not enable it on an older Android build. See
+[Local playback readiness](cli.md#local-folders-and-shuffled-playback) for
+completion, timeout and compatibility details.
+
 The optional `local` section in a [named CLI preset](cli.md#include-local-folders-in-a-preset)
 checks Android folders already connected under their exact names. It does not
 copy files or transfer another device's permission. The separate numbered

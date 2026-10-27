@@ -141,8 +141,10 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		default:
 			ok = false
 		}
-	case "status", "providers", "profiles", "epg_catalog", "capabilities":
+	case "status", "providers", "profiles", "epg_catalog":
 		ok = len(params) == 0
+	case "capabilities":
+		ok = len(params) == 0 || (len(params) == 1 && string(params["local_media_progressive"]) == "true")
 	case "screenshot":
 		ok = validScreenshotRequest(params)
 	case "aspect":
@@ -257,6 +259,12 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	id := hex.EncodeToString(random[:])
 	canonical, _ := json.Marshal(m)
+	if action == "capabilities" && len(params) != 0 {
+		// The probe negotiates relay support, not a new player operation. Keep
+		// the original params in the idempotency hash before forwarding the
+		// legacy empty-params request understood by every player version.
+		m["params"] = json.RawMessage(`{}`)
+	}
 	now = s.now()
 	expires := now.Add(s.ttl)
 	m["id"], _ = json.Marshal(id)
@@ -532,6 +540,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		}
 		if marker, exists := capabilities["local_media"]; exists && !validLocalMediaCapability(marker) {
 			failure(w, 400, "invalid local media capability")
+			return
+		}
+		if marker, exists := capabilities["local_media_progressive"]; exists && (!validLocalMediaProgressiveCapability(marker) || !validLocalMediaCapability(capabilities["local_media"])) {
+			failure(w, 400, "invalid progressive local media capability")
 			return
 		}
 		if marker, exists := capabilities["perf_capture"]; exists && !validPerfCapability(marker) {

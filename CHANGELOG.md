@@ -4,6 +4,10 @@
 
 ### Added
 
+- Negotiate progressive Local play/shuffle with the controller and each player.
+  Report a playable prefix as a partial count while scanning continues, retain
+  complete-scan responses for older clients, and keep playback confirmation
+  separate from command acceptance.
 - Explicit version 3 HLS policy captures (`perf start --hls-policy-details`),
   separating mutable statistics, observed error actions, fragment/part flags
   and initial/current buffer policy. Preserve version 1/2 captures and add
