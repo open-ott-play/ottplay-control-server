@@ -121,7 +121,7 @@ Plex 큐에는 `plex_queue`를 구현한 CLI, 컨트롤러 및 플레이어가 �
 최신 플레이어와 컨트롤러에서 로컬 파일/폴더는 `offline` 제공업체를 사용합니다.
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

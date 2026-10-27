@@ -28,6 +28,7 @@ type requestResult struct {
 	category             *categoryRequest
 	randomPlay           *randomPlayRequest
 	plexLibrary          *plexLibraryRequest
+	localMedia           *localMediaRequest
 	favorites            *favoritesRequest
 	handoff              *handoffRequest
 	offlineProfile       *offlineProfileRequest
@@ -162,6 +163,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parseInspectRequest(params) != nil
 	case "plex_queue":
 		ok = parsePlexQueueRequest(params) != nil
+	case "local_media":
+		ok = parseLocalMediaRequest(params) != nil
 	case "plex_library":
 		ok = parsePlexLibraryRequest(params) != nil
 	case "favorites":
@@ -310,6 +313,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	if action == "plex_queue" {
 		e.plexQueue = parsePlexQueueRequest(params)
 	}
+	if action == "local_media" {
+		e.localMedia = parseLocalMediaRequest(params)
+	}
 	if action == "plex_library" {
 		e.plexLibrary = parsePlexLibraryRequest(params)
 	}
@@ -424,6 +430,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	screenshotRuntime := ""
 	var plexQueue *plexQueueRequest
 	var plexLibrary *plexLibraryRequest
+	var localMedia *localMediaRequest
 	var favorites *favoritesRequest
 	var handoff *handoffRequest
 	var offlineProfile *offlineProfileRequest
@@ -444,6 +451,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			screenshotRuntime = pending.screenshotRuntime
 			plexQueue = pending.plexQueue
 			plexLibrary = pending.plexLibrary
+			localMedia = pending.localMedia
 			favorites = pending.favorites
 			handoff = pending.handoff
 			offlineProfile = pending.offlineProfile
@@ -492,6 +500,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	if randomPlay == nil {
 		randomPlay = d.results[id].randomPlay
 	}
+	if localMedia == nil {
+		localMedia = d.results[id].localMedia
+	}
 	if plexLibrary == nil {
 		plexLibrary = d.results[id].plexLibrary
 	}
@@ -517,6 +528,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		capabilities, err := decodeObject(m["data"])
 		if err != nil {
 			failure(w, 400, "invalid capabilities result")
+			return
+		}
+		if marker, exists := capabilities["local_media"]; exists && !validLocalMediaCapability(marker) {
+			failure(w, 400, "invalid local media capability")
 			return
 		}
 		if marker, exists := capabilities["perf_capture"]; exists && !validPerfCapability(marker) {
@@ -578,6 +593,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid Plex queue result")
 		return
 	}
+	if localMedia != nil && !validLocalMediaResult(m["data"], status, localMedia) {
+		failure(w, 400, "invalid local media result")
+		return
+	}
 	if plexLibrary != nil && !validPlexLibraryResult(m["data"], status, plexLibrary) {
 		failure(w, 400, "invalid Plex library result")
 		return
@@ -623,7 +642,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

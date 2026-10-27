@@ -121,7 +121,7 @@ Fronty Plex vyžadují CLI, řadič a přehrávač s implementací `plex_queue`.
 S aktuálním přehrávačem a řadičem používají místní soubory/složky poskytovatele `offline`:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

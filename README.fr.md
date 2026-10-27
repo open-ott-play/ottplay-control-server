@@ -121,7 +121,7 @@ Les files Plex nécessitent une CLI, un contrôleur et un lecteur implémentant 
 Avec un lecteur et un contrôleur actuels, les fichiers/dossiers locaux utilisent le fournisseur `offline` :
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

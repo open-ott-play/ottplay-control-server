@@ -16,6 +16,8 @@ def digest(value):
 
 
 def comparisons(preset):
+    if "local" in preset:
+        yield "local", {"provider": "local", "settings": preset["local"]}
     yield "plex", {"provider": "plex", "settings": preset["plex"]}
     for row in preset["m3u"]:
         yield "m3u_" + str(row["number"]), {"provider": "m3u", **row}
@@ -27,6 +29,8 @@ def comparisons(preset):
 
 
 def compare(api, client, device, params):
+    if params["provider"] == "local":
+        return api.local_preset_matches(client, device, params["settings"])
     if params["provider"] == "vportal":
         return api.vportal_compare(client, device, params)["matched"]
     result = client.call(device, "settings_compare", params)
@@ -140,6 +144,10 @@ class Session:
 
     def prepare(self, label, action, params):
         check = None
+        if action == "local_media" and params.get("op") == "connect":
+            if self.api.local_preset_connected(self.client, self.device, params["source"]):
+                self.complete(label)
+                return True
         if action == "profile_settings":
             check = {"provider": "m3u", **params}
         elif action == "provider_settings":
@@ -152,7 +160,7 @@ class Session:
         if check is not None and compare(self.api, self.client, self.device, check):
             self.complete(label)
             return True
-        if action in ("provider", "profile", "profile_settings", "provider_settings"):
+        if action in ("provider", "profile", "profile_settings", "provider_settings", "local_media"):
             self.retry(label, action, params)
         return False
 

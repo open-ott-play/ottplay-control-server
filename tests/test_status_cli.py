@@ -262,7 +262,7 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual((code, err), (0, ''))
             self.assertIn('Status:       ' + ('Awake' if standby is False else 'Connected (standby not reported)'), out)
             self.assertIn('Now playing:  Not reported', out)
-            self.assertIn('Provider:     Local videos (offline)', out)
+            self.assertIn('Provider:     Local videos\n', out)
             self.assertIn('Channels:     7 (catalog ready)', out)
             self.assertIn('Volume:       37.5%', out)
             self.assertNotIn('Status:       Offline', out)

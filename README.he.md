@@ -159,7 +159,7 @@ CLI ממתין עד 45 שניות כברירת מחדל. כתיבת `ott -t 45 l
 <div dir="ltr">
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

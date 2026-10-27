@@ -121,7 +121,7 @@ Hàng đợi Plex cần CLI, bộ điều khiển và trình phát triển khai 
 Với trình phát và bộ điều khiển hiện hành, tệp/thư mục cục bộ dùng nhà cung cấp `offline`:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

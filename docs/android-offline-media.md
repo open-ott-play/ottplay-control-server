@@ -1,43 +1,78 @@
-# Offline media on Android tablets
+# Android local media and playback without a network
 
-Status: code investigation on 2026-10-19, not a completed offline playback test.
+Current Android builds implement **Local videos** using the Storage Access
+Framework (SAF), including the API 22 Fire variant. Select **Settings → Provider
+→ Local videos**, then **Add folder** or **Add files** in the system picker.
+OTT stores document references and persisted read-only grants; newly linked
+videos remain in their original location. Older application-owned imports remain
+compatible. This replaces the earlier feasibility proposal for an M3U playlist
+and a separate local media service.
 
-## Result
+The player streams from the original document through its own loopback media
+listener, with byte-range support. No broad all-files permission is required.
+The storage must remain connected and the document provider must supply a
+seekable file. Refresh discovers changes in connected folders. Disconnecting a
+linked source removes OTT metadata and its access grant, not the original media.
+Removing a legacy imported copy deletes the application-owned copy.
 
-Local playback without Wi-Fi or Internet is technically possible. The current Android OTT build does not provide a complete offline library, download manager, or Plex offline cache. k8a is an Amazon KFGIWI on Android 5.1.1 / API 22. fire8 still needs device-specific runtime validation.
+See the player documentation for the [Android source implementation and
+acceptance checks](https://github.com/open-ott-play/ottplay-foss/blob/main/docs/android-local-media-sources.md)
+and [Local videos on all supported platforms](https://github.com/open-ott-play/ottplay-foss/blob/main/docs/offline-media.md).
 
-## Proposed implementation
+## Remote control
 
-1. Import H.264/AAC MP4 files into application-owned storage (or explicitly grant access to a selected directory).
-2. Start an Android media service bound only to `127.0.0.1` before loading OTT's playlist.
-3. Serve a local `offline.m3u` plus the media files. Implement HTTP Range, correct MIME types, and the CORS behavior required by the local WebView.
-4. Configure an OTT M3U profile pointing to the loopback playlist. Persist it independently of the shared Home preset so a preset reload cannot silently remove the offline setup.
-5. Integrate service startup and lifecycle with the player. Screen-off must stop playback and file reads; restart must restore the selected profile and kiosk item.
+Update the player, CLI and controller together, then use the connected folder's
+exact name or source ID:
 
-The playlist and every media URL must resolve locally. A playlist on NAS, Plex, or the Internet is not an offline setup. The loopback HTTP service does not require a network connection.
+```sh
+ott d1 caps
+ott d1 local sources
+ott d1 local shuffle Movies
+ott d1 local play Movies
+ott d1 provider local
+```
 
-## Evidence in the player source
+The `local_media` capability lists supported operations. Remote commands need
+network access to the controller even when the videos are on the device.
+Android does not accept a desktop filesystem path as a grant: connect the source
+in its picker first. Tauri desktop builds that advertise `absolute_paths` can
+also connect an absolute path on that target computer. Browser players use
+previously selected sources and their browser permissions. The compatible wire
+provider ID remains `offline`; the preferred CLI name is `local`.
 
-Paths below are relative to the separate `ottplay-foss` repository inspected for this investigation.
+The optional `local` section in a [named CLI preset](cli.md#include-local-folders-in-a-preset)
+checks Android folders already connected under their exact names. It does not
+copy files or transfer another device's permission. The separate numbered
+[Local videos profiles](cli.md#local-videos-profiles) save a library selection and
+selected item. Kiosk, parental settings and platform access restrictions apply.
 
-- `capacitor.config.ts`: the APK includes `dist-mobile` UI assets.
-- `src/provider/m3u-driver.ts`: profile settings persist, but playlist contents are fetched again at startup.
-- `src/provider/m3u-settings.ts`: local playlist selection depends on `host.readFile`; an Android implementation was not found.
-- `android/app/src/main/AndroidManifest.xml`: no shared media read permissions were declared in the inspected build.
-- `M3UProxyPlugin.kt`: playlist retrieval expects an HTTP connection; passing a `file://` playlist is not a supported substitute.
-- `DashExoPlayerPlugin.kt`: native playback accepts a URI, but this does not establish end-to-end file or content URI support in every OTT playback engine.
-- `src/plugins/plex.ts`: no offline download/cache feature was found; Plex's server-side file path is not a playable local URL.
-- `MobileCommandQueuePlugin.kt`: the existing loopback endpoint serves commands, not a media library.
+## What works without Wi-Fi
 
-## Required acceptance tests
+Local playback requires the media to be physically available on the device or a
+connected drive, and the APK must include its player assets. A NAS/Plex URL or a
+cloud-only document is not a local media backup. This feature does not add a Plex
+download cache, codecs or transcoding. SAF permission alone does not prove that
+a cloud document remains available after connectivity is lost.
 
-On both k8a and fire8, test with Wi-Fi disabled and no USB network forwarding:
+## Device acceptance and troubleshooting
 
-- Cold boot and start the local playlist without contacting external services.
-- Play, seek, select the next file, and replay the last file.
-- Restore the selected kiosk file after player/service restart.
-- Sleep and resume; verify playback/file reads stop while asleep.
-- Confirm operation after shared Home profile reload and after an OTA update.
-- Verify storage capacity, supported codecs, and smooth playback on each tablet.
+Implementation and automated tests do not establish offline behavior on every
+tablet or firmware. Check each deployed device:
 
-These tests have not been performed. No offline media files or local media server were installed as part of the investigation.
+1. Select a local H.264/AAC MP4 folder. Confirm OTT storage gains small metadata
+   records rather than another copy of the videos; play, seek and change files.
+2. Disable networking and repeat playback. Force-stop and restart OTT, then
+   reboot; verify the saved selection and persisted source permission.
+3. Test screen-off/resume and Standby/wake, including a pending folder scan.
+4. Load the shared preset and install an update; verify the folder binding is
+   retained. Remote control can be checked once networking is restored.
+5. Disconnect the source or revoke permission. Confirm an unavailable-source
+   result instead of unrelated playback, then reconnect through the picker.
+6. Remove a linked source and confirm the originals remain. Verify any legacy
+   imported copies separately.
+
+If the picker is unavailable, check that the device has a working document
+provider. If access is lost, reselect the original folder and keep its drive
+connected. A non-seekable provider or unsupported codec needs another suitable
+source/file; a server connection cannot repair it. If remote commands are
+unsupported, check capabilities and update all three components before retrying.

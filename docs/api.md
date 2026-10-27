@@ -1461,6 +1461,54 @@ Negative result data is a single `error` code: `unsupported`, `invalid_request`,
 See the [workflow and limitations](reliable-control.md#continue-on-another-player).
 
 
+### Local source connection and playback
+
+The authenticated `local_media` RPC selects an exact source on the target player.
+It does not interpret a path on the controller host or upload media. The player
+advertises the supported operations and native path capability:
+
+```json
+{"local_media":{"version":1,"operations":["sources","play","shuffle","connect"],"absolute_paths":true,"max_sources":32,"max_items":50000}}
+{"action":"local_media","params":{"runtime":"page-123","op":"sources"}}
+{"action":"local_media","params":{"runtime":"page-123","op":"sources","include_paths":true}}
+{"action":"local_media","params":{"runtime":"page-123","op":"sources","path":"/var/media/Movies","include_paths":true}}
+{"action":"local_media","params":{"runtime":"page-123","op":"shuffle","source":"Movies"}}
+{"action":"local_media","params":{"runtime":"page-123","op":"connect","source":"/Volumes/data/Movies/"}}
+```
+
+`source` is a connected source ID/name or an absolute native path, up to 4,096
+UTF-8 bytes. Names are exact, bounded to 512 bytes, and cannot contain directory
+separators. Relative paths and URL selectors are rejected. The native player
+controls filesystem binding; browser clients retain their existing permission
+model. `connect` does not start playback. `play` and `shuffle` select only the
+resolved source, with no fallback to the whole local library. `shuffle` creates
+one randomized order, subject to the player's ordinary repeat policy.
+
+For `sources` only, an optional absolute `path` (up to 4,096 UTF-8 bytes) filters
+the result using the native player's canonical filesystem identity. It requires
+`absolute_paths:true`, does not create a binding, and does not imply
+`include_paths:true`. A readable unconnected directory returns `sources:[]`;
+invalid or unreadable paths return a correlated error. A returned canonical
+source path may differ from the requested spelling, including OS path aliases.
+
+Successful responses contain `version:1`, the requested `runtime` and `op`, and
+`state:"ready"`. `sources` adds an array of at most 32 entries with `id`, `name`,
+`kind` (`folder` or `file`) and boolean `available`. An optional absolute `path`
+is allowed only when the request explicitly sets `include_paths:true`; players
+expose this only with `absolute_paths:true`. Other successful operations return
+one `source` without its private path, integer `count`, boolean `shuffled`,
+`accepted:true` and `playback_confirmed:false`. `count` is 1–50,000 for playback
+or 0–50,000 for connection. `shuffled` is true only for the `shuffle` operation.
+An accepted response is not playback evidence.
+
+Rejected responses retain `version`, `runtime` and `op`, with `state:"error"` and
+a fixed error identifier. See [the shared contract](../contracts/local-media-v1.json)
+for the allowlist and examples. Runtime mismatches, extra fields, malformed source
+metadata and unsolicited path disclosures are rejected without consuming the
+pending request. Operator credentials need an exact `local_media.sources`,
+`local_media.connect`, `local_media.play` or `local_media.shuffle` scope. There is
+no family-wide scope or automatic retry of uncertain mutations.
+
 ### Local videos profile transfer
 
 The `offline` provider uses the same `profiles {}` listing and `profile {number}`

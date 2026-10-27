@@ -42,6 +42,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
 - [Switch provider and start playback](#switch-provider-and-start-playback)
 - [Switch providers on several players](#switch-providers-on-several-players)
+- [Local folders and shuffled playback](#local-folders-and-shuffled-playback)
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles), [Local videos profiles](#local-videos-profiles) and [named setups](#named-setups)
@@ -678,7 +679,7 @@ Player summary:
 
 `Awake` means standby is off; `Now playing: Not reported` means this response
 does not confirm current content. On older players,
-`Connected (standby not reported)` leaves standby unknown. The provider label `Local videos (offline)`
+`Connected (standby not reported)` leaves standby unknown. The provider label `Local videos`
 names the local-file provider; it does not mean the player is disconnected.
 
 Options for the ordinary CLI must precede `PLAYER` or the management verb:
@@ -1907,16 +1908,77 @@ if M3U has no channels. The same list syntax also works with the other
 [player commands](#run-a-command-on-several-players), including random playback,
 volume, standby, restarts, settings and diagnostics.
 
+## Local folders and shuffled playback
+
+Use `local` for files connected to a player. The old `offline` command spelling
+and provider identifier remain compatible with saved configurations. The label
+in the player is **Local videos**. A NAS or server source still requires a network
+connection; the name does not promise that every source works disconnected.
+
+```sh
+ott t1 local sources
+ott t1 local shuffle Movies
+ott t1 local play Movies
+ott t1 local connect /Volumes/data/Movies/
+ott t1 local shuffle /Volumes/data/Movies/
+ott t1 local sources --paths
+ott t1 local sources --path /Volumes/data/Movies/ --paths
+ott t1,t2 local shuffle Movies
+ott t1 provider local
+```
+
+`Movies` is the exact name or source ID of a connected source on the target
+player. A duplicate name is rejected; use the ID printed by `local sources`.
+`shuffle` uses only that source, randomizes its complete playable list once and
+starts its first item. `play` uses the source order. This differs from
+`provider local R`, which selects just one random item from the current catalogue.
+The normal player repeat setting controls what happens at the end of the list.
+The selected folder and a compact shuffle seed are saved. Reloading the player
+restores the same order while the folder's contents are unchanged; adding or
+removing files produces a new deterministic order from that seed. Running
+`local shuffle` again creates a fresh shuffle.
+The maximum is 50,000 playable items per source, or the lower `max_items` limit
+advertised by the player. A larger source is rejected without starting a partial
+queue. Local playback does not send the item list through the control server.
+
+An absolute path refers to the **target player's filesystem**, not the working
+directory of the terminal running `ott`. On a capable native player it connects
+that directory, reuses an existing exact binding where possible, and then plays
+it. `local connect` performs the connection without starting playback. Relative
+paths such as `./Movies` are not accepted. Quote names and paths containing spaces.
+The CLI does not upload or copy video files.
+
+Browser players can use sources already selected and permitted in their local
+file picker. A remote path cannot grant browser filesystem access. Capabilities
+must advertise `local_media` and the requested operation; absolute paths and
+`local sources --paths` additionally require `absolute_paths: true`. Plain source
+listing omits private filesystem paths. Use `--paths` only when you need them for
+a private local configuration; do not paste that output into public reports.
+`sources --path PATH` asks the native player to resolve the path and list only
+its matching connected source. This also recognizes operating-system aliases
+such as `/var` and `/private/var`. It does not connect the folder or start
+playback. An existing readable directory with no binding returns an empty list;
+invalid or unreadable paths return an error. `--path` requires native path
+support and does not imply `--paths` disclosure.
+
+The request is tied to the discovered player runtime and is sent once. An
+unavailable source, incomplete scan, empty folder or excessive catalogue returns
+an error rather than playing unrelated files or silently truncating the list.
+A timeout is an uncertain outcome, not permission to replay a shuffle. Read
+`local sources` and player status before another mutation. An accepted response
+does not prove that the decoder is rendering video. Update CLI, controller and
+player together if the command is reported unsupported.
+
 ## Local videos profiles
 
-Use provider ID `offline` (display name **Local videos**) for files or folders connected
+Use `provider local` (display name **Local videos**, compatible wire ID `offline`) for files or folders connected
 on the player. Install matching player and controller versions supporting
 `offline_profiles` before using the new save/import/export commands. `ott PLAYER`
 shows the commands currently available; `ott PLAYER caps` reports their capability.
 
 ```sh
 ott d1 providers
-ott d1 provider offline
+ott d1 provider local
 ott d1 profiles
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
@@ -1964,7 +2026,7 @@ sources. Unknown fields, credentials/access objects, absolute or traversal paths
 invalid source references and duplicate JSON keys are rejected before a command
 is sent. The complete request must fit the controller's 16 KiB limit.
 
-If the command is unavailable, select `offline`, check `caps`, update both player
+If the command is unavailable, select `local`, check `caps`, update both player
 and controller and unlock settings/kiosk locally as appropriate. A “binding
 required” result means the profile is saved but the player needs local access.
 If a mutation times out or its acknowledgement is invalid, inspect `profiles`
@@ -2163,8 +2225,57 @@ longer than a single timeout. Setup output, including `--json`, contains only
 the setup name, step names and selected profile; it omits URLs, VPortal keys and
 Plex tokens. Success confirms storage and selection, not successful media
 playback. Settings locks and platform restrictions still apply. Use a player
-with remote M3U profile and Plex settings support; the existing controller needs
-no deployment change.
+with remote M3U profile and Plex settings support. Presets containing local
+folders also require the new `local_media` capability on the player and an
+updated controller and CLI.
+
+### Include local folders in a preset
+
+The name of a CLI preset (for example `local`) is independent of its provider
+sections. Add an optional `local` section inside that preset to deliver the
+same connected folders along with its M3U/Plex settings:
+
+```json
+"local": {
+  "sources": [
+    {"name": "Movies", "path": "/Volumes/data/Movies"},
+    {"name": "Kids"}
+  ]
+}
+```
+
+Each of the 1–32 entries describes a folder. Names must be unique. `path` is an
+optional absolute path on the **target player**, not the CLI computer. Keep
+this private configuration out of repositories and public diagnostics. Inspect
+the source player's configuration explicitly with:
+
+```sh
+ott t1 local sources --paths
+ott t1 load local plan
+ott t1 load local
+ott t1 load local verify
+```
+
+On a native player supporting absolute paths, loading connects that exact path
+and verifies its folder identity. On browsers and other players without this
+capability, loading can only reuse a folder already connected locally under the
+exact name. It never transfers an OS permission, uploads media or substitutes an
+unrelated directory. A missing or ambiguous browser folder stops the load before
+provider settings are written. A native path that is missing, inaccessible or
+overlaps a different connected root is reported as an error.
+
+Folder connections are applied before the other provider settings and verified
+again after the load. Other connected folders are retained. Loading a preset
+does not start a local movie or shuffle the library; the existing final M3U
+profile selection remains unchanged. Use `local shuffle Movies` afterwards to
+play only that folder. The resume journal includes folder connection steps and
+checks their actual state before repeating a confirmed operation. A lost reply
+does not cause a blind retry; earlier successful connections remain available.
+
+The `local` preset section delivers folder configuration. The separate numbered
+Local videos profile import/export commands still describe a saved selection
+and its private binding; assigning a profile the name `Movies` does not select
+or grant access to a folder with that name.
 
 ## Restarting playback or the player
 
@@ -3186,4 +3297,8 @@ matching-source live/archive references only and does not stop the source player
 The existing `ott tv load Local` continues to use its original acknowledgement
 workflow without a journal requirement.
 
-For local files without Wi-Fi, see [Android offline media feasibility](android-offline-media.md). This is an investigated design, not an implemented offline library.
+For local files without Wi-Fi, see [Android local media](android-offline-media.md).
+Current Android builds use the system file/folder picker and persisted read-only
+access to the originals. The files and bundled player must be available on the
+device; remote commands still need a connection. Per-device offline startup and
+playback acceptance remain separate from implementation support.

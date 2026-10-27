@@ -121,7 +121,7 @@ CLI типово очікує до 45 секунд. Запис `ott -t 45 l plex
 З актуальними програвачем і контролером локальні файли/теки використовують провайдера `offline`:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

@@ -31,6 +31,7 @@ var CommandOperations = map[string]string{
 	"player_settings_patch": "get set",
 	"plex_folders":          "list add remove clear",
 	"perf_capture":          "start status read stop",
+	"local_media":           "sources play shuffle connect",
 }
 
 func ValidCommandAction(action string) bool {
