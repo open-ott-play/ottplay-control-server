@@ -42,7 +42,7 @@ class LocalPresetTests(unittest.TestCase):
             raise self.capability_error
         return {"local_media": {"absolute_paths": self.native, "operations": ["sources", "connect"]}}
 
-    def command(self, client, device, params, timeout, session=None):
+    def command(self, client, device, params, timeout, session=None, **kwargs):
         self.local_calls.append(copy.deepcopy(params))
         if params["op"] == "sources":
             rows = self.sources

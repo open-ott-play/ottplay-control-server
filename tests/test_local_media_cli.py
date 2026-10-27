@@ -185,6 +185,18 @@ class LocalMediaTest(unittest.TestCase):
         client.call.assert_called_once_with('dev_t1', 'capabilities', {})
         session.call.assert_called_once_with('local_media', CONTRACT['connect_request']['params'])
 
+    def test_mutation_refreshes_runtime_even_if_read_context_is_supplied(self):
+        stale = caps()
+        current = caps()
+        current['player']['runtime'] = 'page-456'
+        reply = dict(CONTRACT['connect_result'], runtime='page-456')
+        client = mock.Mock(timeout=45)
+        client.call.side_effect = [current, reply]
+        ott.local_media_command(client, 'dev_t1', {'op': 'connect', 'source': 'Movies'}, 45, controls=stale)
+        self.assertEqual(client.call.call_args_list,
+                         [mock.call('dev_t1', 'capabilities', {}),
+                          mock.call('dev_t1', 'local_media', {'op': 'connect', 'source': 'Movies', 'runtime': 'page-456'})])
+
     def test_group_source_selection_is_once_per_distinct_player(self):
         client = ott.Client.__new__(ott.Client)
         client.config = {'players': {'t1': 'dev_1', 'same': 'dev_1', 't2': 'dev_2'}}
