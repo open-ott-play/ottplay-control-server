@@ -149,7 +149,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`b774fb86ef7a091e2df7f908d651abafcb849ffe`](https://github.com/open-ott-play/ottplay-control-server/commit/b774fb86ef7a091e2df7f908d651abafcb849ffe).
+[`bb5cfa1ea1e89c42f73962f0b7f9f9aef6e8157b`](https://github.com/open-ott-play/ottplay-control-server/commit/bb5cfa1ea1e89c42f73962f0b7f9f9aef6e8157b).
 This is an exact source pin, not a claim about the latest published release.
 It contains the complete CLI module set, including finite group `watch`,
 performance-export verification, negotiated debug bundles and the local `resolve` command,
@@ -167,6 +167,8 @@ name is `local`; `offline` remains a compatibility alias. Controller support for
 `local_media` is included in this same source revision. Update the controller
 and player too; confirm the requested operation with `ott PLAYER caps`. Native
 paths additionally require the player to advertise `absolute_paths: true`.
+This revision also supports literal colons in Local folder names and avoids
+repeated per-folder reads when loading an already connected Local preset.
 
 The full source hash is verified before and after checkout. Record
 `git rev-parse HEAD` with diagnostic results. Older CLI revisions, including
@@ -189,8 +191,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=b774fb86ef7a091e2df7f908d651abafcb849ffe
-  ott_source="$HOME/.local/share/ottplay-control-server-local-b774fb86ef7a"
+  ott_ref=bb5cfa1ea1e89c42f73962f0b7f9f9aef6e8157b
+  ott_source="$HOME/.local/share/ottplay-control-server-local-bb5cfa1ea1e8"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -212,7 +214,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-b774fb86ef7a/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-bb5cfa1ea1e8/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -226,7 +228,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-b774fb86ef7a/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-bb5cfa1ea1e8/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -248,8 +250,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'b774fb86ef7a091e2df7f908d651abafcb849ffe'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-b774fb86ef7a'
+$ottRef = 'bb5cfa1ea1e89c42f73962f0b7f9f9aef6e8157b'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-bb5cfa1ea1e8'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -295,12 +297,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-b774fb86ef7a/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-bb5cfa1ea1e8/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-b774fb86ef7a\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-bb5cfa1ea1e8\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -329,7 +331,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-b774fb86ef7a`, stages the replacement beside it, then switches atomically.
+`ott.before-local-bb5cfa1ea1e8`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -341,9 +343,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-b774fb86ef7a")
-staged = launcher.with_name("ott.switch-local-b774fb86ef7a")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-b774fb86ef7a/cli/ott.py"
+backup = launcher.with_name("ott.before-local-bb5cfa1ea1e8")
+staged = launcher.with_name("ott.switch-local-bb5cfa1ea1e8")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-bb5cfa1ea1e8/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -1931,6 +1933,9 @@ ott t1 provider local
 
 `Movies` is the exact name or source ID of a connected source on the target
 player. A duplicate name is rejected; use the ID printed by `local sources`.
+Literal colons are accepted, for example `ott t1 local shuffle "Kids: Cartoons"`,
+when that folder exists on a filesystem permitting the name. Names are limited
+to 512 UTF-8 bytes and cannot contain directory separators or control characters.
 `shuffle` uses only that source, randomizes its complete playable list once and
 starts its first item. `play` uses the source order. This differs from
 `provider local R`, which selects just one random item from the current catalogue.
@@ -2026,7 +2031,10 @@ the exact selected file must still exist.
 Portable documents are version 1, at most 12 KiB compact JSON, with at most 32
 sources. Unknown fields, credentials/access objects, absolute or traversal paths,
 invalid source references and duplicate JSON keys are rejected before a command
-is sent. The complete request must fit the controller's 16 KiB limit.
+is sent. This older portable format also rejects source names beginning with a
+URI-like prefix such as `Kids:`; use the Local folder commands and named preset
+bindings for those literal names. The complete request must fit the controller's
+16 KiB limit.
 
 If the command is unavailable, select `local`, check `caps`, update both player
 and controller and unlock settings/kiosk locally as appropriate. A “binding
@@ -2273,6 +2281,11 @@ profile selection remains unchanged. Use `local shuffle Movies` afterwards to
 play only that folder. The resume journal includes folder connection steps and
 checks their actual state before repeating a confirmed operation. A lost reply
 does not cause a blind retry; earlier successful connections remain available.
+
+Each comparison phase reads a fresh source list once and reuses it for folders
+whose canonical paths are already present. Other path spellings are resolved on
+the target player. New connections still use fresh capability checks and
+readback; the final verification reads the resulting state again.
 
 The `local` preset section delivers folder configuration. The separate numbered
 Local videos profile import/export commands still describe a saved selection

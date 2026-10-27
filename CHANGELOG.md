@@ -78,6 +78,14 @@
 
 ### Changes
 
+- Add capability-gated Local folder commands: `ott t1 local sources`,
+  `local shuffle Movies`, and `local shuffle /Volumes/data/Movies/`. Play or
+  shuffle the selected folder's complete eligible list, up to 50,000 items,
+  or connect a folder without starting playback. Named presets can deliver
+  Local folder bindings alongside provider settings. Native paths refer to
+  the target player; browsers retain their local permission requirements.
+  Accept literal colons in folder names and bound repeated preset reads;
+  preserve `offline` as a compatibility alias and wire provider ID.
 - Extend explicit player lists to player commands beyond provider switching:
   `ott t1,t2,t3,t4 R`, volume, playback, lifecycle, settings, Plex, presets,
   diagnostics and supported Android operations. Resolve and deduplicate targets
@@ -122,8 +130,9 @@
 
 ### Upgrade
 
-- Install all 11 files from the same `cli/` revision together, including
-  `player_settings.py` and `device_registry.py`. Enable the registry only after
+- Install all 13 Python files from the same `cli/` revision together, including
+  `player_settings.py`, `device_registry.py`, `playlist_search.py` and
+  `programme_search.py`. Enable the registry only after
   explicit private PVC initialization and validation with the verified new
   image; preserve the live workload's scheduling constraints for `local-path`.
   Keep one writer and retain the private registry across pod restarts. See the

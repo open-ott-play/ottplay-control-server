@@ -1478,8 +1478,10 @@ advertises the supported operations and native path capability:
 
 `source` is a connected source ID/name or an absolute native path, up to 4,096
 UTF-8 bytes. Names are exact, bounded to 512 bytes, and cannot contain directory
-separators. Relative paths and URL selectors are rejected. The native player
-controls filesystem binding; browser clients retain their existing permission
+separators or control characters. Literal colons, as in `Kids: Cartoons`, are
+accepted; the name is not interpreted as a URI. Relative paths and URL selectors
+are rejected. The native player controls filesystem binding; browser clients
+retain their existing permission
 model. `connect` does not start playback. `play` and `shuffle` select only the
 resolved source, with no fallback to the whole local library. `shuffle` creates
 one randomized order, subject to the player's ordinary repeat policy.
