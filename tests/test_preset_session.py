@@ -50,6 +50,120 @@ class ExactPlayer(FakePlayer):
         return data
 
 
+class PresetVerificationTests(unittest.TestCase):
+    def setUp(self):
+        self.config = config()
+        self.config['presets']['local']['local'] = {'sources': [{'name': 'Movies'}]}
+        _, self.preset = ott.validate_preset(self.config, 'local')
+        self.player = ExactPlayer()
+        self.player.active = self.preset['active_profile']
+        for _, params in session.comparisons(self.preset):
+            if params['provider'] != 'local':
+                self.player.exact[params['provider'], params.get('number')] = params['settings']
+        local_patch = mock.patch.object(ott, 'local_preset_matches', return_value=True)
+        self.local = local_patch.start()
+        self.addCleanup(local_patch.stop)
+
+    def verify(self):
+        with mock.patch.object(self.player, 'call', wraps=self.player.call) as calls:
+            result = session.verify(ott, self.player, 'dev_tv', self.preset)
+        self.assertTrue(all(call.args[1] in {'settings_compare', 'status', 'profiles'}
+                            for call in calls.call_args_list))
+        self.assertEqual([row['step'] for row in result['comparisons']],
+                         [name for name, _ in session.comparisons(self.preset)])
+        self.assertEqual(result['expected_provider'], 'm3u')
+        self.assertEqual(result['expected_active_profile'], self.preset['active_profile'])
+        return result
+
+    def profile_reply(self, provider):
+        if provider == 'offline':
+            rows = [{'number': n, 'name': '', 'active': False, 'configured': False,
+                     'binding_required': False, 'source_count': 0, 'selected_name': ''}
+                    for n in range(1, 16)]
+        else:
+            rows = [dict(self.player.metadata(n), vportal_configured=False) for n in range(1, 16)]
+        return {'provider': provider, 'profiles': rows}
+
+    def test_m3u_matching_selection_is_verified(self):
+        result = self.verify()
+        self.assertEqual((result['status'], result['provider'], result['active_profile']),
+                         ('verified', 'm3u', 1))
+        self.assertEqual([action for _, action, _ in self.player.calls], ['status', 'profiles'])
+
+    def test_m3u_wrong_slot_is_different(self):
+        self.player.active = 2
+        result = self.verify()
+        self.assertEqual((result['status'], result['provider'], result['active_profile']),
+                         ('different', 'm3u', 2))
+
+    def test_other_providers_preserve_comparisons_without_requesting_profiles(self):
+        for provider in ['offline', 'vportal', 'plex', 'stalker']:
+            with self.subTest(provider=provider):
+                self.player.provider = provider
+                self.player.calls.clear()
+                self.player.faults[('profiles', 1)] = AssertionError('Profiles must not be requested')
+                result = self.verify()
+                self.assertEqual((result['status'], result['provider'], result['active_profile']),
+                                 ('different', provider, None))
+                self.assertTrue(all(row['matched'] for row in result['comparisons']))
+                self.assertEqual([action for _, action, _ in self.player.calls], ['status'])
+
+    def test_setting_mismatch_is_preserved_with_correct_m3u_selection(self):
+        self.local.return_value = False
+        result = self.verify()
+        self.assertEqual(result['status'], 'different')
+        self.assertEqual(result['comparisons'][0], {'step': 'local', 'matched': False})
+        self.assertEqual(result['active_profile'], 1)
+
+    def test_malformed_provider_status_remains_an_error(self):
+        for status in [None, [], {}, {'provider': None}, {'provider': True}, {'provider': ''},
+                       {'provider': 'm3u\n'}, {'provider': 'https://private.example'},
+                       {'provider': 'x' * 33}]:
+            with self.subTest(status=status):
+                self.player.counts.clear()
+                self.player.calls.clear()
+                self.player.faults[('status', 1)] = status
+                with self.assertRaisesRegex(ott.Error, 'invalid provider status'):
+                    self.verify()
+                self.assertEqual([action for _, action, _ in self.player.calls], ['status'])
+
+    def test_provider_changed_before_profiles_cannot_confirm_a_matching_slot(self):
+        for provider in ['offline', 'vportal']:
+            with self.subTest(provider=provider):
+                self.player.counts.clear()
+                self.player.faults[('profiles', 1)] = self.profile_reply(provider)
+                result = self.verify()
+                self.assertEqual((result['status'], result['provider'], result['active_profile']),
+                                 ('different', provider, None))
+                self.assertTrue(all(row['matched'] for row in result['comparisons']))
+
+    def test_malformed_profile_metadata_remains_an_error(self):
+        malformed = [self.profile_reply('m3u'), self.profile_reply('m3u'), self.profile_reply('vportal')]
+        malformed[0]['profiles'].pop()
+        malformed[1]['profiles'][0]['active'] = 'true'
+        malformed[2]['profiles'][0]['vportal_configured'] = 'false'
+        for reply in malformed + [{'provider': 'plex', 'profiles': []}]:
+            with self.subTest(provider=reply['provider']):
+                self.player.counts.clear()
+                self.player.faults[('profiles', 1)] = reply
+                with self.assertRaisesRegex(ott.Error, 'invalid profile metadata'):
+                    self.verify()
+
+    def test_verify_command_reports_difference_and_retains_local_comparison(self):
+        self.player.provider = 'offline'
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = session.run(ott, self.config, ['tv', 'load', 'local', 'verify'], 45,
+                               True, None, client=self.player, device='dev_tv')
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(result['provider'], 'offline')
+        self.assertIsNone(result['active_profile'])
+        self.assertEqual(result['comparisons'][0], {'step': 'local', 'matched': True})
+        self.assertNotIn(TOKEN, output.getvalue())
+        self.assertNotIn(PLAYLIST, output.getvalue())
+
+
 class PresetSessionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

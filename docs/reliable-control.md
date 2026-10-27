@@ -95,6 +95,11 @@ ott tv load Local verify
 desired active profile without printing their contents. It does not inspect the
 player. `verify` performs exact read-only comparisons and checks the selected
 M3U profile. It returns nonzero if anything differs or comparison is unsupported.
+Verification never switches the active provider. With Local, Plex, VPortal or
+another provider active, it preserves every settings comparison, including
+Local source bindings, and returns `different` with the current `provider`,
+`expected_provider: "m3u"` and `active_profile: null`. A profile number from
+another provider does not count as the expected M3U selection.
 
 `apply` requires the server journal. It creates a private checkpoint and compares
 every configured provider before the first mutation. Each save compares stored

@@ -3296,6 +3296,11 @@ The optional new workflow is documented in [Reliable control](reliable-control.m
 ([Русский](reliable-control.ru.md)). It requires this newer CLI/controller/player
 revision, not the historical installation pin above. `plan` validates local
 configuration offline; `verify` compares saved player settings without writing.
+It does not switch providers. When Local, Plex, VPortal or another provider is
+active, the result retains all settings comparisons and reports `different`,
+the current `provider`, `expected_provider: "m3u"` and `active_profile: null`.
+The selected M3U slot is checked only while M3U is active; another provider's
+matching slot number cannot confirm it.
 `apply` and `resume` require the controller journal and private checkpoint storage.
 
 ```sh
