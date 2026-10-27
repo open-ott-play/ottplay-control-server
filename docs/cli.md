@@ -12,10 +12,9 @@ command queue.
 For opt-in performance recording, bounded export and guarded notification A–B–A
 trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
 perf --help` works without loading credentials; recording is off by default.
-In builds containing the unreleased version 3 extension,
+The reviewed source revision pinned below includes version 3 support:
 `ott d1 perf start --hls-policy-details` selects HLS policy evidence when
-supported; `--hls-details` continues to select version 2. This extension is not
-included in the beta.12 installation pinned below. See the
+supported; `--hls-details` continues to select version 2. See the
 [buffer-policy runbook](performance-capture.md#hls-buffer-policy-and-retry-evidence)
 for capture, export, verification and the limits of retry/cause observations.
 
@@ -148,9 +147,10 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 ### Choose the CLI source revision
 
 Install CPython 3.12 or newer and Git first. The native server release archives
-contain the Go server, **not** the Python CLI. The examples below install the
-source from release
-[`v0.1.6-beta.13`](https://github.com/open-ott-play/ottplay-control-server/releases/tag/v0.1.6-beta.13).
+contain the Go server, **not** the Python CLI. The examples below install reviewed
+source commit
+[`b774fb86ef7a091e2df7f908d651abafcb849ffe`](https://github.com/open-ott-play/ottplay-control-server/commit/b774fb86ef7a091e2df7f908d651abafcb849ffe).
+This is an exact source pin, not a claim about the latest published release.
 It contains the complete CLI module set, including finite group `watch`,
 performance-export verification, negotiated debug bundles and the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
@@ -160,11 +160,18 @@ while retaining policy and strict-state checks. It also includes media categorie
 and bounded catalogue pages (`s --limit` / `--offset`), plus explicit player lists
 for player commands such as `ott t1,t2,t3,t4 R`, settings, lifecycle, presets
 and diagnostic exports. Provider switching also accepts an optional channel
-number, `R` / `random` or title selector. Update the controller and
-player too; confirm support with `ott PLAYER caps`.
+number, `R` / `random` or title selector. It includes HLS policy capture v3,
+`local sources`, `local play` / `local shuffle` by connected folder name or native
+path, and [Local source bindings in named presets](#named-setups). The public
+name is `local`; `offline` remains a compatibility alias. Controller support for
+`local_media` is included in this same source revision. Update the controller
+and player too; confirm the requested operation with `ott PLAYER caps`. Native
+paths additionally require the player to advertise `absolute_paths: true`.
 
-The release reference is resolved to one exact commit before checkout. Record
-`git rev-parse HEAD` with diagnostic results; this is not a moving latest version. Older CLI revisions may lack `go`, Local videos profile commands or
+The full source hash is verified before and after checkout. Record
+`git rev-parse HEAD` with diagnostic results. Older CLI revisions, including
+`v0.1.6-beta.13`, lack the new `local` source commands and preset bindings; other
+older revisions may also lack `go`, Local videos profile commands or
 high-level Android release updates. A server's `version` output, the repository's `VERSION` file and
 a player's reported version identify different components; none substitutes for
 checking this CLI checkout's commit. Follow the
@@ -182,8 +189,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=v0.1.6-beta.13
-  ott_source="$HOME/.local/share/ottplay-control-server-0.1.6-beta.13"
+  ott_ref=b774fb86ef7a091e2df7f908d651abafcb849ffe
+  ott_source="$HOME/.local/share/ottplay-control-server-local-b774fb86ef7a"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -192,18 +199,20 @@ contacting a controller:
   fi
   git clone --no-checkout https://github.com/open-ott-play/ottplay-control-server.git "$ott_source"
   ott_revision="$(git -C "$ott_source" rev-parse "$ott_ref^{commit}")"
+  test "$ott_revision" = "$ott_ref"
   git -C "$ott_source" checkout --detach "$ott_revision"
   test "$(git -C "$ott_source" rev-parse HEAD)" = "$ott_revision"
   python3 "$ott_source/cli/ott.py" --help
   python3 "$ott_source/cli/ott.py" diagnostics --help
   python3 "$ott_source/cli/ott.py" report verify --help
+  python3 "$ott_source/cli/ott.py" t1 perf start --help
 )
 ```
 
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.13/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-b774fb86ef7a/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -217,7 +226,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-0.1.6-beta.13/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-b774fb86ef7a/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -239,8 +248,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'v0.1.6-beta.13'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.13'
+$ottRef = 'b774fb86ef7a091e2df7f908d651abafcb849ffe'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-b774fb86ef7a'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -249,7 +258,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Python is unavailable.' }
 git clone --no-checkout https://github.com/open-ott-play/ottplay-control-server.git $ottSource
 if ($LASTEXITCODE -ne 0) { throw 'Clone failed.' }
 $ottRevision = git -C $ottSource rev-parse "$ottRef^{commit}"
-if ($LASTEXITCODE -ne 0) { throw 'Release revision is unavailable.' }
+if ($LASTEXITCODE -ne 0 -or $ottRevision -ne $ottRef) { throw 'Reviewed source revision is unavailable.' }
 git -C $ottSource checkout --detach $ottRevision
 if ($LASTEXITCODE -ne 0) { throw 'Checkout failed.' }
 $ottActualRevision = git -C $ottSource rev-parse HEAD
@@ -260,6 +269,7 @@ $ottScript = Join-Path $ottSource 'cli\ott.py'
 py -3 $ottScript --help
 py -3 $ottScript diagnostics --help
 py -3 $ottScript report verify --help
+py -3 $ottScript t1 perf start --help
 ```
 
 In the remaining examples replace `ott` with `py -3 $ottScript`, for example
@@ -285,12 +295,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.13/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-b774fb86ef7a/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.13\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-b774fb86ef7a\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -319,7 +329,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-0.1.6-beta.13`, stages the replacement beside it, then switches atomically.
+`ott.before-local-b774fb86ef7a`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -331,9 +341,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-0.1.6-beta.13")
-staged = launcher.with_name("ott.switch-0.1.6-beta.13")
-reviewed = Path.home() / ".local/share/ottplay-control-server-0.1.6-beta.13/cli/ott.py"
+backup = launcher.with_name("ott.before-local-b774fb86ef7a")
+staged = launcher.with_name("ott.switch-local-b774fb86ef7a")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-b774fb86ef7a/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -750,23 +760,15 @@ do not merge stderr into stdout when consuming JSON.
 
 ### Update or uninstall the CLI
 
-For the Git installation above, choose a published `RELEASE_TAG` and update a
-clean checkout. Review `git status --short` first and preserve any local edits:
-
-```sh
-cd "$HOME/.local/share/ottplay-control-server"
-git status --short
-git fetch origin tag RELEASE_TAG
-git switch --detach RELEASE_TAG
-ott --help
-ott diagnostics --help
-```
-
-The existing symlink follows the checkout. For a copied installation replace all
-the sibling Python files together from one version. Keep `cli.json`, presets
-and server credentials outside the checkout; updating CLI files does not update
-or restart the command server, native apps or players already open in a browser.
-After updating a hosted player, reload it and inspect `ott PLAYER caps`.
+Use the [revision-specific installation and selection procedure](#update-select-or-roll-back-the-cli)
+for updates. Install a reviewed commit into a new directory, verify it directly,
+then select its script or deliberately switch the existing symlink. Retain the
+previous checkout for rollback; do not move an installed revision's checkout to
+a different commit or mix individual Python modules from different versions.
+Keep `cli.json`, presets and server credentials outside the checkout. Updating
+CLI files does not update or restart the command server, native apps or players
+already open in a browser. After updating a hosted player, reload it and inspect
+`ott PLAYER caps`.
 
 To uninstall the symlink installation, remove only the `~/.local/bin/ott` link you
 created and, when no longer needed, its source checkout. Keep private configuration
