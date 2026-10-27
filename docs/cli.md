@@ -149,7 +149,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`2a7d68fbf7c173428735c9ce890e0165ed7feb58`](https://github.com/open-ott-play/ottplay-control-server/commit/2a7d68fbf7c173428735c9ce890e0165ed7feb58).
+[`2334b565191b7dfc2936f2504c18ec2ebc89bed0`](https://github.com/open-ott-play/ottplay-control-server/commit/2334b565191b7dfc2936f2504c18ec2ebc89bed0).
 This is an exact source pin, not a claim about the latest published release.
 It contains the complete CLI module set, including group RPC failure diagnostics, finite group `watch`,
 performance-export verification, negotiated debug bundles and the local `resolve` command,
@@ -169,10 +169,11 @@ and player too; confirm the requested operation with `ott PLAYER caps`. Native
 paths additionally require the player to advertise `absolute_paths: true`.
 This revision also supports literal colons in Local folder names and avoids
 repeated per-folder reads when loading an already connected Local preset. It also
-negotiates progressive Local play/shuffle and labels partial counts. The
-[session-only playback contract](#local-folders-and-shuffled-playback) additionally
-requires matching CLI, controller and player support; do not infer that support
-from a source pin or a server version alone.
+requires negotiated session-only Local play/shuffle and labels progressive partial
+counts. The [session-only playback contract](#local-folders-and-shuffled-playback)
+requires matching controller and player support. Upgrade those components before
+installing this CLI for Local playback; the CLI refuses unsupported combinations
+without starting a Local command.
 
 The full source hash is verified before and after checkout. Record
 `git rev-parse HEAD` with diagnostic results. Older CLI revisions, including
@@ -195,7 +196,7 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=2a7d68fbf7c173428735c9ce890e0165ed7feb58
+  ott_ref=2334b565191b7dfc2936f2504c18ec2ebc89bed0
   ott_source="$HOME/.local/share/ottplay-control-server-local-2a7d68fbf7c1"
   python3 --version
   mkdir -p "$HOME/.local/share"
@@ -254,7 +255,7 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '2a7d68fbf7c173428735c9ce890e0165ed7feb58'
+$ottRef = '2334b565191b7dfc2936f2504c18ec2ebc89bed0'
 $ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-2a7d68fbf7c1'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
