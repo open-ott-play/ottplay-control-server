@@ -121,7 +121,7 @@ CLI รอสูงสุด 45 วินาทีเป็นค่าเริ
 เมื่อใช้เครื่องเล่นและตัวควบคุมปัจจุบัน ไฟล์/โฟลเดอร์ภายในใช้ผู้ให้บริการ `offline`:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

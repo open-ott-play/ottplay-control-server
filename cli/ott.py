@@ -76,7 +76,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show available controls, then a player summary
-  ott NAME load PRESET               apply a private Plex, M3U and optional Stalker preset
+  ott NAME load PRESET               apply a private preset, including configured local folders
   ott NAME load PRESET plan|apply|resume|verify [--checkpoint FILE]
                                      inspect or safely resume exact preset settings
   ott handoff SOURCE TARGET          continue live/archive viewing on another player
@@ -111,7 +111,12 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME provider m3u R            select M3U, play a random channel (r/random)
   ott NAME provider m3u РЕН          exact channel name first, else random match
   ott t1,t2,t3,t4 provider m3u        switch each listed player (alias: prov)
-  ott NAME provider offline          select Local videos (if listed in providers)
+  ott NAME provider local            select Local videos (legacy alias: offline)
+  ott NAME local sources [--path PATH] [--paths]  list sources; native paths are opt-in
+  ott NAME local shuffle Movies      shuffle only the connected Movies folder
+  ott NAME local shuffle /Volumes/data/Movies/  connect/play a path on a native player
+  ott NAME local play Movies         play the connected source in its current order
+  ott NAME local connect /Volumes/data/Movies/  connect a native folder without playback
   ott NAME provider-config FILE      update active provider settings from JSON
   ott NAME plex setup URL [TOKEN]    set Plex address and token (hidden prompt if omitted)
   ott NAME plex setup URL --token-file FILE  set Plex address and token from a file
@@ -265,6 +270,24 @@ CHANNEL_STEPS = {"prev": "previous_channel", "next": "next_channel"}
 CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
 PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
 OFFLINE_PROFILE_OPERATIONS = frozenset(("list", "load", "save", "export", "import"))
+LOCAL_MEDIA_OPERATIONS = frozenset(("sources", "play", "shuffle", "connect"))
+MAX_LOCAL_MEDIA_SOURCES = 32
+MAX_LOCAL_MEDIA_ITEMS = 50000
+LOCAL_MEDIA_ERRORS = {
+    "invalid_request": "The player rejected the local media request",
+    "runtime_changed": "The player restarted before the local media request could run",
+    "restricted": "Local media is restricted by the player's current settings or kiosk policy",
+    "unsupported": "This player cannot perform the requested local media operation",
+    "source_not_found": "No connected local source matches; use local sources or an absolute path on a supported native player",
+    "source_ambiguous": "Several connected sources have that name; use an exact source ID from local sources",
+    "source_unavailable": "The local source is unavailable; reconnect the drive or restore its read permission",
+    "catalog_loading": "The local source is still being scanned; wait for the scan to finish",
+    "catalog_unavailable": "The local catalogue could not be loaded",
+    "empty_source": "The selected local source contains no playable videos",
+    "too_many_items": "The selected local source exceeds the supported item limit; no partial queue was started",
+    "operation_in_progress": "Another local media operation is still in progress",
+    "native_error": "The native player could not open the local source",
+}
 OFFLINE_BINDING_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 ASPECT_OPERATIONS = frozenset(("get", "set"))
 NOTIFICATIONS_OPERATIONS = frozenset(("get", "set"))
@@ -277,7 +300,7 @@ RECEIPT_ACTIONS = frozenset((
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
-    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "categories", "favorites", "aspect",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "categories", "favorites", "aspect",
     "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
@@ -1037,6 +1060,8 @@ def parse_command(words):
         return "status", {}
     verb, tail = command_verb(words), words[1:]
     text = " ".join(tail)
+    if verb in ("local", "offline"):
+        return "local_media", parse_local_media(tail)
     # Reserve numeric-looking offsets while preserving names such as +HD.
     signed_head = re.match(r"[+-][+-]*\s*\.?(.)", verb)
     if verb in ("+", "-") or (signed_head and signed_head[1].isnumeric()):
@@ -1219,7 +1244,7 @@ def parse_command(words):
     if verb == "provider":
         if not tail:
             raise Error("provider requires a provider ID, index or name")
-        return "provider", {"query": text}
+        return "provider", {"query": "offline" if text.strip().casefold() == "local" else text}
     if verb == "provider-config":
         if len(tail) != 1:
             raise Error("Use provider-config FILE.json")
@@ -1459,7 +1484,7 @@ def offline_profile_command(client, device, action, params, timeout):
     try:
         controls = capabilities_metadata(client.call(device, "capabilities", {}))
         if operation not in controls.get("offline_profiles", {}).get("operations", []):
-            raise Error("Local videos profile operation is unavailable. Select provider offline, check caps and local restrictions, and update the player/controller. No profile command was sent")
+            raise Error("Local videos profile operation is unavailable. Select provider local, check caps and local restrictions, and update the player/controller. No profile command was sent")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Profile capability discovery exceeded --timeout; no profile command was sent")
@@ -1486,7 +1511,7 @@ def offline_profile_command(client, device, action, params, timeout):
         return {"provider": "offline", "number": params["number"], "path": str(path.resolve()), "exported": True}
     except (PlayerRejected, PlayerUnsupported):
         outcome = "The request was not repeated" if sent else "No profile command was sent"
-        raise Error("Local videos profile request was rejected or unsupported; check provider offline, capabilities and local permissions. " + outcome) from None
+        raise Error("Local videos profile request was rejected or unsupported; check provider local, capabilities and local permissions. " + outcome) from None
     except HTTPError as exc:
         if exc.code in (400, 404):
             raise Error("This controller does not accept Local videos profile requests; update the controller and player. The request was not repeated") from None
@@ -1706,6 +1731,84 @@ def preset_url(value):
         return False
 
 
+def validate_local_preset(value):
+    if (not isinstance(value, dict) or set(value) != {"sources"}
+            or not isinstance(value["sources"], list) or not 1 <= len(value["sources"]) <= 32):
+        raise Error("Local preset requires 1–32 folder sources")
+    sources, names, paths = [], set(), set()
+    for row in value["sources"]:
+        if (not isinstance(row, dict) or set(row) not in ({"name"}, {"name", "path"})
+                or not offline_source_name(row.get("name"), 512)):
+            raise Error("Local preset sources require a folder name and optional absolute target path")
+        name = row["name"]
+        if name in names:
+            raise Error("Local preset folder names must be unique")
+        names.add(name)
+        source = {"name": name}
+        if "path" in row:
+            path = row["path"]
+            if (not local_media_selector(path) or not local_media_absolute(path)
+                    or any(part in (".", "..") for part in re.split(r"[\\/]", path))):
+                raise Error("Local preset paths must be absolute target paths without dot segments")
+            key = path.rstrip("/\\")
+            if key in paths:
+                raise Error("Local preset paths must be unique")
+            paths.add(key)
+            source["path"] = path
+        sources.append(source)
+    return {"sources": sources}
+
+
+def local_preset_snapshot(client, device, path=None):
+    controls = local_media_capabilities(client, device, client.timeout)
+    capability = controls["local_media"]
+    if not {"sources", "connect"} <= set(capability["operations"]):
+        raise Error("This player cannot receive Local videos presets; no preset settings were sent")
+    native = capability["absolute_paths"]
+    params = {"op": "sources"}
+    if native:
+        params["include_paths"] = True
+        if path is not None:
+            params["path"] = path
+    result = local_media_command(client, device, params, client.timeout)
+    return native, result["sources"]
+
+
+def local_preset_plan(client, device, local):
+    native, existing = local_preset_snapshot(client, device)
+    plan = []
+    for source in local["sources"]:
+        path = source.get("path") if native else None
+        if path:
+            # Canonical identity belongs to the target filesystem, not this CLI.
+            _, matches = local_preset_snapshot(client, device, path)
+        else:
+            matches = [row for row in existing if row["name"] == source["name"]]
+        if len(matches) > 1:
+            raise Error("Local preset folder is ambiguous; no preset settings were sent")
+        if matches and (matches[0]["kind"] != "folder" or matches[0]["name"] != source["name"]):
+            raise Error("Local preset folder identity differs from the player")
+        connected = bool(matches and matches[0]["available"])
+        if not connected and not path:
+            raise Error("Connect each Local preset folder on this player before loading the preset")
+        plan.append({"selector": path or matches[0]["id"], "name": source["name"], "connected": connected})
+    return plan
+
+
+def local_preset_matches(client, device, local):
+    return all(row["connected"] for row in local_preset_plan(client, device, local))
+
+
+def local_preset_connected(client, device, selector):
+    absolute = local_media_absolute(selector)
+    native, sources = local_preset_snapshot(client, device, selector if absolute else None)
+    if local_media_absolute(selector):
+        matches = sources if native else []
+    else:
+        matches = [row for row in sources if selector in (row["id"], row["name"])]
+    return len(matches) == 1 and matches[0]["kind"] == "folder" and matches[0]["available"]
+
+
 def validate_preset(config, requested):
     names = preset_names(config)
     if not preset_name(requested):
@@ -1716,8 +1819,8 @@ def validate_preset(config, requested):
     name = matches[0]
     value = config["presets"][name]
     if (not isinstance(value, dict) or not {"m3u", "plex", "active_profile"} <= set(value)
-            or set(value) - {"m3u", "plex", "active_profile", "stalker", "vportal"}):
-        raise Error("A preset must contain m3u, plex and active_profile, with optional stalker and vportal profiles")
+            or set(value) - {"m3u", "plex", "active_profile", "stalker", "vportal", "local"}):
+        raise Error("A preset must contain m3u, plex and active_profile, with optional stalker, vportal and local settings")
     if not isinstance(value["m3u"], list) or not 1 <= len(value["m3u"]) <= 15:
         raise Error("A preset must contain 1–15 complete M3U profiles")
     profiles = []
@@ -1793,6 +1896,8 @@ def validate_preset(config, requested):
         result["stalker"] = stalker
     if portals:
         result["vportal"] = [{"number": number, "settings": settings} for number, settings in sorted(portals.items())]
+    if "local" in value:
+        result["local"] = validate_local_preset(value["local"])
     return name, result
 
 
@@ -1863,11 +1968,31 @@ def load_preset(client, device, name, preset, session=None):
         step("save_profile_" + str(row["number"]), "profile_settings", row, validate)
 
     try:
+        local_plan = []
+        if "local" in preset:
+            stage = "preflight_local"
+            local_plan = local_preset_plan(client, device, preset["local"])
         # Every dedicated slot must support exact comparison before any mutation.
         # Capture again before each save because an earlier save changes revision.
         for row in preset.get("vportal", []):
             stage = "preflight_vportal_" + str(row["number"])
             vportal_compare(client, device, row)
+        for index, row in enumerate(local_plan, 1):
+            stage = "connect_local_" + str(index)
+            params = {"op": "connect", "source": row["selector"]}
+            if session is not None:
+                ready = session.prepare(stage, "local_media", params)
+            else:
+                ready = row["connected"]
+            if not ready:
+                result = local_media_command(client, device, params, budget, session=session)
+                if result["source"]["name"] != row["name"] or result["source"]["kind"] != "folder":
+                    raise Error("Local preset folder identity differs from the player")
+            if not local_preset_connected(client, device, row["selector"]):
+                raise Error("Local preset folder connection was not confirmed")
+            if session is not None:
+                session.complete(stage)
+            completed.append(stage)
         for row in preset.get("vportal", []):
             stage = "save_vportal_" + str(row["number"])
             vportal_settings_command(client, device, row, session, stage)
@@ -1926,6 +2051,11 @@ def load_preset(client, device, name, preset, session=None):
             stage = "verify_vportal_" + str(row["number"])
             if not vportal_compare(client, device, row)["matched"]:
                 raise Error("VPortal saved settings differ from the preset")
+            completed.append(stage)
+        if "local" in preset:
+            stage = "verify_local"
+            if not local_preset_matches(client, device, preset["local"]):
+                raise Error("Local preset folders differ from the player")
             completed.append(stage)
     except KeyboardInterrupt:
         return {"preset": name, "status": "interrupted", "stage": stage, "completed": completed,
@@ -2678,6 +2808,169 @@ def print_categories(data):
         print(f"{'*' if row['id'] == data['selected'] else ' '} {shlex.quote('id:' + row['id'])}  {clean(row['name'])} ({row['count']})")
 
 
+def local_media_absolute(value):
+    return isinstance(value, str) and re.match(r"^(?:/|[A-Za-z]:[\\/])", value) is not None
+
+
+def local_media_selector(value):
+    return (plex_library_text(value, 4096) and
+            (local_media_absolute(value) or
+             (len(value.encode("utf-8")) <= 512 and "/" not in value and "\\" not in value and value not in (".", ".."))))
+
+
+def parse_local_media(words):
+    op = words[0].casefold() if words else "sources"
+    op = "sources" if op == "list" else op
+    tail = words[1:]
+    if op == "sources":
+        params = {"op": op}
+        while tail:
+            if tail[0] == "--paths" and "include_paths" not in params:
+                params["include_paths"] = True
+                tail = tail[1:]
+            elif (tail[0] == "--path" and "path" not in params and len(tail) >= 2
+                  and local_media_selector(tail[1]) and local_media_absolute(tail[1])):
+                params["path"] = tail[1]
+                tail = tail[2:]
+            else:
+                raise Error("Use local sources [--path ABSOLUTE_TARGET_PATH] [--paths], with each option once")
+        return params
+    if op in ("connect", "play", "shuffle"):
+        if tail[:1] == ["--"]:
+            tail = tail[1:]
+        elif any(value.startswith("--") for value in tail):
+            raise Error("Unknown local media option; use -- before a source name that starts with --")
+        source = " ".join(tail).strip()
+        if local_media_selector(source):
+            return {"op": op, "source": source}
+    raise Error("Use local sources [--path PATH] [--paths], local connect SOURCE, local play SOURCE or local shuffle SOURCE; SOURCE is a connected name/ID or an absolute path on the player")
+
+
+def local_media_metadata(data, runtime, params, capability=None):
+    invalid = "Invalid local media result; playback may be uncertain. Read local sources before sending another change"
+    capability = capability or {"max_sources": MAX_LOCAL_MEDIA_SOURCES, "max_items": MAX_LOCAL_MEDIA_ITEMS}
+    base = {"version", "runtime", "op", "state"}
+    try:
+        if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode("utf-8")) > 192 * 1024:
+            raise Error(invalid)
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise Error(invalid) from None
+    if (not isinstance(data, dict) or not base <= set(data) or type(data["version"]) is not int or data["version"] != 1
+            or data["runtime"] != runtime or data["op"] != params["op"]):
+        raise Error(invalid)
+    if data["state"] == "error":
+        if set(data) != base | {"error"} or not isinstance(data["error"], str) or data["error"] not in LOCAL_MEDIA_ERRORS:
+            raise Error(invalid)
+        return dict(data)
+    if data["state"] != "ready":
+        raise Error(invalid)
+
+    def source(row, paths=False):
+        fields = {"id", "name", "kind", "available"}
+        if (not isinstance(row, dict) or set(row) not in (fields, fields | {"path"})
+                or not isinstance(row.get("id"), str) or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", row["id"]) is None
+                or not offline_source_name(row.get("name"), 512) or row.get("kind") not in ("folder", "file")
+                or type(row.get("available")) is not bool
+                or ("path" in row and (not paths or not plex_library_text(row["path"], 4096) or not local_media_absolute(row["path"])))):
+            raise Error(invalid)
+        return dict(row)
+
+    if params["op"] == "sources":
+        if set(data) != base | {"sources"} or not isinstance(data["sources"], list) or len(data["sources"]) > capability["max_sources"]:
+            raise Error(invalid)
+        rows = [source(row, params.get("include_paths") is True) for row in data["sources"]]
+        if len({row["id"] for row in rows}) != len(rows):
+            raise Error(invalid)
+        return dict(data, sources=rows)
+    if (set(data) != base | {"source", "count", "shuffled", "accepted", "playback_confirmed"}
+            or type(data["count"]) is not int or not (0 if params["op"] == "connect" else 1) <= data["count"] <= capability["max_items"]
+            or type(data["shuffled"]) is not bool or data["shuffled"] != (params["op"] == "shuffle")
+            or data["accepted"] is not True or data["playback_confirmed"] is not False):
+        raise Error(invalid)
+    selected = source(data["source"])
+    if (not selected["available"] or
+            (not local_media_absolute(params["source"]) and params["source"] not in (selected["id"], selected["name"]))):
+        raise Error(invalid)
+    return dict(data, source=selected)
+
+
+def local_media_capabilities(client, device, timeout):
+    previous_timeout = client.timeout
+    try:
+        client.timeout = timeout
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        if "local_media" not in controls:
+            raise Error("Local media commands require an updated player and controller advertising local_media. No local media command was sent")
+        return controls
+    finally:
+        client.timeout = previous_timeout
+
+
+def local_media_command(client, device, params, timeout, session=None):
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    runtime = None
+    sent = False
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        capability = controls.get("local_media", {})
+        if params["op"] not in capability.get("operations", []):
+            raise Error("Local media commands require an updated player and controller advertising local_media. No local media command was sent")
+        if (params.get("include_paths") is True or "path" in params or local_media_absolute(params.get("source"))) and capability.get("absolute_paths") is not True:
+            raise Error("This player does not support native local paths. Connect the folder in the player, then use its name or source ID. No local media command was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Local media capability discovery exceeded --timeout; no local media command was sent")
+        runtime = controls["player"]["runtime"]
+        client.timeout = remaining
+        sent = True
+        request_params = dict(params, runtime=runtime)
+        result = (session.call("local_media", request_params) if session is not None
+                  else client.call(device, "local_media", request_params))
+        if time.monotonic() >= deadline:
+            raise Error("Local media response exceeded --timeout. Acceptance is uncertain; the request was not repeated")
+        result = local_media_metadata(result, runtime, params, capability)
+        if result["state"] == "error":
+            raise Error(LOCAL_MEDIA_ERRORS[result["error"]] + ". The request was not repeated")
+        return result
+    except PlayerRejected as exc:
+        detail = "Local media request was rejected; check the source, current runtime and local restrictions"
+        if runtime is not None:
+            try:
+                rejected = local_media_metadata(exc.data, runtime, params)
+                if rejected["state"] == "error":
+                    detail = LOCAL_MEDIA_ERRORS[rejected["error"]]
+            except Error:
+                pass
+        raise Error(detail + ". The request was not repeated") from None
+    except PlayerUnsupported:
+        outcome = "The request was not repeated" if sent else "No local media command was sent"
+        raise Error("Local media commands are unsupported by this player/controller. " + outcome) from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("This controller does not accept local media commands; update the controller and player. The request was not repeated") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_local_media(data, params=None):
+    if data["op"] == "sources":
+        if not data["sources"]:
+            print("No connected local source matches that path." if params and "path" in params else
+                  "No local sources are connected. Add a folder in the player or use local connect with a supported native path.")
+        for row in data["sources"]:
+            print(f"{clean(row['id'])}  {clean(row['name'])} ({row['kind']}; {'available' if row['available'] else 'unavailable'})")
+            if "path" in row:
+                print("  " + clean(row["path"]))
+    elif data["op"] == "connect":
+        print(f"Local source connected: {clean(data['source']['name'])}; {data['count']} catalogued items. Playback was not started.")
+    else:
+        print(f"Local source: {clean(data['source']['name'])}; {data['count']} items; " + ("shuffled once." if data["shuffled"] else "source order."))
+        print("Playback request accepted; playback has not been confirmed.")
+
+
 def parse_plex_library(words):
     operation = words[0].casefold()
     if operation == "libraries":
@@ -3226,6 +3519,19 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_library"] = {"version": 1, "operations": list(operations), "max_items": library["max_items"]}
+    if "local_media" in data:
+        local = data["local_media"]
+        operations = local.get("operations") if isinstance(local, dict) else None
+        if (not isinstance(local, dict) or set(local) != {"version", "operations", "absolute_paths", "max_sources", "max_items"}
+                or type(local.get("version")) is not int or local["version"] != 1
+                or type(local.get("absolute_paths")) is not bool
+                or type(local.get("max_sources")) is not int or not 1 <= local["max_sources"] <= MAX_LOCAL_MEDIA_SOURCES
+                or type(local.get("max_items")) is not int or not 1 <= local["max_items"] <= MAX_LOCAL_MEDIA_ITEMS
+                or not isinstance(operations, list) or len(operations) > len(LOCAL_MEDIA_OPERATIONS)
+                or any(not isinstance(op, str) or op not in LOCAL_MEDIA_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["local_media"] = dict(local, operations=list(operations))
     if "plex_library_truncation" in data:
         truncation = data["plex_library_truncation"]
         if ("plex_library" not in result or result["plex_library"]["max_items"] != MAX_PLEX_QUEUE_ITEMS
@@ -3379,7 +3685,7 @@ def print_player_help(data, name):
         print(f"  {prefix} providers  — list allowed providers (alias: provs)")
         if not kiosk_locked:
             print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
-            print(f"  {prefix} provider offline  — request Local videos (when listed in providers)")
+            print(f"  {prefix} provider local  — request Local videos (legacy alias: offline)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
             print(f"  {prefix} provider m3u 1 / R / NAME  — wait for loading, then play by number, random or name")
             print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request each player in order")
@@ -3431,6 +3737,23 @@ def print_player_help(data, name):
     if queue:
         print(f"  {prefix} plex " + " / ".join(op + " ID [ID ...]" if op in ("play", "preview") else op for op in queue))
         print("    next/prev use the retained Plex queue until plex stop clears it; kiosk can repeat its order.")
+    local = controls.get("local_media", {})
+    local_operations = local.get("operations", [])
+    if "sources" in local_operations:
+        print(f"  {prefix} local sources  — list connected local folders and files")
+        if local.get("absolute_paths"):
+            print(f"  {prefix} local sources --paths  — include private paths on this native player")
+            print(f"  {prefix} local sources --path /Volumes/data/Movies/  — find a binding using its canonical target path")
+    if "shuffle" in local_operations:
+        print(f"  {prefix} local shuffle Movies  — shuffle only that connected folder")
+        if local.get("absolute_paths"):
+            print(f"  {prefix} local shuffle /Volumes/data/Movies/  — connect and shuffle a folder on the player")
+    if "play" in local_operations:
+        print(f"  {prefix} local play Movies  — play that connected source in order")
+    if "connect" in local_operations:
+        print(f"  {prefix} local connect Movies  — confirm a connected source without playback")
+        if local.get("absolute_paths"):
+            print(f"  {prefix} local connect /Volumes/data/Movies/  — connect a folder without playback")
     libraries = controls.get("plex_library", {}).get("operations", [])
     if "list" in libraries:
         print(f"  {prefix} plex libraries  — list movie/show libraries on the player's Plex server")
@@ -3524,7 +3847,7 @@ def print_player_summary(data, name):
     state = "Standby" if standby is True else "Awake" if standby is False else "Connected (standby not reported)"
     provider = status_text(data.get("provider"), r"[a-z0-9_-]{1,32}")
     provider = {"m3u": "M3U", "vportal": "VPortal", "plex": "Plex", "stalker": "Stalker",
-                "offline": "Local videos (offline)"}.get(provider, provider)
+                "offline": "Local videos", "local": "Local videos"}.get(provider, provider)
     volume = data.get("volume")
     volume = f"{volume:g}%" if type(volume) in (int, float) and 0 <= volume <= 100 and math.isfinite(volume) else "Not reported"
     channels = data.get("channels")
@@ -4454,7 +4777,7 @@ def provider_play_plan(client, device, words, deadline):
     if not query:
         raise Error("provider requires a provider ID, index or name")
     if len(tail) == 1 and tail[0] != "--":
-        return {"query": query}, None, None
+        return {"query": "offline" if query.casefold() == "local" else query}, None, None
     boundary = tail.index("--") if "--" in tail else None
     if boundary is not None and (boundary == 0 or boundary == len(tail) - 1 or tail.count("--") != 1):
         raise Error("Use provider ID_OR_NAME -- CHANNEL, R or NAME")
@@ -4473,6 +4796,8 @@ def provider_play_plan(client, device, words, deadline):
 
     def resolve(value):
         key = value.strip().casefold()
+        if key == "local":
+            key = "offline"
         exact = [row for row in rows if row["id"].casefold() == key or str(row["index"]) == key]
         exact = exact or [row for row in rows if media_search_key(row["name"]) == media_search_key(key)]
         matches = exact or [row for row in rows if media_search_key(key) in media_search_key(row["name"])]
@@ -5049,6 +5374,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         data = plex_queue_command(client, device, params, args.timeout)
     elif action == "plex_library":
         data = plex_library_command(client, device, params, args.timeout)
+    elif action == "local_media":
+        data = local_media_command(client, device, params, args.timeout)
     elif action == "categories":
         data = categories_command(client, device, params, args.timeout)
     elif action == "channels":
@@ -5164,6 +5491,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         print_plex_queue(data, preview=params["op"] == "preview")
     elif action == "plex_library":
         print_plex_library(data)
+    elif action == "local_media":
+        print_local_media(data, params)
     elif action == "categories":
         print_categories(data)
     elif action == "favorites":

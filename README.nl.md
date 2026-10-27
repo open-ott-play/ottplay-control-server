@@ -121,7 +121,7 @@ Plex-wachtrijen vereisen een CLI, controller en speler met `plex_queue`. `plex p
 Met een actuele speler en controller gebruiken lokale bestanden/mappen de provider `offline`:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

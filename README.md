@@ -231,10 +231,11 @@ remaining items are not appended automatically. See
 
 ### Save Local videos profiles
 
-With a current player and controller, local files/folders use provider `offline`:
+With a current player and controller, select **Local videos** with `provider local`
+(the compatible protocol identifier remains `offline`):
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

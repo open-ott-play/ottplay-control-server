@@ -232,7 +232,7 @@ class OfflineProfileTest(unittest.TestCase):
         status, output, error, _ = self.run_cli([], [{'provider': 'm3u'}, data])
         self.assertEqual((status, error), (0, ''))
         self.assertIn('Available controls now', output)
-        self.assertIn('provider offline', output)
+        self.assertIn('provider local', output)
 
     def test_path_descriptions_match_player_validation(self):
         for name in ['../video.mp4', '/video.mp4', 'a//b', 'a/', 'file:foo', 'C:\\movie.mp4']:

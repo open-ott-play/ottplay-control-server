@@ -121,7 +121,7 @@ Plex সারির জন্য `plex_queue` বাস্তবায়নক
 বর্তমান প্লেয়ার ও নিয়ন্ত্রকে স্থানীয় ফাইল/ফোল্ডার `offline` প্রদানকারী ব্যবহার করে:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

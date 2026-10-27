@@ -121,7 +121,7 @@ Kolejki Plex wymagają CLI, kontrolera i odtwarzacza implementujących `plex_que
 Przy aktualnym odtwarzaczu i kontrolerze lokalne pliki/foldery korzystają z dostawcy `offline`:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

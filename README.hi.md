@@ -121,7 +121,7 @@ Plex कतारों के लिए `plex_queue` लागू करने 
 वर्तमान प्लेयर और नियंत्रक में लोकल फ़ाइल/फ़ोल्डर `offline` प्रदाता इस्तेमाल करते हैं:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

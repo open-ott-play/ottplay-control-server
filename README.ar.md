@@ -159,7 +159,7 @@ ott l plex library --preview id:16    # read-only check of an explicit library
 <div dir="ltr">
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

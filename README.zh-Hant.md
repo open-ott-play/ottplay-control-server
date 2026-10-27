@@ -121,7 +121,7 @@ Plex 佇列要求 CLI、控制器和播放器實現 `plex_queue`。`plex play --
 在目前版本的播放器和控制器中，本機檔案/資料夾使用 `offline` 供應商：
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json

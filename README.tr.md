@@ -121,7 +121,7 @@ Plex kuyrukları `plex_queue` uygulayan CLI, denetleyici ve oynatıcı gerektiri
 Güncel oynatıcı ve denetleyiciyle yerel dosya/klasörler `offline` sağlayıcısını kullanır:
 
 ```sh
-ott d1 provider offline
+ott d1 provider local
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json
