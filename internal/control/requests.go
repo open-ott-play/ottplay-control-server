@@ -144,7 +144,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	case "status", "providers", "profiles", "epg_catalog":
 		ok = len(params) == 0
 	case "capabilities":
-		ok = len(params) == 0 || (len(params) == 1 && string(params["local_media_progressive"]) == "true")
+		ok = validLocalMediaCapabilityProbe(params)
 	case "screenshot":
 		ok = validScreenshotRequest(params)
 	case "aspect":
@@ -542,8 +542,12 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 400, "invalid local media capability")
 			return
 		}
-		if marker, exists := capabilities["local_media_progressive"]; exists && (!validLocalMediaProgressiveCapability(marker) || !validLocalMediaCapability(capabilities["local_media"])) {
+		if marker, exists := capabilities["local_media_progressive"]; exists && (!validLocalMediaExtensionCapability(marker) || !validLocalMediaCapability(capabilities["local_media"])) {
 			failure(w, 400, "invalid progressive local media capability")
+			return
+		}
+		if marker, exists := capabilities["local_media_session"]; exists && (!validLocalMediaExtensionCapability(marker) || !validLocalMediaCapability(capabilities["local_media"])) {
+			failure(w, 400, "invalid session local media capability")
 			return
 		}
 		if marker, exists := capabilities["perf_capture"]; exists && !validPerfCapability(marker) {

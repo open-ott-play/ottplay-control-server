@@ -233,7 +233,9 @@ remaining items are not appended automatically. See
 
 The [reviewed CLI source](docs/cli.md#choose-the-cli-source-revision) includes
 `local` commands and Local source bindings in named presets. Use a controller
-with `local_media` support and a player advertising the requested operation:
+with `local_media` support and a player advertising the requested operation.
+Session-only `play`/`shuffle` additionally require the coordinated CLI/controller/
+player update and `local_media_session` handshake; controller beta22 predates it:
 
 ```sh
 ott t1 local sources
@@ -243,10 +245,17 @@ ott t1,t2 local shuffle Movies
 ott t1,t2,t3,t4 local shuffle ~/v/data/FFFF/
 ```
 
-With a controller and player supporting progressive Local playback, the command
+Remote `play`/`shuffle` (also `offline` and groups) keep the playback selection,
+order and position in memory. They do not replace saved provider/profile/startup
+settings or become persistent through autosave or export. Explicit UI selection
+and native source bindings remain separate persistent actions. The new CLI
+refuses playback if the controller or player cannot prove session support.
+
+With session and progressive support on the controller and player, the command
 can return after discovering playable items while the selected folder continues
 scanning. The CLI labels that count as partial; an accepted request does not
-confirm decoded video. Older combinations keep the complete-scan behavior.
+confirm decoded video. Session-capable players without progressive support wait
+for a complete selected-source scan.
 
 Folder names are exact. Absolute paths refer to the target player's filesystem
 and require native path support; browser players use folders already selected

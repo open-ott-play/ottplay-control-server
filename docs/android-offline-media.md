@@ -34,13 +34,25 @@ ott d1 provider local
 
 The `local_media` capability lists supported operations. Remote commands need
 network access to the controller even when the videos are on the device.
+`local play` and `local shuffle`, including the `offline` alias and groups, use a
+temporary session: they do not save provider/profile/startup selection, queue
+order, shuffle seed, cursor or resume position through autosave or export.
+The CLI requires a successful controller probe and player
+`local_media_session: {"version":1}` support before sending playback. Controller
+beta22 predates that handshake; an unsupported controller or player gets no
+Local playback command and no legacy fallback.
+
 Android does not accept a desktop filesystem path as a grant: connect the source
 in its picker first. Tauri desktop builds that advertise `absolute_paths` can
 also connect an absolute path on that target computer. Browser players use
 previously selected sources and their browser permissions. The compatible wire
 provider ID remains `offline`; the preferred CLI name is `local`.
+Persisted SAF grants and native folder bindings are independent of the playback
+session. Explicit Local/provider/kiosk selection in the player UI still saves
+startup configuration. Reloading ends the remote session and follows that saved
+configuration.
 
-When both the controller and player support progressive Local playback, `local
+When both the controller and player support session and progressive Local playback, `local
 play` and `local shuffle` can accept a playable prefix while discovery continues.
 The CLI marks the item count as partial. Support is negotiated per player;
 installing a new CLI alone does not enable it on an older Android build. See
@@ -66,7 +78,7 @@ a cloud document remains available after connectivity is lost.
 Implementation and automated tests do not establish offline behavior on every
 tablet or firmware. Check each deployed device:
 
-1. Select a local H.264/AAC MP4 folder. Confirm OTT storage gains small metadata
+1. Select a local H.264/AAC MP4 folder in the player UI. Confirm OTT storage gains small metadata
    records rather than another copy of the videos; play, seek and change files.
 2. Disable networking and repeat playback. Force-stop and restart OTT, then
    reboot; verify the saved selection and persisted source permission.

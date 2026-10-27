@@ -4,6 +4,12 @@
 
 ### Added
 
+- Require negotiated session-only Local play/shuffle in the CLI, including the
+  `offline` alias and groups. Remote playback stays in memory without replacing
+  saved provider/profile/startup state, order, seed, cursor, resume or exports;
+  explicit UI choices and source bindings remain persistent. The separate
+  session capability and acknowledgement preserve legacy schemas, and unsupported
+  controllers/players fail before a Local mutation without a legacy fallback.
 - Negotiate progressive Local play/shuffle with the controller and each player.
   Report a playable prefix as a partial count while scanning continues, retain
   complete-scan responses for older clients, and keep playback confirmation

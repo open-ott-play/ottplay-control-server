@@ -1472,7 +1472,7 @@ advertises the supported operations and native path capability:
 {"action":"local_media","params":{"runtime":"page-123","op":"sources"}}
 {"action":"local_media","params":{"runtime":"page-123","op":"sources","include_paths":true}}
 {"action":"local_media","params":{"runtime":"page-123","op":"sources","path":"/var/media/Movies","include_paths":true}}
-{"action":"local_media","params":{"runtime":"page-123","op":"shuffle","source":"Movies"}}
+{"action":"local_media","params":{"runtime":"page-123","op":"shuffle","source":"Movies","session":true}}
 {"action":"local_media","params":{"runtime":"page-123","op":"connect","source":"/Volumes/data/Movies/"}}
 ```
 
@@ -1501,48 +1501,103 @@ expose this only with `absolute_paths:true`. Other successful operations return
 one `source` without its private path, integer `count`, boolean `shuffled`,
 `accepted:true` and `playback_confirmed:false`. `count` is 1–50,000 for playback
 or 0–50,000 for connection. `shuffled` is true only for the `shuffle` operation.
-An accepted response is not playback evidence.
+Negotiated session playback additionally requires `session:true`, as described
+below. Connection responses retain their existing shape. An accepted response
+is not playback evidence.
+
+#### Session-only Local playback negotiation
+
+The existing `local_media` capability keeps exactly its five fields. Updated
+players advertise session-only playback in a separate sibling capability;
+progressive support is independent:
+
+```json
+{"local_media_session":{"version":1},"local_media_progressive":{"version":1}}
+```
+
+The new CLI sends this read-only combined controller probe before every Local
+`play` or `shuffle`, including the `offline` alias and each target in a group:
+
+```json
+{"action":"capabilities","params":{"local_media_session":true,"local_media_progressive":true}}
+```
+
+A supporting controller accepts exactly `{}`, `{"local_media_session":true}`,
+`{"local_media_progressive":true}`, or both flags set to literal `true`.
+It computes idempotency identity from the original parameters before consuming
+the probe flags and forwarding `capabilities` with `{}` to the player. False,
+null, numeric substitutes and additional fields are invalid.
+
+A successful probe proves controller support; the returned player capability
+must separately include `local_media_session:{"version":1}`. Controller beta22
+predates the session probe and rejects it with HTTP 400 before allocating or
+queuing a request. The new CLI stops on that rejection or a missing player
+session marker; it never falls back to an unflagged Local mutation. Timeouts,
+receipt failures, HTTP 5xx and player rejections also do not establish support.
+The probe and command share one per-target timeout budget. `sources`, `connect`
+and preset folder bindings continue using their existing capability checks.
+
+After the handshake, playback requests require `session:true`:
+
+```json
+{"action":"local_media","params":{"runtime":"page-123","op":"shuffle","source":"Movies","session":true}}
+{"version":1,"runtime":"page-123","op":"shuffle","state":"ready","source":{"id":"source-123","name":"Movies","kind":"folder","available":true},"count":3,"shuffled":true,"accepted":true,"playback_confirmed":false,"session":true}
+```
+
+`session` is allowed only as literal `true` on `play`/`shuffle`; it is invalid
+on `sources`/`connect`. A successful response must echo `session:true`: the
+complete result has the original nine fields plus `session` (ten fields).
+A missing, false, null or unsolicited session acknowledgement is rejected;
+the client does not resend playback or downgrade an uncertain result. Error
+results keep the original five fields, without `session` or `scanning`.
+
+Session playback keeps the selected provider/source, order, shuffle seed,
+cursor and resume position in memory. It does not replace saved provider,
+profile or startup settings, including through deferred saves, autosave or
+export. Reloading ends that session and follows the saved startup configuration.
+Explicit provider/Local/kiosk selection in the player UI can create persistent
+configuration. Native source connections and OS/browser access grants are
+separate from playback persistence and are not undone when a session ends.
+
+Updated players use the transient implementation for all remote Local play and
+shuffle, including requests from older CLIs. Without the `session` flag they
+return the legacy acknowledgement shape, preserving strict older validators.
+An older CLI/player combination has no session guarantee. The new CLI requires
+the handshake so it can establish this behavior instead of relying on version
+labels. See [the session contract](../contracts/local-media-session-v1.json) for
+complete, progressive and error examples. Update CLI, controller and player
+together; documentation or a CLI installation alone does not update a player.
 
 #### Progressive Local playback negotiation
 
-The existing `local_media` capability keeps exactly its five fields. A player
-supporting progressive playback adds a separate capability:
+For the new CLI, session support is required and progressive support is optional.
+Only a successful combined probe **and** a valid player
+`local_media_progressive:{"version":1}` marker allow `progressive:true` in
+addition to `session:true`:
 
 ```json
-{"local_media_progressive":{"version":1}}
-```
-
-A controller client must also establish server support. Submit the read-only
-probe `{"action":"capabilities","params":{"local_media_progressive":true}}`.
-A supporting server accepts this exact parameter and forwards an ordinary
-`capabilities` request with `{}` parameters to the player. An older server
-rejects the probe with HTTP 400 before allocating or queuing a request. Only
-that enqueue rejection permits one fallback to `capabilities {}`, within the
-same overall deadline. A receipt failure, timeout, HTTP 5xx or player rejection
-does not establish support and must not trigger that fallback.
-
-Only a successful probe **and** a valid player `local_media_progressive` marker
-allow the client to opt in on `play` or `shuffle`:
-
-```json
-{"action":"local_media","params":{"runtime":"page-123","op":"shuffle","source":"Movies","progressive":true}}
+{"action":"local_media","params":{"runtime":"page-123","op":"shuffle","source":"Movies","session":true,"progressive":true}}
 ```
 
 If the selected source is still scanning, an accepted result may add
-`"scanning":true` to the usual nine fields. Its `count` is the number of playable
+`"scanning":true` to the ten session-result fields (eleven fields total).
+Its `count` is the number of playable
 items discovered so far, from 1 through the advertised limit; it is not a final
 total. The response still uses `state:"ready"`, `accepted:true` and
-`playback_confirmed:false`. A completed scan returns the original nine-field
-result even when the request opted in. The request does not stream later counts
-through the controller.
+`playback_confirmed:false`. A completed scan returns the ten-field session result
+without `scanning`, even when the request opted in. The request does not stream
+later counts through the controller. A session-capable player without the
+progressive marker uses a complete selected-source scan.
 
 `progressive` is allowed only as the literal boolean `true` on `play` or
 `shuffle`; it is invalid on `sources` and `connect`. `scanning` is allowed only
 as `true` on an opted-in successful playback result. `false`, `null`, numeric
 substitutes and unsolicited fields are rejected. Error results retain their
-original five fields. Requests without the opt-in retain complete-scan behavior,
-so old CLI, controller and player combinations continue to work. Negotiation is
-independent for each player in a comma-separated group.
+original five fields. Legacy clients can still use the progressive-only probe
+and request: without `session:true`, their complete acknowledgement has nine
+fields and their partial acknowledgement adds only `scanning:true` (ten).
+This preserves the legacy schema; it does not prove session support on an older
+player. Negotiation is independent for each player in a comma-separated group.
 
 Rejected responses retain `version`, `runtime` and `op`, with `state:"error"` and
 a fixed error identifier. See [the shared contract](../contracts/local-media-v1.json)

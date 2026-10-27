@@ -13,6 +13,7 @@ spec = importlib.util.spec_from_file_location('ott_group_request_diagnostics', R
 ott = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ott)
 CONTRACT = json.loads((ROOT / 'contracts/local-media-v1.json').read_text())
+SESSION_CONTRACT = json.loads((ROOT / 'contracts/local-media-session-v1.json').read_text())
 PRIVATE = 'https://private.example/?token=never-project-this'
 
 
@@ -68,11 +69,11 @@ class GroupRequestDiagnosticsTest(unittest.TestCase):
         if action == 'capabilities':
             data = {'version': 1, 'player': {'version': 'test', 'platform': 'tauri', 'runtime': runtime},
                     'lifecycle': [], 'input': [], 'playback': [], 'local_media': CONTRACT['capability'],
-                    'local_media_progressive': {'version': 1}}
+                    'local_media_progressive': {'version': 1}, 'local_media_session': {'version': 1}}
         else:
             self.assertEqual(action, 'local_media')
-            self.assertEqual(params, {'op': 'shuffle', 'source': 'Movies', 'runtime': runtime, 'progressive': True})
-            data = dict(CONTRACT['shuffle_result'], runtime=runtime)
+            self.assertEqual(params, {'op': 'shuffle', 'source': 'Movies', 'runtime': runtime, 'progressive': True, 'session': True})
+            data = dict(SESSION_CONTRACT['shuffle_result'], runtime=runtime)
         return 200, {'id': request_id, 'status': 'ok', 'data': data}
 
     def run_cli(self, selector='t1,t2,t3,t4'):
@@ -107,7 +108,7 @@ class GroupRequestDiagnosticsTest(unittest.TestCase):
         self.assertEqual([(device, action) for device, action, _ in self.posts],
                          [('dev_1', 'capabilities'), ('dev_2', 'capabilities'), ('dev_2', 'local_media'),
                           ('dev_3', 'capabilities'), ('dev_4', 'capabilities'), ('dev_4', 'local_media')])
-        self.assertTrue(all(params == {'local_media_progressive': True}
+        self.assertTrue(all(params == SESSION_CONTRACT['probe_request']['params']
                             for _, action, params in self.posts if action == 'capabilities'))
         self.assertNotIn(PRIVATE, out + err)
         self.assertAlmostEqual(self.now, 11.6)
