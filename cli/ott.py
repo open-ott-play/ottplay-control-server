@@ -1738,7 +1738,7 @@ def validate_local_preset(value):
     sources, names, paths = [], set(), set()
     for row in value["sources"]:
         if (not isinstance(row, dict) or set(row) not in ({"name"}, {"name", "path"})
-                or not offline_source_name(row.get("name"), 512)):
+                or not local_media_name(row.get("name"))):
             raise Error("Local preset sources require a folder name and optional absolute target path")
         name = row["name"]
         if name in names:
@@ -2812,6 +2812,12 @@ def local_media_absolute(value):
     return isinstance(value, str) and re.match(r"^(?:/|[A-Za-z]:[\\/])", value) is not None
 
 
+def local_media_name(value):
+    """A local basename is text, not a URI or a portable profile reference."""
+    return (plex_library_text(value, 512) and "/" not in value and "\\" not in value
+            and value not in (".", "..") and all(not 127 <= ord(char) <= 159 for char in value))
+
+
 def local_media_selector(value):
     return (plex_library_text(value, 4096) and
             (local_media_absolute(value) or
@@ -2869,7 +2875,7 @@ def local_media_metadata(data, runtime, params, capability=None):
         fields = {"id", "name", "kind", "available"}
         if (not isinstance(row, dict) or set(row) not in (fields, fields | {"path"})
                 or not isinstance(row.get("id"), str) or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", row["id"]) is None
-                or not offline_source_name(row.get("name"), 512) or row.get("kind") not in ("folder", "file")
+                or not local_media_name(row.get("name")) or row.get("kind") not in ("folder", "file")
                 or type(row.get("available")) is not bool
                 or ("path" in row and (not paths or not plex_library_text(row["path"], 4096) or not local_media_absolute(row["path"])))):
             raise Error(invalid)

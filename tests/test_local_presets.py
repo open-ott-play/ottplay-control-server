@@ -157,6 +157,18 @@ class LocalPresetTests(unittest.TestCase):
         value = {"sources": [{"name": "Movies", "path": "/Volumes/data/Movies/"}, {"name": "Kids"}]}
         self.assertEqual(ott.validate_local_preset(value), value)
 
+    def test_colon_named_folder_can_be_delivered_in_a_preset(self):
+        value = {"sources": [{"name": "Kids: Cartoons", "path": "/Volumes/data/Kids: Cartoons"}]}
+        self.assertEqual(ott.validate_local_preset(value), value)
+        result = self.load(self.normalized(value))
+        self.assertEqual(result["status"], "loaded")
+        self.assertEqual(self.sources[0]["name"], "Kids: Cartoons")
+
+    def test_preset_folder_names_retain_basename_and_byte_limits(self):
+        for name in (".", "..", "A/B", "A\\B", "A\nB", "A\x85B", "Я" * 257):
+            with self.subTest(name=name), self.assertRaises(ott.Error):
+                ott.validate_local_preset({"sources": [{"name": name}]})
+
     def test_connect_checkpoint_reconciles_lost_reply_without_replaying(self):
         module_spec = importlib.util.spec_from_file_location("local_preset_session", Path(__file__).resolve().parents[1] / "cli/preset_session.py")
         module = importlib.util.module_from_spec(module_spec)

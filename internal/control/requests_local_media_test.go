@@ -231,3 +231,35 @@ func TestLocalMediaCapabilityAndSourceBounds(t *testing.T) {
 		t.Fatal("empty source listing rejected")
 	}
 }
+
+func TestLocalMediaLiteralNamesPreservePortableProfileValidation(t *testing.T) {
+	for _, name := range []string{"Kids: Cartoons", "Drama:2026", "Фильмы: детям"} {
+		for _, op := range []string{"sources", "connect", "play", "shuffle"} {
+			s := newTestServer(t)
+			params := map[string]any{"runtime": "page-123", "op": op}
+			if op != "sources" {
+				params["source"] = name
+			}
+			encoded, _ := json.Marshal(map[string]any{"action": "local_media", "params": params})
+			id := rpcID(t, s, string(encoded))
+			source := map[string]any{"id": "folder-colon", "name": name, "kind": "folder", "available": true}
+			result := map[string]any{"version": 1, "runtime": "page-123", "op": op, "state": "ready"}
+			if op == "sources" {
+				result["sources"] = []any{source}
+			} else {
+				result["source"], result["count"], result["shuffled"] = source, 1, op == "shuffle"
+				result["accepted"], result["playback_confirmed"] = true, false
+			}
+			expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, "ok", result), nil), 200)
+		}
+	}
+	if offlineSourceName(json.RawMessage(`"Kids: Cartoons"`), 512, false) {
+		t.Fatal("portable profile wire validation changed")
+	}
+	for _, name := range []string{"", " ", ".", "..", "A/B", `A\B`, "A\nB", "A\x7fB", "A\u0085B", strings.Repeat("Я", 257)} {
+		raw, _ := json.Marshal(name)
+		if localMediaName(raw) {
+			t.Fatalf("invalid local basename accepted: %q", name)
+		}
+	}
+}
