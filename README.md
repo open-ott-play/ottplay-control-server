@@ -101,9 +101,9 @@ Both server and player must include the request/response extension.
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
 cover macOS/Linux and Windows, Python/PATH setup and the required CLI modules.
-They pin the CLI release source with workbench and offline
-verification; stable CLI v0.1.0 and native server archives do not include those
-commands. [Update or roll back the CLI](docs/cli.md#update-select-or-roll-back-the-cli)
+They pin a reviewed source commit containing Local source commands, preset
+bindings, workbench and offline verification; stable CLI v0.1.0 and native server
+archives do not include those commands. [Update or roll back the CLI](docs/cli.md#update-select-or-roll-back-the-cli)
 without replacing an existing checkout, launcher or private configuration.
 Local launchers can use the read-only [playlist resolver](docs/cli.md#local-playlist-resolver)
 to search channels, current programmes and playable archives without a controller.
@@ -111,11 +111,11 @@ Use [finite group monitoring](docs/monitoring-runbook.md) to distinguish control
 access failures, unavailable observations, standby and decoder progress before
 repairing a player. Saved diagnostic bundles and performance exports can be
 verified offline.
-The unreleased
-[HLS policy capture extension](docs/performance-capture.md#hls-buffer-policy-and-retry-evidence)
-adds explicit opt-in evidence for buffer starvation, distinguishing constructor
-settings, observed cap changes and mutable retry statistics. It is not included
-in the pinned beta.12 CLI installation.
+The [HLS policy capture extension](docs/performance-capture.md#hls-buffer-policy-and-retry-evidence)
+is included in that reviewed CLI source. It adds explicit opt-in evidence for
+buffer starvation, distinguishing constructor settings, observed cap changes
+and mutable retry statistics. Capture also requires matching controller and
+player support.
 Once installed and configured:
 
 ```sh
@@ -228,6 +228,25 @@ library larger than 500 items starts a 500-item queue and prints a limit warning
 The first 500 items are selected in library order, then shuffled when requested;
 remaining items are not appended automatically. See
 [Plex libraries by name](docs/cli.md#plex-libraries-by-name).
+
+### Play connected local folders
+
+The [reviewed CLI source](docs/cli.md#choose-the-cli-source-revision) includes
+`local` commands and Local source bindings in named presets. Use a controller
+with `local_media` support and a player advertising the requested operation:
+
+```sh
+ott t1 local sources
+ott t1 local shuffle Movies
+ott t1 local shuffle /Volumes/data/Movies/
+ott t1,t2 local shuffle Movies
+```
+
+Folder names are exact. Absolute paths refer to the target player's filesystem
+and require native path support; browser players use folders already selected
+and permitted on that browser. See [Local folders](docs/cli.md#local-folders-and-shuffled-playback)
+for source IDs, limits, aliases and examples, and [named setups](docs/cli.md#named-setups)
+for delivering saved Local source bindings with `ott PLAYER load PRESET`.
 
 ### Save Local videos profiles
 

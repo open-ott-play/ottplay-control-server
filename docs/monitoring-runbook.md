@@ -87,11 +87,12 @@ ott report verify ./d1-capture --json
 ```
 
 Use `perf start --hls-details` when the advertised HLS v2 capability is available
-and per-track buffer/fragment evidence is needed. The unreleased v3 extension
+and per-track buffer/fragment evidence is needed. The v3 extension
 adds `perf start --hls-policy-details` for initial/current buffer policy,
 observed cap changes and separately labelled retry statistics. It requires a
 compatible controller, CLI and the player's `perf_capture_hls_policy` v3
-capability; it is not part of the pinned beta.12 CLI installation. The two flags
+capability. CLI and controller support is included in the
+[reviewed source revision](cli.md#choose-the-cli-source-revision). The two flags
 are alternatives, and `--hls-details` retains v2 compatibility. See the
 [HLS policy definitions and examples](performance-capture.md#hls-buffer-policy-and-retry-evidence)
 before interpreting retry counts or buffer-cap causes.
