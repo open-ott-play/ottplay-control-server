@@ -82,10 +82,17 @@ func validLocalMediaSource(raw json.RawMessage, includePaths bool) (string, bool
 		}
 		count--
 	}
-	if err != nil || count != 4 || json.Unmarshal(m["id"], &id) != nil || !localMediaIDPattern.MatchString(id) || !offlineSourceName(m["name"], 512, false) || !offlineEnum(m["kind"], "folder", "file") || (string(m["available"]) != "true" && string(m["available"]) != "false") {
+	if err != nil || count != 4 || json.Unmarshal(m["id"], &id) != nil || !localMediaIDPattern.MatchString(id) || !localMediaName(m["name"]) || !offlineEnum(m["kind"], "folder", "file") || (string(m["available"]) != "true" && string(m["available"]) != "false") {
 		return "", false
 	}
 	return id, true
+}
+
+func localMediaName(raw json.RawMessage) bool {
+	var value string
+	return offlineNonemptyText(raw, 512) && json.Unmarshal(raw, &value) == nil &&
+		!strings.ContainsAny(value, `/\`) && value != "." && value != ".." &&
+		!strings.ContainsFunc(value, func(character rune) bool { return character >= 127 && character <= 159 })
 }
 
 func validLocalMediaResult(raw json.RawMessage, status string, request *localMediaRequest) bool {

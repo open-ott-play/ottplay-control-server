@@ -1738,7 +1738,7 @@ def validate_local_preset(value):
     sources, names, paths = [], set(), set()
     for row in value["sources"]:
         if (not isinstance(row, dict) or set(row) not in ({"name"}, {"name", "path"})
-                or not offline_source_name(row.get("name"), 512)):
+                or not local_media_name(row.get("name"))):
             raise Error("Local preset sources require a folder name and optional absolute target path")
         name = row["name"]
         if name in names:
@@ -1759,8 +1759,9 @@ def validate_local_preset(value):
     return {"sources": sources}
 
 
-def local_preset_snapshot(client, device, path=None):
-    controls = local_media_capabilities(client, device, client.timeout)
+def local_preset_snapshot(client, device, path=None, *, controls=None):
+    if controls is None:
+        controls = local_media_capabilities(client, device, client.timeout)
     capability = controls["local_media"]
     if not {"sources", "connect"} <= set(capability["operations"]):
         raise Error("This player cannot receive Local videos presets; no preset settings were sent")
@@ -1770,18 +1771,22 @@ def local_preset_snapshot(client, device, path=None):
         params["include_paths"] = True
         if path is not None:
             params["path"] = path
-    result = local_media_command(client, device, params, client.timeout)
+    result = local_media_command(client, device, params, client.timeout, controls=controls)
     return native, result["sources"]
 
 
 def local_preset_plan(client, device, local):
-    native, existing = local_preset_snapshot(client, device)
+    controls = local_media_capabilities(client, device, client.timeout)
+    native, existing = local_preset_snapshot(client, device, controls=controls)
     plan = []
     for source in local["sources"]:
         path = source.get("path") if native else None
         if path:
-            # Canonical identity belongs to the target filesystem, not this CLI.
-            _, matches = local_preset_snapshot(client, device, path)
+            # Returned paths are already canonical on the target. Resolve only
+            # spellings absent from this phase's snapshot, never on the CLI host.
+            matches = [row for row in existing if row.get("path", "").rstrip("/\\") == path.rstrip("/\\")]
+            if not matches:
+                _, matches = local_preset_snapshot(client, device, path, controls=controls)
         else:
             matches = [row for row in existing if row["name"] == source["name"]]
         if len(matches) > 1:
@@ -1980,16 +1985,15 @@ def load_preset(client, device, name, preset, session=None):
         for index, row in enumerate(local_plan, 1):
             stage = "connect_local_" + str(index)
             params = {"op": "connect", "source": row["selector"]}
-            if session is not None:
+            ready = row["connected"]
+            if not ready and session is not None:
                 ready = session.prepare(stage, "local_media", params)
-            else:
-                ready = row["connected"]
             if not ready:
                 result = local_media_command(client, device, params, budget, session=session)
                 if result["source"]["name"] != row["name"] or result["source"]["kind"] != "folder":
                     raise Error("Local preset folder identity differs from the player")
-            if not local_preset_connected(client, device, row["selector"]):
-                raise Error("Local preset folder connection was not confirmed")
+                if not local_preset_connected(client, device, row["selector"]):
+                    raise Error("Local preset folder connection was not confirmed")
             if session is not None:
                 session.complete(stage)
             completed.append(stage)
@@ -2812,6 +2816,12 @@ def local_media_absolute(value):
     return isinstance(value, str) and re.match(r"^(?:/|[A-Za-z]:[\\/])", value) is not None
 
 
+def local_media_name(value):
+    """A local basename is text, not a URI or a portable profile reference."""
+    return (plex_library_text(value, 512) and "/" not in value and "\\" not in value
+            and value not in (".", "..") and all(not 127 <= ord(char) <= 159 for char in value))
+
+
 def local_media_selector(value):
     return (plex_library_text(value, 4096) and
             (local_media_absolute(value) or
@@ -2869,7 +2879,7 @@ def local_media_metadata(data, runtime, params, capability=None):
         fields = {"id", "name", "kind", "available"}
         if (not isinstance(row, dict) or set(row) not in (fields, fields | {"path"})
                 or not isinstance(row.get("id"), str) or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", row["id"]) is None
-                or not offline_source_name(row.get("name"), 512) or row.get("kind") not in ("folder", "file")
+                or not local_media_name(row.get("name")) or row.get("kind") not in ("folder", "file")
                 or type(row.get("available")) is not bool
                 or ("path" in row and (not paths or not plex_library_text(row["path"], 4096) or not local_media_absolute(row["path"])))):
             raise Error(invalid)
@@ -2906,14 +2916,17 @@ def local_media_capabilities(client, device, timeout):
         client.timeout = previous_timeout
 
 
-def local_media_command(client, device, params, timeout, session=None):
+def local_media_command(client, device, params, timeout, session=None, *, controls=None):
     deadline = time.monotonic() + timeout
     previous_timeout = client.timeout
     runtime = None
     sent = False
     try:
         client.timeout = max(0, deadline - time.monotonic())
-        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        # Reuse a validated runtime only for a bounded read-only preset phase.
+        # Every mutation still discovers fresh capabilities before dispatch.
+        if controls is None or params["op"] != "sources":
+            controls = capabilities_metadata(client.call(device, "capabilities", {}))
         capability = controls.get("local_media", {})
         if params["op"] not in capability.get("operations", []):
             raise Error("Local media commands require an updated player and controller advertising local_media. No local media command was sent")

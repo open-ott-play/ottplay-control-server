@@ -85,6 +85,28 @@ class LocalMediaTest(unittest.TestCase):
         self.assertEqual((code, out), (1, ''))
         self.assertNotIn('/Volumes', err)
 
+    def test_literal_colon_names_round_trip_without_changing_portable_profiles(self):
+        for name in ('Kids: Cartoons', 'Drama:2026', 'Фильмы: детям'):
+            for op in CONTRACT['operations']:
+                data = copy.deepcopy(CONTRACT[op + '_result'])
+                if op == 'sources':
+                    data['sources'].append(dict(data['sources'][0], id='source-colon', name=name))
+                else:
+                    data['source']['name'] = name
+                words = ['local', op] + ([] if op == 'sources' else [name])
+                code, out, err, calls = self.run_cli(words, [caps(), data], True)
+                self.assertEqual((code, err, json.loads(out)), (0, '', data))
+                self.assertEqual(len(calls), 2)
+        self.assertFalse(ott.offline_source_name('Kids: Cartoons', 512))
+
+    def test_source_names_remain_bounded_basename_text(self):
+        for name in ('', ' ', '.', '..', 'Kids/Cartoons', 'Kids\\Cartoons', 'Kids\nCartoons',
+                     'Kids\x7fCartoons', 'Kids\x85Cartoons', '\ud800', 'Я' * 257):
+            data = copy.deepcopy(CONTRACT['sources_result'])
+            data['sources'][0]['name'] = name
+            code, out, _, _ = self.run_cli(['local', 'sources'], [caps(), data], True)
+            self.assertEqual((code, out), (1, ''), repr(name))
+
     def test_path_lookup_uses_player_canonical_identity_without_revealing_paths_by_default(self):
         params = CONTRACT['lookup_request']['params']
         result = CONTRACT['lookup_result']
@@ -162,6 +184,18 @@ class LocalMediaTest(unittest.TestCase):
         self.assertEqual(result, CONTRACT['connect_result'])
         client.call.assert_called_once_with('dev_t1', 'capabilities', {})
         session.call.assert_called_once_with('local_media', CONTRACT['connect_request']['params'])
+
+    def test_mutation_refreshes_runtime_even_if_read_context_is_supplied(self):
+        stale = caps()
+        current = caps()
+        current['player']['runtime'] = 'page-456'
+        reply = dict(CONTRACT['connect_result'], runtime='page-456')
+        client = mock.Mock(timeout=45)
+        client.call.side_effect = [current, reply]
+        ott.local_media_command(client, 'dev_t1', {'op': 'connect', 'source': 'Movies'}, 45, controls=stale)
+        self.assertEqual(client.call.call_args_list,
+                         [mock.call('dev_t1', 'capabilities', {}),
+                          mock.call('dev_t1', 'local_media', {'op': 'connect', 'source': 'Movies', 'runtime': 'page-456'})])
 
     def test_group_source_selection_is_once_per_distinct_player(self):
         client = ott.Client.__new__(ott.Client)
