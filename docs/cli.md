@@ -1968,11 +1968,20 @@ playback. An existing readable directory with no binding returns an empty list;
 invalid or unreadable paths return an error. `--path` requires native path
 support and does not imply `--paths` disclosure.
 
+Updated native players wait for the selected folder's complete scan. For example,
+`Movies` can start while the unrelated `FFFF` folder continues scanning in the
+background. The queue still includes the whole eligible folder within the
+advertised limit; it is not truncated to the files found so far. Older player
+builds without per-source scan state may wait for the entire library scan.
+Completion time depends on the filesystem; an unavailable or stalled disk can
+still cause a timeout.
+
 The request is tied to the discovered player runtime and is sent once. An
-unavailable source, incomplete scan, empty folder or excessive catalogue returns
-an error rather than playing unrelated files or silently truncating the list.
+unavailable source, a scan still incomplete at the deadline, an empty folder or
+an excessive catalogue returns an error rather than playing unrelated files or
+silently truncating the list.
 A timeout is an uncertain outcome, not permission to replay a shuffle. Read
-`local sources` and player status before another mutation. An accepted response
+`local sources` and `status` before another mutation. An accepted response
 does not prove that the decoder is rendering video. Update CLI, controller and
 player together if the command is reported unsupported.
 
