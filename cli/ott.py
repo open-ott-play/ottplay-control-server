@@ -2953,6 +2953,10 @@ def local_media_metadata(data, runtime, params, capability=None):
             raise Error(invalid)
         return dict(data, sources=rows)
     fields = base | {"source", "count", "shuffled", "accepted", "playback_confirmed"}
+    if params["op"] in ("play", "shuffle"):
+        if params.get("session") is not True or data.get("session") is not True:
+            raise Error(invalid)
+        fields.add("session")
     if "scanning" in data:
         if (params["op"] not in ("play", "shuffle") or params.get("progressive") is not True
                 or data["scanning"] is not True):
@@ -2983,38 +2987,38 @@ def local_media_capabilities(client, device, timeout):
 
 
 def local_media_command(client, device, params, timeout, session=None, *, controls=None):
+    playback_session = params["op"] in ("play", "shuffle")
+    if not playback_session and "session" in params:
+        raise Error("Session playback flags are only valid for local play or shuffle. No local media command was sent")
     deadline = time.monotonic() + timeout
     previous_timeout = client.timeout
     runtime = None
     sent = False
-    progressive_supported = False
     request_params = params
     try:
         client.timeout = max(0, deadline - time.monotonic())
         # Reuse a validated runtime only for a bounded read-only preset phase.
         # Every mutation still discovers fresh capabilities before dispatch.
         if controls is None or params["op"] != "sources":
-            if params["op"] in ("play", "shuffle"):
+            if playback_session:
                 try:
-                    raw_controls = client.call(device, "capabilities", {"local_media_progressive": True})
-                    progressive_supported = True
+                    raw_controls = client.call(device, "capabilities", {"local_media_session": True,
+                                                                         "local_media_progressive": True})
                 except HTTPError as exc:
                     if exc.code != 400:
                         raise
-                    # Legacy controllers reject this read-only probe before
-                    # enqueueing it. Receipt failures and uncertain outcomes
-                    # must not trigger a second request.
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise Error("Local media capability discovery exceeded --timeout; no local media command was sent") from None
-                    client.timeout = remaining
-                    raw_controls = client.call(device, "capabilities", {})
+                    # A legacy controller cannot guarantee temporary playback.
+                    # Never fall back to a persistent Local mutation.
+                    raise Error("This controller does not support session-only Local playback; update the controller. "
+                                "No local media command was sent") from None
                 controls = capabilities_metadata(raw_controls)
             else:
                 controls = capabilities_metadata(client.call(device, "capabilities", {}))
         capability = controls.get("local_media", {})
         if params["op"] not in capability.get("operations", []):
             raise Error("Local media commands require an updated player and controller advertising local_media. No local media command was sent")
+        if playback_session and "local_media_session" not in controls:
+            raise Error("This player does not support session-only Local playback; update the player. No local media command was sent")
         if (params.get("include_paths") is True or "path" in params or local_media_absolute(params.get("source"))) and capability.get("absolute_paths") is not True:
             raise Error("This player does not support native local paths. Connect the folder in the player, then use its name or source ID. No local media command was sent")
         remaining = deadline - time.monotonic()
@@ -3027,8 +3031,10 @@ def local_media_command(client, device, params, timeout, session=None, *, contro
         # The request opt-in is negotiated per player and per command, never
         # inherited from shared group arguments or a prior capability snapshot.
         request_params.pop("progressive", None)
-        if progressive_supported and "local_media_progressive" in controls:
-            request_params["progressive"] = True
+        if playback_session:
+            request_params["session"] = True
+            if "local_media_progressive" in controls:
+                request_params["progressive"] = True
         result = (session.call("local_media", request_params) if session is not None
                   else client.call(device, "local_media", request_params))
         if time.monotonic() >= deadline:
@@ -3639,13 +3645,14 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["local_media"] = dict(local, operations=list(operations))
-    if "local_media_progressive" in data:
-        progressive = data["local_media_progressive"]
-        if ("local_media" not in result or not isinstance(progressive, dict)
-                or set(progressive) != {"version"} or type(progressive.get("version")) is not int
-                or progressive["version"] != 1):
-            raise Error(invalid)
-        result["local_media_progressive"] = {"version": 1}
+    for key in ("local_media_progressive", "local_media_session"):
+        if key in data:
+            marker = data[key]
+            if ("local_media" not in result or not isinstance(marker, dict)
+                    or set(marker) != {"version"} or type(marker.get("version")) is not int
+                    or marker["version"] != 1):
+                raise Error(invalid)
+            result[key] = {"version": 1}
     if "plex_library_truncation" in data:
         truncation = data["plex_library_truncation"]
         if ("plex_library" not in result or result["plex_library"]["max_items"] != MAX_PLEX_QUEUE_ITEMS

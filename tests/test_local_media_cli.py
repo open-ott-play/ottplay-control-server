@@ -11,15 +11,24 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ott_local_media', ROOT / 'cli/ott.py')
 ott = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ott)
-CONTRACT = json.loads((ROOT / 'contracts/local-media-v1.json').read_text())
+BASE_CONTRACT = json.loads((ROOT / 'contracts/local-media-v1.json').read_text())
+SESSION_CONTRACT = json.loads((ROOT / 'contracts/local-media-session-v1.json').read_text())
+# Source discovery/connect and the five-field error fixture remain unchanged.
+CONTRACT = dict(BASE_CONTRACT)
+for prefix in ('play', 'shuffle', 'progressive_play', 'progressive_shuffle'):
+    for suffix in ('request', 'result'):
+        CONTRACT[prefix + '_' + suffix] = SESSION_CONTRACT[prefix + '_' + suffix]
+PLAYBACK_PROBE = SESSION_CONTRACT['probe_request']
 
 
-def caps(native=True, progressive=False):
+def caps(native=True, progressive=False, session=True):
     value = {'version': 1, 'player': {'version': 'test', 'platform': 'tauri', 'runtime': 'page-123'},
              'lifecycle': [], 'input': [], 'playback': [], 'local_media': copy.deepcopy(CONTRACT['capability'])}
     value['local_media']['absolute_paths'] = native
     if progressive:
         value['local_media_progressive'] = copy.deepcopy(CONTRACT['progressive_capability'])
+    if session:
+        value['local_media_session'] = copy.deepcopy(SESSION_CONTRACT['capability'])
     return value
 
 
@@ -44,7 +53,7 @@ class LocalMediaTest(unittest.TestCase):
             data = CONTRACT[op + '_result']
             code, out, err, calls = self.run_cli(words, [caps(), data], True)
             self.assertEqual((code, err, json.loads(out)), (0, '', data))
-            probe = {'local_media_progressive': True} if op in ('play', 'shuffle') else {}
+            probe = PLAYBACK_PROBE['params'] if op in ('play', 'shuffle') else {}
             self.assertEqual(calls, [mock.call('dev_t1', 'capabilities', probe),
                                     mock.call('dev_t1', 'local_media', CONTRACT[op + '_request']['params'])])
 
@@ -53,21 +62,20 @@ class LocalMediaTest(unittest.TestCase):
             partial = dict(CONTRACT['progressive_' + op + '_result'], count=1)
             code, out, err, calls = self.run_cli(['local', op, 'Movies'], [caps(progressive=True), partial], True)
             self.assertEqual((code, err, json.loads(out)), (0, '', partial))
-            self.assertEqual(calls, [mock.call('dev_t1', 'capabilities', CONTRACT['progressive_probe_request']['params']),
+            self.assertEqual(calls, [mock.call('dev_t1', 'capabilities', PLAYBACK_PROBE['params']),
                                     mock.call('dev_t1', 'local_media', CONTRACT['progressive_' + op + '_request']['params'])])
 
-            # Successful negotiation may still return a complete legacy result.
+            # A negotiated session may complete before the response is sent.
             complete = CONTRACT[op + '_result']
             code, out, err, _ = self.run_cli(['local', op, 'Movies'], [caps(progressive=True), complete], True)
             self.assertEqual((code, err, json.loads(out)), (0, '', complete))
 
-            # A new player behind an older controller still uses the legacy request.
+            # An old controller must never lead to a persistent fallback.
             code, out, err, calls = self.run_cli(['local', op, 'Movies'],
                                                [ott.HTTPError(400), caps(progressive=True), complete], True)
-            self.assertEqual((code, err, json.loads(out)), (0, '', complete))
-            self.assertEqual(calls, [mock.call('dev_t1', 'capabilities', {'local_media_progressive': True}),
-                                    mock.call('dev_t1', 'capabilities', {}),
-                                    mock.call('dev_t1', 'local_media', CONTRACT[op + '_request']['params'])])
+            self.assertEqual((code, out), (1, ''))
+            self.assertIn('controller does not support session-only Local playback', err)
+            self.assertEqual(calls, [mock.call('dev_t1', 'capabilities', PLAYBACK_PROBE['params'])])
 
     def test_progressive_probe_is_not_used_for_sources_or_connect(self):
         for op in ('sources', 'connect'):
@@ -85,9 +93,53 @@ class LocalMediaTest(unittest.TestCase):
         value = caps(progressive=True); del value['local_media']
         self.assertEqual(len(self.run_cli(['local', 'play', 'Movies'], [value])[3]), 1)
 
+    def test_session_marker_is_required_strict_and_requires_base_capability(self):
+        for name in ('local', 'LOCAL', 'offline', 'OFFLINE'):
+            for op in ('play', 'shuffle'):
+                code, out, err, calls = self.run_cli([name, op, 'Movies'], [caps(session=False, progressive=True)])
+                self.assertEqual((code, out, len(calls)), (1, '', 1))
+                self.assertIn('player does not support session-only Local playback', err)
+                self.assertEqual(calls[0], mock.call('dev_t1', 'capabilities', PLAYBACK_PROBE['params']))
+                code, out, err, calls = self.run_cli([name, op, 'Movies'], [caps(), CONTRACT[op + '_result']], True)
+                self.assertEqual((code, err), (0, ''))
+                self.assertIs(json.loads(out)['session'], True)
+                self.assertEqual(calls[-1], mock.call('dev_t1', 'local_media', CONTRACT[op + '_request']['params']))
+        for marker in (None, True, 1, [], {}, {'version': True}, {'version': 2}, {'version': 1, 'extra': True}):
+            value = caps(); value['local_media_session'] = marker
+            self.assertEqual(self.run_cli(['local', 'shuffle', 'Movies'], [value])[3],
+                             [mock.call('dev_t1', 'capabilities', PLAYBACK_PROBE['params'])])
+        value = caps(); del value['local_media']
+        with self.assertRaises(ott.Error):
+            ott.capabilities_metadata(value)
+
+    def test_session_echo_is_strict_and_not_added_to_other_operations_or_errors(self):
+        for op in ('play', 'shuffle'):
+            for progressive in (False, True):
+                base = CONTRACT[('progressive_' if progressive else '') + op + '_result']
+                invalid = [dict(base, session=value) for value in (False, None, 1, 'true', [], {})]
+                invalid += [{key: value for key, value in base.items() if key != 'session'}, dict(base, private='secret')]
+                for data in invalid:
+                    code, out, err, calls = self.run_cli(['local', op, 'Movies'], [caps(progressive=progressive), data])
+                    self.assertEqual((code, out, len(calls)), (1, '', 2))
+                    self.assertNotIn('secret', err)
+        self.assertEqual(CONTRACT['error_result'], SESSION_CONTRACT['error_result'])
+        for op in ('sources', 'connect'):
+            data = dict(CONTRACT[op + '_result'], session=True)
+            with self.assertRaises(ott.Error):
+                ott.local_media_metadata(data, 'page-123', {'op': op, 'source': 'Movies'})
+            for value in (True, False, None):
+                client = mock.Mock(timeout=10)
+                with self.assertRaisesRegex(ott.Error, 'only valid for local play or shuffle'):
+                    ott.local_media_command(client, 'dev_t1', {'op': op, 'source': 'Movies', 'session': value}, 10)
+                client.call.assert_not_called()
+        for op in ('play', 'shuffle'):
+            data = dict(CONTRACT['error_result'], op=op, session=True)
+            code, out, err, calls = self.run_cli(['local', op, 'Movies'], [caps(), data])
+            self.assertEqual((code, out, len(calls)), (1, '', 2))
+
     def test_scanning_requires_negotiated_true_and_preserves_all_result_guards(self):
         partial = dict(CONTRACT['shuffle_result'], scanning=True)
-        for replies in ([caps(), partial], [ott.HTTPError(400), caps(progressive=True), partial]):
+        for replies in ([caps(), partial],):
             code, out, _, calls = self.run_cli(['local', 'shuffle', 'Movies'], replies)
             self.assertEqual((code, out, len(calls)), (1, '', len(replies)))
         for value in (False, None, 1, 'true', [], {}):
@@ -124,8 +176,8 @@ class LocalMediaTest(unittest.TestCase):
             self.assertNotIn('shuffled once', out)
             self.assertNotIn('source order', out)
 
-    def test_only_confirmed_probe_enqueue_400_falls_back_and_mutations_never_replay(self):
-        failures = (ott.HTTPError(401), ott.HTTPError(404), ott.HTTPError(429), ott.HTTPError(500),
+    def test_probe_failures_never_fall_back_and_mutations_never_replay(self):
+        failures = (ott.HTTPError(400), ott.HTTPError(401), ott.HTTPError(404), ott.HTTPError(429), ott.HTTPError(500),
                     ott.TransportError('uncertain probe'),
                     ott.RequestError('controller_http_error', 'receipt', 'HTTP 400 after enqueue'),
                     ott.PlayerRejected('rejected', {}), ott.PlayerUnsupported('unsupported'))
@@ -133,17 +185,17 @@ class LocalMediaTest(unittest.TestCase):
             code, out, _, calls = self.run_cli(['local', 'shuffle', 'Movies'], [failure])
             self.assertEqual((code, out, len(calls)), (1, '', 1), type(failure).__name__)
         code, out, _, calls = self.run_cli(['local', 'shuffle', 'Movies'], [ott.HTTPError(400), ott.HTTPError(400)])
-        self.assertEqual((code, out, len(calls)), (1, '', 2))
+        self.assertEqual((code, out, len(calls)), (1, '', 1))
         for failure in (ott.HTTPError(400), ott.TransportError('uncertain mutation'),
                         ott.PlayerRejected('private detail', CONTRACT['error_result'])):
             code, out, err, calls = self.run_cli(['local', 'shuffle', 'Movies'], [caps(progressive=True), failure])
             self.assertEqual((code, out, len(calls)), (1, '', 2))
             self.assertNotIn('private detail', err)
 
-    def test_fallback_and_delayed_capability_reply_share_original_deadline(self):
+    def test_capability_and_playback_reply_share_original_deadline(self):
         client = mock.Mock(timeout=10)
         budgets = []
-        replies = iter([ott.HTTPError(400), caps(progressive=True), CONTRACT['shuffle_result']])
+        replies = iter([caps(progressive=True), CONTRACT['shuffle_result']])
         def reply(*args):
             budgets.append(client.timeout)
             value = next(replies)
@@ -151,12 +203,13 @@ class LocalMediaTest(unittest.TestCase):
                 raise value
             return value
         client.call.side_effect = reply
-        with mock.patch.object(ott.time, 'monotonic', side_effect=[0, 0, 8, 9, 9.5]):
+        with mock.patch.object(ott.time, 'monotonic', side_effect=[0, 0, 9, 9.5]):
             ott.local_media_command(client, 'dev_t1', {'op': 'shuffle', 'source': 'Movies'}, 10)
-        self.assertEqual(budgets, [10, 2, 1])
+        self.assertEqual(budgets, [10, 1])
         self.assertEqual(client.timeout, 10)
-        self.assertNotIn('progressive', client.call.call_args.args[2])
-        for first in (ott.HTTPError(400), caps(progressive=True)):
+        self.assertIs(client.call.call_args.args[2]['session'], True)
+        self.assertIs(client.call.call_args.args[2]['progressive'], True)
+        for first in (caps(), caps(progressive=True)):
             client = mock.Mock(timeout=10)
             client.call.side_effect = [first]
             with mock.patch.object(ott.time, 'monotonic', side_effect=[0, 0, 10]):
@@ -165,20 +218,18 @@ class LocalMediaTest(unittest.TestCase):
             self.assertEqual(client.call.call_count, 1)
             self.assertEqual(client.timeout, 10)
 
-    def test_enqueue_http_400_falls_back_once_through_actual_receipt_client(self):
+    def test_enqueue_http_400_stops_through_actual_receipt_client(self):
         client = ott.Client.__new__(ott.Client)
         client.timeout = 10
-        client.api = mock.Mock(side_effect=[ott.HTTPError(400), (202, {'id': 'a' * 32}), (202, {'id': 'b' * 32})])
-        client._wait_receipt = mock.Mock(side_effect=[
-            {'request_id': 'a' * 32, 'status': 'ok', 'data': caps(progressive=True)},
-            {'request_id': 'b' * 32, 'status': 'ok', 'data': CONTRACT['shuffle_result']}])
+        client.api = mock.Mock(side_effect=ott.HTTPError(400))
+        client._wait_receipt = mock.Mock()
         client.on_receipt = mock.Mock()
-        result = ott.local_media_command(client, 'dev_t1', {'op': 'shuffle', 'source': 'Movies'}, 10)
-        self.assertEqual(result, CONTRACT['shuffle_result'])
-        self.assertEqual([call.args[1] for call in client.api.call_args_list], [
-            CONTRACT['progressive_probe_request'], {'action': 'capabilities', 'params': {}}, CONTRACT['shuffle_request']])
+        with self.assertRaisesRegex(ott.Error, 'controller does not support session-only'):
+            ott.local_media_command(client, 'dev_t1', {'op': 'shuffle', 'source': 'Movies'}, 10)
+        self.assertEqual([call.args[1] for call in client.api.call_args_list], [PLAYBACK_PROBE])
+        client._wait_receipt.assert_not_called()
         self.assertEqual([call.args[0]['action'] for call in client.on_receipt.call_args_list],
-                         ['capabilities', 'capabilities', 'local_media'])
+                         ['capabilities'])
 
     def test_receipt_http_400_is_not_reinterpreted_as_probe_enqueue_rejection(self):
         client = ott.Client.__new__(ott.Client)
@@ -190,7 +241,7 @@ class LocalMediaTest(unittest.TestCase):
                 ott.local_media_command(client, 'dev_t1', {'op': 'shuffle', 'source': 'Movies'}, 10)
         self.assertEqual(client.api.call_count, 2)
         self.assertEqual(client.api.call_args_list[0].args[1],
-                         {'action': 'capabilities', 'params': {'local_media_progressive': True}})
+                         PLAYBACK_PROBE)
         self.assertEqual(client.on_receipt.call_count, 1)
         self.assertEqual(client.on_receipt.call_args.args[0]['action'], 'capabilities')
 
@@ -390,7 +441,7 @@ class LocalMediaTest(unittest.TestCase):
         ott.local_media_command(client, 'dev_t1', params, 45, controls=caps(progressive=True))
         self.assertEqual(params, original)
         self.assertEqual(client.call.call_args_list,
-                         [mock.call('dev_t1', 'capabilities', {'local_media_progressive': True}),
+                         [mock.call('dev_t1', 'capabilities', PLAYBACK_PROBE['params']),
                           mock.call('dev_t1', 'local_media', CONTRACT['shuffle_request']['params'])])
 
     def test_mixed_four_player_fanout_reports_partial_counts_in_plain_and_json(self):
@@ -402,16 +453,16 @@ class LocalMediaTest(unittest.TestCase):
             client.server, client.timeout, client.on_receipt = 'https://controller.example', 45, None
             def reply(device, action, params):
                 if action == 'capabilities':
-                    if device == 'dev_2' and params:
+                    if device == 'dev_2':
                         raise ott.HTTPError(400)
-                    value = caps(progressive=device != 'dev_3')
+                    value = caps(progressive=device in ('dev_1', 'dev_3'), session=device != 'dev_3')
                     value['player']['runtime'] = device.replace('_', '-')
                     return value
                 value = copy.deepcopy(CONTRACT['shuffle_result'])
                 value['runtime'] = params['runtime']
                 value['source']['name'] = 'FFFF'
-                value['count'] = {'dev_1': 46, 'dev_2': 13611, 'dev_3': 12, 'dev_4': 1}[device]
-                if device in ('dev_1', 'dev_4'):
+                value['count'] = {'dev_1': 46, 'dev_4': 13608}[device]
+                if device == 'dev_1':
                     value['scanning'] = True
                 return value
             client.call = mock.Mock(side_effect=reply)
@@ -419,30 +470,34 @@ class LocalMediaTest(unittest.TestCase):
             with mock.patch.object(ott, 'Client', return_value=client), mock.patch.object(ott, 'read_json', return_value=client.config), \
                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = ott.main((['-j'] if json_output else []) + ['t1,t2,t3,t4', 'local', 'shuffle', selector])
-            self.assertEqual((code, err.getvalue()), (0, ''))
+            self.assertEqual((code, err.getvalue()), (1, ''))
             mutations = [c for c in client.call.call_args_list if c.args[1] == 'local_media']
-            self.assertEqual(len(mutations), 4)
-            for index, call in enumerate(mutations, 1):
-                expected = {'op': 'shuffle', 'source': selector, 'runtime': f'dev-{index}'}
-                if index in (1, 4):
+            self.assertEqual(len(mutations), 2)
+            for index, call in zip((1, 4), mutations):
+                expected = {'op': 'shuffle', 'source': selector, 'runtime': f'dev-{index}', 'session': True}
+                if index == 1:
                     expected['progressive'] = True
                 self.assertEqual(call, mock.call(f'dev_{index}', 'local_media', expected))
-            self.assertEqual(client.call.call_count, 9)
+            self.assertEqual(client.call.call_count, 6)
             self.assertEqual(client.timeout, 45)
             if json_output:
                 data = json.loads(out.getvalue())
-                self.assertEqual((data['succeeded'], data['failed']), (4, 0))
-                self.assertEqual([row['data'].get('scanning') for row in data['results']], [True, None, None, True])
-                self.assertEqual([row['data']['count'] for row in data['results']], [46, 13611, 12, 1])
+                self.assertEqual((data['succeeded'], data['failed']), (2, 2))
+                successful = [row['data'] for row in data['results'] if row['ok']]
+                self.assertEqual([row.get('scanning') for row in successful], [True, None])
+                self.assertEqual([row['count'] for row in successful], [46, 13608])
+                self.assertTrue(all(row['session'] is True for row in successful))
+                self.assertIn('controller does not support session-only', data['results'][1]['error'])
+                self.assertIn('player does not support session-only', data['results'][2]['error'])
             else:
                 text = out.getvalue()
                 self.assertIn('t1: Local source: FFFF; 46 items discovered so far; scanning continues.', text)
-                self.assertIn('t4: Local source: FFFF; 1 item discovered so far; scanning continues.', text)
-                self.assertIn('t2: Local source: FFFF; 13611 items; shuffled once.', text)
-                self.assertIn('t3: Local source: FFFF; 12 items; shuffled once.', text)
-                self.assertEqual(text.count('Playback request accepted; playback has not been confirmed.'), 4)
+                self.assertIn('t4: Local source: FFFF; 13608 items; shuffled once.', text)
+                self.assertIn('t2: Error: This controller does not support session-only', text)
+                self.assertIn('t3: Error: This player does not support session-only', text)
+                self.assertEqual(text.count('Playback request accepted; playback has not been confirmed.'), 2)
                 self.assertFalse(any('shuffled once' in line for line in text.splitlines()
-                                     if line.startswith(('t1:', 't4:'))))
+                                     if line.startswith('t1:')))
 
     def test_group_source_selection_is_once_per_distinct_player(self):
         client = ott.Client.__new__(ott.Client)
@@ -461,8 +516,8 @@ class LocalMediaTest(unittest.TestCase):
         self.assertEqual((code, err.getvalue()), (0, ''))
         self.assertEqual(json.loads(out.getvalue())['succeeded'], 2)
         mutations = [c for c in client.call.call_args_list if c.args[1] == 'local_media']
-        self.assertEqual(mutations, [mock.call('dev_1', 'local_media', {'op': 'shuffle', 'source': 'Movies', 'runtime': 'dev-1'}),
-                                     mock.call('dev_2', 'local_media', {'op': 'shuffle', 'source': 'Movies', 'runtime': 'dev-2'})])
+        self.assertEqual(mutations, [mock.call('dev_1', 'local_media', {'op': 'shuffle', 'source': 'Movies', 'runtime': 'dev-1', 'session': True}),
+                                     mock.call('dev_2', 'local_media', {'op': 'shuffle', 'source': 'Movies', 'runtime': 'dev-2', 'session': True})])
 
 
 if __name__ == '__main__':
