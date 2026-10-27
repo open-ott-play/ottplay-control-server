@@ -2,6 +2,10 @@
 """OTT-play remote CLI using the Python 3 standard library."""
 import argparse
 import base64
+import contextlib
+import copy
+import hashlib
+import io
 import getpass
 import http.client
 import ipaddress
@@ -54,6 +58,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott report verify DIRECTORY [-j]   verify and re-evaluate saved evidence offline
   ott presets                        list locally configured preset names
   ott devices                        list devices and their last connection
+  ott t1,t2,t3,t4 R                  any player command accepts a list; results per player
   ott t1,t2 watch --duration 30       observe players and decoder progress (read-only)
   ott ha status [-j]                 Home Assistant bridge and active banner recipients
   ott NAME notifications [on|off]    read/save the single banner and camera preference
@@ -190,7 +195,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 --receipt writes one safe JSON request receipt to stderr per player RPC; stdout is unchanged.
-Comma-separated player lists support provider/prov and notifications; each distinct player runs once, in order.
+Comma-separated player lists accept any player command; each distinct player runs once, in order.
 Add a channel number, R/random or name to switch and play from the provider's complete All catalog.
 Use provider "Local videos" -- NAME to separate a multiword provider from a channel explicitly.
 An exact full channel name wins; otherwise a random partial-name match is selected. Playback wakes standby.
@@ -1932,7 +1937,7 @@ def load_preset(client, device, name, preset, session=None):
             "completed": completed}
 
 
-def preset_command(config, words, timeout, json_output, on_receipt=None):
+def preset_command(config, words, timeout, json_output, on_receipt=None, *, client=None, device=None):
     if len(words) > 3:
         path = Path(__file__).resolve().with_name("preset_session.py")
         if not path.is_file():
@@ -1940,7 +1945,8 @@ def preset_command(config, words, timeout, json_output, on_receipt=None):
         spec = importlib.util.spec_from_file_location("ott_preset_session", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module.run(SimpleNamespace(**globals()), config, words, timeout, json_output, on_receipt)
+        return module.run(SimpleNamespace(**globals()), config, words, timeout, json_output, on_receipt,
+                          client=client, device=device)
     receipt = {"status": "failed", "stage": "validate", "completed": [], "error": "Invalid preset configuration or command."}
     try:
         _, params = parse_command(words[1:])
@@ -1948,9 +1954,9 @@ def preset_command(config, words, timeout, json_output, on_receipt=None):
         receipt["preset"] = name
         receipt["stage"] = "connect"
         receipt["error"] = "Could not prepare the player connection."
-        client = Client(config, timeout)
+        client = client if client is not None else Client(config, timeout)
         client.on_receipt = on_receipt
-        device = client.device(words[0])
+        device = device if device is not None else client.device(words[0])
         receipt = load_preset(client, device, name, preset)
     except Error as exc:
         if receipt["stage"] == "validate":
@@ -4710,8 +4716,8 @@ def provider_command(client, device, words, project=False):
         client.timeout = previous_timeout
 
 
-def provider_group_targets(client, selector):
-    """Resolve a comma list locally before any provider request can be sent."""
+def player_group_targets(client, selector):
+    """Resolve an explicit comma list before any per-player request can be sent."""
     if "," not in selector:
         return None
     aliases = client.config.get("players", {})
@@ -4728,6 +4734,8 @@ def provider_group_targets(client, selector):
     names = [name.strip() for name in selector.split(",")]
     if any(not name for name in names):
         raise Error("Player lists require a name between every comma; use t1,t2,t3,t4")
+    if len(names) > 64:
+        raise Error("Player lists support at most 64 names")
     targets = []
     seen = set()
     for name in names:
@@ -4742,81 +4750,540 @@ def provider_group_targets(client, selector):
     return targets
 
 
-def provider_group_command(client, targets, words, json_output):
-    if command_verb(words) != "provider":
-        raise Error("Player lists support provider/prov or notifications; use ott t1,t2,t3,t4 provider m3u or notifications off")
-    action, params = parse_command(words)
-    if not params["query"].strip():
-        raise Error("provider requires a provider ID, index or name")
-    results = []
-    on_receipt = getattr(client, "on_receipt", None)
+def player_command_route(words):
+    """The single dispatch table for built-in and optional player commands."""
+    verb = words[0].casefold() if words else ""
+    if verb == "perf":
+        return "performance"
+    if verb in ("setting", "settings"):
+        return "player_settings"
+    if verb == "update" and (len(words) == 1 or words[1].casefold() not in ("status", "prepare", "install")):
+        return "app_update"
+    if verb in ("doctor", "inspect", "operation", "bundle", "test", "debug", "dbg"):
+        return "workbench"
+    if verb == "load":
+        return "preset"
+    if verb == "android":
+        return "android"
+    return None
+
+
+def group_output_suffixes(targets):
+    result = []
     for name, device in targets:
+        base = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:48] or "player"
+        # Independent of the other members: a checkpoint has the same name
+        # when resuming a subset of the original group in a different order.
+        result.append(base if base == name else base + "-" + hashlib.sha256(device.encode()).hexdigest()[:12])
+    return result
+
+
+def group_output_arguments(words, route, prepared, suffix):
+    """Expand only output/checkpoint arguments; never credential or media inputs."""
+    words, prepared = list(words), copy.deepcopy(prepared)
+    destinations = []
+
+    def expand(value, directory=False, checkpoint=False, resume=False):
+        if not isinstance(value, str) or not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise Error("Group output must name a local file or directory without control characters")
+        path = Path(value).expanduser()
+        if path.name in ("", ".", "..") or ".." in path.parts or (not directory and value.endswith(("/", "\\"))):
+            raise Error("Group output must name a file or directory without parent traversal")
+        extension = "" if directory else path.suffix
+        stem = path.name[:-len(extension)] if extension else path.name
+        target = path.with_name(stem + "." + suffix + extension)
+        destinations.append((target, checkpoint, resume))
+        # Path removes an explicit ./; retain an option-safe spelling when an
+        # argparse-based module receives a relative name beginning with '-'.
+        value = str(target)
+        return "." + os.sep + value if value.startswith("-") else value
+
+    if prepared is not None and prepared[0] in ("screenshot", "profile_export") and "output" in prepared[1]:
+        value = expand(prepared[1]["output"])
+        prepared[1]["output"] = value
+        words[-1] = value
+    elif route == "android" and len(words) == 4 and words[1].casefold() == "screenshot" and words[2] in ("-o", "--output"):
+        words[3] = expand(words[3])
+    elif route == "preset" and len(words) == 5 and words[3] == "--checkpoint" and words[2] in ("apply", "resume"):
+        words[4] = expand(words[4], checkpoint=True, resume=words[2] == "resume")
+    else:
+        verb = words[0].casefold() if words else ""
+        flag = ("--out" if route == "performance" or (route == "workbench" and verb == "bundle") else
+                "--report" if route == "workbench" and verb == "test" else None)
+        if flag:
+            # Match argparse's unambiguous long-option abbreviations and = form.
+            slots = []
+            index = 1
+            while index < len(words):
+                key, separator, value = words[index].partition("=")
+                if key.startswith("--") and len(key) > 2 and flag.startswith(key):
+                    if separator:
+                        slots.append((index, key, value))
+                    elif index + 1 < len(words):
+                        index += 1
+                        slots.append((index, None, words[index]))
+                index += 1
+            if slots:
+                # argparse uses the last repeated option; only it is a destination.
+                index, key, value = slots[-1]
+                value = expand(value, directory=True)
+                words[index] = key + "=" + value if key else value
+    return words, prepared, destinations
+
+
+def group_output_preflight(plans):
+    seen = set()
+    for _, _, destinations in plans:
+        for path, checkpoint, resume in destinations:
+            identity = str(path.resolve()).casefold()
+            if identity in seen:
+                raise Error("Group output destinations overlap; choose a different output name")
+            seen.add(identity)
+            if not resume and (path.exists() or path.is_symlink()):
+                raise Error("A per-player output already exists; choose another output name. No player command was sent")
+            if not checkpoint and not path.parent.is_dir():
+                raise Error("Group output parent directories must already exist. No player command was sent")
+
+
+GROUP_OUTPUT_LIMIT = 4 * 1024 * 1024
+GROUP_DIAGNOSTIC_LIMIT = 256 * 1024
+GROUP_AGGREGATE_LIMIT = 16 * 1024 * 1024
+
+
+class GroupOutput(io.StringIO):
+    """Bound buffered output without interrupting an already dispatched change."""
+    def __init__(self, limit):
+        super().__init__()
+        self.limit, self.size, self.exceeded = limit, 0, False
+
+    def write(self, value):
+        encoded = value.encode("utf-8")
+        available = max(0, self.limit - self.size)
+        if len(encoded) > available:
+            self.exceeded = True
+        retained = encoded[:available].decode("utf-8", errors="ignore")
+        self.size += len(retained.encode("utf-8"))
+        super().write(retained)
+        return len(value)
+
+
+def player_group_command(client, config, targets, args, argv):
+    words = args.words[1:]
+    route = player_command_route(words)
+    # Parsing before output capture keeps hidden credential prompts visible and
+    # validates ordinary commands once, before any target receives a request.
+    prepared = parse_command(words) if route is None else None
+    action = prepared[0] if prepared else (words[0].casefold() if words else "status")
+    if action == "provider" and not prepared[1]["query"].strip():
+        raise Error("provider requires a provider ID, index or name")
+    if route == "android" and len(words) > 1 and words[1].casefold() == "bind" and len(targets) > 1:
+        raise Error("android bind requires one player; a native queue cannot be shared by multiple players")
+    if route == "preset":
+        if len(words) not in (2, 3, 5) or (len(words) > 2 and words[2] not in ("plan", "apply", "resume", "verify")):
+            raise Error("Use PLAYER load PRESET [plan|apply|resume|verify [--checkpoint FILE]]")
+        validate_preset(config, words[1])
+    plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
+    group_output_preflight(plans)
+    json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))
+    results, codes = [], []
+    on_receipt, stderr, previous_timeout = client.on_receipt, sys.stderr, client.timeout
+    interrupted, retained_bytes = False, 0
+    for (name, device), (local_words, local_prepared, _) in zip(targets, plans):
         row = {"player": name, "ok": False}
-        try:
-            if callable(on_receipt):
-                client.on_receipt = lambda receipt, name=name: on_receipt({**receipt, "player": name})
-            data, playback_error = provider_command(client, device, words, project=True)
-            row["data"] = provider_switch_metadata(data)
-            if "playback" in data:
-                row["data"]["playback"] = data["playback"]
-            if "wake" in data:
-                row["data"]["wake"] = data["wake"]
-            if playback_error:
-                raise playback_error
-            row["ok"] = True
-        except (PlayerRejected, PlayerUnsupported) as exc:
-            reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
-            row["error"] = (f"The provider request was {reason}; check its allowed providers and local restrictions. "
-                            "The request was not repeated.")
-        except Error as exc:
-            row["error"] = clean(str(exc))
-        except (KeyError, TypeError, ValueError, OSError):
-            row["error"] = "The provider request did not complete; inspect this player before another change."
-        finally:
-            client.on_receipt = on_receipt
+        output, errors = GroupOutput(GROUP_OUTPUT_LIMIT), GroupOutput(GROUP_DIAGNOSTIC_LIMIT)
+        code = 130 if interrupted else 1
+        if interrupted:
+            row["error"] = "Not started: group execution was interrupted"
+        else:
+            local_args = SimpleNamespace(**vars(args))
+            local_args.words = [name, *local_words]
+            local_args.json = json_output or action == "provider"
+            try:
+                if callable(on_receipt):
+                    def receipt(item, name=name):
+                        # Keep JSON receipts on the original stderr.
+                        with contextlib.redirect_stderr(stderr):
+                            on_receipt({**item, "player": name})
+                    client.on_receipt = receipt
+                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    code = execute_player_command(client, config, local_args, argv, device,
+                                                  prepared=local_prepared, grouped=True)
+            except (PlayerRejected, PlayerUnsupported) as exc:
+                reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+                row["error"] = "The " + action + " request was " + reason + "; inspect this player before another change. The request was not repeated."
+            except Error as exc:
+                row["error"] = clean(str(exc))
+            except Exception:
+                row["error"] = "Check the configuration; the operation did not complete. The request was not repeated."
+            except SystemExit as exc:
+                code = exc.code if type(exc.code) is int else 1
+                if code:
+                    row["error"] = "Invalid player command arguments; no command was retried"
+            except KeyboardInterrupt:
+                code = 130
+                row["error"] = "Interrupted; a request may have executed. Inspect this player before retrying"
+            finally:
+                client.on_receipt, client.timeout = on_receipt, previous_timeout
+            size = output.size + errors.size
+            if output.exceeded or errors.exceeded or retained_bytes + size > GROUP_AGGREGATE_LIMIT:
+                code = 130 if code == 130 else 1
+                row["error"] = "Group output limit exceeded; the result is incomplete. The command may have executed and was not repeated."
+                output = GroupOutput(GROUP_OUTPUT_LIMIT)
+                errors = GroupOutput(GROUP_DIAGNOSTIC_LIMIT)
+            else:
+                retained_bytes += size
+            raw = output.getvalue()
+            if local_args.json and raw.strip():
+                try:
+                    row["data"] = json.loads(raw)
+                except ValueError:
+                    # Help is plain text even with --json; retain it as such.
+                    row["output"] = raw.rstrip()
+            if errors.getvalue().strip():
+                if json_output:
+                    row["warnings"] = [clean(line) for line in errors.getvalue().splitlines()]
+                else:
+                    for line in errors.getvalue().splitlines():
+                        print(clean(name) + ": " + clean(line), file=stderr, flush=True)
+        row["ok"] = code == 0 and "error" not in row
+        if not row["ok"] and "error" not in row:
+            row["error"] = "Command completed with exit status " + str(code) + "; inspect its result before retrying"
+        if action not in ("provider", "notifications"):
+            row["exit_code"] = code
         results.append(row)
+        codes.append(code)
+        interrupted = interrupted or code == 130
         if not json_output:
-            message = ("Provider switch requested: " + row["data"]["provider"] if row["ok"]
-                       else "Error: " + row["error"])
-            if "playback" in row.get("data", {}):
-                message = "Provider switch acknowledged: " + row["data"]["provider"] + "; "
-                message += ("channel requested: " + clean(row["data"]["playback"]["channel"]["name"]) if row["ok"]
-                            else "Error: " + row["error"])
-            print(f"{clean(name)}: {message}", flush=True)
+            if action == "provider":
+                data = row.get("data", {})
+                if "playback" in data:
+                    message = "Provider switch acknowledged: " + data["provider"] + "; "
+                    message += ("channel requested: " + clean(data["playback"]["channel"]["name"]) if row["ok"] else "Error: " + row["error"])
+                else:
+                    message = "Provider switch requested: " + data["provider"] if row["ok"] else "Error: " + row["error"]
+                print(clean(name) + ": " + message, flush=True)
+            else:
+                for line in output.getvalue().splitlines():
+                    print(clean(name) + ": " + line, flush=True)
+                if not row["ok"]:
+                    print(clean(name) + ": Error: " + row["error"], flush=True)
     succeeded = sum(row["ok"] for row in results)
     if json_output:
         print(json.dumps({"action": action, "results": results, "succeeded": succeeded,
                           "failed": len(results) - succeeded}, ensure_ascii=False, indent=2))
-    return 0 if succeeded == len(results) else 1
+    if interrupted:
+        return 130
+    return next((code for code in (1, 2, 3) if code in codes), 0 if succeeded == len(results) else 1)
 
 
-def notifications_group_command(client, targets, words, json_output):
-    _, params = parse_command(words)
-    results = []
-    on_receipt = getattr(client, "on_receipt", None)
-    for name, device in targets:
-        row = {"player": name, "ok": False}
+def execute_player_command(client, config, args, argv, device, *, prepared=None, grouped=False):
+    """Run the same resolved-player command for a single target or one group member."""
+    words = args.words[1:]
+    route = player_command_route(words)
+    if route == "preset":
+        return preset_command(config, args.words, args.timeout, args.json, client.on_receipt,
+                              client=client, device=device)
+    if route == "performance":
+        path = Path(__file__).resolve().with_name("performance.py")
+        if not path.is_file():
+            raise Error("Install all CLI Python files from the same revision to use performance capture")
+        spec = importlib.util.spec_from_file_location("ott_performance", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.run(SimpleNamespace(**globals()), client, device, words[1:], args.timeout, args.json)
+    if route == "player_settings":
+        module_path = Path(__file__).resolve().with_name("player_settings.py")
+        if not module_path.is_file():
+            raise Error("Install all CLI Python files from the same revision to manage settings")
+        spec = importlib.util.spec_from_file_location("ott_player_settings", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.run(SimpleNamespace(**globals()), client, device, words, args.timeout, args.json)
+    if route == "app_update":
+        module_path = Path(__file__).resolve().with_name("app_update.py")
+        if not module_path.is_file():
+            raise Error("Install app_update.py beside ott.py to use release updates")
+        spec = importlib.util.spec_from_file_location("ott_app_update", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.run(SimpleNamespace(**globals()), client, device, words, args.json)
+    if route == "workbench":
+        module_path = Path(__file__).resolve().with_name("workbench.py")
+        if not module_path.is_file():
+            raise Error("Install workbench.py beside ott.py to use the workbench")
+        spec = importlib.util.spec_from_file_location("ott_workbench", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.run(SimpleNamespace(**globals()), client, device, words, args.timeout, args.json)
+    if route == "android":
+        data = android_command(client, args.config, device, args.words[0], words[1:], args.json)
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    action, params = copy.deepcopy(prepared) if prepared is not None else parse_command(words)
+    status_overview = action == "status" and command_verb(words) != "v"
+    status_deadline = time.monotonic() + args.timeout if status_overview else None
+    catalog_play = None
+    playback_error = None
+    plex_settings = action == "provider_settings" and params.get("provider") == "plex"
+    if action == "provider" and (grouped or len(words) > 2 or "--" in words[1:]):
+        data, playback_error = provider_command(client, device, words, project=grouped)
+    elif action in ("profile_save", "profile_export", "profile_import"):
+        data = offline_profile_command(client, device, action, params, args.timeout)
+    elif action == "profile_settings" and "vportal" in params["settings"]:
+        data = vportal_profile_command(client, device, params, args.timeout)
+    elif action == "provider_settings" and params.get("provider") == "vportal":
+        row = {"number": params["settings"]["profile"],
+               "settings": {key: value for key, value in params["settings"].items() if key != "profile"}}
+        data = vportal_settings_command(client, device, row)
+    elif action == "screenshot":
+        data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
+    elif action == "plex_queue":
+        data = plex_queue_command(client, device, params, args.timeout)
+    elif action == "plex_library":
+        data = plex_library_command(client, device, params, args.timeout)
+    elif action == "categories":
+        data = categories_command(client, device, params, args.timeout)
+    elif action == "channels":
+        data = channels_command(client, device, params, args.timeout)
+    elif action == "favorites":
+        data = favorites_command(client, device, params, args.timeout)
+    elif action == "aspect":
+        data = aspect_command(client, device, params, args.timeout)
+    elif action == "notifications":
+        data = notifications_command(client, device, params, args.timeout)
+    elif action == "command" and params.get("command") == "random_channel":
+        data = random_command(client, device, params, args.timeout)
+    elif action == "programs" and "epg" in config:
+        data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
+    elif action == "play":
+        data, playback_error = play_channel(client, device, params, args.timeout)
+        if data.get("channels") == [] and "epg" in config and data.get("version") != 1:
+            print("No channel matches. Searching current EPG and available archives...", file=sys.stderr)
+            query = params["query"]
+            data, catalog_play = server_programs(client, device, config["epg"], query, refresh=args.refresh)
+            action, params, words = "programs", {"search": query}, ["p", query]
+            playback_error = None
+    else:
         try:
-            if callable(on_receipt):
-                client.on_receipt = lambda receipt, name=name: on_receipt({**receipt, "player": name})
-            row["data"] = notifications_command(client, device, params, client.timeout)
-            row["ok"] = True
-        except Error as exc:
-            row["error"] = clean(str(exc))
-        finally:
-            client.on_receipt = on_receipt
-        results.append(row)
-        if not json_output:
-            print(clean(name) + ": ", end="")
-            if row["ok"]:
-                print_notifications(row["data"])
+            data = client.call(device, action, params)
+        except (PlayerRejected, PlayerUnsupported) as exc:
+            if action == "restart" and params.get("target") == "stream":
+                if isinstance(exc.data, dict) and (exc.data.get("reason") == "no_restartable_stream" or exc.data.get("error") == "There is no owned, restartable stream."):
+                    raise Error("No stream is ready to restart. Wait for playback to load, or use 'ott <player> restart' to reload the player. The request was not repeated.") from None
+                if isinstance(exc, PlayerUnsupported):
+                    raise Error("Stream restart is unavailable in the current playback state or player version. Wait for loading to finish, check capabilities, or use 'ott <player> restart' to reload the player.") from None
+            if action == "playback" and params.get("operation") in CHANNEL_STEPS.values() and isinstance(exc, PlayerRejected):
+                detail = exc.data.get("error") if isinstance(exc.data, dict) else None
+                if isinstance(detail, str) and detail in PLEX_QUEUE_ERRORS:
+                    raise Error(detail + " The request was not repeated") from None
+            if action in ("capabilities", "lifecycle", "input", "playback"):
+                reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+                raise Error(f"The {action} request was {reason}; use an updated player/controller and check capabilities and local restrictions") from None
+            if action not in ("profiles", "profile", "profile_settings", "restart") and not plex_settings:
+                raise
+            # Settings can contain credentials: do not echo player-supplied errors.
+            reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+            if plex_settings:
+                raise Error(f"The Plex settings request was {reason}; select Plex, unlock its settings and use a player with remote Plex support") from None
+            raise Error(f"The {action} request was {reason}; check its settings on the player") from None
+    if action in ("vportal", "vportal_random", "vportal_search"):
+        data = vportal_metadata(data, action != "vportal_search", action == "vportal_random")
+    elif action in ("profiles", "profile", "profile_settings"):
+        data = profile_metadata(data, action, params)
+    elif action == "app_update":
+        data = app_update_metadata(data, params)
+    elif action == "restart":
+        data = restart_metadata(data, params["target"])
+    elif action == "kiosk":
+        data = kiosk_metadata(data, "set" if params.get("query") else params["mode"], params.get("strict", False))
+    elif plex_settings:
+        data = plex_settings_metadata(data, params["settings"])
+    elif action == "status" and command_verb(words) == "v":
+        data = volume_metadata(data)
+    elif status_overview:
+        data = status_capabilities(client, device, data, status_deadline)
+    elif action == "command" and params.get("command") == "set_volume":
+        data = volume_metadata(data, mutating=True)
+    elif action == "capabilities":
+        data = capabilities_metadata(data)
+    elif action in ("lifecycle", "input"):
+        data = deferred_control_metadata(data, action, params)
+    elif action == "playback":
+        data = playback_metadata(data, params)
+    if action == "programs" and params["search"] and not listing_option(words):
+        selected = select_programme(data["programs"])
+        if selected:
+            try:
+                number = selected["number"]
+                archive = selected.get("mode") == "archive"
+                key = (number, selected["start"]) if archive else number
+                target = catalog_play[key] if catalog_play is not None else None
+                # Use the returned catalogue number, even for duplicate or numeric names.
+                playback = (client.call(device, "play_archive_catalog" if archive else "play_catalog", target) if target is not None
+                            else client.call(device, "play", {"query": str(number)}))
+                channel = playback.get("channel") if isinstance(playback, dict) else None
+                if (not isinstance(channel, dict) or playback.get("dispatched") is not True
+                        or type(channel.get("number")) is not int or channel["number"] != number
+                        or channel.get("name") != selected["channel"]
+                        or (target is not None and channel.get("id") != target["id"])
+                        or (archive and (playback.get("start") != selected["start"] or playback.get("end") != selected["end"]))):
+                    raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
+                if catalog_play is not None:
+                    playback = {"dispatched": True, "channel": {key: channel[key] for key in ("id", "number", "name")}}
+                    if archive:
+                        playback.update({"mode": "archive", "start": selected["start"], "end": selected["end"]})
+                data["playback"] = playback
+            except Error as exc:
+                playback_error = exc
+                data["playback"] = {"error": str(exc)}
+        elif not data.get("partial"):
+            print("No current programmes or available archives match the search." if "epg" in config else
+                  "No current programmes match the search.", file=sys.stderr)
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    elif action == "app_update":
+        if params["operation"] == "install":
+            print("Installer request accepted. Android may require confirmation on the device; use update status to check completion.")
+        else:
+            print("Update: " + data["phase"] + "; installed " + data["installed_version"] + "; target " + (data["target_version"] or "none"))
+            if data["error"]:
+                print("Reason: " + data["error"])
+            if not data["can_request_installs"]:
+                print("Android requires permission to install updates from this app.")
+    elif action == "screenshot":
+        print(f"Screenshot saved: {clean(data['path'])} ({data['width']}×{data['height']}; {data['source']}; video: {data['video']})")
+    elif action == "plex_queue":
+        print_plex_queue(data, preview=params["op"] == "preview")
+    elif action == "plex_library":
+        print_plex_library(data)
+    elif action == "categories":
+        print_categories(data)
+    elif action == "favorites":
+        print_favorites(data)
+    elif action == "aspect":
+        print_aspect(data, args.words[0])
+    elif action == "notifications":
+        print_notifications(data)
+    elif action == "channels" or (action == "play" and "channels" in data):
+        for row in data["channels"]:
+            print(f"{row['number']}: {clean(row['name'])}")
+        if action == "channels" and "limit" in params:
+            print(f"Showing {len(data['channels'])} of {data['total']} matching videos "
+                  f"(offset {data['offset']}); more: {'yes' if data['has_more'] else 'no'}.")
+            if data["has_more"]:
+                command = ["ott", *argv[:len(argv) - len(args.words)], args.words[0], "s",
+                           "--limit", str(params["limit"]), "--offset", str(data["offset"] + len(data["channels"]))]
+                if params["search"]:
+                    command.extend(["--", params["search"]])
+                print("Next page (current catalog): " + clean(shlex.join(command)))
+    elif action == "programs":
+        for row in data["programs"]:
+            detail = ""
+            if row.get("mode") == "archive":
+                detail = " [archive from %s; %s consecutive programmes]" % (
+                    time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(row["start"])), row["consecutive"])
+            print(f"{clean(row['channel'])} — {clean(row['title'])}{detail}")
+    elif action in ("vportal", "vportal_random", "vportal_search"):
+        for row in data["items"]:
+            print(f"{row['number']}: {clean(row['title'])}")
+    elif action == "status" and command_verb(words) == "v":
+        print(f"{data['volume']:g}%")
+    elif status_overview:
+        print_player_status(data, args.words[0])
+    elif action == "providers":
+        for row in data["providers"]:
+            print(f"{'*' if row['active'] else ' '} {row['index']}: {clean(row['id'])} — {clean(row['name'])}")
+    elif action == "profile_export":
+        print("Local videos profile exported: " + clean(data["path"]) + ". Videos and access grants are not included.")
+    elif action in ("profile_save", "profile_import"):
+        print(f"Local videos profile saved: {data['profile']['number']}: {clean(data['profile']['name'])}. Playback was not started.")
+        if data["binding_required"]:
+            print(f"Local binding required: first load profile {data['profile']['number']}. In Settings → Provider → Local videos, "
+                  "connect the original sources, wait for scanning to finish, and choose Bind loaded profile to connected sources. "
+                  "Then load the same profile again.")
+    elif action == "profiles":
+        for row in data["profiles"]:
+            if data["provider"] == "offline":
+                state = "binding required" if row["binding_required"] else ("configured" if row["configured"] else "empty")
+                print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | sources: {row['source_count']} | {state} | selected: {clean(row['selected_name']) or 'none'}")
+            elif data["provider"] == "vportal":
+                print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
             else:
-                print("Error: " + row["error"], flush=True)
-    succeeded = sum(row["ok"] for row in results)
-    if json_output:
-        print(json.dumps({"action": "notifications", "results": results, "succeeded": succeeded,
-                          "failed": len(results) - succeeded}, ensure_ascii=False, indent=2))
-    return 0 if succeeded == len(results) else 1
+                history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
+                print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | history: {history} h | "
+                      f"playlist: {'set' if row['playlist_configured'] else 'empty'}")
+    elif action == "profile":
+        print(f"Profile switch requested: {data['profile']['number']}: {clean(data['profile']['name'])}")
+        if data.get("binding_required"):
+            print("Local source binding or permission is required on the player. Playback has not been confirmed.")
+    elif action == "profile_settings":
+        print(f"Profile settings saved: {data['profile']['number']}: {clean(data['profile']['name'])}")
+    elif action == "restart":
+        print("Stream restart requested." if data["target"] == "stream" else
+              "Player reload accepted; waiting for the acknowledgement to reach the player.")
+    elif action == "lifecycle":
+        if data["operation"] in ("standby", "wake"):
+            label = "Standby" if data["operation"] == "standby" else "Wake"
+            print(f"{label} request accepted ({data['operation']}); waiting for the acknowledgement to reach the player.")
+        else:
+            print(f"Lifecycle request accepted: {data['operation']}; waiting for the acknowledgement to reach the player.")
+    elif action == "input":
+        print(f"Input request accepted: {data['key']}; waiting for the acknowledgement to reach the player.")
+    elif action == "playback":
+        if "plex_queue" in data:
+            print_plex_queue(data["plex_queue"])
+        elif "channel" in data:
+            print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
+        else:
+            print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")
+    elif action == "kiosk":
+        if data.get("strict"):
+            if data["state"] == "waiting":
+                print("Strict kiosk is armed; local controls lock after the first channel selection.")
+            else:
+                print("Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.")
+        if data["state"] == "off":
+            print("Kiosk mode disabled.")
+        elif data["state"] == "waiting":
+            print("Kiosk mode enabled; waiting for the first channel selection in the player.")
+        elif "media" in data:
+            provider_name = "Plex" if data["provider"] == "plex" else "VPortal"
+            print(f"Kiosk {provider_name}: {clean(data['media']['title'])} | {data['media']['index'] + 1}/{data['media']['total']} | {data['health']} | retries: {data['retries']}")
+        else:
+            print(f"Kiosk channel: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
+        if data.get("screen_suspended"):
+            print("Playback is suspended while the screen is off or the app is in the background.")
+    elif plex_settings:
+        print("Plex settings saved: " + ", ".join(data["fields"]) + ".")
+    elif action == "play":
+        print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
+    elif action == "command" and params.get("command") == "set_volume":
+        print(f"{data['volume']:g}%")
+    elif action == "command" and params.get("command") == "random_channel":
+        print(f"Random channel requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
+    else:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    if action in ("programs", "play") and data.get("playback", {}).get("dispatched"):
+        channel = data["playback"]["channel"]
+        sys.stdout.flush()
+        exact = (sum(media_search_key(row["name"]) == media_search_key(params["query"].strip())
+                     for row in data.get("channels", [])) if action == "play" else 0)
+        if len(data.get("programs", data.get("channels", []))) > 1 and exact != 1:
+            print(f"Randomly selected channel: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
+        print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
+    if action in ("vportal", "vportal_random"):
+        shuffled = "shuffled; " if action == "vportal_random" else ""
+        print(f"VPortal playback requested: {data['total']} videos; {shuffled}repeat enabled.", file=sys.stderr)
+    elif action == "vportal_search" and not data["items"]:
+        print("No VPortal videos match the search.", file=sys.stderr)
+    if action == "programs" and data.get("partial"):
+        print(f"Programme search is incomplete: checked {data['checked']} of {data['total']} channels on the player. "
+              "Unchecked channels may contain matches. This is search coverage, not EPG download progress.", file=sys.stderr)
+    if action in ("categories", "channels", "play") and data.get("loading"):
+        print("The media catalog is still loading; this listing is incomplete. Run the listing again when loading finishes.", file=sys.stderr)
+    if playback_error:
+        raise playback_error
+    return 3 if (action == "programs" and data.get("partial")) or (action in ("categories", "channels") and data.get("loading")) else 0
 
 
 def main(argv=None):
@@ -4890,7 +5357,7 @@ def main(argv=None):
             print(json.dumps({"presets": names}, indent=2) if args.json else "\n".join(names))
             return 0
         if (len(args.words) > 1 and args.words[1].casefold() == "load"
-                and args.words[0].casefold() not in TOP_LEVEL_COMMANDS):
+                and args.words[0].casefold() not in TOP_LEVEL_COMMANDS and "," not in args.words[0]):
             return preset_command(config, args.words, args.timeout, args.json,
                                   print_request_receipt if args.receipt else None)
         client = Client(config, args.timeout)
@@ -4906,315 +5373,11 @@ def main(argv=None):
             raise Error(f"The name {args.words[0]!r} is reserved for a CLI command. Run ott --help for its syntax; use another player alias or the device UUID")
         if len(args.words) >= 2 and args.words[1].casefold() == "watch":
             return fleet_module().run(SimpleNamespace(**globals()), client, args.words[0], args.words[2:], args.timeout, args.json)
-        targets = provider_group_targets(client, args.words[0])
+        targets = player_group_targets(client, args.words[0])
         if targets is not None:
-            if command_verb(args.words[1:]) == "notifications":
-                return notifications_group_command(client, targets, args.words[1:], args.json)
-            return provider_group_command(client, targets, args.words[1:], args.json)
+            return player_group_command(client, config, targets, args, argv)
         device = client.device(args.words[0])
-        words = args.words[1:]
-        if words and words[0].casefold() == "perf":
-            path = Path(__file__).resolve().with_name("performance.py")
-            if not path.is_file():
-                raise Error("Install all CLI Python files from the same revision to use performance capture")
-            spec = importlib.util.spec_from_file_location("ott_performance", path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module.run(SimpleNamespace(**globals()), client, device, words[1:], args.timeout, args.json)
-        if words and words[0].casefold() in ("setting", "settings"):
-            module_path = Path(__file__).resolve().with_name("player_settings.py")
-            if not module_path.is_file():
-                raise Error("Install all CLI Python files from the same revision to manage settings")
-            spec = importlib.util.spec_from_file_location("ott_player_settings", module_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module.run(SimpleNamespace(**globals()), client, device, words, args.timeout, args.json)
-        if (words and words[0].casefold() == "update" and
-                (len(words) == 1 or words[1].casefold() not in ("status", "prepare", "install"))):
-            module_path = Path(__file__).resolve().with_name("app_update.py")
-            if not module_path.is_file():
-                raise Error("Install app_update.py beside ott.py to use release updates")
-            spec = importlib.util.spec_from_file_location("ott_app_update", module_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module.run(SimpleNamespace(**globals()), client, device, words, args.json)
-        if words and words[0].casefold() in ("doctor", "inspect", "operation", "bundle", "test", "debug", "dbg"):
-            module_path = Path(__file__).resolve().with_name("workbench.py")
-            if not module_path.is_file():
-                raise Error("Install workbench.py beside ott.py to use the workbench")
-            spec = importlib.util.spec_from_file_location("ott_workbench", module_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module.run(SimpleNamespace(**globals()), client, device, words, args.timeout, args.json)
-        if words and words[0].casefold() == "android":
-            data = android_command(client, args.config, device, args.words[0], words[1:], args.json)
-            print(json.dumps(data, ensure_ascii=False, indent=2))
-            return 0
-        action, params = parse_command(words)
-        status_overview = action == "status" and command_verb(words) != "v"
-        status_deadline = time.monotonic() + args.timeout if status_overview else None
-        catalog_play = None
-        playback_error = None
-        plex_settings = action == "provider_settings" and params.get("provider") == "plex"
-        if action == "provider" and (len(words) > 2 or "--" in words[1:]):
-            data, playback_error = provider_command(client, device, words)
-        elif action in ("profile_save", "profile_export", "profile_import"):
-            data = offline_profile_command(client, device, action, params, args.timeout)
-        elif action == "profile_settings" and "vportal" in params["settings"]:
-            data = vportal_profile_command(client, device, params, args.timeout)
-        elif action == "provider_settings" and params.get("provider") == "vportal":
-            row = {"number": params["settings"]["profile"],
-                   "settings": {key: value for key, value in params["settings"].items() if key != "profile"}}
-            data = vportal_settings_command(client, device, row)
-        elif action == "screenshot":
-            data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
-        elif action == "plex_queue":
-            data = plex_queue_command(client, device, params, args.timeout)
-        elif action == "plex_library":
-            data = plex_library_command(client, device, params, args.timeout)
-        elif action == "categories":
-            data = categories_command(client, device, params, args.timeout)
-        elif action == "channels":
-            data = channels_command(client, device, params, args.timeout)
-        elif action == "favorites":
-            data = favorites_command(client, device, params, args.timeout)
-        elif action == "aspect":
-            data = aspect_command(client, device, params, args.timeout)
-        elif action == "notifications":
-            data = notifications_command(client, device, params, args.timeout)
-        elif action == "command" and params.get("command") == "random_channel":
-            data = random_command(client, device, params, args.timeout)
-        elif action == "programs" and "epg" in config:
-            data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
-        elif action == "play":
-            data, playback_error = play_channel(client, device, params, args.timeout)
-            if data.get("channels") == [] and "epg" in config and data.get("version") != 1:
-                print("No channel matches. Searching current EPG and available archives...", file=sys.stderr)
-                query = params["query"]
-                data, catalog_play = server_programs(client, device, config["epg"], query, refresh=args.refresh)
-                action, params, words = "programs", {"search": query}, ["p", query]
-                playback_error = None
-        else:
-            try:
-                data = client.call(device, action, params)
-            except (PlayerRejected, PlayerUnsupported) as exc:
-                if action == "restart" and params.get("target") == "stream":
-                    if isinstance(exc.data, dict) and (exc.data.get("reason") == "no_restartable_stream" or exc.data.get("error") == "There is no owned, restartable stream."):
-                        raise Error("No stream is ready to restart. Wait for playback to load, or use 'ott <player> restart' to reload the player. The request was not repeated.") from None
-                    if isinstance(exc, PlayerUnsupported):
-                        raise Error("Stream restart is unavailable in the current playback state or player version. Wait for loading to finish, check capabilities, or use 'ott <player> restart' to reload the player.") from None
-                if action == "playback" and params.get("operation") in CHANNEL_STEPS.values() and isinstance(exc, PlayerRejected):
-                    detail = exc.data.get("error") if isinstance(exc.data, dict) else None
-                    if isinstance(detail, str) and detail in PLEX_QUEUE_ERRORS:
-                        raise Error(detail + " The request was not repeated") from None
-                if action in ("capabilities", "lifecycle", "input", "playback"):
-                    reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
-                    raise Error(f"The {action} request was {reason}; use an updated player/controller and check capabilities and local restrictions") from None
-                if action not in ("profiles", "profile", "profile_settings", "restart") and not plex_settings:
-                    raise
-                # Settings can contain credentials: do not echo player-supplied errors.
-                reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
-                if plex_settings:
-                    raise Error(f"The Plex settings request was {reason}; select Plex, unlock its settings and use a player with remote Plex support") from None
-                raise Error(f"The {action} request was {reason}; check its settings on the player") from None
-        if action in ("vportal", "vportal_random", "vportal_search"):
-            data = vportal_metadata(data, action != "vportal_search", action == "vportal_random")
-        elif action in ("profiles", "profile", "profile_settings"):
-            data = profile_metadata(data, action, params)
-        elif action == "app_update":
-            data = app_update_metadata(data, params)
-        elif action == "restart":
-            data = restart_metadata(data, params["target"])
-        elif action == "kiosk":
-            data = kiosk_metadata(data, "set" if params.get("query") else params["mode"], params.get("strict", False))
-        elif plex_settings:
-            data = plex_settings_metadata(data, params["settings"])
-        elif action == "status" and command_verb(words) == "v":
-            data = volume_metadata(data)
-        elif status_overview:
-            data = status_capabilities(client, device, data, status_deadline)
-        elif action == "command" and params.get("command") == "set_volume":
-            data = volume_metadata(data, mutating=True)
-        elif action == "capabilities":
-            data = capabilities_metadata(data)
-        elif action in ("lifecycle", "input"):
-            data = deferred_control_metadata(data, action, params)
-        elif action == "playback":
-            data = playback_metadata(data, params)
-        if action == "programs" and params["search"] and not listing_option(words):
-            selected = select_programme(data["programs"])
-            if selected:
-                try:
-                    number = selected["number"]
-                    archive = selected.get("mode") == "archive"
-                    key = (number, selected["start"]) if archive else number
-                    target = catalog_play[key] if catalog_play is not None else None
-                    # Use the returned catalogue number, even for duplicate or numeric names.
-                    playback = (client.call(device, "play_archive_catalog" if archive else "play_catalog", target) if target is not None
-                                else client.call(device, "play", {"query": str(number)}))
-                    channel = playback.get("channel") if isinstance(playback, dict) else None
-                    if (not isinstance(channel, dict) or playback.get("dispatched") is not True
-                            or type(channel.get("number")) is not int or channel["number"] != number
-                            or channel.get("name") != selected["channel"]
-                            or (target is not None and channel.get("id") != target["id"])
-                            or (archive and (playback.get("start") != selected["start"] or playback.get("end") != selected["end"]))):
-                        raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
-                    if catalog_play is not None:
-                        playback = {"dispatched": True, "channel": {key: channel[key] for key in ("id", "number", "name")}}
-                        if archive:
-                            playback.update({"mode": "archive", "start": selected["start"], "end": selected["end"]})
-                    data["playback"] = playback
-                except Error as exc:
-                    playback_error = exc
-                    data["playback"] = {"error": str(exc)}
-            elif not data.get("partial"):
-                print("No current programmes or available archives match the search." if "epg" in config else
-                      "No current programmes match the search.", file=sys.stderr)
-        if args.json:
-            print(json.dumps(data, ensure_ascii=False, indent=2))
-        elif action == "app_update":
-            if params["operation"] == "install":
-                print("Installer request accepted. Android may require confirmation on the device; use update status to check completion.")
-            else:
-                print("Update: " + data["phase"] + "; installed " + data["installed_version"] + "; target " + (data["target_version"] or "none"))
-                if data["error"]:
-                    print("Reason: " + data["error"])
-                if not data["can_request_installs"]:
-                    print("Android requires permission to install updates from this app.")
-        elif action == "screenshot":
-            print(f"Screenshot saved: {clean(data['path'])} ({data['width']}×{data['height']}; {data['source']}; video: {data['video']})")
-        elif action == "plex_queue":
-            print_plex_queue(data, preview=params["op"] == "preview")
-        elif action == "plex_library":
-            print_plex_library(data)
-        elif action == "categories":
-            print_categories(data)
-        elif action == "favorites":
-            print_favorites(data)
-        elif action == "aspect":
-            print_aspect(data, args.words[0])
-        elif action == "notifications":
-            print_notifications(data)
-        elif action == "channels" or (action == "play" and "channels" in data):
-            for row in data["channels"]:
-                print(f"{row['number']}: {clean(row['name'])}")
-            if action == "channels" and "limit" in params:
-                print(f"Showing {len(data['channels'])} of {data['total']} matching videos "
-                      f"(offset {data['offset']}); more: {'yes' if data['has_more'] else 'no'}.")
-                if data["has_more"]:
-                    command = ["ott", *argv[:len(argv) - len(args.words)], args.words[0], "s",
-                               "--limit", str(params["limit"]), "--offset", str(data["offset"] + len(data["channels"]))]
-                    if params["search"]:
-                        command.extend(["--", params["search"]])
-                    print("Next page (current catalog): " + clean(shlex.join(command)))
-        elif action == "programs":
-            for row in data["programs"]:
-                detail = ""
-                if row.get("mode") == "archive":
-                    detail = " [archive from %s; %s consecutive programmes]" % (
-                        time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(row["start"])), row["consecutive"])
-                print(f"{clean(row['channel'])} — {clean(row['title'])}{detail}")
-        elif action in ("vportal", "vportal_random", "vportal_search"):
-            for row in data["items"]:
-                print(f"{row['number']}: {clean(row['title'])}")
-        elif action == "status" and command_verb(words) == "v":
-            print(f"{data['volume']:g}%")
-        elif status_overview:
-            print_player_status(data, args.words[0])
-        elif action == "providers":
-            for row in data["providers"]:
-                print(f"{'*' if row['active'] else ' '} {row['index']}: {clean(row['id'])} — {clean(row['name'])}")
-        elif action == "profile_export":
-            print("Local videos profile exported: " + clean(data["path"]) + ". Videos and access grants are not included.")
-        elif action in ("profile_save", "profile_import"):
-            print(f"Local videos profile saved: {data['profile']['number']}: {clean(data['profile']['name'])}. Playback was not started.")
-            if data["binding_required"]:
-                print(f"Local binding required: first load profile {data['profile']['number']}. In Settings → Provider → Local videos, "
-                      "connect the original sources, wait for scanning to finish, and choose Bind loaded profile to connected sources. "
-                      "Then load the same profile again.")
-        elif action == "profiles":
-            for row in data["profiles"]:
-                if data["provider"] == "offline":
-                    state = "binding required" if row["binding_required"] else ("configured" if row["configured"] else "empty")
-                    print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | sources: {row['source_count']} | {state} | selected: {clean(row['selected_name']) or 'none'}")
-                elif data["provider"] == "vportal":
-                    print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
-                else:
-                    history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
-                    print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | history: {history} h | "
-                          f"playlist: {'set' if row['playlist_configured'] else 'empty'}")
-        elif action == "profile":
-            print(f"Profile switch requested: {data['profile']['number']}: {clean(data['profile']['name'])}")
-            if data.get("binding_required"):
-                print("Local source binding or permission is required on the player. Playback has not been confirmed.")
-        elif action == "profile_settings":
-            print(f"Profile settings saved: {data['profile']['number']}: {clean(data['profile']['name'])}")
-        elif action == "restart":
-            print("Stream restart requested." if data["target"] == "stream" else
-                  "Player reload accepted; waiting for the acknowledgement to reach the player.")
-        elif action == "lifecycle":
-            if data["operation"] in ("standby", "wake"):
-                label = "Standby" if data["operation"] == "standby" else "Wake"
-                print(f"{label} request accepted ({data['operation']}); waiting for the acknowledgement to reach the player.")
-            else:
-                print(f"Lifecycle request accepted: {data['operation']}; waiting for the acknowledgement to reach the player.")
-        elif action == "input":
-            print(f"Input request accepted: {data['key']}; waiting for the acknowledgement to reach the player.")
-        elif action == "playback":
-            if "plex_queue" in data:
-                print_plex_queue(data["plex_queue"])
-            elif "channel" in data:
-                print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
-            else:
-                print(f"Playback request dispatched: {data['operation']}; this does not confirm decoder recovery.")
-        elif action == "kiosk":
-            if data.get("strict"):
-                if data["state"] == "waiting":
-                    print("Strict kiosk is armed; local controls lock after the first channel selection.")
-                else:
-                    print("Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.")
-            if data["state"] == "off":
-                print("Kiosk mode disabled.")
-            elif data["state"] == "waiting":
-                print("Kiosk mode enabled; waiting for the first channel selection in the player.")
-            elif "media" in data:
-                provider_name = "Plex" if data["provider"] == "plex" else "VPortal"
-                print(f"Kiosk {provider_name}: {clean(data['media']['title'])} | {data['media']['index'] + 1}/{data['media']['total']} | {data['health']} | retries: {data['retries']}")
-            else:
-                print(f"Kiosk channel: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
-            if data.get("screen_suspended"):
-                print("Playback is suspended while the screen is off or the app is in the background.")
-        elif plex_settings:
-            print("Plex settings saved: " + ", ".join(data["fields"]) + ".")
-        elif action == "play":
-            print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
-        elif action == "command" and params.get("command") == "set_volume":
-            print(f"{data['volume']:g}%")
-        elif action == "command" and params.get("command") == "random_channel":
-            print(f"Random channel requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
-        else:
-            print(json.dumps(data, ensure_ascii=False, indent=2))
-        if action in ("programs", "play") and data.get("playback", {}).get("dispatched"):
-            channel = data["playback"]["channel"]
-            sys.stdout.flush()
-            exact = (sum(media_search_key(row["name"]) == media_search_key(params["query"].strip())
-                         for row in data.get("channels", [])) if action == "play" else 0)
-            if len(data.get("programs", data.get("channels", []))) > 1 and exact != 1:
-                print(f"Randomly selected channel: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
-            print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
-        if action in ("vportal", "vportal_random"):
-            shuffled = "shuffled; " if action == "vportal_random" else ""
-            print(f"VPortal playback requested: {data['total']} videos; {shuffled}repeat enabled.", file=sys.stderr)
-        elif action == "vportal_search" and not data["items"]:
-            print("No VPortal videos match the search.", file=sys.stderr)
-        if action == "programs" and data.get("partial"):
-            print(f"Programme search is incomplete: checked {data['checked']} of {data['total']} channels on the player. "
-                  "Unchecked channels may contain matches. This is search coverage, not EPG download progress.", file=sys.stderr)
-        if action in ("categories", "channels", "play") and data.get("loading"):
-            print("The media catalog is still loading; this listing is incomplete. Run the listing again when loading finishes.", file=sys.stderr)
-        if playback_error:
-            raise playback_error
-        return 3 if (action == "programs" and data.get("partial")) or (action in ("categories", "channels") and data.get("loading")) else 0
+        return execute_player_command(client, config, args, argv, device)
     except (Error, KeyError, TypeError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         print("Error: " + (str(exc) if isinstance(exc, Error) else "Check the configuration; the operation did not complete"), file=sys.stderr)
         return 1
