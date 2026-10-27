@@ -149,9 +149,9 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`722a0f685d583c39c92490bcbd4004618450f3c3`](https://github.com/open-ott-play/ottplay-control-server/commit/722a0f685d583c39c92490bcbd4004618450f3c3).
+[`2a7d68fbf7c173428735c9ce890e0165ed7feb58`](https://github.com/open-ott-play/ottplay-control-server/commit/2a7d68fbf7c173428735c9ce890e0165ed7feb58).
 This is an exact source pin, not a claim about the latest published release.
-It contains the complete CLI module set, including finite group `watch`,
+It contains the complete CLI module set, including group RPC failure diagnostics, finite group `watch`,
 performance-export verification, negotiated debug bundles and the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
 OTA workflow (`app_update.py`), including stable releases promoted from RC bytes, Local videos profile save/load/import/export, and
@@ -194,8 +194,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=722a0f685d583c39c92490bcbd4004618450f3c3
-  ott_source="$HOME/.local/share/ottplay-control-server-local-722a0f685d58"
+  ott_ref=2a7d68fbf7c173428735c9ce890e0165ed7feb58
+  ott_source="$HOME/.local/share/ottplay-control-server-local-2a7d68fbf7c1"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -217,7 +217,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-722a0f685d58/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-2a7d68fbf7c1/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -231,7 +231,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-722a0f685d58/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-2a7d68fbf7c1/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -253,8 +253,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '722a0f685d583c39c92490bcbd4004618450f3c3'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-722a0f685d58'
+$ottRef = '2a7d68fbf7c173428735c9ce890e0165ed7feb58'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-2a7d68fbf7c1'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -300,12 +300,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-722a0f685d58/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-2a7d68fbf7c1/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-722a0f685d58\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-2a7d68fbf7c1\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -334,7 +334,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-722a0f685d58`, stages the replacement beside it, then switches atomically.
+`ott.before-local-2a7d68fbf7c1`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -346,9 +346,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-722a0f685d58")
-staged = launcher.with_name("ott.switch-local-722a0f685d58")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-722a0f685d58/cli/ott.py"
+backup = launcher.with_name("ott.before-local-2a7d68fbf7c1")
+staged = launcher.with_name("ott.switch-local-2a7d68fbf7c1")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-2a7d68fbf7c1/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -821,7 +821,12 @@ Commands run in order. A failure on one player does not prevent execution on the
 remaining players. There is no group rollback or automatic replay of failed or
 uncertain requests. Each command retains its normal per-player timeout and any
 specific options such as update `--wait`; a group can therefore take longer than
-one timeout. Capabilities, settings locks, native bindings and local permission
+one timeout. For example, `ott -t 30 t1,t2,t3,t4 local shuffle Movies` gives each
+target a separate 30-second capability-and-command budget, in sequence. Three
+exhausted budgets followed by one quick response can take about 92 seconds.
+This is not a 30-second deadline for the whole group. The CLI timeout does not
+cancel an accepted request or extend its independent server-side TTL.
+Capabilities, settings locks, native bindings and local permission
 requirements are checked independently by the existing command. Random choices
 are independent, and the players need not have matching providers or catalogues.
 The group is not an atomic or synchronized playback operation.
@@ -844,13 +849,65 @@ JSON:
 
 ```sh
 ott -j --receipt t1,t2,t3,t4 R > random-results.json 2> random-receipts.log
+ott -t 30 -j --receipt t1,t2,t3,t4 local shuffle Movies > local-results.json 2> local-receipts.log
 ott -t 60 -j t1,t2,t3,t4 doctor
 ```
 
+An RPC submission or receipt failure can add a `request` object to the failed
+group row. It contains the actual RPC `action` (or `unknown`), `request_id`
+(32 lowercase hex characters, or `null` when no valid ID was received), `stage`
+(`enqueue`, `receipt`, or `unknown`) and `reason`. The aggregate's `action` still
+names the logical command. This metadata does not require `--receipt`. For
+example, this excerpt from a Local group result
+identifies a failed capability read; other rows and text fields are omitted:
+
+```json
+{
+  "action": "local_media",
+  "results": [
+    {
+      "player": "t1",
+      "ok": false,
+      "exit_code": 1,
+      "request": {
+        "action": "capabilities",
+        "request_id": "0123456789abcdef0123456789abcdef",
+        "stage": "receipt",
+        "reason": "request_pending_timeout"
+      }
+    }
+  ]
+}
+```
+
+This is evidence about the `capabilities` RPC, not a Local playback verdict.
+Reasons are `controller_unavailable`, `controller_http_error`, `invalid_response`,
+`receipt_missing`, `unauthorized`, `rate_limited`, `request_pending_timeout`, or
+`unknown`. `controller_unavailable` can also carry `transport_category`:
+`deadline`, `dns`, `tls`, `socket`, `protocol`, `truncated`, or `unknown`.
+`deadline` means the CLI's local deadline expired; a socket timeout is classified
+as `socket`. These categories describe the observed transport failure; they do
+not identify an outage's cause or prove that the player is offline. A timed-out
+mutation can still execute before its server-side TTL expires. When an ID is
+available, read the retained controller receipt with an authenticated request,
+without resubmitting the original command:
+
+```http
+GET /api/requests?device_id=DEVICE_UUID&id=0123456789abcdef0123456789abcdef
+```
+
+See the [request/response API](api.md#requestresponse-extension-protocol-1).
+Controller results expire 60 seconds after receipt; a 404 means missing or
+expired. `ott PLAYER operation REQUEST_ID` is a separate, new inspection RPC
+to the player's journal for supported mutating actions and can return `unknown`.
+Read-only `capabilities` requests are not journaled there; `operation` is not a
+general controller-receipt reader.
+
 `--receipt` keeps one safe receipt per RPC on stderr and adds the target `player`;
 human warnings may also appear there. A multi-step command can produce several
-receipts for one player. An acknowledgement does not prove visible playback or
-completed application restart.
+receipts for one player, including successful steps preceding the failed row's
+`request`. The new group metadata does not replace that history. An
+acknowledgement does not prove visible playback or completed application restart.
 
 The aggregate exit code uses this precedence: `130` (interrupted), `1` (error),
 `2` (failed diagnostic check), `3` (partial or unknown result), then `0` (all

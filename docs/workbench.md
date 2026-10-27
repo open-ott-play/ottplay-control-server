@@ -152,6 +152,27 @@ command to obtain an ID. Multi-request commands produce multiple receipt lines.
 Only action, ID, and status are included; params, response data, credentials, and
 server URLs are omitted. Existing stderr diagnostics may appear alongside JSON.
 
+Failed ordinary group commands can additionally retain safe RPC metadata in
+the result row's `request`: actual `action`, nullable `request_id`, `stage`,
+`reason`, and an optional `transport_category`. For example, an outer
+`action: "local_media"` with `request.action: "capabilities"` identifies a failed
+capability read, not a playback failure. See the [group result example and
+field values](cli.md#group-results-and-interruption). Keep `--receipt` when the
+IDs of earlier successful RPCs also matter; the row describes only its failure.
+
+Ordinary groups run sequentially. In the Local example, an explicit `-t 30`
+gives each target its own 30-second capability-and-command budget; three
+timeouts plus a quick fourth response can take about 92 seconds. It does not
+cancel an accepted request or change the server's TTL.
+To read a retained controller receipt without resubmitting its command, use
+authenticated `GET /api/requests` with `device_id` and `id` as described in the
+[request/response API](api.md#requestresponse-extension-protocol-1); controller
+results expire 60 seconds after receipt. `operation` sends a separate inspection
+RPC to the player's journal for supported mutating actions, can return `unknown`,
+and does not look up read-only `capabilities` requests. Inspect the player's state
+before deciding to repeat a mutation. A timeout, `controller_unavailable`, or a
+transport category does not establish that the app exited or playback stopped.
+
 ## Observations and lanes
 
 `doctor` reads capabilities, build identity and a bounded snapshot. `inspect`
