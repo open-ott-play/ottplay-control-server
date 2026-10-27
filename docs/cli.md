@@ -821,7 +821,12 @@ Commands run in order. A failure on one player does not prevent execution on the
 remaining players. There is no group rollback or automatic replay of failed or
 uncertain requests. Each command retains its normal per-player timeout and any
 specific options such as update `--wait`; a group can therefore take longer than
-one timeout. Capabilities, settings locks, native bindings and local permission
+one timeout. For example, `ott -t 30 t1,t2,t3,t4 local shuffle Movies` gives each
+target a separate 30-second capability-and-command budget, in sequence. Three
+exhausted budgets followed by one quick response can take about 92 seconds.
+This is not a 30-second deadline for the whole group. The CLI timeout does not
+cancel an accepted request or extend its independent server-side TTL.
+Capabilities, settings locks, native bindings and local permission
 requirements are checked independently by the existing command. Random choices
 are independent, and the players need not have matching providers or catalogues.
 The group is not an atomic or synchronized playback operation.
@@ -844,13 +849,65 @@ JSON:
 
 ```sh
 ott -j --receipt t1,t2,t3,t4 R > random-results.json 2> random-receipts.log
+ott -t 30 -j --receipt t1,t2,t3,t4 local shuffle Movies > local-results.json 2> local-receipts.log
 ott -t 60 -j t1,t2,t3,t4 doctor
 ```
 
+An RPC submission or receipt failure can add a `request` object to the failed
+group row. It contains the actual RPC `action` (or `unknown`), `request_id`
+(32 lowercase hex characters, or `null` when no valid ID was received), `stage`
+(`enqueue`, `receipt`, or `unknown`) and `reason`. The aggregate's `action` still
+names the logical command. This metadata does not require `--receipt`. For
+example, this excerpt from a Local group result
+identifies a failed capability read; other rows and text fields are omitted:
+
+```json
+{
+  "action": "local_media",
+  "results": [
+    {
+      "player": "t1",
+      "ok": false,
+      "exit_code": 1,
+      "request": {
+        "action": "capabilities",
+        "request_id": "0123456789abcdef0123456789abcdef",
+        "stage": "receipt",
+        "reason": "request_pending_timeout"
+      }
+    }
+  ]
+}
+```
+
+This is evidence about the `capabilities` RPC, not a Local playback verdict.
+Reasons are `controller_unavailable`, `controller_http_error`, `invalid_response`,
+`receipt_missing`, `unauthorized`, `rate_limited`, `request_pending_timeout`, or
+`unknown`. `controller_unavailable` can also carry `transport_category`:
+`deadline`, `dns`, `tls`, `socket`, `protocol`, `truncated`, or `unknown`.
+`deadline` means the CLI's local deadline expired; a socket timeout is classified
+as `socket`. These categories describe the observed transport failure; they do
+not identify an outage's cause or prove that the player is offline. A timed-out
+mutation can still execute before its server-side TTL expires. When an ID is
+available, read the retained controller receipt with an authenticated request,
+without resubmitting the original command:
+
+```http
+GET /api/requests?device_id=DEVICE_UUID&id=0123456789abcdef0123456789abcdef
+```
+
+See the [request/response API](api.md#requestresponse-extension-protocol-1).
+Controller results expire 60 seconds after receipt; a 404 means missing or
+expired. `ott PLAYER operation REQUEST_ID` is a separate, new inspection RPC
+to the player's journal for supported mutating actions and can return `unknown`.
+Read-only `capabilities` requests are not journaled there; `operation` is not a
+general controller-receipt reader.
+
 `--receipt` keeps one safe receipt per RPC on stderr and adds the target `player`;
 human warnings may also appear there. A multi-step command can produce several
-receipts for one player. An acknowledgement does not prove visible playback or
-completed application restart.
+receipts for one player, including successful steps preceding the failed row's
+`request`. The new group metadata does not replace that history. An
+acknowledgement does not prove visible playback or completed application restart.
 
 The aggregate exit code uses this precedence: `130` (interrupted), `1` (error),
 `2` (failed diagnostic check), `3` (partial or unknown result), then `0` (all

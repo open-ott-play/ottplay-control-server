@@ -21,6 +21,7 @@ import secrets
 import stat
 import struct
 import shlex
+import socket
 import subprocess
 import sys
 import tempfile
@@ -389,11 +390,13 @@ class Error(Exception):
 
 class RequestError(Error):
     """A bounded request failure with machine-readable cause and stage."""
-    def __init__(self, reason, stage, message, request_id=None):
+    def __init__(self, reason, stage, message, request_id=None, *, transport_category=None):
         super().__init__(message)
         self.reason = reason
         self.stage = stage
         self.request_id = request_id
+        self.action = None
+        self.transport_category = transport_category
 
 
 class PlayerRejected(Error):
@@ -410,8 +413,51 @@ class PlayerUnsupported(Error):
         self.data = data
 
 
+TRANSPORT_CATEGORIES = frozenset(("deadline", "dns", "tls", "socket", "protocol", "truncated", "unknown"))
+REQUEST_ERROR_REASONS = frozenset(("controller_unavailable", "controller_http_error", "invalid_response",
+                                 "receipt_missing", "unauthorized", "rate_limited", "request_pending_timeout"))
+
+
 class TransportError(Error):
-    pass
+    def __init__(self, message, category="unknown"):
+        super().__init__(message)
+        self.category = category if isinstance(category, str) and category in TRANSPORT_CATEGORIES else "unknown"
+
+
+def transport_error_category(error):
+    """Classify typed network failures without inspecting private exception text."""
+    for _ in range(4):
+        if not isinstance(error, urllib.error.URLError):
+            break
+        error = error.reason
+    if isinstance(error, urllib.error.URLError):
+        return "unknown"
+    if isinstance(error, socket.gaierror):
+        return "dns"
+    if isinstance(error, ssl.SSLError):
+        return "tls"
+    if isinstance(error, http.client.HTTPException):
+        return "protocol"
+    if isinstance(error, OSError):
+        return "socket"
+    return "unknown"
+
+
+def request_error_metadata(error):
+    """Project only safe request identity and enum diagnostics into group JSON."""
+    action = error.action
+    reason = error.reason
+    result = {
+        "action": action if isinstance(action, str) and action in RECEIPT_ACTIONS else "unknown",
+        "request_id": error.request_id if isinstance(error.request_id, str)
+        and re.fullmatch(r"[0-9a-f]{32}", error.request_id) else None,
+        "stage": error.stage if isinstance(error.stage, str) and error.stage in ("enqueue", "receipt") else "unknown",
+        "reason": reason if isinstance(reason, str) and reason in REQUEST_ERROR_REASONS else "unknown",
+    }
+    category = error.transport_category
+    if result["reason"] == "controller_unavailable" and category is not None:
+        result["transport_category"] = category if isinstance(category, str) and category in TRANSPORT_CATEGORIES else "unknown"
+    return result
 
 
 class HTTPError(Error):
@@ -717,10 +763,10 @@ class Client:
             ok, value = outcome.get(timeout=max(0, deadline - time.monotonic()))
         except queue.Empty:
             cancelled.set()
-            raise TransportError("Timed out waiting for the server response") from None
+            raise TransportError("Timed out waiting for the server response", "deadline") from None
         if time.monotonic() >= deadline:
             cancelled.set()
-            raise TransportError("Timed out waiting for the server response")
+            raise TransportError("Timed out waiting for the server response", "deadline")
         if not ok:
             raise value
         return value
@@ -734,12 +780,12 @@ class Client:
         request = urllib.request.Request(self.server + path, data=body, headers=headers)
         try:
             if cancelled.is_set() or time.monotonic() >= deadline:
-                raise TransportError("Timed out waiting for the server response")
+                raise TransportError("Timed out waiting for the server response", "deadline")
             with self.opener.open(request, timeout=budget) as response:
                 body = bytearray()
                 while True:
                     if cancelled.is_set() or time.monotonic() >= deadline:
-                        raise TransportError("Timed out waiting for the server response")
+                        raise TransportError("Timed out waiting for the server response", "deadline")
                     # read1 returns available bytes instead of waiting for the
                     # entire body, letting a timed-out trickle worker retire.
                     chunk = response.read1(min(65536, 2 * 1024 * 1024 + 1 - len(body)))
@@ -748,7 +794,7 @@ class Client:
                         # advertised Content-Length without IncompleteRead.
                         remaining = getattr(response, "length", None)
                         if isinstance(remaining, int) and remaining > 0:
-                            raise TransportError("The server closed the connection before sending the complete response")
+                            raise TransportError("The server closed the connection before sending the complete response", "truncated")
                         return response.status, decode_response_json(body)
                     body.extend(chunk)
                     if len(body) > 2 * 1024 * 1024:
@@ -758,7 +804,7 @@ class Client:
             exc.close()
             raise HTTPError(code) from None
         except (OSError, http.client.HTTPException) as exc:
-            raise TransportError("Server unavailable; check the address and connection") from exc
+            raise TransportError("Server unavailable; check the address and connection", transport_error_category(exc)) from exc
         except (ValueError, RecursionError) as exc:
             raise Error("The server returned invalid JSON") from exc
 
@@ -798,7 +844,8 @@ class Client:
                 reason = ("controller_unavailable" if isinstance(exc, TransportError) else
                           "controller_http_error" if isinstance(exc, HTTPError) else "invalid_response")
                 raise RequestError(reason, "enqueue", "The controller did not confirm the request. "
-                                   "The request may have been accepted; do not repeat the change blindly.") from exc
+                                   "The request may have been accepted; do not repeat the change blindly.",
+                                   transport_category=exc.category if isinstance(exc, TransportError) else None) from exc
             if not isinstance(queued, dict) or not isinstance(queued.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", queued["id"]):
                 raise RequestError("invalid_response", "enqueue", "The server did not return a request ID. "
                                    "The request may have been accepted; do not repeat the change blindly.")
@@ -814,6 +861,11 @@ class Client:
                 raise
             status = "ok"
             return receipt
+        except RequestError as exc:
+            # Bind the failure to this RPC, including capabilities before a
+            # requested operation. Never borrow a prior request or group action.
+            exc.action = action if isinstance(action, str) and action in RECEIPT_ACTIONS else "unknown"
+            raise
         finally:
             callback = getattr(self, "on_receipt", None)
             if callable(callback):
@@ -827,6 +879,7 @@ class Client:
 
     def _wait_receipt(self, query, request_id, deadline):
         last_failure = None
+        last_transport_category = None
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -837,12 +890,14 @@ class Client:
                 break
             try:
                 status, result = self.api("/api/requests" + query + "&id=" + request_id, timeout=remaining)
-            except TransportError:
+            except TransportError as exc:
                 last_failure = "controller_unavailable"
+                last_transport_category = exc.category
                 continue
             except HTTPError as exc:
                 if exc.code in (502, 503, 504):
                     last_failure = "controller_http_error"
+                    last_transport_category = None
                     continue
                 if exc.code == 404:
                     raise RequestError("receipt_missing", "receipt", "The request receipt has expired or is missing. "
@@ -860,6 +915,7 @@ class Client:
                     raise RequestError("invalid_response", "receipt", "The server returned an invalid pending status. "
                                        "The request may have been executed; do not repeat the change blindly.", request_id)
                 last_failure = None
+                last_transport_category = None
                 continue
             if status != 200 or not isinstance(result, dict) or result.get("id") != request_id or result.get("status") not in ("ok", "rejected", "unsupported") or not isinstance(result.get("data"), dict):
                 raise RequestError("invalid_response", "receipt", "The server returned an invalid player response. "
@@ -878,7 +934,8 @@ class Client:
         if last_failure:
             message = "The controller could not be reached while waiting for the request receipt." if last_failure == "controller_unavailable" else "The controller returned HTTP errors while waiting for the request receipt."
             raise RequestError(last_failure, "receipt", message + " The player's response is unknown. "
-                               "The request may still execute before its TTL expires; do not repeat the change blindly.", request_id)
+                               "The request may still execute before its TTL expires; do not repeat the change blindly.", request_id,
+                               transport_category=last_transport_category)
         raise RequestError("request_pending_timeout", "receipt", "No player response was received before the deadline. "
                            "This does not establish that the player is offline. The request may still execute before its TTL expires; "
                            "do not repeat the change blindly.", request_id)
@@ -5303,6 +5360,8 @@ def player_group_command(client, config, targets, args, argv):
                 row["error"] = "The " + action + " request was " + reason + "; inspect this player before another change. The request was not repeated."
             except Error as exc:
                 row["error"] = clean(str(exc))
+                if isinstance(exc, RequestError):
+                    row["request"] = request_error_metadata(exc)
             except Exception:
                 row["error"] = "Check the configuration; the operation did not complete. The request was not repeated."
             except SystemExit as exc:

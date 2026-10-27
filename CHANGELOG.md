@@ -63,6 +63,9 @@
 
 ### Fixed
 
+- Preserve safe RPC action, request ID, stage and reason in failed group-command
+  rows, with a bounded transport category when available. Distinguish a failed
+  capability read from the outer command without replaying uncertain requests.
 - Distinguish controller transport/HTTP failures, pending request timeouts,
   missing receipts, authorization and rate limits instead of attributing every
   timeout to the player. Mutations are still submitted only once.
