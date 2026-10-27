@@ -182,7 +182,7 @@ class LocalMediaTest(unittest.TestCase):
                 code, out, err, calls = self.run_cli(['local', 'shuffle', 'Movies'], [caps(), reply])
                 self.assertEqual((code, out, len(calls)), (1, '', 2))
                 self.assertIn('No supported playable items', err)
-                self.assertIn('selected source or active Local profile', err)
+                self.assertIn('selected source match the active Local profile', err)
                 self.assertIn('check file formats and profile selection', err)
                 self.assertIn('The request was not repeated', err)
                 self.assertNotIn('private player details', err)

@@ -284,7 +284,7 @@ LOCAL_MEDIA_ERRORS = {
     "catalog_loading": "The local source is still being scanned; wait for the scan to finish",
     "catalog_unavailable": "The local catalogue could not be loaded",
     "empty_source": (
-        "No supported playable items were found in the selected source or active Local profile; "
+        "No supported playable items in the selected source match the active Local profile; "
         "check file formats and profile selection"
     ),
     "too_many_items": "The selected local source exceeds the supported item limit; no partial queue was started",
