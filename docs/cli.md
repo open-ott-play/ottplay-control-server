@@ -1948,6 +1948,20 @@ The maximum is 50,000 playable items per source, or the lower `max_items` limit
 advertised by the player. A larger source is rejected without starting a partial
 queue. Local playback does not send the item list through the control server.
 
+Local discovery and decoding are separate. The current Tauri native catalogue
+indexes `.mp4`, `.m4v`, `.webm`, `.ogv`, `.mp3`, `.m4a` and `.ogg`; it does not
+index `.avi` or `.mkv`. Even an indexed container must contain codecs supported
+by the target player's media engine. Use compatible converted or remuxed copies,
+or use Plex with server and player settings that provide compatible playback
+or transcoding. An H.264/AAC MKV may only need remuxing into MP4; other codecs may
+need transcoding. Renaming an extension does not convert the container or its
+codecs, and Local commands do not perform either conversion.
+
+`empty_source` means no supported playable items matched the selected source
+and active Local profile. It does not prove the directory contains no files:
+unsupported formats or profile filtering can leave an existing folder with no
+eligible items. Check the file formats and active Local profile before retrying.
+
 An absolute path refers to the **target player's filesystem**, not the working
 directory of the terminal running `ott`. On a capable native player it connects
 that directory, reuses an existing exact binding where possible, and then plays
