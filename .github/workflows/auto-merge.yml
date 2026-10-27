@@ -7,7 +7,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited, converted_to_draft]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}-${{ (github.event.action != 'edited' || github.event.changes.base) && 'state' || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -19,11 +19,19 @@ jobs:
       contents: read
       pull-requests: write
     if: >-
-      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-       (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)) &&
+      (github.event.action != 'edited' || github.event.changes.base) &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]') ||
+       (github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]')) &&
       contains(fromJSON('["4alvit","californiantiramisu","dependabot[bot]","renovate[bot]"]'), github.event.pull_request.user.login) &&
       contains(github.event.pull_request.labels.*.name, 'automerge') &&
       !github.event.pull_request.draft
     uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-merge.yml@cd07a77d4a069dd14fff57d07e47dafbda082ab6 # main
+    with:
+      reviewed-merge: true
+      required-status-checks: CI gate
+      allow-dependabot-actions-review: true
+      allow-owned-bot-actions-review: false
     secrets:
       BOT_PAT: ${{ secrets.BOT_PAT }}
