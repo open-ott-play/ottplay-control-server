@@ -1,0 +1,38 @@
+name: Auto Approve PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited, converted_to_draft]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited, converted_to_draft]
+
+# Ignored title/body edits must not cancel a pending approval for this head.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}-${{ (github.event.action != 'edited' || github.event.changes.base) && 'state' || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  auto-approve:
+    permissions:
+      contents: read
+      pull-requests: write
+    if: >-
+      (github.event.action != 'edited' || github.event.changes.base) &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]') ||
+       (github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]')) &&
+      contains(fromJSON('["4alvit","dependabot[bot]","renovate[bot]"]'), github.event.pull_request.user.login) &&
+      contains(github.event.pull_request.labels.*.name, 'automerge') &&
+      !github.event.pull_request.draft
+    # Metadata only; the pinned helper never checks out or executes PR code.
+    # Exclude californiantiramisu so its own-BOT_PAT Actions fallback cannot run.
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-approve-reusable.yml@cd07a77d4a069dd14fff57d07e47dafbda082ab6 # main
+    with:
+      authors: '["4alvit","dependabot[bot]","renovate[bot]"]'
+    secrets:
+      BOT_PAT: ${{ secrets.BOT_PAT }}
+      APPROVAL_PAT: ${{ secrets.APPROVAL_PAT }}
