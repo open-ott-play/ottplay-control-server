@@ -342,7 +342,7 @@ def run(api, client, selector, words, timeout, json_output=False):
     try:
         args = arguments(words, json_output)
         json_output = args.json
-        targets = api.provider_group_targets(client, selector)
+        targets = api.player_group_targets(client, selector)
         if targets is None:
             targets = [(selector, client.device(selector))]
         check(bool(targets) and len(targets) <= MAX_TARGETS and all(DEVICE_ID.fullmatch(device) for _, device in targets), "invalid_targets")

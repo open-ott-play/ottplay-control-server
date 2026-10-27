@@ -58,7 +58,7 @@ class ProviderGroupTest(unittest.TestCase):
                 self.assertEqual((code, out), (1, ''))
                 self.assertTrue(err.startswith('Error: '))
                 client.call.assert_not_called()
-        for words in ([], ['restart'], ['providers'], ['provider'], ['prov', '   '], ['provider-config', 'secret.json']):
+        for words in (['provider'], ['prov', '   '], ['provider-config', 'secret.json']):
             with self.subTest(words=words):
                 code, out, _, client = self.run_cli(['t1,t2'] + words)
                 self.assertEqual((code, out), (1, ''))

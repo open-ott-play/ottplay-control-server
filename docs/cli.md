@@ -38,6 +38,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Register and connect a player](#register-and-connect-a-player)
 - [Disconnect, deregister or revoke a player](#disconnect-deregister-or-revoke-a-player)
 - [Help, options and output](#help-options-and-output)
+- [Run a command on several players](#run-a-command-on-several-players)
 - [Player commands and aliases](#commands), [programme search and archives](#programme-search-configuration-and-archives)
 - [Switch provider and start playback](#switch-provider-and-start-playback)
 - [Switch providers on several players](#switch-providers-on-several-players)
@@ -148,16 +149,17 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install the
 source from release
-[`v0.1.6-beta.12`](https://github.com/open-ott-play/ottplay-control-server/releases/tag/v0.1.6-beta.12).
+[`v0.1.6-beta.13`](https://github.com/open-ott-play/ottplay-control-server/releases/tag/v0.1.6-beta.13).
 It contains the complete CLI module set, including finite group `watch`,
 performance-export verification, negotiated debug bundles and the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
 OTA workflow (`app_update.py`), including stable releases promoted from RC bytes, Local videos profile save/load/import/export, and
 `standby` / `go` controls. Kiosk confirmation accepts screen-suspended playback
 while retaining policy and strict-state checks. It also includes media categories, stable-ID playback
-and bounded catalogue pages (`s --limit` / `--offset`), plus group provider
-changes such as `ott t1,t2,t3,t4 provider m3u`, with optional channel numbers,
-`R` / `random` or title selection after switching. Update the controller and
+and bounded catalogue pages (`s --limit` / `--offset`), plus explicit player lists
+for player commands such as `ott t1,t2,t3,t4 R`, settings, lifecycle, presets
+and diagnostic exports. Provider switching also accepts an optional channel
+number, `R` / `random` or title selector. Update the controller and
 player too; confirm support with `ott PLAYER caps`.
 
 The release reference is resolved to one exact commit before checkout. Record
@@ -179,8 +181,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=v0.1.6-beta.12
-  ott_source="$HOME/.local/share/ottplay-control-server-0.1.6-beta.12"
+  ott_ref=v0.1.6-beta.13
+  ott_source="$HOME/.local/share/ottplay-control-server-0.1.6-beta.13"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -200,7 +202,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.12/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.13/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -214,7 +216,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-0.1.6-beta.12/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-0.1.6-beta.13/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -236,8 +238,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'v0.1.6-beta.12'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.12'
+$ottRef = 'v0.1.6-beta.13'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.13'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -282,12 +284,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.12/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-0.1.6-beta.13/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.12\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-0.1.6-beta.13\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -316,7 +318,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-0.1.6-beta.12`, stages the replacement beside it, then switches atomically.
+`ott.before-0.1.6-beta.13`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -328,9 +330,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-0.1.6-beta.12")
-staged = launcher.with_name("ott.switch-0.1.6-beta.12")
-reviewed = Path.home() / ".local/share/ottplay-control-server-0.1.6-beta.12/cli/ott.py"
+backup = launcher.with_name("ott.before-0.1.6-beta.13")
+staged = launcher.with_name("ott.switch-0.1.6-beta.13")
+reviewed = Path.home() / ".local/share/ottplay-control-server-0.1.6-beta.13/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -708,7 +710,7 @@ ott --receipt tv restart
   `action`, `request_id`, and `status` (`ok`, `rejected`, `unsupported`, or
   `unknown`). A lost submit reply has `request_id:null` and `status:"unknown"`;
   the CLI does not resend the POST. Multi-step commands emit one line per RPC.
-  Group provider commands also include `player` to identify the target alias.
+  Group commands also include `player` to identify the target alias.
   Existing human-readable stderr diagnostics may accompany these JSON lines.
 - `-h` / `--help`: display the command summary.
 
@@ -769,6 +771,150 @@ To uninstall the symlink installation, remove only the `~/.local/bin/ott` link y
 created and, when no longer needed, its source checkout. Keep private configuration
 until any required deregistration is complete. Uninstalling the CLI does not
 stop the controller or revoke player/operator credentials.
+
+## Run a command on several players
+
+Replace a single player name with an explicit comma-separated list. The same
+command and arguments run independently on each distinct player, using the
+ordinary single-player implementation:
+
+```sh
+ott t1,t2,t3,t4 R                 # choose a random channel independently on each
+ott t1,t2,t3,t4 random            # same command; r also works
+ott t1,t2,t3,t4 next
+ott t1,t2,t3,t4 prev
+ott t1,t2,t3,t4 +15               # advance 15 channels with each player's wrapping
+ott t1,t2,t3,t4 volume 35
+ott t1,t2,t3,t4 standby           # stop playback while retaining remote control
+ott t1,t2,t3,t4 go
+ott t1,t2,t3,t4 restart           # reload each player
+ott t1,t2,t3,t4 restart stream    # restart each current stream
+ott t1,t2,t3,t4 caps
+ott t1,t2,t3,t4                   # available controls and readable status for each
+ott -j t1,t2,t3,t4 status
+ott t1,t2,t3,t4 provider m3u 1
+ott t1,t2,t3,t4 plex shuffle "Family videos"
+ott t1,t2,t3,t4 settings
+ott t1,t2,t3,t4 setting bufSize 3
+ott t1,t2,t3,t4 load Home plan    # inspect a configured private preset
+ott t1,t2,t3,t4 load Home apply   # separate default checkpoint per player
+```
+
+Keep the list in one shell argument: `t1,t2,t3,t4`, or quote it when adding
+spaces (`"t1, t2, t3, t4"`). Up to 64 input names are accepted in one list;
+repeated names count toward this limit. Names and UUIDs are resolved locally
+before any player command is sent. Empty entries, unknown or ambiguous names,
+invalid ordinary command arguments and conflicting explicit output paths fail preflight.
+Aliases for the same UUID are deduplicated, retaining the first name and list
+order. An exact existing alias or UUID containing a comma keeps its single-player
+meaning; use different aliases to express a list.
+
+Commands run in order. A failure on one player does not prevent execution on the
+remaining players. There is no group rollback or automatic replay of failed or
+uncertain requests. Each command retains its normal per-player timeout and any
+specific options such as update `--wait`; a group can therefore take longer than
+one timeout. Capabilities, settings locks, native bindings and local permission
+requirements are checked independently by the existing command. Random choices
+are independent, and the players need not have matching providers or catalogues.
+The group is not an atomic or synchronized playback operation.
+
+Session, operation, category, favorite and media IDs are passed unchanged to each
+target. For example, `perf stop SESSION_ID` only stops that ID where it exists;
+it does not select each player's current session. Plex IDs identify items in
+that player's configured Plex server. Use `caps`, `perf status`, `plex status`
+or another appropriate read command to inspect individual outcomes.
+
+### Group results and interruption
+
+Text output labels each player's result. `-j` / `--json` emits one aggregate
+object containing `action`, ordered `results`, `succeeded` and `failed`. Every
+result has `player` and `ok`; it can also contain `data`, `error`, `warnings` or
+`output`. General group commands include the original handler's `exit_code`.
+The existing provider and notification result formats retain their established
+fields without adding `exit_code`. Keep stdout separate from stderr when parsing
+JSON:
+
+```sh
+ott -j --receipt t1,t2,t3,t4 R > random-results.json 2> random-receipts.log
+ott -t 60 -j t1,t2,t3,t4 doctor
+```
+
+`--receipt` keeps one safe receipt per RPC on stderr and adds the target `player`;
+human warnings may also appear there. A multi-step command can produce several
+receipts for one player. An acknowledgement does not prove visible playback or
+completed application restart.
+
+The aggregate exit code uses this precedence: `130` (interrupted), `1` (error),
+`2` (failed diagnostic check), `3` (partial or unknown result), then `0` (all
+succeeded). Consult each result for its command-specific meaning. Ctrl-C stops
+the remaining player commands; unstarted targets are reported as interrupted.
+It cannot recall a command already accepted by a player. Inspect uncertain
+outcomes before explicitly retrying only the affected targets.
+
+Group capture retains at most 4 MiB of stdout and 256 KiB of stderr per player,
+and 16 MiB of captured output across the group. Overflow is reported as incomplete
+output; a command may already have executed and is not replayed. Use narrower catalogue
+pages or a single-player command when a large result exceeds these limits.
+
+### Separate files and checkpoints
+
+Explicit output paths receive a player suffix. A file suffix goes before the
+last extension; a directory suffix goes after its complete name:
+
+```sh
+ott t1,t2 shot -o screen.png                    # screen.t1.png, screen.t2.png
+ott t1,t2 android screenshot -o native.png      # native.t1.png, native.t2.png
+ott t1,t2 profile export 1 profile.json         # profile.t1.json, profile.t2.json
+ott t1,t2 bundle --out ./bundle                 # ./bundle.t1, ./bundle.t2
+ott t1,t2 test run health --report ./health     # ./health.t1, ./health.t2
+ott t1,t2 perf export SESSION_ID --out ./perf    # ./perf.t1, ./perf.t2
+ott -t 240 t1,t2 perf trial notifications --out ./trial
+ott t1,t2 load Home apply --checkpoint /private/checkpoint.json
+ott t1,t2 load Home resume --checkpoint /private/checkpoint.json
+```
+
+The checkpoint examples use `/private/checkpoint.t1.json` and
+`/private/checkpoint.t2.json`; substitute an actual private directory. Resume
+uses the same expanded paths and still checks the server, device, preset and
+preset revision recorded in each checkpoint. Retain the same target names when
+resuming an explicitly named checkpoint through a list. To resume only one player
+with single-player syntax, pass its actual expanded filename:
+`ott t2 load Home resume --checkpoint /private/checkpoint.t2.json`.
+Defaults remain unchanged: screenshots already have unique filenames, and
+default checkpoints include the device identity.
+
+Simple aliases retain their names in the suffix, as in `screen.t1.png`.
+The name component uses up to 48 ASCII letters, digits, underscores or hyphens,
+replacing other characters with underscores. Names requiring replacement or truncation
+also receive a 12-hex-digit suffix derived from the device UUID, independent of
+which other players are in the list. Remaining filename collisions fail
+preflight rather than sharing an output. Retain the same alias when resuming.
+New explicit destinations must not already exist; their parent directories must
+exist, except for checkpoint directories created by the checkpoint handler.
+Existing resume checkpoints are checked rather than replaced. The ordinary
+private-file and no-overwrite protections still apply.
+
+Only output arguments are expanded: screenshot `-o` / `--output`, `profile export`
+files, `bundle` and `perf export` / `perf trial` `--out`, test `--report`, and
+explicit load `--checkpoint`. Input paths such as `provider-config`,
+`profile-config`, `profile import`, Plex `--token-file` and settings `--value-file`
+are passed unchanged to each player command.
+
+### Scope and exceptions
+
+Player lists also cover native Android commands and application
+updates; each target still needs its own native binding or update capability.
+`android bind NATIVE_ALIAS` accepts only one distinct player because a native
+queue cannot be shared by multiple players. Bind them individually first.
+`watch` retains its existing finite group collector and concurrency settings.
+
+Controller and local-management commands keep their own syntax: `devices`,
+`discover`, `pending`, registration/pairing/alias commands, `ha`, `server`,
+`presets`, `resolve`, `diagnostics`, offline `report verify`, and the two-player
+`handoff SOURCE TARGET`. They are not repeated for a player list. Global command
+names after a player selector remain ordinary search text where the single-player
+parser allows it; use `play TITLE` to explicitly search a reserved player-command
+name.
 
 ## Commands
 
@@ -1751,14 +1897,15 @@ rejected, `null` if its outcome is unknown). Successful playback has
 
 A runtime failure on one player does not prevent requests to the remaining
 players. Exit status is zero only when every distinct target acknowledges the
-provider switch and, when requested, playback; otherwise it is one. Requests
-are not retried and successful changes are not rolled back after another target
+provider switch and, when requested, playback; errors return one and interruption
+returns 130. Requests are not retried and successful changes are not rolled back after another target
 fails.
 
 An acknowledgement confirms that the change was dispatched, not that a playlist
 loaded or playback started. Check the individual player's status and profiles
-if M3U has no channels. Group syntax currently supports `provider` / `prov`;
-other commands keep their existing single-player syntax.
+if M3U has no channels. The same list syntax also works with the other
+[player commands](#run-a-command-on-several-players), including random playback,
+volume, standby, restarts, settings and diagnostics.
 
 ## Local videos profiles
 
@@ -2654,6 +2801,21 @@ Stable CLI v0.1.0 does not provide `doctor`, `inspect`, `operation`, `bundle`,
 `test`, `resolve` or `report verify`; install the
 [reviewed source revision](#choose-the-cli-source-revision), then invoke its
 script directly. Adding only the missing module to an old checkout is unsupported.
+
+### A player list reports that only provider or notifications is supported
+
+`Player lists support provider/prov or notifications; use ott t1,t2,t3,t4 provider m3u or notifications off`
+comes from an older local CLI. It is not a rejection from the player. Install
+the [reviewed CLI source](#choose-the-cli-source-revision), keep all its Python
+modules together, then check `type -a ott` and invoke that checkout's `cli/ott.py`
+directly if necessary. Updating only the Go server does not update this script.
+
+With the updated CLI, start with `ott t1,t2,t3,t4 caps`, then retry the desired
+command such as `ott t1,t2,t3,t4 R`. Individual unsupported or offline players
+appear in the group result. Do not repeat the whole group after a partial
+mutation; inspect results and retry only the intended failed targets. If an
+export path already exists, choose a new base path and check the per-player
+filenames described in [Separate files and checkpoints](#separate-files-and-checkpoints).
 
 ### Configuration cannot be read or the wrong controller is selected
 

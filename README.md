@@ -146,6 +146,23 @@ ott report verify ./a1-progress --json  # re-evaluate saved evidence offline
 [disconnecting and revoking access](docs/cli.md#disconnect-deregister-or-revoke-a-player),
 and [troubleshooting](docs/cli.md#troubleshooting).
 
+Use an explicit comma-separated list to run the same player command on several
+installations:
+
+```sh
+ott t1,t2,t3,t4 R               # independently choose a random channel on each
+ott t1,t2,t3,t4 volume 35
+ott t1,t2,t3,t4 standby
+ott t1,t2,t3,t4 go
+ott t1,t2,t3,t4 restart stream
+ott -j --receipt t1,t2,t3,t4 caps
+```
+
+The CLI resolves all names first, runs the command once per distinct player and
+reports each result. A failure on one player does not undo successful changes on another.
+The [player-group guide](docs/cli.md#run-a-command-on-several-players) covers
+settings, Plex, presets, diagnostics, separate output files and partial failures.
+
 For an always-on player, use [standby and go](docs/cli.md#stop-playback-while-keeping-the-player-online)
 to stop playback and wake it later without exiting the app. `stop` remains an
 alias for `standby`; `start` and `wake` remain aliases for `go`. Remote control
