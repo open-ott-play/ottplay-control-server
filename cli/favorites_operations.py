@@ -336,3 +336,149 @@ class ContextStore:
             raise OperationStoreError("missing") from None
         except (OSError, private_files.StorageError):
             raise OperationStoreError("unavailable") from None
+
+
+class AcknowledgementStore:
+    """Separate administrative evidence; never changes original transfer records.
+
+    An immutable intent binds later explicit confirmation to the same plan.
+    It never authorizes automatic replay. Evidence is bounded and retained;
+    capacity never deletes unknown history.
+    """
+    def __init__(self, directory, *, server, device):
+        self.directory = Path(directory).expanduser().absolute()
+        self.target = ContextStore(directory, server=server, device=device,
+                                   validate_context=remote.validate_recovery_record).target
+
+    def _intent(self, inspection, request):
+        try:
+            if type(inspection) is not protocol.ValidatedResult:
+                raise ValueError
+            expected = protocol.recovery_ack_request(inspection)
+            if request != expected:
+                raise ValueError
+            return {"version": 1, "target_sha256": self.target, "request": request,
+                    "inspection": {"request": inspection.request, "request_id": inspection.request_id,
+                                   "data": inspection.data}}
+        except Exception:  # noqa: BLE001 - rejected metadata stays private
+            raise OperationStoreError("invalid_context") from None
+
+    def _read(self, parent, name):
+        fd = parent.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as stream:
+            stat = os.fstat(stream.fileno())
+            if not private_files._private_regular(stat) or stat.st_size > 8192:
+                raise OperationStoreError("unavailable")
+            raw = stream.read(8193)
+        if len(raw) > 8192:
+            raise OperationStoreError("capacity")
+        return raw
+
+    def _write(self, name, value):
+        raw = _encoded(value)
+        if len(raw) > 8192:
+            raise OperationStoreError("capacity")
+        try:
+            with (private_files._Parent(self.directory) as parent,
+                  private_files._Lock(parent, ".favorites-acknowledgements.lock")):
+                parent.assert_current()
+                try:
+                    existing = self._read(parent, name)
+                except FileNotFoundError:
+                    existing = None
+                if existing is not None:
+                    if existing != raw:
+                        # A new read of the same immutable plan has a new outer
+                        # request ID. Preserve the first logical intent; only
+                        # a new explicit confirmation may authorize an attempt.
+                        previous = private_files._decode(existing)
+                        current = private_files._decode(raw)
+                        if name.endswith(".intent.json"):
+                            previous = self._comparison(previous)
+                            current = self._comparison(current)
+                        if previous != current:
+                            raise OperationStoreError("conflict")
+                    return False
+                count, size, intents, proofs = 0, 0, set(), set()
+                with os.scandir(self.directory) as entries:
+                    for entry in entries:
+                        if entry.name.startswith("favorites-ack-"):
+                            if not re.fullmatch(r"favorites-ack-[0-9a-f]{64}\.(?:intent|evidence)\.json", entry.name):
+                                raise OperationStoreError("unavailable")
+                            size += len(self._read(parent, entry.name))
+                            count += 1
+                            digest = entry.name[len("favorites-ack-"):len("favorites-ack-") + 64]
+                            (intents if entry.name.endswith(".intent.json") else proofs).add(digest)
+                digest = name[len("favorites-ack-"):len("favorites-ack-") + 64]
+                if name.endswith(".intent.json"):
+                    intents.add(digest)
+                else:
+                    proofs.add(digest)
+                # Reserve one bounded evidence record for every pending intent.
+                if (count + 1 > 64 or len(intents) > 32 or not proofs <= intents
+                        or size + len(raw) + 8192 * len(intents - proofs) > MAX_TOTAL_BYTES):
+                    raise OperationStoreError("capacity")
+                parent.assert_current()
+                parent.write_new(name, raw)
+                parent.sync()
+                if self._read(parent, name) != raw:
+                    raise OperationStoreError("retention_uncertain")
+                parent.assert_current()
+                return True
+        except (OSError, private_files.StorageError):
+            raise OperationStoreError("retention_uncertain") from None
+
+    @staticmethod
+    def _comparison(value):
+        result = copy.deepcopy(value)
+        result.get("inspection", {}).pop("request_id", None)
+        return result
+
+    def load_intent(self, acknowledgement_id, operation_id, plan_sha256):
+        """Read the exact target-bound original intent without creating files."""
+        try:
+            if (type(acknowledgement_id) is not str or re.fullmatch(r"[0-9a-f]{64}", acknowledgement_id) is None
+                    or type(plan_sha256) is not str or re.fullmatch(r"[0-9a-f]{64}", plan_sha256) is None
+                    or type(operation_id) is not str or UUID.fullmatch(operation_id) is None):
+                raise ValueError
+            with private_files._Parent(self.directory) as parent:
+                value = private_files._decode(self._read(parent, "favorites-ack-" + acknowledgement_id + ".intent.json"))
+                parent.assert_current()
+            saved = value["inspection"]
+            if type(saved) is not dict or set(saved) != {"request", "request_id", "data"}:
+                raise ValueError
+            inspection = protocol.validate_result(saved["request"], saved["data"], request_id=saved["request_id"],
+                                                  response_id=saved["request_id"], status="ok")
+            request = value["request"]
+            if (value != self._intent(inspection, request) or request["acknowledgement_id"] != acknowledgement_id
+                    or request["operation_id"] != operation_id or request["plan_sha256"] != plan_sha256):
+                raise ValueError
+            return inspection, copy.deepcopy(request)
+        except FileNotFoundError:
+            raise OperationStoreError("missing") from None
+        except Exception:  # noqa: BLE001 - private evidence must never leak on rejection
+            raise OperationStoreError("invalid_context") from None
+
+    def save_intent(self, inspection, request):
+        value = self._intent(inspection, request)
+        return self._write("favorites-ack-" + request["acknowledgement_id"] + ".intent.json", value)
+
+    def save_evidence(self, inspection, request, evidence):
+        value = self._intent(inspection, request)
+        try:
+            mode = evidence["mode"]
+            params = request if mode == "acknowledge" else {
+                "op": "recovery", "runtime": evidence["runtime"], "mode": "inspect", "operation_id": request["operation_id"]}
+            result = protocol.validate_result(params, evidence, request_id="0" * 32, response_id="0" * 32, status="ok")
+            if result.data["record"] != {**inspection.data["record"], "acknowledgement": protocol.recovery_audit(request)}:
+                raise ValueError
+            with private_files._Parent(self.directory) as parent:
+                retained = private_files._decode(self._read(parent, "favorites-ack-" + request["acknowledgement_id"] + ".intent.json"))
+                if self._comparison(retained) != self._comparison(value):
+                    raise ValueError
+                parent.assert_current()
+            return self._write("favorites-ack-" + request["acknowledgement_id"] + ".evidence.json",
+                {"version": 1, "target_sha256": self.target, "acknowledgement_id": request["acknowledgement_id"],
+                 "classification": "administrative-audit-only", "evidence": evidence})
+        except (ValueError, KeyError, OSError, private_files.StorageError):
+            raise OperationStoreError("invalid_completion") from None

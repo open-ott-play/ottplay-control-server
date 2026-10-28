@@ -61,6 +61,7 @@ type favoritesTransferRequest struct {
 	ChunkBytes, BudgetMS                    int
 	TargetID, Mode                          string
 	PriorScope                              *favoritesTransferScope
+	Recovery                                *favoritesRecoveryRequest
 }
 
 var favoritesTransferCapabilityLimits = map[string]int{
@@ -324,6 +325,11 @@ func parseFavoritesTransferRequest(params map[string]json.RawMessage) *favorites
 		return nil
 	}
 	switch v.Op {
+	case "recovery":
+		v.Recovery = parseFavoritesRecoveryRequest(params, v.Runtime)
+		if v.Recovery != nil {
+			return v
+		}
 	case "prepare":
 		if !favoritesTransferFields(params, "op", "runtime", "scope", "expected_revision", "binding_revision", "document_sha256", "size_bytes", "budget_ms") || !profileInteger(params["size_bytes"], 1, maxFavoritesTransferDocumentBytes) || !profileInteger(params["budget_ms"], 1, 300000) {
 			return nil
@@ -640,6 +646,9 @@ func validFavoritesTransferResult(raw json.RawMessage, status string, request *f
 			return false
 		}
 		code, valid := inspectString(problem, 64)
+		if request.Op == "recovery" {
+			return request.Recovery != nil && favoritesTransferFields(m, "version", "runtime", "op", "error") && (status == "rejected" || status == "unsupported") && valid && favoritesRecoveryError(code)
+		}
 		// The authenticated outer request ID correlates this minimal error. It
 		// never proves that a commit was not applied and cannot permit replay.
 		return favoritesTransferFields(m, "version", "runtime", "op", "error") && (status == "rejected" || status == "unsupported") && valid && (favoritesTransferErrors[code] || request.Op == "provision" && code == "outcome_unknown")
@@ -648,6 +657,8 @@ func validFavoritesTransferResult(raw json.RawMessage, status string, request *f
 		return false
 	}
 	switch request.Op {
+	case "recovery":
+		return validFavoritesRecoveryResult(m, request.Runtime, request.Recovery)
 	case "prepare":
 		baseRevision, base := favoritesTransferText(m["expected_revision"], 256)
 		bindingRevision, binding := favoritesTransferText(m["binding_revision"], 256)

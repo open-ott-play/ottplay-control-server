@@ -4,6 +4,10 @@
 
 ### Added
 
+- Add explicit favorites uncertainty inspection and acknowledgement with a
+  separate recovery permission, exact record/ledger confirmation and retained
+  original outcomes. Check recovery support before new mutating transfers;
+  lost acknowledgements are observed without repeating writes.
 - Store portable favorites companions in existing named CLI presets. Validate,
   export, import, diff and restore bounded documents with private backups and
   guarded local replacement. Whole-scope merge combines distinct scopes,
@@ -11,7 +15,7 @@
   explicit. Group collection reads every complete snapshot before one local write.
 - Add explicit current-Plex favorites binding, collect, load, diff, clear and
   status commands in source. The first adapter covers the currently verified,
-  paired Plex source; coordinated player/controller/CLI deployment is pending.
+  paired Plex source and requires compatible player/controller/CLI versions.
   Ordinary preset loading with a favorites companion remains gated until complete
   settings-plus-favorites delivery is integrated.
 - Retain target-bound favorites operation evidence and reconcile uncertain

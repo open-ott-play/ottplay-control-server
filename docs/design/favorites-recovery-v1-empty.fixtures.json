@@ -1,0 +1,46 @@
+{
+  "synthetic_only": true,
+  "absent_storage": true,
+  "no_persistent_initialization": true,
+  "no_fenced_record_claim": true,
+  "list": {
+    "request": {
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "list"
+    },
+    "result": {
+      "version": 1,
+      "runtime": "synthetic-recovery-runtime-1",
+      "op": "recovery",
+      "ledger_format": 2,
+      "ledger_revision": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "backend_proof": null,
+      "mode": "list",
+      "records": []
+    }
+  },
+  "inspect": {
+    "request": {
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "inspect",
+      "operation_id": "33333333-3333-4333-8333-333333333333"
+    },
+    "result": {
+      "version": 1,
+      "runtime": "synthetic-recovery-runtime-1",
+      "op": "recovery",
+      "ledger_format": 2,
+      "ledger_revision": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "backend_proof": null,
+      "mode": "inspect",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "record": null,
+      "acknowledge_allowed": false,
+      "plan_sha256": null,
+      "acknowledgement_id": null,
+      "after_ledger_sha256": null
+    }
+  }
+}

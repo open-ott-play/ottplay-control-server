@@ -785,6 +785,27 @@ current-Plex codec and bounded limit schema. An absent marker remains compatible
 with older players. Controller acceptance does not advertise support on a player;
 the CLI must require fresh runtime capabilities and an exact compatible binding.
 
+The independent sibling marker `favorites_transfer_recovery: {"version":1}`
+advertises global receipt inspection and conditional acknowledgement. It does
+not change the original transfer marker or require a currently active Plex
+source. The new `recovery` operation accepts `list`, `inspect` and `acknowledge`
+modes, all requiring the exact `favorites_transfer.recovery` permission. Existing
+operator grants are not expanded automatically. A scoped operator that will
+start new transfers also needs recovery permission; the CLI performs an
+authenticated read-only recovery probe before preparing a new mutation.
+
+Recovery lists retained `pending`, `partial` and `unknown` records, including
+acknowledged records, with their original scope and outcome. Inspecting an
+eligible fenced record returns a deterministic acknowledgement ID, proposed
+whole-ledger digest and confirmation hash. Acknowledgement requires those exact
+values, `accept_unknown:true`, the fixed reason `accept-unknown-no-replay`, and a
+fresh conditional write under the same physical lock as the original writer.
+It preserves the original outcome and every other record. Legacy unfenced rows
+are read-only; neither an elapsed timeout nor a new runtime makes them safe to
+acknowledge. A missing reply is inspected without automatic replay. See the
+[recovery contract, schema and fixtures](design/favorites-recovery-v1.md) and
+[CLI recovery examples](cli.md#acknowledge-a-retained-uncertain-operation).
+
 `prepare` binds a player-generated operation UUID to the scope, base and binding
 revisions, digest, byte count and explicit whole budget (1–300000 ms). It creates
 one RAM grant, with at most 10000 ms to consume it through begin, and no persistent

@@ -54,7 +54,8 @@ class CurrentAPI(fixture.MemoryAPI):
         if payload is not None and payload["action"] == "capabilities":
             request_id = f"{len(self.responses) + 1:032x}"
             data = {"version": 1, "player": {"version": "1.1.70", "platform": "tauri", "runtime": self.runtime},
-                    "lifecycle": [], "input": [], "playback": [], "favorites_transfer": copy.deepcopy(self.capability)}
+                    "lifecycle": [], "input": [], "playback": [], "favorites_transfer": copy.deepcopy(self.capability),
+                    "favorites_transfer_recovery": {"version": 1}}
             self.responses[request_id] = ("capabilities", {"id": request_id, "status": "ok", "data": self.caps_change(data)})
             self.calls.append({"method": "POST", "op": "capabilities", "at": self.clock(), "timeout": timeout})
             return 202, {"id": request_id, "status": "queued"}
@@ -62,6 +63,11 @@ class CurrentAPI(fixture.MemoryAPI):
 
     def data(self, params):
         op = params["op"]
+        if op == "recovery":
+            assert params["mode"] == "list"
+            return {"version": 1, "op": op, "runtime": params["runtime"], "mode": "list",
+                    "ledger_format": 2, "ledger_revision": remote.protocol.EMPTY_LEDGER_SHA256,
+                    "backend_proof": None, "records": []}
         if op in ("bindingcatalog", "bind"):
             data = copy.deepcopy(PACKET[op + "_response"])
             if op == "bindingcatalog":
@@ -172,7 +178,7 @@ class FavoritesCommandsTests(unittest.TestCase):
         original = self.path.read_bytes()
         result = self.call("load", preset="Home", mode="replace")
         self.assertEqual((result["status"], result["verified"], result["warnings"]), ("verified", True, []))
-        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "snapshot", "prepare", "begin", "append", "preview", "commit"])
+        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "snapshot", "recovery", "prepare", "begin", "append", "preview", "commit"])
         self.assertEqual(self.path.read_bytes(), original)
         records = list(self.directory.glob(".favorites-operations-*/*.json"))
         self.assertEqual(len(records), 1)
@@ -255,7 +261,7 @@ class FavoritesCommandsTests(unittest.TestCase):
         self.assertNotIn("verified", result)  # Binding proof cannot authorize a transfer receipt.
         self.assertEqual(self.provision_requests(), [{"op": "provision", "runtime": fixture.RUNTIME,
             "mode": "create", "target_id": "target-one", "expected_binding_revision": "8", "codecVersion": 1}])
-        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "provision"])
+        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "recovery", "provision"])
         self.assertEqual(self.path.read_bytes(), original)
         self.no_stage_or_context()
 
@@ -678,7 +684,7 @@ class FavoritesCommandsTests(unittest.TestCase):
                 self.assertEqual(result["observed_pair"]["binding_revision"], "9")
                 self.assertNotIn("verified", result)
                 self.assertNotIn("private-token", json.dumps(result))
-                self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "provision", "bindingcatalog"])
+                self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "recovery", "provision", "bindingcatalog"])
                 self.assertEqual(len(self.provision_requests()), 1)
                 self.no_stage_or_context()
 
@@ -687,7 +693,7 @@ class FavoritesCommandsTests(unittest.TestCase):
         # The actual import was applied, but its ACK echoes a different target.
         self.client.mutators["provision"] = lambda data: data | {"target_id": "target-two"}
         result = self.call("bind", preset="Home", scope=SCOPE)
-        self.assertEqual((result["status"], result["request_id"]), ("unknown", "00000000000000000000000000000003"))
+        self.assertEqual((result["status"], result["request_id"]), ("unknown", "00000000000000000000000000000004"))
         self.assertEqual(result["observed_pair"]["scope"], SCOPE)
         self.assertEqual(len(self.provision_requests()), 1)
         self.no_stage_or_context()
@@ -710,13 +716,13 @@ class FavoritesCommandsTests(unittest.TestCase):
     def test_pending_pairing_reserves_observation_time_and_never_extends_whole_deadline(self):
         self.client.bindings["one"] = []
         self.client.get_effects["provision"] = ["pending"] * 100
-        result = self.call("bind", new=True, timeout=12)
+        result = self.call("bind", new=True, timeout=16)
         self.assertEqual((result["status"], result["replay_allowed"]), ("unknown", False))
         self.assertEqual(len(self.provision_requests()), 1)
         self.assertEqual(self.client.posts().count("bindingcatalog"), 2)
-        self.assertLessEqual(self.clock(), 112)
+        self.assertLessEqual(self.clock(), 116)
         for row in self.client.calls:
-            deadline = 108 if row["op"] == "provision" else 112
+            deadline = 112 if row["op"] == "provision" else 116
             self.assertGreater(row["timeout"], 0)
             self.assertLessEqual(row["at"] + row["timeout"], deadline)
         self.no_stage_or_context()
@@ -761,7 +767,7 @@ class FavoritesCommandsTests(unittest.TestCase):
         self.assertEqual(result["status"], "planned")
         read.assert_not_called()
         self.assertEqual(real.timeout, 45)
-        self.assertEqual(sum(request.get_method() == "POST" for request in observed), 8)
+        self.assertEqual(sum(request.get_method() == "POST" for request in observed), 9)
         for request in observed:
             if request.data is not None:
                 self.assertEqual(request.data, json.dumps(json.loads(request.data), ensure_ascii=False).encode("utf-8"))

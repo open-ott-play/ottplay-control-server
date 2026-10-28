@@ -1,0 +1,516 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ottplay:draft2:favorites-recovery-v1",
+  "title": "DRAFT 2: deterministic one-record recovery with exact after-ledger digest",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "runtime": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,64}(?![\\s\\S])",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profileBindingId",
+        "sourceBindingId",
+        "provider"
+      ],
+      "properties": {
+        "profileBindingId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sourceBindingId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.\\/-]{0,63}(?![\\s\\S])",
+          "maxLength": 64
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "acknowledgement_id",
+        "runtime",
+        "ledger_revision_before",
+        "backend_proof",
+        "reason"
+      ],
+      "properties": {
+        "acknowledgement_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "ledger_revision_before": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "scope",
+        "original_state",
+        "original_outcome",
+        "original_entry_sha256",
+        "acknowledgement"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "original_state": {
+          "enum": [
+            "pending",
+            "partial",
+            "unknown"
+          ]
+        },
+        "original_outcome": {
+          "enum": [
+            "partial",
+            "unknown"
+          ]
+        },
+        "original_entry_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "acknowledgement": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/audit"
+            }
+          ]
+        }
+      }
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/request_list"
+        },
+        {
+          "$ref": "#/$defs/request_inspect"
+        },
+        {
+          "$ref": "#/$defs/request_acknowledge"
+        }
+      ]
+    },
+    "request_list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "mode"
+      ],
+      "properties": {
+        "op": {
+          "const": "recovery"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "mode": {
+          "const": "list"
+        }
+      }
+    },
+    "request_inspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "mode",
+        "operation_id"
+      ],
+      "properties": {
+        "op": {
+          "const": "recovery"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "mode": {
+          "const": "inspect"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "request_acknowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "mode",
+        "operation_id",
+        "scope",
+        "original_entry_sha256",
+        "expected_ledger_revision",
+        "backend_proof",
+        "plan_sha256",
+        "acknowledgement_id",
+        "accept_unknown",
+        "after_ledger_sha256",
+        "reason"
+      ],
+      "properties": {
+        "op": {
+          "const": "recovery"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "mode": {
+          "const": "acknowledge"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "original_entry_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expected_ledger_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "$ref": "#/$defs/sha256"
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "acknowledgement_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "accept_unknown": {
+          "const": true
+        },
+        "after_ledger_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "response": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/response_list"
+        },
+        {
+          "$ref": "#/$defs/response_inspect"
+        },
+        {
+          "$ref": "#/$defs/response_acknowledge"
+        },
+        {
+          "$ref": "#/$defs/error"
+        }
+      ]
+    },
+    "response_list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "mode",
+        "ledger_format",
+        "ledger_revision",
+        "backend_proof",
+        "records"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "recovery"
+        },
+        "mode": {
+          "const": "list"
+        },
+        "ledger_format": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "ledger_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "records": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/record"
+          }
+        }
+      }
+    },
+    "response_inspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "mode",
+        "operation_id",
+        "ledger_format",
+        "ledger_revision",
+        "backend_proof",
+        "record",
+        "acknowledge_allowed",
+        "plan_sha256",
+        "acknowledgement_id",
+        "after_ledger_sha256"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "recovery"
+        },
+        "mode": {
+          "const": "inspect"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "ledger_format": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "ledger_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "record": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/record"
+            }
+          ]
+        },
+        "acknowledge_allowed": {
+          "type": "boolean"
+        },
+        "plan_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "acknowledgement_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "after_ledger_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        }
+      }
+    },
+    "response_acknowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "mode",
+        "operation_id",
+        "acknowledgement_id",
+        "plan_sha256",
+        "acknowledged",
+        "persistence",
+        "ledger_revision",
+        "record"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "recovery"
+        },
+        "mode": {
+          "const": "acknowledge"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "acknowledgement_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "acknowledged": {
+          "const": true
+        },
+        "persistence": {
+          "const": "persistent"
+        },
+        "ledger_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "record": {
+          "$ref": "#/$defs/record"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "error"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "recovery"
+        },
+        "error": {
+          "enum": [
+            "invalid_request",
+            "envelope_too_large",
+            "runtime_changed",
+            "expired",
+            "busy",
+            "unsupported_persistence",
+            "revision_conflict",
+            "policy_denied",
+            "storage_unavailable",
+            "limits_exceeded"
+          ]
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        }
+      }
+    },
+    "reason": {
+      "const": "accept-unknown-no-replay"
+    }
+  }
+}

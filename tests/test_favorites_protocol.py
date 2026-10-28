@@ -30,6 +30,9 @@ def provision_fixture(mode="create"):
 
 
 def fixture(op):
+    if op == "recovery":
+        pair = json.loads((ROOT / "docs/design/favorites-recovery-v1.fixtures.json").read_bytes())["list"]
+        return {"request": pair["request"], "response": pair["result"]}
     if op == "prepare":
         return {"request": copy.deepcopy(CANONICAL_PACKET["prepare"]["request_example"]),
                 "response": copy.deepcopy(CANONICAL_PACKET["prepare"]["response_example"])}

@@ -49,6 +49,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles), [Local videos profiles](#local-videos-profiles) and [named setups](#named-setups)
 - [Saved favorites documents](#saved-favorites-documents) and [favorites across profiles](#favorites-across-profiles)
+- [Inspect and acknowledge uncertain favorites operations](#acknowledge-a-retained-uncertain-operation)
 - [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
@@ -438,6 +439,10 @@ example, not a replacement for saved aliases, native bindings, presets or creden
 ```
 
 `server_config` is the private server JSON containing `admin_token` and `devices`.
+For a [scoped command operator](security-design.md#scoped-command-operators),
+point it at a separate private credentials file containing `operator_token`
+instead, and resolve players through the `players` map. Registration management
+still requires the administrator configuration.
 Keep it out of repositories and public website files. `server` is the address
 used by the CLI; `player_server` is the address to enter in players. Both may use
 the same HTTPS address. Set `OTT_CONFIG` or pass `--config FILE` to select another
@@ -1914,6 +1919,91 @@ preview, then explicitly apply. A `local_retention_unconfirmed` warning means
 local completion bookkeeping failed; it does not undo verified player storage.
 Do not delete pending recovery files to make room or replay uncertain operations.
 
+### Acknowledge a retained uncertain operation
+
+A retained `pending`, `partial` or `unknown` receipt can block another transfer.
+`fav status` reads evidence about the original write. The separate recovery
+commands let an operator explicitly accept that the result remains uncertain
+and release that one administrative block. They preserve favorites, bindings
+and the original outcome.
+
+```sh
+ott t1 fav recovery
+ott t1 fav recovery inspect OPERATION_UUID
+ott t1 fav acknowledge OPERATION_UUID --dry-run
+ott t1 fav acknowledge OPERATION_UUID --confirm PLAN_SHA256
+```
+
+Replace `OPERATION_UUID` with the exact ID from the recovery list or the original
+request. Copy `PLAN_SHA256` from the preview. `recover` aliases `recovery`, and
+`ack` aliases `acknowledge`. Acknowledgement targets one player and one retained
+operation; it does not support a comma-separated player list. The preview reads
+the current record without changing the player or saving an acknowledgement.
+
+The confirmation is bound to the current runtime, exact original record, whole
+ledger and qualified storage backend. If any of these change, obtain another
+preview. A successful acknowledgement records acceptance of uncertainty; it
+does not prove the interrupted write succeeded or failed. Every later transfer
+uses a new operation ID and a fresh snapshot. Other protected operations continue
+to block changes until individually resolved.
+
+Recovery uses the player's global receipt ledger. It can inspect a record whose
+original Plex source or profile is inactive or deleted. It does not switch
+providers, recreate a profile or copy credentials. The original record supplies
+its scope.
+
+This requires a compatible controller and CLI plus the independent
+`favorites_transfer_recovery` capability. A new mutating transfer, clear or
+binding change first checks recovery support and authorization through a
+read-only request. Remote load/clear previews also perform this check before
+staging their dry run. The
+explicit controller permission is `favorites_transfer.recovery`; existing
+favorites or provisioning grants do not imply it. The existing unrestricted
+administrator follows the controller's normal authorization model.
+
+A scoped operator needs at least `"actions": ["capabilities",
+"favorites_transfer.recovery"]` for these recovery commands, plus permission
+for the selected device. The first action permits CLI discovery. Configure its
+private `operator_token` file through `server_config` as described in
+[scoped command operators](security-design.md#scoped-command-operators).
+Other transfer or binding commands additionally require their own exact grants.
+
+New persistent transfer and online acknowledgement require a qualified native
+`localStorage` backend and Web Locks shared with every participating writer.
+The lock remains held until the actual write finishes, even if its CLI request
+times out. Ordinary remote bookmarks and the player's existing favorites UI
+keep their separate capabilities. A platform without the required storage
+guard can expose read-only recovery without accepting an acknowledgement.
+
+Troubleshooting:
+
+- `busy`: a physical writer still owns the storage lock. Let it settle, or
+  restart the player/tab that owns the stalled operation, then inspect again.
+  Another tab sharing the same storage can still hold the lock.
+- A missing or invalid acknowledgement response: use `fav recovery inspect`
+  for the same operation. The CLI retains separate administrative intent and
+  observes the stored audit without repeating the write. The original transfer
+  remains `unknown` or `partial`; its recovery record is retained.
+  If a fresh preview still shows the exact unacknowledged plan, a new explicit
+  `--confirm` invocation authorizes one conditional attempt. This also handles
+  a CLI crash after saving intent but before sending its first request.
+- `revision_conflict`: the preview is stale. Inspect and preview again rather
+  than reusing its confirmation hash.
+- `unsupported_persistence` or legacy ledger format 1: online acknowledgement
+  is unavailable. Unfenced development receipts remain inspect-only and need a
+  separately reviewed offline repair after all old writers have stopped. Normal
+  deployed players before this transfer feature did not create those receipts.
+- `limits_exceeded`: the ledger retains at most 32 records within 64 KiB.
+  New protected records reserve space for acknowledgement, but acknowledgement
+  does not free a record slot or purge history. Preserve the evidence before
+  arranging a reviewed archival or offline repair.
+
+Do not restore an old ledger backup over later favorites operations. Controller
+rollback disables the new recovery operation without removing its evidence;
+older players may refuse the guarded ledger format. The [recovery protocol and
+storage contract](design/favorites-recovery-v1.md) describes the exact checks,
+acknowledgement hashes, capacity reservation and rollback limits.
+
 ## Favorites across profiles
 
 Save the item currently playing on the target player together with its active
@@ -3275,7 +3365,8 @@ replies. See [server troubleshooting](deployment.md#troubleshooting).
 ### HTTP errors
 
 - **401/403:** check which credential is being used. The player needs its device
-  token, ordinary CLI requests need `admin_token`, and diagnostics need their own
+  token, ordinary CLI requests need an administrator or appropriately scoped
+  command-operator credential, and diagnostics need their own
   scoped operator credential. Verify the configuration was applied and restarted,
   and check origin or operator-scope restrictions for the affected route.
 - **404:** check the final server base URL/proxy prefix and the server version.

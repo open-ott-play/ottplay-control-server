@@ -1,0 +1,207 @@
+{
+  "synthetic_only": true,
+  "private_layout_not_normative": true,
+  "derivation": {
+    "original_entry_utf8": "{\"operationId\":\"33333333-3333-4333-8333-333333333333\",\"scope\":{\"profileBindingId\":\"11111111-1111-4111-8111-111111111111\",\"sourceBindingId\":\"22222222-2222-4222-8222-222222222222\",\"provider\":\"plex\"},\"state\":\"pending\",\"payloadHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"fencedFormat\":2}",
+    "original_entry_sha256": "24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81",
+    "before_ledger_utf8": "{\"version\":2,\"entries\":[{\"operationId\":\"33333333-3333-4333-8333-333333333333\",\"scope\":{\"profileBindingId\":\"11111111-1111-4111-8111-111111111111\",\"sourceBindingId\":\"22222222-2222-4222-8222-222222222222\",\"provider\":\"plex\"},\"state\":\"pending\",\"payloadHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"fencedFormat\":2}]}",
+    "before_ledger_sha256": "9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d",
+    "backend_proof_input_utf8": "[\"ottplay-favorites-recovery-backend-v1\",\"https://synthetic.invalid\",\"synthetic-ledger-key\",\"synthetic-lock-name\",\"synchronous-localstorage\",2,\"guard-v1\"]",
+    "backend_proof": "aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5",
+    "acknowledgement_input_utf8": "[\"ottplay-favorites-recovery-ack-v1\",\"synthetic-recovery-runtime-1\",\"33333333-3333-4333-8333-333333333333\",[\"11111111-1111-4111-8111-111111111111\",\"22222222-2222-4222-8222-222222222222\",\"plex\"],\"24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81\",\"9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d\",\"aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5\",\"accept-unknown-no-replay\"]",
+    "acknowledgement_id": "55912213208c18aa2f6d79d2d6e0f651d23149743c0980c980c29ee8718f8049",
+    "after_ledger_utf8": "{\"version\":2,\"entries\":[{\"operationId\":\"33333333-3333-4333-8333-333333333333\",\"scope\":{\"profileBindingId\":\"11111111-1111-4111-8111-111111111111\",\"sourceBindingId\":\"22222222-2222-4222-8222-222222222222\",\"provider\":\"plex\"},\"state\":\"pending\",\"payloadHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"fencedFormat\":2,\"recovery_ack\":{\"acknowledgement_id\":\"55912213208c18aa2f6d79d2d6e0f651d23149743c0980c980c29ee8718f8049\",\"runtime\":\"synthetic-recovery-runtime-1\",\"ledger_revision_before\":\"9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d\",\"backend_proof\":\"aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5\",\"reason\":\"accept-unknown-no-replay\"}}]}",
+    "after_ledger_sha256": "9531840379de3f4e631f80b81bc8905fa3192c106e158d7e552fd508ca58b0bc",
+    "plan_input_utf8": "[\"ottplay-favorites-recovery-plan-v1\",\"synthetic-recovery-runtime-1\",\"33333333-3333-4333-8333-333333333333\",[\"11111111-1111-4111-8111-111111111111\",\"22222222-2222-4222-8222-222222222222\",\"plex\"],\"24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81\",\"9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d\",\"aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5\",\"accept-unknown-no-replay\",\"55912213208c18aa2f6d79d2d6e0f651d23149743c0980c980c29ee8718f8049\",\"9531840379de3f4e631f80b81bc8905fa3192c106e158d7e552fd508ca58b0bc\"]",
+    "plan_sha256": "be5edc795727bf375fc837d0cb785ceeeaaaa2d5d87f6b2f81160ffd8078ae22"
+  },
+  "list": {
+    "request": {
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "list"
+    },
+    "result": {
+      "version": 1,
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "list",
+      "ledger_format": 2,
+      "ledger_revision": "9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d",
+      "backend_proof": "aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5",
+      "records": [
+        {
+          "operation_id": "33333333-3333-4333-8333-333333333333",
+          "scope": {
+            "profileBindingId": "11111111-1111-4111-8111-111111111111",
+            "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+            "provider": "plex"
+          },
+          "original_state": "pending",
+          "original_outcome": "unknown",
+          "original_entry_sha256": "24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81",
+          "acknowledgement": null
+        }
+      ]
+    }
+  },
+  "inspect": {
+    "request": {
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "inspect",
+      "operation_id": "33333333-3333-4333-8333-333333333333"
+    },
+    "result": {
+      "version": 1,
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "inspect",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "ledger_format": 2,
+      "ledger_revision": "9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d",
+      "backend_proof": "aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5",
+      "record": {
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "original_state": "pending",
+        "original_outcome": "unknown",
+        "original_entry_sha256": "24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81",
+        "acknowledgement": null
+      },
+      "acknowledge_allowed": true,
+      "plan_sha256": "be5edc795727bf375fc837d0cb785ceeeaaaa2d5d87f6b2f81160ffd8078ae22",
+      "acknowledgement_id": "55912213208c18aa2f6d79d2d6e0f651d23149743c0980c980c29ee8718f8049",
+      "after_ledger_sha256": "9531840379de3f4e631f80b81bc8905fa3192c106e158d7e552fd508ca58b0bc"
+    }
+  },
+  "acknowledge": {
+    "request": {
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "acknowledge",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "scope": {
+        "profileBindingId": "11111111-1111-4111-8111-111111111111",
+        "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+        "provider": "plex"
+      },
+      "original_entry_sha256": "24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81",
+      "expected_ledger_revision": "9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d",
+      "backend_proof": "aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5",
+      "reason": "accept-unknown-no-replay",
+      "acknowledgement_id": "55912213208c18aa2f6d79d2d6e0f651d23149743c0980c980c29ee8718f8049",
+      "after_ledger_sha256": "9531840379de3f4e631f80b81bc8905fa3192c106e158d7e552fd508ca58b0bc",
+      "plan_sha256": "be5edc795727bf375fc837d0cb785ceeeaaaa2d5d87f6b2f81160ffd8078ae22",
+      "accept_unknown": true
+    },
+    "result": {
+      "version": 1,
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "acknowledge",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "acknowledgement_id": "55912213208c18aa2f6d79d2d6e0f651d23149743c0980c980c29ee8718f8049",
+      "plan_sha256": "be5edc795727bf375fc837d0cb785ceeeaaaa2d5d87f6b2f81160ffd8078ae22",
+      "acknowledged": true,
+      "persistence": "persistent",
+      "ledger_revision": "9531840379de3f4e631f80b81bc8905fa3192c106e158d7e552fd508ca58b0bc",
+      "record": {
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "original_state": "pending",
+        "original_outcome": "unknown",
+        "original_entry_sha256": "24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81",
+        "acknowledgement": {
+          "acknowledgement_id": "55912213208c18aa2f6d79d2d6e0f651d23149743c0980c980c29ee8718f8049",
+          "runtime": "synthetic-recovery-runtime-1",
+          "ledger_revision_before": "9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d",
+          "backend_proof": "aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5",
+          "reason": "accept-unknown-no-replay"
+        }
+      }
+    }
+  },
+  "inspect_after_lost_ack": {
+    "request": {
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "inspect",
+      "operation_id": "33333333-3333-4333-8333-333333333333"
+    },
+    "result": {
+      "version": 1,
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "inspect",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "ledger_format": 2,
+      "ledger_revision": "9531840379de3f4e631f80b81bc8905fa3192c106e158d7e552fd508ca58b0bc",
+      "backend_proof": "aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5",
+      "record": {
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "original_state": "pending",
+        "original_outcome": "unknown",
+        "original_entry_sha256": "24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81",
+        "acknowledgement": {
+          "acknowledgement_id": "55912213208c18aa2f6d79d2d6e0f651d23149743c0980c980c29ee8718f8049",
+          "runtime": "synthetic-recovery-runtime-1",
+          "ledger_revision_before": "9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d",
+          "backend_proof": "aaad977108267e0e1860d89ce5dcec29e5b2ae6f546da94f48fd48f3982d0cd5",
+          "reason": "accept-unknown-no-replay"
+        }
+      },
+      "acknowledge_allowed": false,
+      "plan_sha256": null,
+      "acknowledgement_id": null,
+      "after_ledger_sha256": null
+    }
+  },
+  "legacy_inspect": {
+    "request": {
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "inspect",
+      "operation_id": "33333333-3333-4333-8333-333333333333"
+    },
+    "result": {
+      "version": 1,
+      "op": "recovery",
+      "runtime": "synthetic-recovery-runtime-1",
+      "mode": "inspect",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "ledger_format": 1,
+      "ledger_revision": "9a78ff8738b1dc6ed181754842089cfcf29e354eb87ab91df226c2fae3530c6d",
+      "backend_proof": null,
+      "record": {
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "original_state": "pending",
+        "original_outcome": "unknown",
+        "original_entry_sha256": "24871d67fd31cb32691638f95faec022d56a6a5b6fe50b7cee3c27f12a234d81",
+        "acknowledgement": null
+      },
+      "acknowledge_allowed": false,
+      "plan_sha256": null,
+      "acknowledgement_id": null,
+      "after_ledger_sha256": null
+    }
+  }
+}
