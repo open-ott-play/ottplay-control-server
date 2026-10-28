@@ -22,7 +22,7 @@ var favoritesGlobalReservedChannelPattern = regexp.MustCompile(`^channel:[0-9]+$
 var favoritesGlobalDrivePattern = regexp.MustCompile(`^[A-Za-z]:`)
 
 // Count UTF-16 units and use the exact ECMAScript edge-whitespace set, matching
-// the existing V3 portable codec. Never normalize identities or trim values.
+// the existing portable codec. Never normalize identities or trim values.
 func favoritesGlobalPortableText(raw json.RawMessage, maximum int) (string, bool) {
 	var value *string
 	if json.Unmarshal(raw, &value) != nil || value == nil || *value == "" {
@@ -84,12 +84,13 @@ func favoritesGlobalPortableIdentity(raw json.RawMessage) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	switch favoritesGlobalString(origin["provider"]) {
-	case "plex":
+	provider := favoritesGlobalString(origin["provider"])
+	switch {
+	case provider == "plex":
 		if !favoritesTransferFields(locator, "kind", "serverId", "ratingKey") || !inspectEnum(locator["kind"], "plex-media") || !favoritesGlobalPortablePattern(locator["serverId"], favoritesGlobalPMSPattern) || !favoritesGlobalPortablePattern(locator["ratingKey"], favoritesGlobalRatingPattern) {
 			return "", false
 		}
-	case "local":
+	case provider == "local":
 		if !favoritesTransferFields(locator, "kind", "rootAlias", "relativePath") || !inspectEnum(locator["kind"], "local-media") {
 			return "", false
 		}
@@ -105,7 +106,8 @@ func favoritesGlobalPortableIdentity(raw json.RawMessage) (string, bool) {
 				return "", false
 			}
 		}
-	case "vportal":
+	case provider == "vportal" || (provider == "m3u" && inspectEnum(locator["kind"], "vportal-media")):
+		// The receiver must separately prove that an M3U profile owns its embedded portal.
 		if !favoritesTransferFields(locator, "kind", "idField", "id") || !inspectEnum(locator["kind"], "vportal-media") || !inspectEnum(locator["idField"], "id", "fid", "stream_id", "itemId", "media_id", "episode_id") || !favoritesGlobalPortablePattern(locator["id"], favoritesGlobalIdentifierPattern) {
 			return "", false
 		}

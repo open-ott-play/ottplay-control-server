@@ -98,7 +98,7 @@ class GlobalFavoritesDocumentTests(unittest.TestCase):
             rows.append(value)
             self.assertEqual(codec.validate_document(document(value)), document(value))
             wrong = copy.deepcopy(value)
-            wrong["origin"]["provider"] = "m3u" if provider in ("plex", "local", "vportal") else "plex"
+            wrong["origin"]["provider"] = "m3u" if provider in ("plex", "local") else "stalker" if provider == "vportal" else "plex"
             self.error(codec.validate_document, document(wrong))
         self.assertEqual(codec.load_document(codec.canonical_bytes(document(*rows))), document(*rows))
 
@@ -120,6 +120,56 @@ class GlobalFavoritesDocumentTests(unittest.TestCase):
             self.assertEqual(codec.validate_document(document(value)), document(value))
         value["locator"]["idField"] = "unknown"
         self.error(codec.validate_document, document(value))
+
+    def test_v4_embedded_m3u_portal_shared_cases_preserve_outer_origin(self):
+        content = (ROOT / "contracts/global-favorites-nested-m3u-vportal.fixtures.json").read_bytes()
+        self.assertEqual(hashlib.sha256(content).hexdigest(),
+                         "362978d296107b331f815f178d0f51c7893e86e0a412f0304f476b6e0b866d83")
+        examples = json.loads(content)
+        for case in examples["cases"]:
+            with self.subTest(case=case["id"]):
+                value = document(case["entry"])
+                if not case["valid"]:
+                    self.error(codec.validate_document, value)
+                    continue
+                self.assertEqual(codec.validate_document(value), value)
+                self.assertEqual(codec.load_document(codec.canonical_bytes(value)), value)
+                self.assertEqual(value["entries"][0]["origin"]["provider"], "m3u")
+                self.assertEqual(codec.required_locator_kinds(value), ["vportal-media"])
+                self.assertFalse(codec.supports(value, ["channel", "channel-name"]))
+                self.assertTrue(codec.supports(value, ["vportal-media"]))
+        root, folder = (examples["cases"][index]["entry"] for index in (0, 1))
+        moved = copy.deepcopy(root)
+        moved["origin"]["subprofile"] = folder["origin"]["subprofile"]
+        self.assertNotEqual(codec.identity(root), codec.identity(moved))
+        direct = copy.deepcopy(root)
+        direct["origin"]["provider"] = "vportal"
+        self.assertNotEqual(codec.identity(root), codec.identity(direct))
+
+    def test_v4_exception_keeps_provider_kind_and_safe_id_restrictions(self):
+        value = row()
+        value["locator"] = {"kind": "vportal-media", "idField": "id", "id": "0002"}
+        for provider in ("m3u", "vportal"):
+            value["origin"]["provider"] = provider
+            for field in codec.VPORTAL_ID_FIELDS:
+                value["locator"]["idField"] = field
+                self.assertEqual(codec.validate_document(document(value)), document(value))
+            value["locator"]["idField"] = "id"
+            for identifier in (0, 42, "", "https://secret", "id/path", "x" * 257):
+                bad = copy.deepcopy(value)
+                bad["locator"]["id"] = identifier
+                self.error(codec.validate_document, document(bad))
+            bad = copy.deepcopy(value)
+            bad["locator"]["idField"] = "cmd"
+            self.error(codec.validate_document, document(bad))
+        for provider in ("plex", "local", "stalker", "future-provider"):
+            value["origin"]["provider"] = provider
+            self.error(codec.validate_document, document(value))
+        value["origin"]["provider"] = "m3u"
+        for locator in ({"kind": "plex-media", "serverId": "pms", "ratingKey": "1"},
+                        {"kind": "local-media", "rootAlias": "Movies", "relativePath": "movie.mp4"}):
+            value["locator"] = locator
+            self.error(codec.validate_document, document(value))
 
     def test_relative_paths_do_not_decode_or_grant_filesystem_access(self):
         value = row()

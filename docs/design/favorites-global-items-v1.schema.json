@@ -254,7 +254,143 @@
           ]
         }
       },
-      "$comment": "Structural envelope only: normative existing V3 portable codec additionally enforces UTF-16 text bounds, well-formed Unicode, exact JS trim, text/path exclusions, provider/locator parity and reserved channel:<digits> rejection. No normalization or private receiver mapping."
+      "$comment": "Structural envelope only: normative V4 portable codec additionally enforces UTF-16 text bounds, well-formed Unicode, exact JS trim, text/path exclusions and reserved channel:<digits> rejection. The m3u+vportal-media combination requires receiver-owned embedded-portal provenance; kind support alone is not proof of ownership. No normalization or private receiver mapping.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "properties": {
+                  "provider": {
+                    "const": "plex"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "locator": {
+                "properties": {
+                  "kind": {
+                    "const": "plex-media"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "properties": {
+                  "provider": {
+                    "const": "local"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "locator": {
+                "properties": {
+                  "kind": {
+                    "const": "local-media"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "properties": {
+                  "provider": {
+                    "const": "vportal"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "locator": {
+                "properties": {
+                  "kind": {
+                    "const": "vportal-media"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "properties": {
+                  "provider": {
+                    "not": {
+                      "enum": [
+                        "plex",
+                        "local",
+                        "vportal",
+                        "m3u"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "locator": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "channel",
+                      "channel-name"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "origin": {
+                "properties": {
+                  "provider": {
+                    "const": "m3u"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "locator": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "channel",
+                      "channel-name",
+                      "vportal-media"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "row": {
       "type": "object",

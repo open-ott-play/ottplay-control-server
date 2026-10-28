@@ -2175,6 +2175,11 @@ requires global support explicitly.
 Command-line titles/selectors retain the 1–160 UTF-8 byte input limit; use the
 listed UUID when an imported favorite has a longer title.
 
+Favorites from a configured VPortal inside M3U retain their M3U profile and
+source alias, including the actual portal folder when present. The receiving
+player must have the matching embedded portal configured; imports do not copy
+portal URLs or credentials or silently switch to a top-level VPortal profile.
+
 The list has at most 1,000 entries. Every page contains at most 100 rows and
 64 KiB of original response data; long titles can reduce the rows per page.
 Pages must have the same store/context revisions, contiguous offsets and unique

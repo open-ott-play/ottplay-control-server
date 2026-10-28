@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -250,6 +251,86 @@ func TestGlobalItemsPortableV3Corpus(t *testing.T) {
 		t.Fatal("ordinal channel identity accepted")
 	}
 }
+func TestGlobalItemsPortableV4NestedM3UPortal(t *testing.T) {
+	raw, err := os.ReadFile("../../contracts/global-favorites-nested-m3u-vportal.fixtures.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Contract string `json:"contract"`
+		Cases    []struct {
+			ID    string          `json:"id"`
+			Entry json.RawMessage `json:"entry"`
+			Valid bool            `json:"valid"`
+		} `json:"cases"`
+	}
+	if err = json.Unmarshal(raw, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	if corpus.Contract != "joint-unactivated-portable-v1-v4" || len(corpus.Cases) != 5 {
+		t.Fatal("missing V4 parity fixtures")
+	}
+	for _, row := range corpus.Cases {
+		t.Run(row.ID, func(t *testing.T) {
+			identity, valid := favoritesGlobalPortableIdentity(row.Entry)
+			if valid != row.Valid {
+				t.Fatal("nested M3U portal parity")
+			}
+			if valid {
+				var original, got map[string]any
+				if json.Unmarshal(row.Entry, &original) != nil || json.Unmarshal([]byte(identity), &got) != nil {
+					t.Fatal("invalid portable identity JSON")
+				}
+				delete(original, "title")
+				if !reflect.DeepEqual(got, original) {
+					t.Fatal("outer origin or locator changed")
+				}
+			}
+			for _, f := range globalItemsFixtures(t)[:2] {
+				result := transferObject(t, f.result)
+				if f.op == "list" {
+					result["entries"] = transferJSON(t, []any{map[string]any{"id": globalTestOperation, "entry": row.Entry}})
+				} else {
+					result["entry"] = row.Entry
+				}
+				if validFavoritesGlobalItemsResult(transferJSON(t, result), "ok", parseFavoritesGlobalItemsRequest(f.params)) != row.Valid {
+					t.Fatal("nested M3U portal result parity", f.op)
+				}
+			}
+		})
+	}
+}
+
+func TestGlobalItemsPortableV4ProviderBoundary(t *testing.T) {
+	portal := json.RawMessage(`{"kind":"vportal-media","idField":"id","id":"42"}`)
+	for _, row := range []struct {
+		provider string
+		locator  json.RawMessage
+		valid    bool
+	}{
+		{"m3u", portal, true},
+		{"vportal", portal, true},
+		{"plex", portal, false},
+		{"local", portal, false},
+		{"stalker", portal, false},
+		{"other", portal, false},
+		{"m3u", json.RawMessage(`{"kind":"plex-media","serverId":"PMS-1","ratingKey":"42"}`), false},
+		{"m3u", json.RawMessage(`{"kind":"local-media","rootAlias":"Movies","relativePath":"movie.mp4"}`), false},
+		{"m3u", json.RawMessage(`{"kind":"channel","channelId":"42"}`), true},
+		{"m3u", json.RawMessage(`{"kind":"channel-name","name":"News","group":null}`), true},
+		{"vportal", json.RawMessage(`{"kind":"channel","channelId":"42"}`), false},
+		{"vportal", json.RawMessage(`{"kind":"channel-name","name":"News","group":null}`), false},
+	} {
+		entry := transferObject(t, globalItemsEntry(t))
+		origin := transferObject(t, entry["origin"])
+		origin["provider"] = transferJSON(t, row.provider)
+		entry["origin"], entry["locator"] = transferJSON(t, origin), row.locator
+		if _, valid := favoritesGlobalPortableIdentity(transferJSON(t, entry)); valid != row.valid {
+			t.Fatal("provider boundary", row.provider, string(row.locator))
+		}
+	}
+}
+
 func TestGlobalItemsHundredRowsAndRawByteBoundary(t *testing.T) {
 	f := globalItemsFixtures(t)[0]
 	q := parseFavoritesGlobalItemsRequest(f.params)

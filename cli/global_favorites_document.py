@@ -78,7 +78,8 @@ def _locator(provider, value):
         _require(not path.startswith("/") and not re.match(r"[A-Za-z]:", path) and "\\" not in path
                  and all(segment not in ("", ".", "..") for segment in path.split("/")))
         return {"kind": "local-media", "relativePath": path, "rootAlias": _text(value["rootAlias"], 256)}
-    if provider == "vportal":
+    if (provider == "vportal" or provider == "m3u" and type(value) is dict
+            and set(value) == {"kind", "idField", "id"} and value["kind"] == "vportal-media"):
         _shape(value, ("kind", "idField", "id"))
         _require(value["kind"] == "vportal-media" and type(value["idField"]) is str
                  and value["idField"] in VPORTAL_ID_FIELDS)
