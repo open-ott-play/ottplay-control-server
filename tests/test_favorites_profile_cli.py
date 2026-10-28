@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+from itertools import permutations
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -17,6 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("ott_favorites_profiles", ROOT / "cli/ott.py")
 ott = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ott)
+OPERATION_ID = "95e21aca-76b0-4db1-b3ce-bd9a4bd64770"
+PROFILE_ID = "9ac483a8-083e-4ce1-9dca-f31a3514e90f"
+SOURCE_ID = "88dbcf12-1d8c-417e-b6c5-f8810e3a3285"
+SCOPE = f"plex:{PROFILE_ID}:{SOURCE_ID}"
+SCOPE_VALUE = {"provider": "plex", "profileBindingId": PROFILE_ID, "sourceBindingId": SOURCE_ID}
 
 
 def document(*members):
@@ -122,11 +128,85 @@ class FavoritesProfileParserTests(unittest.TestCase):
             self.assertEqual(ott.parse_command([alias, "diff", "Home"])[1], {"op": "diff", "preset": "Home", "dry_run": True})
             self.assertEqual(ott.parse_command([alias, "clear", "--dry-run"])[1], {"op": "clear", "dry_run": True})
             self.assertEqual(ott.parse_command([alias, "clear"])[1], {"op": "clear", "dry_run": False})
-            for name in ("load", "collect", "diff", "clear"):
+            for name in ("load", "collect", "diff", "clear", "bind", "bindings", "status"):
                 self.assertEqual(ott.parse_command([alias, "play", name]), ("favorites", {"op": "play", "query": name}))
             self.assertEqual(ott.parse_command([alias, "add", "clear"]), ("favorites", {"op": "add", "name": "clear"}))
         self.assertEqual(ott.FAVORITES_OPERATIONS, {"list", "add", "play", "remove"})
         self.assertNotIn("favorites_profile", ott.RECEIPT_ACTIONS)
+
+    def test_internal_binding_and_status_grammar_uses_canonical_ids(self):
+        for alias in ("fav", "favs", "favorite", "favorites", "favourite", "favourites", "FAV"):
+            for words, expected in (
+                (["bindings"], {"op": "bindings"}),
+                (["STATUS", OPERATION_ID], {"op": "status", "operation_id": OPERATION_ID}),
+                (["bind", "current", "--new"], {"op": "bind", "preset": "current", "new": True, "dry_run": False}),
+                (["BIND", "--dry-run", "CURRENT", "--new"],
+                 {"op": "bind", "preset": "current", "new": True, "dry_run": True}),
+                (["bind", "Home"], {"op": "bind", "preset": "Home", "dry_run": False}),
+                (["bind", "current"], {"op": "bind", "preset": "current", "dry_run": False}),
+                (["bind", "Home", "--scope", "current"],
+                 {"op": "bind", "preset": "Home", "dry_run": False, "scope": "current"}),
+            ):
+                self.assertEqual(ott.parse_command([alias, *words]), ("favorites_profile", expected))
+        for chunks in permutations((["--scope", SCOPE], ["--target", "plex-target-local-1"], ["--dry-run"])):
+            flags = [word for chunk in chunks for word in chunk]
+            self.assertEqual(ott.parse_command(["fav", "bind", "Home", *flags]), ("favorites_profile", {
+                "op": "bind", "preset": "Home", "scope": SCOPE_VALUE,
+                "target_id": "plex-target-local-1", "dry_run": True}))
+        for target in ("é" * 128, "target:opaque/identifier"):
+            self.assertEqual(ott.parse_command(["fav", "bind", "Home", "--target", target])[1]["target_id"], target)
+        self.assertEqual(ott.parse_command(["fav", "bind", "--target", "target", "--scope", SCOPE, "Home"])[1],
+                         {"op": "bind", "preset": "Home", "scope": SCOPE_VALUE, "target_id": "target", "dry_run": False})
+        for command in ("fav bindings", "fav status", "fav bind "):
+            self.assertNotIn(command, ott.HELP)
+
+    def test_scope_selectors_preserve_unselected_shapes_and_accept_flag_order(self):
+        for operation, suffix in (("load", ["Home", "REPLACE"]), ("collect", ["Home", "merge"]),
+                                  ("diff", ["Home"]), ("clear", [])):
+            baseline = ott.parse_command(["fav", operation, *suffix])[1]
+            self.assertNotIn("scope", baseline)
+            for selector, expected in (("current", "current"), ("CURRENT", "current"), (SCOPE, SCOPE_VALUE)):
+                for words in (["fav", operation, "--scope", selector, *suffix],
+                              ["fav", operation, *suffix, "--scope", selector]):
+                    self.assertEqual(ott.parse_command(words), ("favorites_profile", baseline | {"scope": expected}))
+            if operation != "diff":
+                for words in (["fav", operation, "--dry-run", "--scope", SCOPE, *suffix],
+                              ["fav", operation, *suffix, "--scope", SCOPE, "--dry-run"]):
+                    self.assertEqual(ott.parse_command(words)[1], baseline | {"scope": SCOPE_VALUE, "dry_run": True})
+        for provider in ("m3u", "vportal", "plex", "offline"):
+            selected = ott.parse_command(["fav", "clear", "--scope", f"{provider}:{PROFILE_ID}:{SOURCE_ID}"])[1]
+            self.assertEqual(selected["scope"], SCOPE_VALUE | {"provider": provider})
+        self.assertEqual(ott.parse_command(["fav", "load", "Home", "--dry-run", "replace"])[1],
+                         {"op": "load", "preset": "Home", "mode": "replace", "dry_run": True})
+
+    def test_malformed_binding_scope_status_and_flags_never_become_bookmark_play(self):
+        cases = [
+            ("bindings", "extra"), ("bindings", "--dry-run"), ("status",), ("status", OPERATION_ID, "--dry-run"),
+            ("bind",), ("bind", "Home", "--new"), ("bind", "current", "--new", "--new"),
+            ("bind", "current", "--new", "--scope", "current"),
+            ("bind", "current", "--target", "target", "--new"), ("bind", "Home", "--target"),
+            ("bind", "Home", "--target", "one", "--target", "two"), ("bind", "Home", "merge"),
+            ("bind", "../Home"), ("load", "Home", "--target", "one"), ("collect", "Home", "--new"),
+            ("diff", "Home", "--dry-run"), ("clear", "--scope"), ("clear", "--scope", "--dry-run"),
+            ("clear", "--scope", "current", "--scope", SCOPE), ("clear", "--scope=current"),
+            ("clear", "--dry-run", "--dry-run"), ("clear", "--unknown"), ("--scope", "current"),
+            ("bookmark", "--unknown"),
+        ]
+        for identifier in (OPERATION_ID.upper(), OPERATION_ID.replace("4db1", "1db1"),
+                           OPERATION_ID.replace("b3ce", "73ce"), "{" + OPERATION_ID + "}", OPERATION_ID + " "):
+            cases.append(("status", identifier))
+        for selector in ("plex", "plex:1:2", f"plex:{PROFILE_ID.upper()}:{SOURCE_ID}",
+                         f"stalker:{PROFILE_ID}:{SOURCE_ID}", SCOPE + ":extra", " current"):
+            cases.append(("clear", "--scope", selector))
+        for target in ("", "x" * 257, "é" * 129, "two words", "x\ty", "x\x7fy", "x\x85y", "x\u200by", "\ud800"):
+            cases.append(("bind", "Home", "--target", target))
+        for words in cases:
+            with self.subTest(words=words), self.assertRaises(ott.Error):
+                ott.parse_command(["fav", *words])
+        self.assertEqual(ott.parse_command(["fav", "play", "--", "--scope"]),
+                         ("favorites", {"op": "play", "query": "--scope"}))
+        self.assertEqual(ott.parse_command(["fav", "--", "--scope"]),
+                         ("favorites", {"op": "play", "query": "--scope"}))
 
     def test_present_companion_cannot_be_ignored_by_preset_load(self):
         base = {"presets": {"Home": {
@@ -165,7 +245,7 @@ class FavoritesProfileParserTests(unittest.TestCase):
 
     def test_bad_player_grammar_never_becomes_search(self):
         for words in (("load",), ("load", "Home", "invalid"), ("load", "../Home"),
-                      ("load", "Home", "--dry-run", "replace"), ("load", "Home", "--dry-run", "--dry-run"),
+                      ("load", "Home", "--dry-run", "--dry-run"),
                       ("collect",), ("collect", "Home", "merge", "replace"),
                       ("diff",), ("diff", "Home", "replace"), ("clear", "all"), ("clear", "--force")):
             with self.subTest(words=words), self.assertRaises(ott.Error):
@@ -198,7 +278,11 @@ class FavoritesProfileParserTests(unittest.TestCase):
 
     def test_unwired_commands_fail_before_client_or_writes(self):
         for words in (["t1", "fav", "load", "Home"], ["t1,t2", "fav", "collect", "Home"],
-                      ["t1", "fav", "clear"], ["t1", "fav", "clear", "--dry-run"]):
+                      ["t1", "fav", "clear"], ["t1", "fav", "clear", "--dry-run"],
+                      ["t1", "fav", "bindings"], ["t1", "fav", "status", OPERATION_ID],
+                      ["t1", "fav", "bind", "current", "--new"],
+                      ["t1,t2", "fav", "bind", "Home", "--scope", SCOPE, "--target", "target"],
+                      ["t1,t2", "fav", "collect", "Home", "--scope", "current"]):
             out, err = io.StringIO(), io.StringIO()
             with mock.patch.object(ott, "read_json", return_value={"presets": {"Home": {}}}), \
                     mock.patch.object(ott, "Client") as client, mock.patch.object(ott, "write_private") as write, \

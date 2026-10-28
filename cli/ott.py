@@ -362,7 +362,8 @@ CATEGORY_ERRORS = {
 
 
 FAVORITES_OPERATIONS = frozenset(("list", "add", "play", "remove"))
-FAVORITES_PROFILE_OPERATIONS = frozenset(("load", "collect", "diff", "clear"))
+FAVORITES_PROFILE_OPERATIONS = frozenset(("load", "collect", "diff", "clear", "bindings", "bind", "status"))
+FAVORITES_UUID_V4 = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}")
 MAX_FAVORITES_PROFILE_FILE_BYTES = 1024 * 1024
 FAVORITES_PROFILE_UNAVAILABLE = (
     "Favorites profile synchronization is not available in this CLI build; "
@@ -2518,30 +2519,96 @@ def screenshot_command(client, device, name, output, timeout):
             os.close(parent_fd)
 
 
+def _favorites_scope_selector(value):
+    if value.casefold() == "current":
+        return "current"
+    parts = value.split(":")
+    if (len(parts) != 3 or parts[0] not in ("m3u", "vportal", "plex", "offline")
+            or not all(FAVORITES_UUID_V4.fullmatch(part) for part in parts[1:])):
+        raise Error("Favorites scope requires current or provider:PROFILE_UUID:SOURCE_UUID with canonical UUIDv4 values")
+    return {"provider": parts[0], "profileBindingId": parts[1], "sourceBindingId": parts[2]}
+
+
+def _favorites_target_selector(value):
+    # This is parser admission only. The frozen adapter contract and fresh
+    # catalogue must validate ownership, provider support and exact identity.
+    try:
+        valid = (1 <= len(value.encode("utf-8")) <= 256
+                 and not any(char.isspace() or unicodedata.category(char).startswith("C") for char in value))
+    except UnicodeError:
+        valid = False
+    if not valid:
+        raise Error("Favorites target requires 1–256 UTF-8 bytes without whitespace or control characters")
+    return value
+
+
 def parse_favorites_profile(words):
-    """Parse local coordination commands; these names are never RPC actions."""
-    usage = "Use fav load|collect PRESET [merge|replace] [--dry-run], fav diff PRESET or fav clear [--dry-run]"
+    """Internal, disabled coordination grammar; never send these names as RPCs.
+
+    Binding/capability negotiation remains a host activation gate. Parsed scope
+    and target selectors cannot authorize label matching or implicit pairing.
+    """
+    usage = ("Use fav load|collect PRESET [merge|replace] [--scope SCOPE] [--dry-run], "
+             "fav diff PRESET [--scope SCOPE], fav clear [--scope SCOPE] [--dry-run], "
+             "fav bindings, fav status UUIDv4, fav bind current --new [--dry-run] or "
+             "fav bind PRESET [--scope SCOPE] [--target TARGET_ID] [--dry-run]")
     if not words or words[0].casefold() not in FAVORITES_PROFILE_OPERATIONS:
         raise Error(usage)
     operation = words[0].casefold()
-    values = list(words[1:])
-    dry_run = bool(values and values[-1] == "--dry-run")
-    if dry_run:
-        values.pop()
+    if operation == "bindings":
+        if len(words) != 1:
+            raise Error(usage)
+        return {"op": operation}
+    if operation == "status":
+        if len(words) != 2 or not FAVORITES_UUID_V4.fullmatch(words[1]):
+            raise Error("Use fav status with exactly one canonical UUIDv4 operation ID")
+        return {"op": operation, "operation_id": words[1]}
+    values, options = [], {}
+    index = 1
+    while index < len(words):
+        word = words[index]
+        if word.startswith("-"):
+            allowed = {"--scope", "--dry-run"} | ({"--target", "--new"} if operation == "bind" else set())
+            if word not in allowed or word in options:
+                raise Error(usage)
+            if word in ("--scope", "--target"):
+                index += 1
+                if index >= len(words) or words[index].startswith("--"):
+                    raise Error(usage)
+                options[word] = (_favorites_scope_selector(words[index]) if word == "--scope"
+                                 else _favorites_target_selector(words[index]))
+            else:
+                options[word] = True
+        else:
+            values.append(word)
+        index += 1
+    dry_run = options.get("--dry-run", False)
+    selected = {"scope": options["--scope"]} if "--scope" in options else {}
+    if operation == "bind":
+        if len(values) != 1 or not preset_name(values[0]):
+            raise Error(usage)
+        if options.get("--new"):
+            if values[0].casefold() != "current" or set(options) - {"--new", "--dry-run"}:
+                raise Error(usage)
+            return {"op": operation, "preset": "current", "new": True, "dry_run": dry_run}
+        if "--target" in options:
+            selected["target_id"] = options["--target"]
+        return {"op": operation, "preset": values[0], "dry_run": dry_run, **selected}
     if operation == "clear":
         if values:
             raise Error(usage)
-        return {"op": operation, "dry_run": dry_run}
+        return {"op": operation, "dry_run": dry_run, **selected}
     if not values or not preset_name(values[0]):
         raise Error(usage)
     name, modes = values[0], values[1:]
     if operation == "diff":
         if modes or dry_run:
             raise Error(usage)
-        return {"op": operation, "preset": name, "dry_run": True}
+        return {"op": operation, "preset": name, "dry_run": True, **selected}
     if len(modes) > 1 or (modes and modes[0].casefold() not in ("merge", "replace")):
         raise Error(usage)
-    return {"op": operation, "preset": name, "mode": modes[0].casefold() if modes else "merge", "dry_run": dry_run}
+    return {"op": operation, "preset": name, "mode": modes[0].casefold() if modes else "merge",
+            "dry_run": dry_run, **selected}
 
 
 def parse_presets_command(words):
@@ -2833,6 +2900,8 @@ def parse_favorites(words):
     if operation in FAVORITES_OPERATIONS:
         values = words[1:]
     else:
+        if words[0] != "--" and any(word.startswith("--") for word in words):
+            raise Error("Unknown favorites option; use fav play -- NAME for a literal bookmark name")
         operation, values = "play", words
     if values and values[0] == "--":
         values = values[1:]
