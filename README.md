@@ -289,15 +289,63 @@ capabilities, portable-format limits and troubleshooting.
 ott l fav add "Evening cartoons"    # capture this player's current item and profile
 ott l fav                           # list saved entries and their stable IDs
 ott l fav play "Evening cartoons"  # load that profile, then resolve and play the item
-ott l fav rm fav-abc123              # use the actual ID from the list
+ott l fav rm id:00000000-0000-4000-8000-000000000001 # replace with an actual listed UUID
+ott l fav global current            # inspect the current portable item without saving
+ott l fav legacy list               # inspect legacy-only bookmarks explicitly
 ```
 
-Favorites persist on the target player across normal restarts. Selecting one
-loads its saved provider/profile and resolves a fresh link; a changed source or
-missing item fails without substituting another channel/movie. The CLI, controller
-and player must support `favorites`; `ott l` shows available operations. See
+With `favorites_global_items` support, ordinary `fav` commands use the complete
+global list across providers and profiles. Add/remove use the existing guarded
+global transfer; playback resolves the selected receiver UUID against the current
+list and never substitutes a channel number or similar name. Missing items remain
+visible. When that marker is absent, the CLI announces legacy mode; it never falls
+back after an error on the global path. `fav legacy` accesses old bookmarks
+explicitly, including the legacy-only count shown below the global list. See
 [favorites across profiles](docs/cli.md#favorites-across-profiles) for aliases,
 limits, acknowledgement semantics and troubleshooting.
+
+### Transfer a mixed favorites document
+
+On players advertising `favorites_global`, global documents preserve ordered
+favorites from multiple providers, profiles and sources. Public source aliases
+and exact item locators travel with each entry; provider credentials and media
+URLs do not. The receiver resolves its own sources and reports missing,
+ambiguous or unsupported entries in the preview.
+
+```sh
+ott t1 fav global describe
+ott t1,t2 fav global collect Home         # all snapshots, then one local profile update
+ott presets Home fav global export favorites.json
+ott presets Home fav global import favorites.json merge --dry-run
+ott t2 fav global diff Home
+ott t2 fav global load Home replace --dry-run
+ott t2 fav global load Home replace       # apply the validated plan
+ott t2 fav global status OPERATION_UUID   # inspect retained evidence; never replay
+ott t1,t2 fav global export favorites.json # favorites.t1.json and favorites.t2.json
+ott t2 fav global recovery              # list unresolved transfer records
+ott t2 fav global ack OPERATION_UUID --dry-run
+ott t2 fav global ack OPERATION_UUID --confirm PLAN_SHA256
+```
+
+`merge` preserves the existing order and appends new identities. A conflicting
+title for the same identity blocks a local merge; `replace` deliberately uses
+the incoming document's order and titles. Local documents live in the separate
+`preset_global_favorites` section of the private CLI configuration. Offline
+`validate`, `diff FILE` and `restore BACKUP [--dry-run]` operate on that document
+only; restore preserves the current provider settings and other profiles.
+
+Ordinary `ott t1 load Home` does not yet deliver either favorites companion and
+stops before changing a preset that contains one. Use `ott t1 load Home
+--settings-only` explicitly for settings, then a separate `fav global load` for
+global favorites. Existing scoped `fav load` remains separate; ordinary `fav play`
+uses the global list when supported. No command silently substitutes a source or retries an
+uncertain write.
+
+Recovery has its own capability. An acknowledgement requires one player and
+the exact plan hash from a fresh preview; it records acceptance of uncertainty,
+never proof that the original transfer succeeded. New global writes require a
+complete recovery list with no unacknowledged records. Read-only inspection,
+exports and previews do not clear those records or wake the player.
 
 ### Load a saved setup
 

@@ -174,6 +174,9 @@ def recovery_record(begin, preview, commit_request):
 
 class _RequestTransport:
     """Shared bounded HTTP mechanics, without granting mutation support."""
+    _protocol = protocol
+    _action = ACTION
+
     def __init__(self, client, device, *, runtime, envelope_limit, response_limit, scope_validator,
                  timeout, monotonic, sleep, max_metadata_bytes, deadline, allowed_ops=None):
         if (not callable(getattr(client, "api", None)) or not callable(getattr(client, "api_raw", None)) or type(device) is not str
@@ -268,21 +271,21 @@ class _RequestTransport:
 
     def _params(self, params):
         try:
-            params = protocol.validate_request(params)
+            params = self._protocol.validate_request(params)
             if self._allowed_ops is not None and params["op"] not in self._allowed_ops:
                 raise RemoteError("invalid_configuration")
-            envelopes = transfer.request_envelopes(ACTION, params)
+            envelopes = transfer.request_envelopes(self._action, params)
             if max(len(envelopes.client), len(envelopes.queued_upper_bound)) > self._envelope_limit:
                 raise RemoteError("invalid_configuration")
             return params
-        except (protocol.ProtocolError, transfer.TransferError):
+        except (self._protocol.ProtocolError, transfer.TransferError):
             raise RemoteError("invalid_response") from None
 
     def _rpc(self, params, *, deadline, context=None):
         params = self._params(params)
         request_id, phase = None, "enqueue"
         try:
-            status, queued = self._api(self._query, {"action": ACTION, "params": copy.deepcopy(params)}, deadline=deadline)
+            status, queued = self._api(self._query, {"action": self._action, "params": copy.deepcopy(params)}, deadline=deadline)
             if (status != 202 or type(queued) is not dict or set(queued) != {"id", "status"}
                     or queued["status"] != "queued" or type(queued["id"]) is not str
                     or protocol.REQUEST_ID.fullmatch(queued["id"]) is None):
@@ -316,10 +319,10 @@ class _RequestTransport:
                 if status != 200:
                     raise RemoteError("invalid_response")
                 try:
-                    result = protocol.validate_response(params, body, request_id=request_id, context=context,
+                    result = self._protocol.validate_response(params, body, request_id=request_id, context=context,
                                                         scope_validator=self.scope_validator,
                                                         max_metadata_bytes=self.max_metadata_bytes)
-                except (protocol.ProtocolError, TypeError, ValueError, RecursionError):
+                except (self._protocol.ProtocolError, TypeError, ValueError, RecursionError):
                     raise RemoteError("invalid_response") from None
                 if result.status != "ok":
                     raise RemoteError("player_rejected" if result.status == "rejected" else "player_unsupported")

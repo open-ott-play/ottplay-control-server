@@ -166,7 +166,8 @@ class _Target:
             if self.now() <= before:
                 raise CommandError("invalid_clock")
 
-    def discover(self, *, status_recovery=False, recovery_only=False):
+    def read_capabilities(self):
+        """One paced, authenticated receipt; no favorites action is selected here."""
         query = "/api/requests?" + urllib.parse.urlencode({"device_id": self.device})
         self.wait(self.now() + remote.POST_INTERVAL)
         status, queued = self.client.api(query, {"action": "capabilities", "params": {}}, timeout=min(10, self.remaining()))
@@ -200,25 +201,28 @@ class _Target:
                 raise CommandError("capability_unavailable")
             controls = self.api.capabilities_metadata(body["data"])
             self.runtime = controls["player"]["runtime"]
-            marker = body["data"].get("favorites_transfer_recovery")
-            if marker is not None:
-                protocol.validate_recovery_capability(marker)
-                self.recovery = remote.RecoveryPeer(self.client, self.device, runtime=self.runtime,
-                    timeout=self.remaining(), monotonic=self.clock, sleep=self.sleep, deadline=self.deadline)
-            if recovery_only:
-                if self.recovery is None:
-                    raise CommandError("recovery_unsupported")
-                self.wait(self.now() + remote.POST_INTERVAL)
-                return True
-            advertised = body["data"].get("favorites_transfer")
-            if advertised is None:
-                if status_recovery:
-                    return False
-                if controls["player"].get("standby") is True:
-                    raise CommandError("player_in_standby")
-                raise CommandError("unsupported_player_or_controller")
-            self.capability = protocol.validate_capability(advertised)
-            break
+            return controls, body["data"]
+
+    def discover(self, *, status_recovery=False, recovery_only=False):
+        controls, data = self.read_capabilities()
+        marker = data.get("favorites_transfer_recovery")
+        if marker is not None:
+            protocol.validate_recovery_capability(marker)
+            self.recovery = remote.RecoveryPeer(self.client, self.device, runtime=self.runtime,
+                timeout=self.remaining(), monotonic=self.clock, sleep=self.sleep, deadline=self.deadline)
+        if recovery_only:
+            if self.recovery is None:
+                raise CommandError("recovery_unsupported")
+            self.wait(self.now() + remote.POST_INTERVAL)
+            return True
+        advertised = data.get("favorites_transfer")
+        if advertised is None:
+            if status_recovery:
+                return False
+            if controls["player"].get("standby") is True:
+                raise CommandError("player_in_standby")
+            raise CommandError("unsupported_player_or_controller")
+        self.capability = protocol.validate_capability(advertised)
         # Keep spacing across the discovery/transfer boundary, without resetting
         # the original per-player deadline or importing another client/config.
         self.wait(self.now() + remote.POST_INTERVAL)

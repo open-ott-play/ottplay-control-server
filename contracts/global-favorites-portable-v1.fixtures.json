@@ -1,0 +1,721 @@
+{
+  "version": 1,
+  "status": "PROPOSED_CROSS_LANGUAGE_BOUNDARIES_NOT_RUNTIME_QUALIFICATION",
+  "policy": {
+    "well_formed_unicode_required": true,
+    "field_length_unit": "UTF-16 code units",
+    "edge_whitespace": "ECMAScript String.prototype.trim set; not Python str.strip",
+    "controls_forbidden": "U+0000..U+001F and U+007F; no new ban on U+0085 or interior U+FEFF",
+    "canonical_json": "Normalized fixed ASCII key order (lexicographic), compact separators, literal non-ASCII scalar values, no Unicode normalization; UTF-8 bytes without BOM",
+    "duplicate_document_policy": "Reject repeated canonical origin+locator even if title differs; no silent dedup"
+  },
+  "text_cases": [
+    {
+      "id": "paired_surrogate_as_astral",
+      "value": "\ud83d\ude00",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "lone_high_surrogate",
+      "value": "\ud800",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "lone_low_surrogate",
+      "value": "\udc00",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "reversed_surrogates",
+      "value": "\udc00\ud800",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "interrupted_surrogate_pair",
+      "value": "\ud800x\udc00",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "valid_pair_then_lone_high",
+      "value": "\ud83d\ude00\ud800",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "128_astral_equal_256_units",
+      "value": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "129_astral_exceed_256_units",
+      "value": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "254_ascii_plus_astral_equal_256_units",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "255_ascii_plus_astral_exceed_256_units",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "512_astral_title_equal_1024_units",
+      "value": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "max_utf16_units": 1024,
+      "expected_valid": true
+    },
+    {
+      "id": "513_astral_title_exceed_1024_units",
+      "value": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "max_utf16_units": 1024,
+      "expected_valid": false
+    },
+    {
+      "id": "leading_space",
+      "value": " A",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "trailing_space",
+      "value": "A ",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "leading_nel",
+      "value": "\u0085A",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "trailing_nel",
+      "value": "A\u0085",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "leading_nbsp",
+      "value": "\u00a0A",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "trailing_nbsp",
+      "value": "A\u00a0",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "leading_bom",
+      "value": "\ufeffA",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "trailing_bom",
+      "value": "A\ufeff",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "leading_zero_width_space",
+      "value": "\u200bA",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "trailing_zero_width_space",
+      "value": "A\u200b",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "leading_line_separator",
+      "value": "\u2028A",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "trailing_line_separator",
+      "value": "A\u2028",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "interior_bom",
+      "value": "A\ufeffB",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "interior_nel",
+      "value": "A\u0085B",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    },
+    {
+      "id": "interior_c0",
+      "value": "A\u001fB",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "interior_del",
+      "value": "A\u007fB",
+      "max_utf16_units": 256,
+      "expected_valid": false
+    },
+    {
+      "id": "interior_line_and_paragraph_separators",
+      "value": "A\u2028B\u2029C",
+      "max_utf16_units": 256,
+      "expected_valid": true
+    }
+  ],
+  "identity_cases": [
+    {
+      "id": "title_is_not_identity",
+      "first": {
+        "title": "First title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "TV",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "001"
+        }
+      },
+      "second": {
+        "title": "Other title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "TV",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "001"
+        }
+      },
+      "expected_equal": true
+    },
+    {
+      "id": "property_order_is_not_identity",
+      "first": {
+        "title": "First title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "TV",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "001"
+        }
+      },
+      "second": {
+        "locator": {
+          "channelId": "001",
+          "kind": "channel"
+        },
+        "origin": {
+          "sourceAlias": "Family",
+          "subprofile": null,
+          "profile": "TV",
+          "provider": "m3u"
+        },
+        "title": "Title"
+      },
+      "expected_equal": true
+    },
+    {
+      "id": "leading_zero_id_retained",
+      "first": {
+        "title": "First title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "TV",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "001"
+        }
+      },
+      "second": {
+        "title": "First title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "TV",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "1"
+        }
+      },
+      "expected_equal": false
+    },
+    {
+      "id": "profile_case_retained",
+      "first": {
+        "title": "First title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "TV",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "001"
+        }
+      },
+      "second": {
+        "title": "First title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "tv",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "001"
+        }
+      },
+      "expected_equal": false
+    },
+    {
+      "id": "profile_unicode_normalization_not_implicit",
+      "first": {
+        "title": "First title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "\u00e9",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "001"
+        }
+      },
+      "second": {
+        "title": "First title",
+        "origin": {
+          "provider": "m3u",
+          "profile": "e\u0301",
+          "subprofile": null,
+          "sourceAlias": "Family"
+        },
+        "locator": {
+          "kind": "channel",
+          "channelId": "001"
+        }
+      },
+      "expected_equal": false
+    }
+  ],
+  "canonical_cases": [
+    {
+      "id": "scalar_utf8_not_ascii_escape_size",
+      "document": {
+        "version": 1,
+        "entries": [
+          {
+            "title": "\u00e9\ud83d\ude00\u2028\u2029",
+            "origin": {
+              "provider": "m3u",
+              "profile": "TV",
+              "subprofile": null,
+              "sourceAlias": "Family"
+            },
+            "locator": {
+              "kind": "channel",
+              "channelId": "001"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "byte_limit_cases": [
+    {
+      "id": "limit_minus_one",
+      "target_bytes": 1048575,
+      "expected_valid": true
+    },
+    {
+      "id": "limit_exact",
+      "target_bytes": 1048576,
+      "expected_valid": true
+    },
+    {
+      "id": "limit_plus_one",
+      "target_bytes": 1048577,
+      "expected_valid": false
+    }
+  ],
+  "byte_limit_recipe": {
+    "entries": 1000,
+    "row": {
+      "title": "First title",
+      "origin": {
+        "provider": "m3u",
+        "profile": "TV",
+        "subprofile": null,
+        "sourceAlias": "Family"
+      },
+      "locator": {
+        "kind": "channel",
+        "channelId": "001"
+      }
+    },
+    "channel_id": "id- followed by four zero-padded decimal digits (0000..0999)",
+    "title": "ASCII a; derive uniform title length from target minus empty-title canonical size, then add one a to the first remainder entries",
+    "purpose": "All field lengths valid; only total canonical UTF-8 byte boundary varies. No megabyte fixture is saved."
+  },
+  "canonical_expected": [
+    {
+      "id": "scalar_utf8_not_ascii_escape_size",
+      "bytes": 181,
+      "sha256": "5041abec63bd0655b13bf20c59b83ca5ee01fc2ba8f515e2794b479ac2be2be5",
+      "python_agrees": true,
+      "ascii_escaped_bytes": 199
+    }
+  ],
+  "byte_boundaries_expected": [
+    {
+      "id": "limit_minus_one",
+      "bytes": 1048575,
+      "sha256": "2756d87e15cd9444fb2453db62b5d26018d668858b479f834ed31397ebc60320",
+      "entries": 1000,
+      "unique_identities": 1000,
+      "all_titles_valid": true,
+      "valid_size": true
+    },
+    {
+      "id": "limit_exact",
+      "bytes": 1048576,
+      "sha256": "48176b35a5130c5ad659eb4c6cd09855df36efb010e6f078b340e1320b5cf0d3",
+      "entries": 1000,
+      "unique_identities": 1000,
+      "all_titles_valid": true,
+      "valid_size": true
+    },
+    {
+      "id": "limit_plus_one",
+      "bytes": 1048577,
+      "sha256": "d63134d6aaa3d1afacc3ed61154c6811ae3d427afa0e424410142236c31b117d",
+      "entries": 1000,
+      "unique_identities": 1000,
+      "all_titles_valid": true,
+      "valid_size": false
+    }
+  ],
+  "v3_source": {
+    "freeze_sha256": "62ecc34bfd64aa11d36ff3efa18d699cddde058e6e9e5eb8b4f855ed3d02cbaa",
+    "files": {
+      "channel-name.fixtures.json": "e21b5793c5a0208e05732be8bea89bad2233b7184c896492b2b0e0a9a69efecc",
+      "text-semantics.fixtures.json": "8bca8c5af1a78e2b95cd0a12fa075e83089b18f8ff2d794f11b5e13ad94d39f3"
+    }
+  },
+  "v3_channel_name": {
+    "contract": "explicit-channel-name-kind-v1",
+    "requires_locator_kind_advertisement": true,
+    "cases": [
+      {
+        "id": "name-only",
+        "entry": {
+          "title": "Favorite",
+          "origin": {
+            "provider": "m3u",
+            "profile": "Family",
+            "subprofile": null,
+            "sourceAlias": "TV"
+          },
+          "locator": {
+            "kind": "channel-name",
+            "name": "News HD",
+            "group": null
+          }
+        },
+        "valid": true
+      },
+      {
+        "id": "with-group",
+        "entry": {
+          "title": "Favorite",
+          "origin": {
+            "provider": "m3u",
+            "profile": "Family",
+            "subprofile": null,
+            "sourceAlias": "TV"
+          },
+          "locator": {
+            "kind": "channel-name",
+            "name": "News HD",
+            "group": "World"
+          }
+        },
+        "valid": true
+      },
+      {
+        "id": "missing-group",
+        "entry": {
+          "title": "Favorite",
+          "origin": {
+            "provider": "m3u",
+            "profile": "Family",
+            "subprofile": null,
+            "sourceAlias": "TV"
+          },
+          "locator": {
+            "kind": "channel-name",
+            "name": "News HD"
+          }
+        },
+        "valid": false
+      },
+      {
+        "id": "empty-group",
+        "entry": {
+          "title": "Favorite",
+          "origin": {
+            "provider": "m3u",
+            "profile": "Family",
+            "subprofile": null,
+            "sourceAlias": "TV"
+          },
+          "locator": {
+            "kind": "channel-name",
+            "name": "News HD",
+            "group": ""
+          }
+        },
+        "valid": false
+      },
+      {
+        "id": "lone-surrogate",
+        "entry": {
+          "title": "Favorite",
+          "origin": {
+            "provider": "m3u",
+            "profile": "Family",
+            "subprofile": null,
+            "sourceAlias": "TV"
+          },
+          "locator": {
+            "kind": "channel-name",
+            "name": "\ud800",
+            "group": null
+          }
+        },
+        "valid": false
+      },
+      {
+        "id": "private-index",
+        "entry": {
+          "title": "Favorite",
+          "origin": {
+            "provider": "m3u",
+            "profile": "Family",
+            "subprofile": null,
+            "sourceAlias": "TV"
+          },
+          "locator": {
+            "kind": "channel-name",
+            "name": "News HD",
+            "group": null,
+            "index": 42
+          }
+        },
+        "valid": false
+      },
+      {
+        "id": "plex-no-name-fallback",
+        "entry": {
+          "title": "Favorite",
+          "origin": {
+            "provider": "plex",
+            "profile": "Family",
+            "subprofile": null,
+            "sourceAlias": "TV"
+          },
+          "locator": {
+            "kind": "channel-name",
+            "name": "News HD",
+            "group": null
+          }
+        },
+        "valid": false
+      }
+    ]
+  },
+  "v3_text_semantics": {
+    "contract": "portable-v1-text-semantic-fixtures",
+    "unicode": "Well-formed UTF16 only; limits count UTF16 code units, not Unicode code points.",
+    "trim_codepoints": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      32,
+      160,
+      5760,
+      8192,
+      8193,
+      8194,
+      8195,
+      8196,
+      8197,
+      8198,
+      8199,
+      8200,
+      8201,
+      8202,
+      8232,
+      8233,
+      8239,
+      8287,
+      12288,
+      65279
+    ],
+    "cases": [
+      {
+        "id": "ascii",
+        "value": "Profile",
+        "max_utf16_units": 256,
+        "expected": true,
+        "utf16_units": 7
+      },
+      {
+        "id": "astral_pair",
+        "value": "A\ud83d\ude00B",
+        "max_utf16_units": 256,
+        "expected": true,
+        "utf16_units": 4
+      },
+      {
+        "id": "lone_high",
+        "value": "\ud800",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 1
+      },
+      {
+        "id": "lone_low",
+        "value": "\udfff",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 1
+      },
+      {
+        "id": "high_then_ascii",
+        "value": "\ud800A",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 2
+      },
+      {
+        "id": "nested_high",
+        "value": "\ud800\ud800",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 2
+      },
+      {
+        "id": "high_at_end",
+        "value": "A\udbff",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 2
+      },
+      {
+        "id": "null",
+        "value": "A\u0000B",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 3
+      },
+      {
+        "id": "trim_bom",
+        "value": "\ufeffName",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 5
+      },
+      {
+        "id": "trim_nbsp",
+        "value": "Name\u00a0",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 5
+      },
+      {
+        "id": "trim_line_separator",
+        "value": "\u2028Name",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 5
+      },
+      {
+        "id": "not_js_trim_nel",
+        "value": "\u0085Name\u0085",
+        "max_utf16_units": 256,
+        "expected": true,
+        "utf16_units": 6
+      },
+      {
+        "id": "not_js_trim_mongolian",
+        "value": "\u180eName",
+        "max_utf16_units": 256,
+        "expected": true,
+        "utf16_units": 5
+      },
+      {
+        "id": "internal_space",
+        "value": "A B",
+        "max_utf16_units": 256,
+        "expected": true,
+        "utf16_units": 3
+      },
+      {
+        "id": "limit_astral_valid",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00",
+        "max_utf16_units": 256,
+        "expected": true,
+        "utf16_units": 256
+      },
+      {
+        "id": "limit_astral_invalid",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ud83d\ude00",
+        "max_utf16_units": 256,
+        "expected": false,
+        "utf16_units": 257
+      }
+    ]
+  }
+}

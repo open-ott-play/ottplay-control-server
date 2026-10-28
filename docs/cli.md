@@ -5,7 +5,10 @@ Keep all files from the same `cli/` revision together: `ott.py`, `programme_sear
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
 `player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`,
 `favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
-`favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py` and `preset_favorites.py`.
+`favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py`, `preset_favorites.py`,
+`global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
+`global_favorites_remote.py`, `global_favorites_recovery.py`, `global_favorites_operations.py`,
+`global_favorites_commands.py`, `global_favorites_items.py` and `global_favorites_items_commands.py`.
 Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
@@ -153,7 +156,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`c27dacf00a0fa5eacd4c68276ee1f7168003010d`](https://github.com/open-ott-play/ottplay-control-server/commit/c27dacf00a0fa5eacd4c68276ee1f7168003010d).
+[`ff1346fc3a14e08e0d00cd710e5f04263798a823`](https://github.com/open-ott-play/ottplay-control-server/commit/ff1346fc3a14e08e0d00cd710e5f04263798a823).
 This is an exact source pin, not a claim about the latest published release.
 The examples retain this reviewed signed source commit; a server release does
 not install the Python CLI or player. Matching controller and player support is
@@ -182,8 +185,9 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-This source also contains all 20 CLI Python modules for
-[saved favorites documents](#saved-favorites-documents) and explicit current-Plex
+The current CLI contains 29 Python modules, including
+[global favorites transfer](#global-favorites-transfer), its separate recovery
+commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
 `fav recovery` inspection and explicit `fav acknowledge` confirmation without
 replaying an uncertain write. These commands require compatible controller and
@@ -213,8 +217,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=c27dacf00a0fa5eacd4c68276ee1f7168003010d
-  ott_source="$HOME/.local/share/ottplay-control-server-local-c27dacf00a0f"
+  ott_ref=ff1346fc3a14e08e0d00cd710e5f04263798a823
+  ott_source="$HOME/.local/share/ottplay-control-server-local-ff1346fc3a14"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -236,7 +240,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c27dacf00a0f/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-ff1346fc3a14/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -250,7 +254,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-c27dacf00a0f/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-ff1346fc3a14/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -272,8 +276,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'c27dacf00a0fa5eacd4c68276ee1f7168003010d'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c27dacf00a0f'
+$ottRef = 'ff1346fc3a14e08e0d00cd710e5f04263798a823'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-ff1346fc3a14'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -319,12 +323,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c27dacf00a0f/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-ff1346fc3a14/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c27dacf00a0f\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-ff1346fc3a14\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -353,7 +357,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-c27dacf00a0f`, stages the replacement beside it, then switches atomically.
+`ott.before-local-ff1346fc3a14`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -365,9 +369,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-c27dacf00a0f")
-staged = launcher.with_name("ott.switch-local-c27dacf00a0f")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-c27dacf00a0f/cli/ott.py"
+backup = launcher.with_name("ott.before-local-ff1346fc3a14")
+staged = launcher.with_name("ott.switch-local-ff1346fc3a14")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-ff1346fc3a14/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -984,7 +988,8 @@ Existing resume checkpoints are checked rather than replaced. The ordinary
 private-file and no-overwrite protections still apply.
 
 Only output arguments are expanded: screenshot `-o` / `--output`, `profile export`
-files, `bundle` and `perf export` / `perf trial` `--out`, test `--report`, and
+and `fav global export` files, `bundle` and `perf export` / `perf trial` `--out`,
+test `--report`, and
 explicit load `--checkpoint`. Input paths such as `provider-config`,
 `profile-config`, `profile import`, Plex `--token-file` and settings `--value-file`
 are passed unchanged to each player command.
@@ -1793,6 +1798,69 @@ does not prove that playback never started.
 - Parental access, kiosk policy, network restrictions and decoder availability
   can still reject playback. A successful preview never unlocks those controls.
 
+## Global favorites transfer
+
+`fav global` moves an ordered list spanning providers, profiles and sources.
+Install every `cli/*.py` module from the same revision and use a compatible
+controller and player. `ott PLAYER` lists global controls only when advertised.
+The document contains source aliases and item locators, never provider tokens,
+playback URLs or the sender's absolute Local paths. The receiving player uses
+its own configured sources; missing or ambiguous items remain explicit.
+
+```sh
+ott t1 fav global describe
+ott t1,t2 fav global collect Home
+ott presets Home fav global validate
+ott presets Home fav global export family-favorites.json
+ott presets Home fav global diff family-favorites.json
+ott presets Home fav global import family-favorites.json merge --dry-run
+ott t2 fav global import family-favorites.json merge --dry-run
+ott t2 fav global diff Home
+ott t2 fav global load Home replace --dry-run
+ott -t 300 t2 fav global load Home replace
+ott t1,t2 fav global export backup.json
+ott t2 fav global clear --dry-run
+```
+
+Remove `--dry-run` to apply an import, load or clear. `merge` preserves existing
+order and appends new identities; conflicting titles block it. `replace` uses
+the incoming order and titles. A clear is an explicit empty replacement, not a
+playback stop. Group export writes `backup.t1.json` and `backup.t2.json`; it
+refuses existing or overlapping outputs. Group collect reads all selected
+players before one local config update. Remote group writes report each
+player's result and are not an atomic transaction across devices.
+
+Global documents use `preset_global_favorites`, separately from the older scoped
+`preset_favorites` format below. `ott presets Home fav global restore BACKUP
+--dry-run` previews restoring only that document from a private backup. Use `-j`
+for an update, for example `ott -j presets Home fav global import
+family-favorites.json replace`, and take the actual path from its `backup_path`
+JSON field. An unchanged update creates no backup. The backup contains the full
+private configuration; keep it private. Ordinary `load Home` refuses to omit
+either saved favorites companion silently. Use `load Home --settings-only` for
+settings and then `fav global load Home` explicitly for this list.
+
+For an interrupted operation, use its printed UUID:
+
+```sh
+ott t2 fav global status OPERATION_UUID
+ott t2 fav global recovery
+ott t2 fav global recovery inspect OPERATION_UUID
+ott t2 fav global acknowledge OPERATION_UUID --dry-run
+ott t2 fav global acknowledge OPERATION_UUID --confirm PLAN_SHA256
+```
+
+Status validates the original private context against a fresh response and can
+remain usable when the player withholds its write capability. Missing context
+does not permit replay; use the separately advertised recovery inspection.
+Acknowledgement requires exactly one player and the fresh plan hash. It adds an
+administrative audit without declaring the original write successful. A changed
+plan requires a new inspection. No command wakes the player or automatically
+repeats an uncertain write. For unsupported capabilities, update the matching
+components; for insufficient time, choose a longer `-t` before a new attempt.
+The [protocol design](design/global-favorites.md) describes limits, persistence
+and explicit per-operation controller permissions.
+
 ## Saved favorites documents
 
 Local presets can hold a portable favorites document independently of the
@@ -2068,85 +2136,101 @@ acknowledgement hashes, capacity reservation and rollback limits.
 
 ## Favorites across profiles
 
-Save the item currently playing on the target player together with its active
-provider and profile. You do not need to supply a profile number, channel ID,
-movie ID or playback URL:
+When the player advertises `favorites_global_items`, ordinary `fav` commands use
+its complete global list across providers, profiles and sources. The marker is
+checked on every invocation. If it is absent, the CLI announces legacy mode and
+uses the existing `favorites` protocol. An error or malformed response after a
+present global marker never causes a legacy fallback.
 
 ```sh
-ott l fav add                       # save the current channel or supported video
-ott l fav add "Вечерние мультфильмы" # give the entry a recognizable name
-ott l fav                           # list entries, IDs and their saved profiles
-ott l fav play "Вечерние мультфильмы"
-ott l fav play fav-abc123            # use the actual ID printed by fav
-ott l fav rm fav-abc123              # remove that saved entry
+ott l fav                              # complete global list, with receiver UUIDs
+ott l fav global list                  # require the global list explicitly
+ott l fav global current               # read the current portable item; save nothing
+ott l fav add                          # capture and save the current portable item
+ott l fav add "Evening cartoons"
+ott l fav play "Evening cartoons"
+ott l fav play id:00000000-0000-4000-8000-000000000001 # replace with an actual listed UUID
+ott l fav rm id:00000000-0000-4000-8000-000000000001   # remove that exact global identity
+ott l fav legacy list                  # explicit access to old bookmarks
+ott l fav legacy play fav-abc123        # replace with an actual legacy ID
 ```
 
-`favorite`, `favorites`, `favourite`, `favourites` and `favs` are aliases for
-`fav`. `fav current [NAME]` aliases `fav add [NAME]`; `fav list` aliases the bare
-`fav`; `fav remove` and `fav rm` are equivalent. A bare selector, such as
-`ott l fav "Вечерние мультфильмы"`, is shorthand for `fav play`. To play an entry
-whose name is a command word, use `fav play add` rather than `fav add`.
-An explicit `id:fav-abc123` selector is also accepted. Names are matched on the
-player, with an exact case-insensitive name preferred over a unique substring;
-ambiguous names fail and can be resolved using the printed ID.
+`favorite`, `favorites`, `favourite`, `favourites` and `favs` alias `fav`.
+`fav current [NAME]` retains its existing meaning as an alias of **add**;
+`fav global current` is the separate read-only operation. `fav remove` and
+`fav rm` are equivalent. A bare selector is shorthand for `fav play`. Use
+`fav play legacy`, `fav play global` or `fav play add` for those literal names.
+`R`, `random` and numeric selectors such as `1` are literal favorite names;
+they do not request random selection or a row number.
 
-Adding the same item from the same profile/source again preserves its entry ID.
-An explicit new name renames that entry; omitting the name keeps the old one.
-Adding also uses the player's existing channel/media favorites storage.
-`fav remove` removes the cross-profile bookmark only; it does not remove the
-item from the provider's own favorites list.
+Global playback/removal accepts an actual receiver UUID, optionally prefixed
+with `id:`, or a unique title. Exact title matches take precedence over
+case-insensitive full-title matches; there is no substring or fuzzy selection.
+Duplicate titles require the UUID. UUIDs identify entries on that receiving
+player and are not portable document identities. A global `id:UUID` selector is
+rejected on the legacy path without sending a legacy request. For a legacy
+bookmark literally named like a UUID, use `fav legacy play -- UUID` (or `remove`).
+An unqualified UUID never triggers automatic legacy fallback. `fav global play ID_OR_NAME`
+requires global support explicitly.
+Command-line titles/selectors retain the 1–160 UTF-8 byte input limit; use the
+listed UUID when an imported favorite has a longer title.
 
-Favorites live in the target player's persistent storage. They survive normal
-player restarts and are shared across that installation's provider profiles;
-they are not copied to every paired device or stored in the CLI's local preset.
-Clearing the player's site/app data also clears these entries. Up to 100 entries
-are supported. Labels and selectors allow 1–160 UTF-8 bytes, so a non-ASCII
-character can occupy more than one byte.
+The list has at most 1,000 entries. Every page contains at most 100 rows and
+64 KiB of original response data; long titles can reduce the rows per page.
+Pages must have the same store/context revisions, contiguous offsets and unique
+UUIDs/portable identities. A failed or changing page produces an error rather
+than a partial list or a playback request. The legacy-only count is shown
+separately; inspect those bookmarks with `fav legacy list`.
 
-Selecting a favorite first restores the saved provider/profile and waits for
-its catalog to finish loading. It then selects the saved provider item and
-resolves a fresh playable link. A temporary stream URL is not used as its
-identity. A replaced profile source or an unavailable item fails instead of
-silently playing the same channel number from another playlist or a similarly
-named movie. An arbitrary URL, archive programme or item without a durable provider reference
-cannot be added. Live channels with stable IDs and supported provider VOD items
-are eligible; a Plex item remains bound to its Plex source. Numbered profile
-restoration supports M3U, VPortal and Stalker; other providers retain their
-single saved configuration. Existing kiosk and parental restrictions continue to apply.
+Adding reads the player's current portable item, then verifies it against a
+fresh global export before the existing guarded merge. Removing verifies the
+complete UUID list against that exact export and uses replace-minus-one. Both
+require global transfer and recovery support, an unblocked recovery ledger,
+fresh admission, a validated preview and a durable local operation record before
+commit. They do not send a separate direct item-mutation command. A conflicting
+title for an existing identity blocks add and reports the two titles; it does
+not silently rename the existing item. Use an intentional whole-document
+replace to change titles/order. Linked legacy membership effects are checked by
+the same transfer preview; unmapped legacy bookmarks remain accessible.
 
-The CLI discovers support first and sends one `favorites` request bound to that
-player runtime. It does not read a potentially stale status snapshot and compose
-a second profile/item selection. An updated CLI, controller and player with
-`favorites` in `ott l caps` are required; `ott l` lists the operations currently
-available. The entire capability-and-command operation shares `-t`/`--timeout`:
+All pages, exports, recovery checks and transfer steps share one per-player
+`-t`/`--timeout` deadline. Requests are paced; large lists/documents can require a
+larger budget. Changing `-t` on a new deliberate invocation does not resolve an
+uncertain earlier write. Group commands execute separately on each named player,
+so a group has independent outcomes rather than an all-player transaction.
 
 ```sh
-ott -t 60 l fav play "Вечерние мультфильмы"
-ott --json l fav
-ott --receipt l fav play fav-abc123
+ott -t 120 -j l fav
+ott -t 300 l fav add
+ott t1,t2 fav list
+ott l fav global status OPERATION_UUID  # reconcile a retained uncertain add/remove
 ```
 
-`Favorite playback dispatched` means the saved profile loaded and the item was
-handed to the playback path after resolution. It does not establish that video
-or audio is visible on the physical device. Inspect `ott l` or read a returned
-request ID with `ott l operation REQUEST_ID` if playback is uncertain. A timeout
-or lost acknowledgement never triggers an automatic replay.
+Playback reports dispatch only, not visible video/audio. Existing kiosk,
+parental, standby and source restrictions remain enforced by the player. No
+command wakes it automatically. Missing/changed sources fail without substituting
+another item, copying credentials or persisting a temporary media URL.
+
+Legacy mode retains its original protocol and limit of 100 bookmarks. It stores
+the current provider/profile reference on the player; add can rename an existing
+bookmark, and remove deletes that bookmark rather than provider membership.
+Legacy names use the player's existing exact/unique-substring matching and
+1–160 UTF-8 byte input limit. Explicit `fav legacy` also works on updated players.
+Favorites survive normal restarts, but clearing app/site data removes that
+installation's state. Use the separate global export/collect commands to back up
+portable entries; ordinary `fav` does not save a CLI preset automatically.
 
 Troubleshooting:
 
-- **No current playable item:** start the desired channel/video on that player,
-  then run `fav add`. The command does not guess from a highlighted menu row.
-- **Unsupported item:** the active provider cannot offer a stable reference for
-  that item. Saving a transient URL would not make it a reliable favorite.
-- **Saved profile changed or unavailable:** restore its original source or save
-  the desired item again under the new source. The CLI does not overwrite profile
-  credentials to force a match.
-- **Several favorites match:** list `fav`, then use the exact `fav-…` ID.
-- **Storage unavailable:** inspect the player's storage/site-data settings and
-  available space. A failed write is not reported as saved.
-- **Timeout or player changed:** inspect the current state before issuing another
-  playback request. Increase `-t` for a slow provider only on a new deliberate
-  command; a timed-out request may already have changed the profile.
+- **No portable current item:** start a supported channel/video, then run
+  `fav global current`. The CLI does not guess from a highlighted menu row.
+- **Several titles match:** list `fav` and use the exact receiver UUID.
+- **List changed:** obtain a fresh list; the rejected selection is not replayed.
+- **Missing global marker:** update the actual hosted/installed player and reload
+  that instance; `fav global list` refuses legacy fallback.
+- **Blocked or uncertain write:** inspect `fav global recovery` and retained
+  `fav global status OPERATION_UUID`; do not repeat add/remove blindly.
+- **Legacy-only entry:** use `fav legacy list` and its `fav-…` ID explicitly.
 
 ## Selecting a provider
 

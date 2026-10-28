@@ -1,0 +1,714 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ottplay:proposal:global-favorites-recovery-v1",
+  "title": "PROPOSED source-only global favorites recovery v1",
+  "$comment": "Separate action favorites_global_recovery; no runtime activation. Validate strict JSON and relational digest/page rules in the companion normative document. Physical codec/context proof still requires facade-owner freeze.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "present_ledger_sha256": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "not": {
+            "const": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+          }
+        }
+      ]
+    },
+    "uuid": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
+    },
+    "runtime": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9-]{1,64}(?![\\s\\S])"
+    },
+    "reason": {
+      "const": "accept-unknown-no-replay"
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "after_operation_id",
+        "ledger_revision",
+        "store_revision",
+        "context_revision",
+        "backend_proof"
+      ],
+      "properties": {
+        "after_operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "ledger_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "store_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "acknowledgement_id",
+        "runtime",
+        "ledger_revision_before",
+        "store_revision",
+        "context_revision",
+        "backend_proof",
+        "reason"
+      ],
+      "properties": {
+        "acknowledgement_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "ledger_revision_before": {
+          "$ref": "#/$defs/present_ledger_sha256"
+        },
+        "store_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "operation_runtime",
+        "subject",
+        "original_state",
+        "original_outcome",
+        "original_entry_sha256",
+        "acknowledgement"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "original_state": {
+          "enum": [
+            "pending",
+            "partial",
+            "unknown"
+          ]
+        },
+        "original_outcome": {
+          "enum": [
+            "partial",
+            "unknown"
+          ]
+        },
+        "original_entry_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "acknowledgement": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/audit"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "original_state": {
+                "const": "partial"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "original_outcome": {
+                "const": "partial"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "original_outcome": {
+                "const": "unknown"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "inspect_page_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime",
+        "op",
+        "subject",
+        "cursor"
+      ],
+      "properties": {
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "inspect"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "cursor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/cursor"
+            }
+          ]
+        }
+      }
+    },
+    "inspect_operation_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime",
+        "op",
+        "subject",
+        "operation_id"
+      ],
+      "properties": {
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "inspect"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "acknowledge_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "operation_runtime",
+        "original_entry_sha256",
+        "expected_ledger_revision",
+        "expected_store_revision",
+        "expected_context_revision",
+        "backend_proof",
+        "reason",
+        "acknowledgement_id",
+        "after_ledger_sha256",
+        "plan_sha256",
+        "accept_unknown"
+      ],
+      "properties": {
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "acknowledge"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "original_entry_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expected_ledger_revision": {
+          "$ref": "#/$defs/present_ledger_sha256"
+        },
+        "expected_store_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expected_context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "acknowledgement_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "after_ledger_sha256": {
+          "$ref": "#/$defs/present_ledger_sha256"
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "accept_unknown": {
+          "const": true
+        }
+      }
+    },
+    "inspect_page_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "ledger_format",
+        "ledger_revision",
+        "store_revision",
+        "context_revision",
+        "backend_proof",
+        "total",
+        "records",
+        "next_cursor"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "inspect"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "ledger_format": {
+          "const": 1
+        },
+        "ledger_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "store_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "records": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/record"
+          }
+        },
+        "next_cursor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/cursor"
+            }
+          ]
+        }
+      }
+    },
+    "inspect_operation_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "ledger_format",
+        "ledger_revision",
+        "store_revision",
+        "context_revision",
+        "backend_proof",
+        "record",
+        "acknowledge_allowed",
+        "acknowledgement_id",
+        "after_ledger_sha256",
+        "plan_sha256"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "inspect"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "ledger_format": {
+          "const": 1
+        },
+        "ledger_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "store_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "backend_proof": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "record": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/record"
+            }
+          ]
+        },
+        "acknowledge_allowed": {
+          "type": "boolean"
+        },
+        "acknowledgement_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "after_ledger_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/present_ledger_sha256"
+            }
+          ]
+        },
+        "plan_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "acknowledge_allowed": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "record": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/record"
+                  },
+                  {
+                    "properties": {
+                      "acknowledgement": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                ]
+              },
+              "ledger_revision": {
+                "$ref": "#/$defs/present_ledger_sha256"
+              },
+              "backend_proof": {
+                "$ref": "#/$defs/sha256"
+              },
+              "acknowledgement_id": {
+                "$ref": "#/$defs/sha256"
+              },
+              "after_ledger_sha256": {
+                "$ref": "#/$defs/present_ledger_sha256"
+              },
+              "plan_sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "acknowledgement_id": {
+                "type": "null"
+              },
+              "after_ledger_sha256": {
+                "type": "null"
+              },
+              "plan_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "acknowledge_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "operation_runtime",
+        "acknowledgement_id",
+        "plan_sha256",
+        "acknowledged",
+        "persistence",
+        "ledger_revision",
+        "store_revision",
+        "context_revision",
+        "record"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "acknowledge"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "acknowledgement_id": {
+          "$ref": "#/$defs/sha256"
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "acknowledged": {
+          "const": true
+        },
+        "persistence": {
+          "const": "persistent"
+        },
+        "ledger_revision": {
+          "$ref": "#/$defs/present_ledger_sha256"
+        },
+        "store_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "record": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/record"
+            },
+            {
+              "properties": {
+                "acknowledgement": {
+                  "$ref": "#/$defs/audit"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "error"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "enum": [
+            "inspect",
+            "acknowledge"
+          ]
+        },
+        "subject": {
+          "const": "global"
+        },
+        "error": {
+          "enum": [
+            "invalid_request",
+            "envelope_too_large",
+            "runtime_changed",
+            "expired",
+            "busy",
+            "unsupported_persistence",
+            "revision_conflict",
+            "context_changed",
+            "policy_denied",
+            "storage_unavailable",
+            "limits_exceeded",
+            "outcome_unknown"
+          ]
+        }
+      }
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/inspect_page_request"
+        },
+        {
+          "$ref": "#/$defs/inspect_operation_request"
+        },
+        {
+          "$ref": "#/$defs/acknowledge_request"
+        }
+      ]
+    },
+    "response": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/inspect_page_response"
+        },
+        {
+          "$ref": "#/$defs/inspect_operation_response"
+        },
+        {
+          "$ref": "#/$defs/acknowledge_response"
+        },
+        {
+          "$ref": "#/$defs/error"
+        }
+      ]
+    }
+  }
+}
