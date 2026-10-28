@@ -1771,6 +1771,45 @@ does not prove that playback never started.
 - Parental access, kiosk policy, network restrictions and decoder availability
   can still reject playback. A successful preview never unlocks those controls.
 
+## Saved favorites documents
+
+Local presets can hold a portable favorites document independently of the
+player's remote bookmark index. These commands use only local files:
+
+```sh
+ott presets Home fav validate
+ott presets Home fav export favorites.json
+ott presets Home fav diff favorites.json
+ott presets Home fav import favorites.json replace --dry-run
+ott presets Home fav import favorites.json replace
+ott presets Home fav restore /path/to/cli.json.favorites-backup-HASH-NONCE.json --dry-run
+```
+
+Use the actual backup path printed by a successful import; remove `--dry-run`
+to restore that preset's saved favorites. Restore preserves the current
+credentials, aliases, settings and every other preset. Backups contain the full
+private CLI configuration: keep them private and do not attach them to reports.
+Exports contain the favorites document only and never overwrite an existing file.
+
+`merge` is the default import mode: distinct scopes combine, identical scopes
+deduplicate, and differing contents for the same scope block the import. Explicit
+`replace` uses the supplied document instead. A preview reports changes without
+writing; `diff` exits successfully for valid differences, while a blocked import
+preview exits nonzero. A missing favorites companion means no synchronization;
+an empty document does not clear a player's favorites.
+
+The configuration directory and files must be private (POSIX modes 0700/0600).
+Concurrent changes detected before replacement abort the write; reload the latest
+configuration and preview again. If replacement has an uncertain outcome, inspect
+the current file and retained backup before another write. Do not run older CLI
+versions or editors that ignore the configuration lock concurrently.
+
+Player collect/load/diff/clear and automatic favorites delivery with preset load
+are still under development. Document validation does not establish a player
+binding, native folder grant or provider support. See the
+[synchronization design](design/favorites-sync-proposal.md) for the exact coverage
+and current implementation limits. Existing remote bookmarks below are unchanged.
+
 ## Favorites across profiles
 
 Save the item currently playing on the target player together with its active

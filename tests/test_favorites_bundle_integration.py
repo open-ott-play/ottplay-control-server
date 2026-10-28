@@ -1,12 +1,15 @@
 """Real codec/store/CLI boundaries using temporary private fixtures only."""
+import contextlib
 import copy
 import importlib.util
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,6 +67,40 @@ class FavoritesBundleIntegrationTests(unittest.TestCase):
     def command(self, operation, **params):
         return ott.presets_favorites_command(self.path, {"op": operation, "preset": "home", **params},
                                             **self.dependencies)
+
+    def test_real_cli_offline_import_export_restore_never_constructs_client(self):
+        def run(*words):
+            with mock.patch.object(ott, "Client") as client, \
+                    contextlib.redirect_stdout(io.StringIO()) as output, \
+                    contextlib.redirect_stderr(io.StringIO()) as error:
+                code = ott.main(["-c", str(self.path), "-j", "presets", "home", "fav", *words])
+                self.assertEqual(code, 0, error.getvalue())
+                client.assert_not_called()
+                return json.loads(output.getvalue())
+        self.assertEqual(run("validate")["status"], "valid")
+        incoming = self.directory / "incoming-cli.json"
+        self.write(incoming, bundle(scope(rating="987")))
+        before = self.path.read_bytes()
+        run("import", str(incoming), "replace", "--dry-run")
+        self.assertEqual(self.path.read_bytes(), before)
+        changed = run("import", str(incoming), "replace")
+        self.assertEqual(changed["status"], "imported")
+        exported = self.directory / "export-cli.json"
+        self.assertEqual(run("export", str(exported))["status"], "exported")
+        self.assertEqual(json.loads(exported.read_text()), bundle(scope(rating="987")))
+        self.assertNotIn("fixture-private", exported.read_text())
+        self.assertEqual(run("diff", str(exported))["status"], "matched")
+        self.assertEqual(run("restore", changed["backup_path"])["status"], "restored")
+        self.assertEqual(json.loads(self.path.read_text())["preset_favorites"], self.original["preset_favorites"])
+
+    def test_scope_validation_does_not_mutate_input_or_require_bundle(self):
+        document = scope()
+        self.assertEqual(codec.validate_scope_document(document), document)
+        validated = codec.validate_scope_document(document)
+        validated["mediaFavorites"].clear()
+        self.assertEqual(len(document["mediaFavorites"]), 1)
+        with self.assertRaises(codec.DocumentError):
+            codec.validate_scope_document(bundle(document))
 
     def test_replace_restore_only_selected_document_and_export_roundtrip(self):
         incoming = self.directory / "incoming.json"

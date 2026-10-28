@@ -163,9 +163,7 @@ class FavoritesProfileParserTests(unittest.TestCase):
 
     def test_unwired_commands_fail_before_client_or_writes(self):
         for words in (["t1", "fav", "load", "Home"], ["t1,t2", "fav", "collect", "Home"],
-                      ["t1", "fav", "clear"], ["t1", "fav", "clear", "--dry-run"], ["presets", "Home", "fav", "validate"],
-                      ["presets", "Home", "fav", "export", "x.json"], ["presets", "Home", "fav", "import", "x.json"],
-                      ["presets", "Home", "fav", "restore", "backup.json"]):
+                      ["t1", "fav", "clear"], ["t1", "fav", "clear", "--dry-run"]):
             out, err = io.StringIO(), io.StringIO()
             with mock.patch.object(ott, "read_json", return_value={"presets": {"Home": {}}}), \
                     mock.patch.object(ott, "Client") as client, mock.patch.object(ott, "write_private") as write, \

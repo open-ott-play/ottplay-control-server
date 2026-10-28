@@ -1,8 +1,9 @@
 # Favorites profile synchronization — current design
 
-**Status: implementation foundations only; production callbacks remain disabled.**
-The commands below are intended UX, not installed capabilities. Player wire,
-bindings, provider codecs and persistence adapters still need their release gates.
+**Status: local document commands are wired; remote synchronization remains disabled.**
+The source CLI can validate, export, import, compare and restore saved documents.
+Player wire, bindings, provider codecs and persistence adapters still need their
+release gates; remote commands below remain intended UX, not installed capabilities.
 Existing `favorites` v1 remains unchanged. Nothing here implicitly switches a
 provider/profile, starts playback or changes the visible UI.
 
@@ -62,7 +63,7 @@ newly added ones. Preserve it exactly. Do not require matching multisets, count
 it as membership, union it into favorites, or reconstruct/prune it. Auxiliary
 references neither authorize playback nor establish portable matches.
 
-Initial targets are **M3U channel favorites and Plex media favorites**. M3U's
+The first runtime target is **an explicitly bound current Plex source**. M3U's
 existing item ID is a 32-bit URL hash, not proven portable identity. A new exact
 matcher/codec is still required; neither that hash nor a channel number/title
 substitute is sufficient. Plex identity binds machine identifier and rating key
@@ -82,7 +83,9 @@ absolute paths as portable locators. No recognized subset counts as complete.
 
 ## Intended CLI and local-file behavior
 
-These are targets; disabled callbacks fail before client creation or config writes:
+The `ott presets NAME fav ...` commands operate locally and never construct a
+network client. The player-side collect/load/diff/clear commands remain disabled
+before client creation or config writes:
 
 ```sh
 ott t1 fav collect Home --dry-run

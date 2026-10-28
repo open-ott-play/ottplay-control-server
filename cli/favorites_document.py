@@ -190,6 +190,13 @@ def _scope_document(value, channel_codec):
         _reference(reference, scope, channel_codec)
 
 
+def validate_scope_document(value, *, channel_codec=None):
+    """Validate one wire document at its own byte limit, without a bundle wrapper."""
+    _bounded(value)
+    _scope_document(value, channel_codec)
+    return copy.deepcopy(value)
+
+
 def validate_document(value, *, channel_codec=None):
     """Validate syntax; advertised codecs, PMS identity and target grants still gate use."""
     _bounded(value)

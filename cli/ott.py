@@ -2559,6 +2559,23 @@ def _favorites_profile_store(path, validate_document, store_factory, storage_err
                                  validate_document=validate_document)
 
 
+def favorites_profile_dependencies():
+    """Load the local document tools from the same installed CLI revision."""
+    modules = []
+    for name in ("favorites_document", "preset_favorites"):
+        path = Path(__file__).resolve().with_name(name + ".py")
+        if not path.is_file():
+            raise Error("Install all CLI Python files from the same revision to manage saved favorites")
+        spec = importlib.util.spec_from_file_location("ott_" + name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        modules.append(module)
+    codec, storage = modules
+    return {"validate_document": codec.validate_document, "planner": codec.plan_documents,
+            "store_factory": storage.Store, "storage_errors": (storage.StorageError,)}
+
+
 def _validated_favorites_document(document, validate_document):
     try:
         return validate_document(copy.deepcopy(document))
@@ -6180,9 +6197,7 @@ def main(argv=None):
                 names = preset_names(config)
                 print(json.dumps({"presets": names}, indent=2) if args.json else "\n".join(names))
             else:
-                # No portable schema is enabled until the player/controller
-                # contract is agreed. The injected adapter is tested offline.
-                result = presets_favorites_command(args.config, params)
+                result = presets_favorites_command(args.config, params, **favorites_profile_dependencies())
                 if args.json:
                     print(json.dumps(result, ensure_ascii=True, indent=2))
                 else:
