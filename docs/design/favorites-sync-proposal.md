@@ -207,8 +207,15 @@ operation UUID in params.
 
 Pace starts at least 1.5 seconds apart per device using actual prior start times
 and one whole deadline. Account for POSTs, receipt GETs/polls, backpressure and
-final-receipt reserve. Existing limits remain: 120 device/240 controller HTTP
-requests per minute; 50 results retained for 60 seconds. GET does not free a slot.
+final-receipt reserve. Existing limits remain: 120 requests per device credential
+and 240 per controller/operator credential per minute, across its devices;
+50 results are retained for 60 seconds. GET does not free a slot.
+One CLI process services grouped players sequentially. Its transfer adapter spaces
+every HTTP request by at least 0.5 seconds and enforces a rolling 120-request
+minute, in addition to the 1.5-second POST interval. The server independently
+enforces credential and aggregate limits. Other CLI processes and shared traffic
+do not reserve capacity through this process; receipt-poll backpressure waits
+within the same deadline, and a failed mutation POST is never blindly repeated.
 Do not reset timeout per chunk. The CLI budgets 201 seconds of POST pacing for a
 full document plus six control commands, before reserve/latency: reject a
 45-second budget before prepare. Explicit 300-second mode is not a guarantee
@@ -230,7 +237,11 @@ delivery TTL is unchanged; it is not a limit on the complete multi-request trans
 One RAM stage/device has idle TTL 120 seconds and absolute lifetime 600 seconds.
 Only valid accepted activity refreshes idle TTL. Create a target stage just before
 servicing it, not while other targets wait. Runtime change/restart invalidates
-staging. Abort releases staging; it cannot undo a commit or prove no write occurred.
+pre-commit staging. Abort may release only a pre-commit stage. Once commit takes
+ownership, retain the stage until a terminal outcome or reconciliation; late or
+concurrent abort calls must not release it. The CLI uses read-only status after
+commit submission and never aborts or resubmits that commit. Abort cannot undo a
+commit or prove that no write occurred.
 
 ## Persistence and recovery
 

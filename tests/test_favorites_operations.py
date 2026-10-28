@@ -318,6 +318,24 @@ class FavoritesOperationsTests(unittest.TestCase):
         self.assertEqual(set(self.directory.glob(".favorites-completion-*.tmp")), set(interrupted))
         self.error("missing", store.load, context(2)["operation_id"])
 
+    def test_temporary_inventory_reads_fresh_metadata_not_windows_scandir_cache(self):
+        interrupted = self.directory / (".favorites-completion-" + "a" * 32 + ".tmp")
+        interrupted.write_bytes(b"interrupted-evidence")
+        interrupted.chmod(0o600)
+        cached = mock.Mock()
+        cached.name = interrupted.name
+        # Windows scandir metadata has st_nlink=0 even for a regular one-link
+        # file. It cannot establish the private regular-file invariant.
+        cached.stat.return_value = mock.Mock(st_mode=interrupted.stat().st_mode, st_nlink=0)
+        scan = mock.MagicMock()
+        scan.__enter__.return_value = iter([cached])
+        with mock.patch.object(operations.os, "scandir", return_value=scan):
+            saved = self.store.save(context())
+        self.assertEqual(self.store.load(context()["operation_id"]), context())
+        self.assertTrue(Path(saved["path"]).is_file())
+        self.assertEqual(interrupted.read_bytes(), b"interrupted-evidence")
+        cached.stat.assert_not_called()
+
     def test_completion_staging_failure_preserves_original_context(self):
         store = self.real_store()
         intent, result = real_evidence(1)
@@ -381,17 +399,25 @@ class FavoritesOperationsTests(unittest.TestCase):
     def test_cleanup_does_not_delete_a_replacement_parent_file(self):
         store = self.real_store()
         intent, result = real_evidence(1)
-        store.save(intent)
+        original = Path(store.save(intent)["path"])
+        before = original.read_bytes()
         original_write = operations.private_files._Parent.write_new
         # Keep the original private directory available for TemporaryDirectory cleanup.
         renamed = self.directory.with_name(self.directory.name + "-retained")
         self.addCleanup(lambda: shutil.rmtree(renamed, ignore_errors=True))
-        replacement = []
+        replacement, rename_blocked = [], []
 
         def swap_after_write(parent, name, raw):
             original_write(parent, name, raw)
             if name.startswith(".favorites-completion-"):
-                self.directory.rename(renamed)
+                try:
+                    self.directory.rename(renamed)
+                except PermissionError:
+                    if os.name == "nt":
+                        # Windows denies renaming this directory while its
+                        # lock file is open. No replacement parent exists.
+                        rename_blocked.append(True)
+                    raise
                 self.directory.mkdir(mode=0o700)
                 other = self.directory / name
                 other.write_bytes(b"unrelated-private-evidence")
@@ -400,7 +426,12 @@ class FavoritesOperationsTests(unittest.TestCase):
 
         with mock.patch.object(operations.private_files._Parent, "write_new", swap_after_write):
             self.error("unavailable", store.mark_completed, intent["operation_id"], result)
-        self.assertEqual(replacement[0].read_bytes(), b"unrelated-private-evidence")
+        if rename_blocked:
+            self.assertEqual(original.read_bytes(), before)
+            self.assertFalse(renamed.exists())
+            self.assertEqual(list(self.directory.glob(".favorites-completion-*.tmp")), [])
+        else:
+            self.assertEqual(replacement[0].read_bytes(), b"unrelated-private-evidence")
 
     def test_noncooperating_edit_before_replace_is_preserved(self):
         store = self.real_store()

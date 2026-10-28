@@ -152,7 +152,9 @@ class ContextStore:
                     temporary_count += 1
                     if temporary_count > MAX_TEMPORARY_FILES:
                         raise OperationStoreError("capacity")
-                    metadata = entry.stat(follow_symlinks=False)
+                    # Windows DirEntry caches omit the link count. Use fresh
+                    # metadata, as for records below, without following links.
+                    metadata = (self.directory / entry.name).lstat()
                     if not private_files._private_regular(metadata):
                         raise OperationStoreError("unavailable")
                     # Interrupted private staging files are counted but never
