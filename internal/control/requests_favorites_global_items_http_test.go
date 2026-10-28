@@ -68,7 +68,8 @@ func TestGlobalItemsHTTPNegativeAndRawBounds(t *testing.T) {
 		s := newTestServer(t)
 		body := globalRPC(t, f.action, f.params, "")
 		over := body[:len(body)-1] + strings.Repeat(" ", maxFavoritesTransferEnvelopeBytes) + "}"
-		expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, over, nil), 400)
+		// The shared 16 KiB HTTP body limit rejects this before items validation.
+		expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, over, nil), 413)
 		duplicate := strings.Replace(body, `"subject":"global"`, `"subject":"global","subject":"global"`, 1)
 		expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, duplicate, nil), 400)
 		if len(s.devices[0].queue) != 0 {
