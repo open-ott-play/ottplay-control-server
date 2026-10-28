@@ -2008,6 +2008,22 @@ def validate_preset(config, requested):
     return name, result
 
 
+def require_preset_favorites_support(config, name):
+    """Never report a settings-only load as a complete favorites-bearing preset.
+
+    Keep unrelated/absent companions on the legacy path without importing new
+    helpers. The remote integration must replace this gate with full preflight
+    before it can deliver the selected companion and bind it to a checkpoint.
+    """
+    if "preset_favorites" not in config:
+        return
+    extension = config["preset_favorites"]
+    if not isinstance(extension, dict) or not isinstance(extension.get("presets"), dict):
+        raise Error("Invalid saved favorites metadata; no preset settings were sent")
+    if any(isinstance(key, str) and key.casefold() == name.casefold() for key in extension["presets"]):
+        raise Error("This preset contains saved favorites, but complete preset favorites delivery is not available yet; no preset settings were sent")
+
+
 def load_preset(client, device, name, preset, session=None):
     """Apply acknowledged steps; repeat only proven pre-write mount rejections."""
     completed = []
@@ -2187,6 +2203,7 @@ def preset_command(config, words, timeout, json_output, on_receipt=None, *, clie
     try:
         _, params = parse_command(words[1:])
         name, preset = validate_preset(config, params["preset"])
+        require_preset_favorites_support(config, name)
         receipt["preset"] = name
         receipt["stage"] = "connect"
         receipt["error"] = "Could not prepare the player connection."
@@ -5732,7 +5749,8 @@ def player_group_command(client, config, targets, args, argv):
     if route == "preset":
         if len(words) not in (2, 3, 5) or (len(words) > 2 and words[2] not in ("plan", "apply", "resume", "verify")):
             raise Error("Use PLAYER load PRESET [plan|apply|resume|verify [--checkpoint FILE]]")
-        validate_preset(config, words[1])
+        name, _ = validate_preset(config, words[1])
+        require_preset_favorites_support(config, name)
     plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
     group_output_preflight(plans)
     json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))

@@ -128,6 +128,41 @@ class FavoritesProfileParserTests(unittest.TestCase):
         self.assertEqual(ott.FAVORITES_OPERATIONS, {"list", "add", "play", "remove"})
         self.assertNotIn("favorites_profile", ott.RECEIPT_ACTIONS)
 
+    def test_present_companion_cannot_be_ignored_by_preset_load(self):
+        base = {"presets": {"Home": {
+            "m3u": [{"number": 1, "name": "Home", "playlist": "https://example.invalid/live.m3u", "history_hours": 24}],
+            "plex": {"server": "https://plex.invalid", "token": "fixture-private-token"}, "active_profile": 1}}}
+        for companion in ({"version": 1, "scopes": []}, None, {"private": "fixture-private-token"}):
+            for mode in ([], ["plan"], ["apply"], ["resume"], ["verify"]):
+                config = {**copy.deepcopy(base), "preset_favorites": {"version": 1, "presets": {"Home": companion}}}
+                before = copy.deepcopy(config)
+                output, error = io.StringIO(), io.StringIO()
+                with self.subTest(mode=mode, companion=companion), \
+                        mock.patch.object(ott, "read_json", return_value=config), \
+                        mock.patch.object(ott, "Client") as client, \
+                        contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+                    self.assertEqual(ott.main(["-j", "t1", "load", "HOME", *mode]), 1)
+                    client.assert_not_called()
+                self.assertIn("complete preset favorites delivery is not available", output.getvalue() + error.getvalue())
+                self.assertNotIn("fixture-private-token", output.getvalue() + error.getvalue())
+                self.assertEqual(config, before)
+        config = {**copy.deepcopy(base), "preset_favorites": {"version": 1, "presets": {"Home": {}}}}
+        args = SimpleNamespace(words=["t1,t2", "load", "Home"], json=False)
+        client = mock.Mock()
+        with self.assertRaisesRegex(ott.Error, "complete preset favorites delivery"):
+            ott.player_group_command(client, config, [("t1", "one"), ("t2", "two")], args, [])
+        self.assertEqual(client.mock_calls, [])
+
+    def test_preset_companion_gate_preserves_absent_and_orphan_only_behavior(self):
+        for config in ({}, {"preset_favorites": {"version": 999, "presets": {"Other": {"future": True}}}}):
+            with mock.patch.object(ott, "favorites_profile_dependencies", side_effect=AssertionError("unneeded helper")):
+                self.assertIsNone(ott.require_preset_favorites_support(config, "Home"))
+        for extension in (None, [], {"version": 1}, {"presets": []}):
+            with self.assertRaisesRegex(ott.Error, "Invalid saved favorites metadata"):
+                ott.require_preset_favorites_support({"preset_favorites": extension}, "Home")
+        with self.assertRaisesRegex(ott.Error, "complete preset favorites delivery"):
+            ott.require_preset_favorites_support({"preset_favorites": {"presets": {"hOME": {}}}}, "Home")
+
     def test_bad_player_grammar_never_becomes_search(self):
         for words in (("load",), ("load", "Home", "invalid"), ("load", "../Home"),
                       ("load", "Home", "--dry-run", "replace"), ("load", "Home", "--dry-run", "--dry-run"),

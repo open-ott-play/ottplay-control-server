@@ -1793,6 +1793,8 @@ to restore that preset's saved favorites. Restore preserves the current
 credentials, aliases, settings and every other preset. Backups contain the full
 private CLI configuration: keep them private and do not attach them to reports.
 Exports contain the favorites document only and never overwrite an existing file.
+They use compact UTF-8 JSON, so the 1 MiB document limit includes the exact
+exported bytes rather than added formatting.
 
 `merge` is the default import mode: distinct scopes combine, identical scopes
 deduplicate, and differing contents for the same scope block the import. Explicit
@@ -1808,7 +1810,10 @@ the current file and retained backup before another write. Do not run older CLI
 versions or editors that ignore the configuration lock concurrently.
 
 Player collect/load/diff/clear and automatic favorites delivery with preset load
-are still under development. Document validation does not establish a player
+are still under development. While this integration is unavailable, loading a
+preset with its own saved favorites document stops before sending preset settings;
+it cannot report a complete load after copying settings alone. Presets without
+their own companion retain their existing behavior. Document validation does not establish a player
 binding, native folder grant or provider support. See the
 [synchronization design](design/favorites-sync-proposal.md) for the exact coverage
 and current implementation limits. Existing remote bookmarks below are unchanged.

@@ -2,8 +2,10 @@
 
 **Status: local document commands are wired; remote synchronization remains disabled.**
 The source CLI can validate, export, import, compare and restore saved documents.
-Player wire, bindings, provider codecs and persistence adapters still need their
-release gates; remote commands below remain intended UX, not installed capabilities.
+The controller relay and CLI transport implement the seven transfer operations,
+including lost-acknowledgement reconciliation. Player bindings, complete provider
+codecs, persistence adapters and command routing still need their release gates;
+remote commands below remain intended UX, not installed capabilities.
 Existing `favorites` v1 remains unchanged. Nothing here implicitly switches a
 provider/profile, starts playback or changes the visible UI.
 
@@ -105,7 +107,7 @@ ott t1 fav clear
 Collect reads complete snapshots; load applies saved scoped favorites. Local
 bundle merge/replace differs from player application: each approved scope is a
 complete scoped replacement, not a remove/add loop or name-based merge. Preview
-and diff do not write player state. Legacy `fav play NAME`, add/remove and aliases
+and diff do not write persistent favorites. Legacy `fav play NAME`, add/remove and aliases
 retain their existing roles. No development task implicitly authorizes a live clear.
 
 Resolve group aliases first and read each distinct device once. Collect every
@@ -124,6 +126,9 @@ by failed durability verification is uncertain, not proof of rollback. Old
 CLIs/editors ignoring the lock remain a concurrent-write risk.
 
 Export creates a new private file exclusively; an existing path remains intact.
+Exports use compact UTF-8 JSON without an added newline, so a valid document of
+exactly 1 MiB can be exported and imported again without formatting expanding it
+past the limit. Ordinary CLI configuration formatting is unchanged.
 Restore accepts only this config's unchanged private backup family and requires
 the selected preset document. Snapshot → backup read → replace plan → revision
 check restores only that companion, preserving current credentials, provider
@@ -132,10 +137,12 @@ replacement or permission to restore the whole config.
 
 ## Transfer, envelopes and scheduling
 
-Proposed additive capability `favorites_transfer` must advertise implemented
+The additive capability `favorites_transfer` must advertise implemented
 provider/codec coverage and limits. Preserve legacy contracts. Require read-only
 relay/player compatibility before mutation; unsupported negotiation has no legacy
-mutation fallback. Exact RPC activation awaits the player/controller wire freeze.
+mutation fallback. The seven-operation wire is frozen in
+[`contracts/favorites-transfer-v1.json`](../../contracts/favorites-transfer-v1.json).
+Capability and destination-binding negotiation remain separate activation gates.
 
 A complete scoped snapshot returns scope, revision, binding revision, byte count,
 SHA256 and base64 of original document bytes. One bounded response replaces the
@@ -143,12 +150,19 @@ obsolete entry-page design; its final result must fit 2 MiB. Hash original bytes
 not normalized/re-serialized JSON. The local multi-scope bundle also has its own
 whole-bundle 1 MiB limit.
 
-Planned operations are `snapshot`, `begin`, `append`, `preview`, `commit`, `status`
+Transfer operations are `snapshot`, `begin`, `append`, `preview`, `commit`, `status`
 and `abort`. Begin records operation UUID, runtime, scope, base/binding revisions,
 document hash/size and actual chunk count. Append uses contiguous sequence/offset,
 chunk hash and strict canonical base64. Identical duplicates acknowledge the same
 bytes; changed duplicates conflict. Begin/append/preview never write favorites.
 Preview binds the document, physical coverage, intended changes and revisions.
+
+The CLI's preview-only transport uses the same validated staging path, then
+aborts without saving a commit context or sending commit. It returns both ready
+and blocked plans, including bounded unresolved-entry diagnostics. A lost abort
+acknowledgement is reported as unconfirmed cleanup; it does not turn a preview
+into an applied change. Diff can compare complete snapshots locally without
+allocating a stage.
 
 Chunks hold at most 8 KiB raw bytes: 1 MiB needs 128 full chunks, with at most 256
 chunks allowed when a smaller advertised cap is used. Byte boundaries may split
@@ -193,6 +207,14 @@ means a known subset changed; unknown means missing, inconsistent or superseded
 evidence. Missing receipt proves neither not-applied nor safe replay. There is no
 cross-store, cross-tab, fsync, all-scope or all-player atomicity promise.
 
+The CLI validates original receipt response bytes, including their actual size,
+duplicate keys and nonfinite values. After a lost commit response or an explicit
+unknown acknowledgement, it makes at most one scoped status request and never
+resubmits commit. After a player restart, reconciliation additionally requires a
+fresh complete snapshot with the original scope and binding revision. Only a
+persisted committed receipt can resolve an old-runtime operation; a new runtime's
+missing or expired RAM stage cannot establish that the earlier write did not run.
+
 Cookie adapters follow actual per-store behavior/limits, not a blanket prohibition.
 RAM-only adapters need explicit session-only intent/labeling, never a persistent
 copy/durable receipt claim. Reject requested persistence before writes if absent.
@@ -205,6 +227,11 @@ Reconciliation must establish a new plan before any subsequent write.
 ## Named-preset integration and release gates
 
 Ordinary load takes settings and a present companion from the same config snapshot.
+Until full delivery is connected, plain and resumable load reject a selected
+present companion before provider writes, including an empty or malformed one.
+Group load checks this common prerequisite before processing its first member.
+An absent or unrelated companion keeps the legacy path and does not load new
+favorites helpers.
 Preflight schema, coverage, bindings, helper availability and read-only compatibility
 before provider writes; create staging only after setup. Include present companions
 in checkpoint identity. Absent companions retain exact legacy normalized settings,
@@ -224,7 +251,8 @@ Numbered Local import/export remains separate. A server update alone does not
 install CLI modules: package/install the complete reviewed helper set atomically,
 preserving private config, before advertising these commands as usable.
 
-Acceptance requires real M3U/Plex codecs/pairing, complete snapshots, conservative
+Each advertised provider requires its real codec and explicit pairing. Acceptance
+requires complete snapshots, conservative
 same-scope/order/provenance conflicts, unchanged `shuffleBefore`, bounded multibyte
 packing, whole-deadline refusal, concurrent history/cache ownership, per-write and
 readback failure outcomes, and lost-ACK/restart recovery without mutation replay.
