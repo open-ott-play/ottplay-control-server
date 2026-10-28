@@ -1870,6 +1870,15 @@ expired receipt is **unknown**, not proof that the write failed. A pairing whose
 acknowledgement was lost is instead inspected with `fav bindings`; an observed
 pair is reported separately from an acknowledged provisioning request.
 
+If partial storage or a stale cache removes the full favorites capability or
+binding catalog, `fav status` can still make one read-only status request using
+fresh player metadata and the exact controller/device recovery record. Without
+current scope and binding evidence, it reports `unknown` with a nonzero exit
+status, even if the player claims completion; it does not update local completion
+proof. After a player restart, a complete snapshot with the unchanged binding is
+still required for a verified result. Missing local evidence or invalid fresh
+runtime metadata never causes a write replay or a guess at another target.
+
 If a preview exceeds `--timeout`, no commit is sent. Choose a sufficient bounded
 budget, for example `ott -t 180 t1 fav load Home replace --dry-run`, inspect that
 preview, then explicitly apply. A `local_retention_unconfirmed` warning means

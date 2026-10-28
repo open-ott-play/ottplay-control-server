@@ -114,6 +114,7 @@ class _Target:
         self.durable = _DurableContext(config_path, client, device)
         self.uuid_factory = uuid_factory
         self.peer = self.capability = self.catalog = self.target = None
+        self.runtime = None
 
     def now(self):
         value = self.clock()
@@ -140,7 +141,7 @@ class _Target:
             if self.now() <= before:
                 raise CommandError("invalid_clock")
 
-    def discover(self):
+    def discover(self, *, status_recovery=False):
         query = "/api/requests?" + urllib.parse.urlencode({"device_id": self.device})
         self.wait(self.now() + remote.POST_INTERVAL)
         status, queued = self.client.api(query, {"action": "capabilities", "params": {}}, timeout=min(10, self.remaining()))
@@ -171,8 +172,11 @@ class _Target:
                     or body["id"] != request_id or body["status"] != "ok"):
                 raise CommandError("capability_unavailable")
             controls = self.api.capabilities_metadata(body["data"])
+            self.runtime = controls["player"]["runtime"]
             advertised = body["data"].get("favorites_transfer")
             if advertised is None:
+                if status_recovery:
+                    return False
                 raise CommandError("unsupported_player_or_controller")
             self.capability = protocol.validate_capability(advertised)
             break
@@ -188,8 +192,27 @@ class _Target:
             max_metadata_bytes=limits["max_metadata_bytes"], deadline=self.deadline,
             admission_ttl_ms=self.capability["admission"]["admission_ttl_ms"],
             max_budget_ms=self.capability["admission"]["max_budget_ms"])
-        self.catalog = self.peer.catalog()
+        try:
+            self.catalog = self.peer.catalog()
+        except remote.RemoteError:
+            if status_recovery:
+                return False
+            raise
         self.target = self.catalog.data["targets"][0]
+        return True
+
+    def observe_status(self, record):
+        # Fresh generic metadata and the target-bound local record are required,
+        # but no missing mutation capability or catalog is fabricated here.
+        self.wait(self.now() + remote.POST_INTERVAL)
+        bounds = {} if self.capability is None else {
+            "envelope_limit": self.capability["limits"]["max_envelope_bytes"],
+            "response_limit": self.capability["limits"]["max_snapshot_response_bytes"],
+            "max_metadata_bytes": self.capability["limits"]["max_metadata_bytes"],
+        }
+        reader = remote.StatusReader(self.client, self.device, runtime=self.runtime,
+            timeout=self.remaining(), monotonic=self.clock, sleep=self.sleep, deadline=self.deadline, **bounds)
+        return reader.observe(record)
 
     def select(self, selector="current", target_id=None):
         if target_id is not None and target_id != self.target["target_id"]:
@@ -409,7 +432,10 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
         except operations.OperationStoreError:
             return {"op": op, "status": "unknown", "operation_id": params["operation_id"],
                     "verified": False, "reason": "local_context_unavailable", "replay_allowed": False}
-    target.discover()
+    qualified = target.discover(status_recovery=op == "status")
+    if op == "status" and not qualified:
+        outcome = target.observe_status(record)
+        return {"op": op, "status": "unknown", **outcome.summary(), "warnings": [], "replay_allowed": False}
     if op == "bindings":
         return {"op": op, "status": "available", "catalog": target.catalog.data}
     if op == "bind":
@@ -418,8 +444,8 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
         try:
             target.select(record["begin_request"]["scope"])
         except CommandError:
-            return {"op": op, "status": "unknown", "operation_id": params["operation_id"],
-                    "verified": False, "reason": "scope_not_bound", "replay_allowed": False}
+            outcome = target.observe_status(record)
+            return {"op": op, "status": "unknown", **outcome.summary(), "warnings": [], "replay_allowed": False}
         outcome = target.peer.reconcile(record)
         return {"op": op, "status": outcome.outcome, **_completion(target, outcome)}
     scope = target.select(params.get("scope", "current"), params.get("target_id"))

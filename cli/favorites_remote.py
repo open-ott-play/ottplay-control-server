@@ -172,34 +172,29 @@ def recovery_record(begin, preview, commit_request):
     })
 
 
-class RemoteFavorites:
-    def __init__(self, client, device, *, runtime, limits, receipt_retention_seconds, scope_validator,
-                 save_context, timeout=45, monotonic=time.monotonic, sleep=time.sleep, uuid_factory=uuid.uuid4,
-                 max_metadata_bytes=protocol.MAX_METADATA_BYTES, deadline=None,
-                 admission_ttl_ms=10000, max_budget_ms=300000):
+class _RequestTransport:
+    """Shared bounded HTTP mechanics, without granting mutation support."""
+    def __init__(self, client, device, *, runtime, envelope_limit, response_limit, scope_validator,
+                 timeout, monotonic, sleep, max_metadata_bytes, deadline, allowed_ops=None):
         if (not callable(getattr(client, "api", None)) or not callable(getattr(client, "api_raw", None)) or type(device) is not str
                 or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", device) is None
                 or type(runtime) is not str or protocol.RUNTIME.fullmatch(runtime) is None
-                or type(limits) is not Limits or type(receipt_retention_seconds) is not int
-                or not 1 <= receipt_retention_seconds <= 86400 or not callable(scope_validator)
-                or not callable(save_context) or not callable(monotonic) or not callable(sleep)
-                or not callable(uuid_factory) or type(timeout) not in (int, float)
+                or not callable(monotonic) or not callable(sleep) or type(timeout) not in (int, float)
                 or not math.isfinite(timeout) or not 0 < timeout <= 300
                 or type(max_metadata_bytes) is not int or not 1 <= max_metadata_bytes <= protocol.MAX_METADATA_BYTES
-                or type(admission_ttl_ms) is not int or not 1 <= admission_ttl_ms <= 10000
-                or type(max_budget_ms) is not int or not 1 <= max_budget_ms <= 300000
+                or type(envelope_limit) is not int or not 1 <= envelope_limit <= 16384
+                or type(response_limit) is not int or not 1 <= response_limit <= protocol.MAX_RESPONSE_BYTES
                 or deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline))):
             raise RemoteError("invalid_configuration")
         server = getattr(client, "server", None)
         if type(server) is not str or not server or len(server) > 2048:
             raise RemoteError("invalid_configuration")
         self.client, self.device, self.runtime = client, device, runtime
-        self.limits = limits.validate()
-        self.receipt_retention_seconds = receipt_retention_seconds
+        self._envelope_limit, self._response_limit = envelope_limit, response_limit
+        self._allowed_ops = allowed_ops
         self.max_metadata_bytes = max_metadata_bytes
-        self.admission_ttl_ms, self.max_budget_ms = admission_ttl_ms, max_budget_ms
-        self.scope_validator, self.save_context = scope_validator, save_context
-        self.clock, self.sleep, self.uuid_factory = monotonic, sleep, uuid_factory
+        self.scope_validator = scope_validator
+        self.clock, self.sleep = monotonic, sleep
         self._clock_last = None
         started = self._now()
         self._deadline = min(started + timeout, deadline) if deadline is not None else started + timeout
@@ -209,7 +204,6 @@ class RemoteFavorites:
         self._query = "/api/requests?" + urllib.parse.urlencode({"device_id": device})
         self._last_post = self._last_http = None
         self._http_times = deque()
-        self._staging_started = False
 
     def _now(self):
         value = self.clock()
@@ -275,8 +269,10 @@ class RemoteFavorites:
     def _params(self, params):
         try:
             params = protocol.validate_request(params)
+            if self._allowed_ops is not None and params["op"] not in self._allowed_ops:
+                raise RemoteError("invalid_configuration")
             envelopes = transfer.request_envelopes(ACTION, params)
-            if max(len(envelopes.client), len(envelopes.queued_upper_bound)) > self.limits.max_envelope_bytes:
+            if max(len(envelopes.client), len(envelopes.queued_upper_bound)) > self._envelope_limit:
                 raise RemoteError("invalid_configuration")
             return params
         except (protocol.ProtocolError, transfer.TransferError):
@@ -304,12 +300,12 @@ class RemoteFavorites:
                         not_before = self._now() + delay
                         continue
                     raise
-                if type(body) is not bytes or len(body) > self.limits.max_snapshot_response_bytes:
+                if type(body) is not bytes or len(body) > self._response_limit:
                     raise RemoteError("invalid_response")
                 if status == 202:
                     try:
                         pending = transfer.validate_document_bytes(body, max_bytes=min(self.max_metadata_bytes,
-                                                                                       self.limits.max_snapshot_response_bytes))
+                                                                                       self._response_limit))
                     except transfer.TransferError:
                         raise RemoteError("invalid_response") from None
                     if pending != {"status": "pending"}:
@@ -331,6 +327,71 @@ class RemoteFavorites:
             raise RemoteError(last_error or "pending_timeout")
         except RemoteError as error:
             raise RemoteError(error.code, request_id=request_id, phase=phase, http_status=error.http_status) from None
+
+    def _observe_unverified(self, record):
+        saved, context = _restore(record)
+        operation = saved["operation_id"]
+        try:
+            response = self._rpc({"op": "status", "runtime": self.runtime, "operation_id": operation},
+                deadline=self._deadline, context=context if saved["runtime"] == self.runtime else None)
+            # Across a restart there is no authority to derive a new receipt
+            # context without the snapshot. Check all retained identities but
+            # never promote even a matching claimed receipt to verified.
+            data, begin, preview = response.data, saved["begin_request"], saved["preview_response"]
+            if ((saved["runtime"] != self.runtime and data.get("state") != "committed")
+                    or ("scope" in data and data["scope"] != begin["scope"])
+                    or ("transaction_id" in data and data["transaction_id"] != saved["begin_response"]["transaction_id"])
+                    or not {row["id"] for row in data.get("per_store", [])} <= {row["id"] for row in preview["stores"]}):
+                raise RemoteError("invalid_response", request_id=response.request_id)
+            receipt = data.get("receipt")
+            if receipt is not None and (any(receipt[key] != value for key, value in {
+                    "operation_id": operation, "scope": begin["scope"], "document_sha256": begin["document_sha256"],
+                    "plan_digest": preview["plan_digest"], "counts": preview["counts"]}.items())
+                    or {row["id"] for row in data["per_store"]} != {row["id"] for row in preview["stores"]}):
+                raise RemoteError("invalid_response", request_id=response.request_id)
+            return Outcome(operation, "unknown", False, "incomplete_evidence", response.request_id)
+        except RemoteError as error:
+            return Outcome(operation, "unknown", False, error.code, error.request_id)
+
+
+class StatusReader(_RequestTransport):
+    """Unqualified read-only observation, never a capability advertisement.
+
+    The host must load context from the exact controller/device private store
+    and validate fresh generic player metadata first. Protocol ceilings bound
+    this one read; they do not assert supported transfer limits or retention.
+    """
+    def __init__(self, client, device, *, runtime, timeout=45, monotonic=time.monotonic,
+                 sleep=time.sleep, deadline=None, envelope_limit=16384,
+                 response_limit=protocol.MAX_RESPONSE_BYTES, max_metadata_bytes=protocol.MAX_METADATA_BYTES):
+        super().__init__(client, device, runtime=runtime, envelope_limit=envelope_limit,
+            response_limit=response_limit, scope_validator=None, timeout=timeout,
+            monotonic=monotonic, sleep=sleep, max_metadata_bytes=max_metadata_bytes,
+            deadline=deadline, allowed_ops=frozenset(("status",)))
+
+    def observe(self, record):
+        return self._observe_unverified(record)
+
+
+class RemoteFavorites(_RequestTransport):
+    def __init__(self, client, device, *, runtime, limits, receipt_retention_seconds, scope_validator,
+                 save_context, timeout=45, monotonic=time.monotonic, sleep=time.sleep, uuid_factory=uuid.uuid4,
+                 max_metadata_bytes=protocol.MAX_METADATA_BYTES, deadline=None,
+                 admission_ttl_ms=10000, max_budget_ms=300000):
+        if (type(limits) is not Limits or type(receipt_retention_seconds) is not int
+                or not 1 <= receipt_retention_seconds <= 86400 or not callable(scope_validator)
+                or not callable(save_context) or not callable(uuid_factory)
+                or type(admission_ttl_ms) is not int or not 1 <= admission_ttl_ms <= 10000
+                or type(max_budget_ms) is not int or not 1 <= max_budget_ms <= 300000):
+            raise RemoteError("invalid_configuration")
+        self.limits = limits.validate()
+        super().__init__(client, device, runtime=runtime, envelope_limit=limits.max_envelope_bytes,
+            response_limit=limits.max_snapshot_response_bytes, scope_validator=scope_validator,
+            timeout=timeout, monotonic=monotonic, sleep=sleep, max_metadata_bytes=max_metadata_bytes, deadline=deadline)
+        self.receipt_retention_seconds = receipt_retention_seconds
+        self.admission_ttl_ms, self.max_budget_ms = admission_ttl_ms, max_budget_ms
+        self.save_context, self.uuid_factory = save_context, uuid_factory
+        self._staging_started = False
 
     def snapshot(self, scope):
         """Read a complete snapshot; do not change provider, favorites or UI."""
@@ -503,9 +564,12 @@ class RemoteFavorites:
         saved, context = _restore(record)
         try:
             if saved["runtime"] != self.runtime:
-                snapshot = self.snapshot(saved["begin_request"]["scope"])
-                self._snapshot(snapshot)  # Same controller/device/current-runtime ownership.
-                context = protocol.status_context(context, snapshot._result)
+                try:
+                    snapshot = self.snapshot(saved["begin_request"]["scope"])
+                    self._snapshot(snapshot)  # Same controller/device/current-runtime ownership.
+                    context = protocol.status_context(context, snapshot._result)
+                except (RemoteError, protocol.ProtocolError):
+                    return self._observe_unverified(saved)
             result = self._rpc({"op": "status", "runtime": self.runtime, "operation_id": saved["operation_id"]},
                                deadline=self._deadline, context=context)
             return self._outcome(result, saved["operation_id"])

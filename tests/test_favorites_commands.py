@@ -473,6 +473,101 @@ class FavoritesCommandsTests(unittest.TestCase):
         self.assertEqual(result["warnings"], ["local_retention_unconfirmed"])
         self.assertNotIn("private-token", json.dumps(result))
 
+    def retain_pending_intent(self):
+        with mock.patch.object(commands.operations.ContextStore, "mark_completed", side_effect=OSError("private-token")):
+            self.assertTrue(self.call("load", preset="Home", mode="replace")["verified"])
+        records = list(self.directory.glob(".favorites-operations-*/*.json"))
+        self.assertEqual(len(records), 1)
+        self.assertNotIn("completion", json.loads(records[0].read_bytes()))
+        return records[0]
+
+    def test_status_missing_capability_observes_only_fresh_runtime_and_keeps_intent_unverified(self):
+        record = self.retain_pending_intent()
+        original, config = record.read_bytes(), self.path.read_bytes()
+        files = set(self.directory.rglob("*"))
+        self.client.caps_change = lambda data: {key: value for key, value in data.items() if key != "favorites_transfer"}
+        for runtime in (fixture.RUNTIME, "restarted-runtime"):
+            self.client.runtime = runtime
+            before = len(self.client.posts())
+            with mock.patch.object(commands.operations.ContextStore, "mark_completed", side_effect=AssertionError("no completion")) as mark:
+                result = self.call("status", operation_id=fixture.OPERATION)
+            self.assertEqual((result["status"], result["verified"], result["reason"], result["replay_allowed"]),
+                ("unknown", False, "incomplete_evidence", False))
+            self.assertEqual(self.client.posts()[before:], ["capabilities", "status"])
+            sent = json.loads([row for row in self.client.calls if row["method"] == "POST" and row["op"] == "status"][-1]["payload"])
+            self.assertEqual(sent["params"]["runtime"], runtime)
+            mark.assert_not_called()
+            self.assertEqual(record.read_bytes(), original)
+            self.assertEqual(self.path.read_bytes(), config)
+            self.assertEqual(set(self.directory.rglob("*")), files)
+        before = len(self.client.posts())
+        with self.assertRaisesRegex(ott.Error, "unsupported player or controller"):
+            self.call("clear")
+        self.assertEqual(self.client.posts()[before:], ["capabilities"])
+
+    def test_status_catalog_unavailable_or_scope_unbound_is_read_only_unknown(self):
+        record = self.retain_pending_intent()
+        before_bytes = record.read_bytes()
+        for condition in ("unsupported", "unbound"):
+            with self.subTest(condition=condition):
+                if condition == "unsupported":
+                    def reject(api, response):
+                        return 200, {"id": response["id"], "status": "rejected", "data": {
+                            "version": 1, "runtime": api.runtime, "op": "bindingcatalog", "error": "unsupported_persistence"}}
+                    self.client.get_effects["bindingcatalog"] = [reject]
+                else:
+                    self.client.bindings["one"] = []
+                before = len(self.client.posts())
+                result = self.call("status", operation_id=fixture.OPERATION)
+                self.assertEqual((result["status"], result["verified"], result["reason"]),
+                    ("unknown", False, "incomplete_evidence"))
+                self.assertEqual(self.client.posts()[before:], ["capabilities", "bindingcatalog", "status"])
+                self.assertEqual(record.read_bytes(), before_bytes)
+
+    def test_status_restart_snapshot_unavailable_observes_once_without_verifying(self):
+        record = self.retain_pending_intent()
+        before_bytes = record.read_bytes()
+        self.client.runtime = "restarted-runtime"
+        def reject(api, response):
+            return 200, {"id": response["id"], "status": "unsupported", "data": {
+                "version": 1, "runtime": api.runtime, "op": "snapshot", "error": "unsupported_persistence"}}
+        self.client.get_effects["snapshot"] = [reject]
+        before = len(self.client.posts())
+        result = self.call("status", operation_id=fixture.OPERATION)
+        self.assertEqual((result["status"], result["verified"], result["reason"]), ("unknown", False, "incomplete_evidence"))
+        self.assertEqual(self.client.posts()[before:], ["capabilities", "bindingcatalog", "snapshot", "status"])
+        self.assertEqual(record.read_bytes(), before_bytes)
+
+    def test_status_recovery_requires_target_bound_record_and_fresh_valid_metadata(self):
+        self.retain_pending_intent()
+        before = len(self.client.calls)
+        result = self.call("status", targets=[("t2", "two")], operation_id=fixture.OPERATION)
+        self.assertEqual((result["status"], result["reason"]), ("unknown", "local_context_unavailable"))
+        self.assertEqual(len(self.client.calls), before)
+        original_server = self.client.server
+        self.client.server = "https://other-controller.invalid"
+        result = self.call("status", operation_id=fixture.OPERATION)
+        self.assertEqual(result["reason"], "local_context_unavailable")
+        self.assertEqual(len(self.client.calls), before)
+        self.client.server = original_server
+        for change in (lambda data: data | {"player": data["player"] | {"runtime": "bad runtime"}},
+                       lambda data: data | {"favorites_transfer": {"version": 999}}):
+            self.client.caps_change = change
+            before = len(self.client.posts())
+            with self.assertRaises(ott.Error):
+                self.call("status", operation_id=fixture.OPERATION)
+            self.assertEqual(self.client.posts()[before:], ["capabilities"])
+
+    def test_status_recovery_keeps_lower_advertised_raw_bounds(self):
+        self.retain_pending_intent()
+        self.client.capability["limits"]["max_metadata_bytes"] = 700
+        self.client.raw_mutators["bindingcatalog"] = lambda raw: raw[:-2] + b" " * 701 + raw[-2:]
+        self.client.raw_mutators["status"] = lambda raw: raw[:-2] + b" " * 701 + raw[-2:]
+        before = len(self.client.posts())
+        result = self.call("status", operation_id=fixture.OPERATION)
+        self.assertEqual((result["status"], result["verified"], result["reason"]), ("unknown", False, "invalid_response"))
+        self.assertEqual(self.client.posts()[before:], ["capabilities", "bindingcatalog", "status"])
+
     def test_same_runtime_status_reconciles_only_local_evidence_without_player_replay(self):
         # Simulate a confirmed player write whose local completion bookkeeping
         # failed: its durable begin/preview intent must remain available.

@@ -109,6 +109,16 @@ class FavoritesDispatchTests(unittest.TestCase):
             host = SimpleNamespace(run=mock.Mock(return_value={"op": "diff", "status": state, "scope": SCOPE, "summary": summary()}))
             self.assertEqual(self.run_cli(["t1", "fav", "diff", "Home"], host)[0], 0)
 
+    def test_unqualified_status_observation_exits_nonzero_without_claiming_verified(self):
+        host = SimpleNamespace(run=mock.Mock(return_value={"op": "status", "status": "unknown",
+            "outcome": "unknown", "operation_id": OPERATION, "verified": False,
+            "reason": "incomplete_evidence", "replay_allowed": False, "warnings": []}))
+        code, out, err, client, _ = self.run_cli(["-j", "t1", "fav", "status", OPERATION], host)
+        result = json.loads(out)
+        self.assertEqual((code, err, result["verified"], result["reason"]), (1, "", False, "incomplete_evidence"))
+        self.assertEqual(host.run.call_args.args[5], {"op": "status", "operation_id": OPERATION})
+        client.call.assert_not_called()
+
     def test_capability_is_optional_strict_and_controls_help_examples(self):
         controls = ott.capabilities_metadata(caps())
         self.assertEqual(controls["favorites_transfer"], PACKET["capability"]["favorites_transfer"])

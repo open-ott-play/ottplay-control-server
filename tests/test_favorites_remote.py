@@ -591,7 +591,8 @@ class RemoteFavoritesTests(unittest.TestCase):
             before = len(self.api.posts())
             outcome = fresh.reconcile(original)
             self.assertEqual((outcome.outcome, outcome.verified), ("unknown", False))
-            self.assertEqual(self.api.posts()[before:], ["snapshot"])
+            self.assertEqual(self.api.posts()[before:], ["snapshot", "status"])
+            self.assertEqual(outcome.reason, "incomplete_evidence")
         self.api.mutators.clear()
         fresh = self.client(runtime="restarted-runtime")
         self.api.server = "https://wrong-controller.invalid"
@@ -599,6 +600,80 @@ class RemoteFavoritesTests(unittest.TestCase):
         self.assertFalse(fresh.reconcile(original).verified)
         self.assertEqual(len(self.api.calls), before)
         self.assertEqual(self.saved[0], original)
+
+    def test_status_reader_has_no_mutation_api_and_never_promotes_a_claimed_receipt(self):
+        client = self.client()
+        snapshot = self.snapshot(client)
+        self.assertTrue(client.replace(snapshot, snapshot.document_bytes).verified)
+        record = copy.deepcopy(self.saved[0])
+        for runtime in (RUNTIME, "restarted-runtime"):
+            reader = remote.StatusReader(self.api, "device-1", runtime=runtime,
+                monotonic=self.clock, sleep=self.clock.sleep)
+            self.assertFalse(hasattr(reader, "replace"))
+            self.assertFalse(hasattr(reader, "preview"))
+            before = len(self.api.posts())
+            self.error("invalid_configuration", reader._rpc,
+                {"op": "abort", "runtime": runtime, "transaction_id": TRANSACTION}, deadline=reader._deadline)
+            outcome = reader.observe(record)
+            self.assertEqual((outcome.outcome, outcome.verified, outcome.reason), ("unknown", False, "incomplete_evidence"))
+            self.assertIsNone(outcome.result)
+            self.assertEqual(self.api.posts()[before:], ["status"])
+        self.assertEqual(self.saved, [record])
+
+    def test_status_reader_enforces_raw_ceilings_and_one_deadline_without_post_replay(self):
+        client = self.client()
+        snapshot = self.snapshot(client)
+        self.assertTrue(client.replace(snapshot, snapshot.document_bytes).verified)
+        for case in ("raw", "metadata", "lower_metadata", "pending"):
+            with self.subTest(case=case):
+                self.api.raw_mutators.clear()
+                self.api.get_effects.clear()
+                kwargs = {}
+                if case == "raw":
+                    self.api.raw_mutators["status"] = lambda raw: raw + b" " * remote.protocol.MAX_RESPONSE_BYTES
+                elif case in ("metadata", "lower_metadata"):
+                    cap = 131072 if case == "metadata" else 1024
+                    kwargs["max_metadata_bytes"] = cap
+                    self.api.raw_mutators["status"] = lambda raw, count=cap: raw[:-2] + b" " * count + raw[-2:]
+                else:
+                    self.api.get_effects["status"] = ["pending"] * 100
+                reader = remote.StatusReader(self.api, "device-1", runtime=RUNTIME, timeout=5,
+                    monotonic=self.clock, sleep=self.clock.sleep, **kwargs)
+                before, started = len(self.api.posts()), self.clock()
+                result = reader.observe(self.saved[0])
+                self.assertEqual((result.outcome, result.verified), ("unknown", False))
+                self.assertEqual(result.reason, "deadline" if case == "pending" else "invalid_response")
+                self.assertEqual(self.api.posts()[before:], ["status"])
+                self.assertLessEqual(self.clock() - started, 5)
+
+    def test_status_reader_rejects_wrong_runtime_scope_operation_and_store_claims(self):
+        client = self.client()
+        snapshot = self.snapshot(client)
+        self.assertTrue(client.replace(snapshot, snapshot.document_bytes).verified)
+        cases = {
+            "runtime": lambda data: data.update(runtime="different-runtime"),
+            "operation": lambda data: data.update(operation_id="00000000-0000-4000-8000-000000000099"),
+            "scope": lambda data: data["receipt"]["scope"].update(sourceBindingId="00000000-0000-4000-8000-000000000099"),
+            "digest": lambda data: data["receipt"].update(document_sha256="a" * 64),
+            "stores": lambda data: data["per_store"][0].update(id="foreign-store"),
+        }
+        for label, change in cases.items():
+            with self.subTest(case=label):
+                def corrupt(data):
+                    change(data)
+                    return data
+                self.api.mutators["status"] = corrupt
+                reader = remote.StatusReader(self.api, "device-1", runtime="restarted-runtime",
+                    monotonic=self.clock, sleep=self.clock.sleep)
+                outcome = reader.observe(self.saved[0])
+                self.assertEqual((outcome.outcome, outcome.reason), ("unknown", "invalid_response"))
+                self.assertIsNone(outcome.result)
+        reader = remote.StatusReader(self.api, "device-1", runtime=RUNTIME,
+            monotonic=self.clock, sleep=self.clock.sleep)
+        self.api.server = "https://changed-controller.invalid"
+        before = len(self.api.calls)
+        self.assertEqual(reader.observe(self.saved[0]).reason, "invalid_configuration")
+        self.assertEqual(len(self.api.calls), before)
 
     def test_snapshot_target_binding_invalid_settings_and_clock_are_checked(self):
         for override in ({"receipt_retention_seconds": None}, {"runtime": "bad runtime"},
