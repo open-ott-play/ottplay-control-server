@@ -91,6 +91,29 @@ class Outcome:
                 "reason": self.reason, "request_id": self.request_id, "cleanup": self.cleanup}
 
 
+@dataclass(frozen=True)
+class PreviewOutcome:
+    """Validated dry-run evidence, never a committed or persisted receipt."""
+    operation_id: str
+    reason: str
+    request_id: str | None = None
+    cleanup: str = "unconfirmed"
+    _result: protocol.ValidatedResult | None = field(default=None, repr=False)
+    outcome: str = field(default="not_applied", init=False)
+
+    @property
+    def data(self):
+        return self._result.data if self._result is not None else None
+
+    @property
+    def ready(self):
+        return self.data["ready"] if self._result is not None else None
+
+    def summary(self):
+        return {"operation_id": self.operation_id, "outcome": self.outcome, "ready": self.ready, "reason": self.reason,
+                "request_id": self.request_id, "cleanup": self.cleanup}
+
+
 def _json(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
 
@@ -163,7 +186,7 @@ class RemoteFavorites:
         self._query = "/api/requests?" + urllib.parse.urlencode({"device_id": device})
         self._last_post = self._last_http = None
         self._http_times = deque()
-        self._replacement_started = False
+        self._staging_started = False
 
     def _now(self):
         value = self.clock()
@@ -305,7 +328,7 @@ class RemoteFavorites:
         except (protocol.ProtocolError, ValueError):
             raise RemoteError("invalid_snapshot") from None
 
-    def _preflight(self, snapshot, raw):
+    def _preflight(self, snapshot, raw, *, commit_planned=True):
         baseline = self._snapshot(snapshot)
         try:
             document = transfer.validate_document_bytes(raw, max_bytes=self.limits.max_document_bytes)
@@ -328,17 +351,19 @@ class RemoteFavorites:
                                   "size_bytes": packed.size_bytes, "chunk_count": len(packed.chunks), "persistence": "persistent"})
             for op in ("preview", "abort"):
                 self._params({"op": op, "runtime": self.runtime, "transaction_id": PLACEHOLDER_TRANSACTION})
-            self._params({"op": "commit", "runtime": self.runtime, "transaction_id": PLACEHOLDER_TRANSACTION,
-                          "operation_id": operation, "expected_revision": baseline["revision"], "plan_digest": "0" * 64})
-            self._params({"op": "status", "runtime": self.runtime, "operation_id": operation})
-            commands = len(packed.chunks) + 5  # begin/preview/commit and cleanup/status admission.
-            budget = transfer.estimate_budget(len(packed.chunks), control_commands=5,
+            if commit_planned:
+                self._params({"op": "commit", "runtime": self.runtime, "transaction_id": PLACEHOLDER_TRANSACTION,
+                              "operation_id": operation, "expected_revision": baseline["revision"], "plan_digest": "0" * 64})
+                self._params({"op": "status", "runtime": self.runtime, "operation_id": operation})
+            controls = 5 if commit_planned else 3  # Dry run has only begin/preview/abort.
+            commands = len(packed.chunks) + controls
+            budget = transfer.estimate_budget(len(packed.chunks), control_commands=controls,
                                               controller_requests=commands * 3, device_requests=commands * 3,
                                               final_receipt_reserve=RECONCILE_RESERVE)
             transfer.require_budget(budget, deadline=self._deadline, now=self._now())
             if (budget.minimum_seconds > self.limits.absolute_ttl_seconds
                     or self.limits.idle_ttl_seconds < POST_INTERVAL + HTTP_INTERVAL
-                    or self.receipt_retention_seconds < budget.minimum_seconds):
+                    or commit_planned and self.receipt_retention_seconds < budget.minimum_seconds):
                 raise RemoteError("deadline_insufficient")
             return begin, packed, params
         except transfer.TransferError as error:
@@ -375,12 +400,12 @@ class RemoteFavorites:
         if not saved or self._now() >= deadline:
             raise RemoteError("context_not_saved")
 
-    def _abort(self, transaction):
+    def _abort(self, transaction, operation):
         if transaction is None:
             return "unconfirmed"
         try:
-            self._rpc({"op": "abort", "runtime": self.runtime, "transaction_id": transaction}, deadline=self._deadline)
-            return "aborted"
+            result = self._rpc({"op": "abort", "runtime": self.runtime, "transaction_id": transaction}, deadline=self._deadline)
+            return "aborted" if result.data["operation_id"] == operation else "unconfirmed"
         except RemoteError:
             return "unconfirmed"
 
@@ -414,21 +439,56 @@ class RemoteFavorites:
         except protocol.ProtocolError:
             return Outcome(saved["operation_id"], "unknown", False, "invalid_context")
 
-    def replace(self, snapshot, document):
-        """Replace exactly this known scope; merging/planning belongs above."""
-        if self._replacement_started:
+    def _stage(self, snapshot, document, *, commit_planned):
+        """Share staging/validation; callers alone choose abort or durable commit."""
+        if self._staging_started:
             raise RemoteError("already_started")
-        begin_params, packed, append_params = self._preflight(snapshot, document)
+        begin_params, packed, append_params = self._preflight(snapshot, document, commit_planned=commit_planned)
         operation, transaction = begin_params["operation_id"], None
-        self._replacement_started = True
+        self._staging_started = True
+        remaining_commit = int(commit_planned)
         try:
-            begin = self._rpc(begin_params, deadline=self._cutoff(len(packed.chunks) + 3))
+            begin = self._rpc(begin_params, deadline=self._cutoff(len(packed.chunks) + 2 + remaining_commit))
             transaction = begin.data["transaction_id"]
             if begin.data["next_seq"] != 0 or begin.data["received_bytes"] != 0:
                 raise RemoteError("invalid_response", request_id=begin.request_id, phase="receipt")
             for index, packed_chunk in enumerate(packed.chunks):
-                self._rpc(append_params(packed_chunk.chunk, transaction), deadline=self._cutoff(len(packed.chunks) - index + 2))
-            preview = self._rpc({"op": "preview", "runtime": self.runtime, "transaction_id": transaction}, deadline=self._cutoff(2))
+                self._rpc(append_params(packed_chunk.chunk, transaction),
+                          deadline=self._cutoff(len(packed.chunks) - index + 1 + remaining_commit))
+            preview = self._rpc({"op": "preview", "runtime": self.runtime, "transaction_id": transaction},
+                                deadline=self._cutoff(1 + remaining_commit))
+            if (preview.data["base_revision"] != begin_params["expected_revision"]
+                    or preview.data["binding_revision"] != begin_params["binding_revision"]):
+                raise RemoteError("invalid_response", request_id=preview.request_id, phase="receipt")
+            return begin, preview
+        except RemoteError as error:
+            return Outcome(operation, "not_applied", False, error.code, error.request_id, self._abort(transaction, operation))
+
+    def preview(self, snapshot, document):
+        """Stage and inspect one known scope, then abort; never save or commit.
+
+        A valid blocked preview retains diagnostics with ready=False. Invalid
+        or uncertain preview evidence has ready=None. Cleanup is independent:
+        an unconfirmed abort never becomes a claimed completed cleanup.
+        """
+        staged = self._stage(snapshot, document, commit_planned=False)
+        if type(staged) is Outcome:
+            return PreviewOutcome(staged.operation_id, staged.reason, staged.request_id, staged.cleanup)
+        begin, preview = staged
+        operation = begin.request["operation_id"]
+        cleanup = self._abort(begin.data["transaction_id"], operation)
+        return PreviewOutcome(operation, "ready" if preview.data["ready"] else "blocked",
+                              preview.request_id, cleanup, preview)
+
+    def replace(self, snapshot, document):
+        """Replace exactly this known scope; merging/planning belongs above."""
+        staged = self._stage(snapshot, document, commit_planned=True)
+        if type(staged) is Outcome:
+            return staged
+        begin, preview = staged
+        begin_params = begin.request
+        operation, transaction = begin_params["operation_id"], begin.data["transaction_id"]
+        try:
             if preview.data["ready"] is not True:
                 raise RemoteError("not_ready", request_id=preview.request_id, phase="receipt")
             context = protocol.retain_context(begin, preview)
@@ -438,9 +498,9 @@ class RemoteFavorites:
             record = recovery_record(begin, preview, commit)
             self._save(record, self._cutoff(1))
         except protocol.ProtocolError:
-            return Outcome(operation, "not_applied", False, "invalid_response", cleanup=self._abort(transaction))
+            return Outcome(operation, "not_applied", False, "invalid_response", cleanup=self._abort(transaction, operation))
         except RemoteError as error:
-            return Outcome(operation, "not_applied", False, error.code, error.request_id, self._abort(transaction))
+            return Outcome(operation, "not_applied", False, error.code, error.request_id, self._abort(transaction, operation))
         try:
             result = self._rpc(commit, deadline=self._cutoff(1), context=context)
             if result.data.get("outcome") == "unknown":

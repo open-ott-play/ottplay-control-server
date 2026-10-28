@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 import urllib.parse
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from itertools import pairwise
 from pathlib import Path
 from unittest import mock
@@ -193,6 +193,139 @@ class RemoteFavoritesTests(unittest.TestCase):
         self.assertTrue(all(b["at"] - a["at"] >= 0.5 for a, b in pairwise(self.api.calls)))
         self.assertTrue(all(0 < x["timeout"] <= min(10, 145 - x["at"]) for x in self.api.calls))
         self.error("already_started", client.replace, snapshot, snapshot.document_bytes)
+
+    def assert_preview_safe(self):
+        self.assertEqual(self.saved, [])
+        self.assertNotIn("saved", self.api.events)
+        self.assertNotIn("commit", self.api.posts())
+        self.assertNotIn("status", self.api.posts())
+
+    def test_preview_ready_retains_immutable_evidence_and_aborts_without_save(self):
+        save = mock.Mock(side_effect=AssertionError("preview must not save"))
+        client = self.client(save_context=save, limits=replace(LIMITS, max_chunk_bytes=128))
+        snapshot = self.snapshot(client)
+        result = client.preview(snapshot, snapshot.document_bytes)
+        self.assertIsInstance(result, remote.PreviewOutcome)
+        self.assertEqual((result.ready, result.reason, result.outcome, result.cleanup),
+                         (True, "ready", "not_applied", "aborted"))
+        self.assertEqual(result.data["counts"], self.api.preview["counts"])
+        changed = result.data
+        changed["counts"]["mediaFavorites"] = 999
+        self.assertEqual(result.data["counts"], self.api.preview["counts"])
+        with self.assertRaises(FrozenInstanceError):
+            result.cleanup = "changed"
+        self.assertEqual(bytes(self.api.upload), snapshot.document_bytes)
+        self.assertEqual(self.api.posts(), ["snapshot", "begin", *["append"] * 6, "preview", "abort"])
+        posts = [x["at"] for x in self.api.calls if x["method"] == "POST"]
+        self.assertTrue(all(b - a >= 1.5 for a, b in pairwise(posts)))
+        self.assertTrue(all(0 < x["timeout"] <= min(10, 145 - x["at"]) for x in self.api.calls))
+        self.error("already_started", client.preview, snapshot, snapshot.document_bytes)
+        self.error("already_started", client.replace, snapshot, snapshot.document_bytes)
+        save.assert_not_called()
+        self.assert_preview_safe()
+
+    def test_blocked_preview_returns_validated_diagnostics_without_commit(self):
+        diagnostic = {"collection": "mediaFavorites", "entry_index": 0, "reason": "missing"}
+        self.api.mutators["preview"] = lambda data: data | {
+            "ready": False, "counts": data["counts"] | {"unresolved": 1}, "unresolved": [diagnostic]}
+        client = self.client()
+        snapshot = self.snapshot(client)
+        result = client.preview(snapshot, snapshot.document_bytes)
+        self.assertEqual((result.ready, result.reason, result.outcome, result.cleanup),
+                         (False, "blocked", "not_applied", "aborted"))
+        self.assertEqual(result.data["unresolved"], [diagnostic])
+        self.assertEqual(result.data["counts"]["unresolved"], 1)
+        self.assert_preview_safe()
+
+    def test_preview_abort_loss_or_wrong_operation_does_not_discard_valid_preview(self):
+        def lost(_api, _params):
+            raise OSError(PRIVATE)
+        for failure in ("enqueue", "receipt", "wrong_operation"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                if failure == "enqueue":
+                    self.api.post_effects["abort"] = lost
+                elif failure == "receipt":
+                    self.api.get_effects["abort"] = ["pending"] * 100
+                else:
+                    self.api.mutators["abort"] = lambda data: data | {"operation_id": remote.PLACEHOLDER_TRANSACTION}
+                client = self.client()
+                snapshot = self.snapshot(client)
+                result = client.preview(snapshot, snapshot.document_bytes)
+                self.assertEqual((result.ready, result.outcome, result.cleanup), (True, "not_applied", "unconfirmed"))
+                self.assertEqual(self.api.posts().count("abort"), 1)
+                self.assertLessEqual(self.clock(), 145)
+                self.assert_preview_safe()
+
+    def test_ready_and_blocked_preview_validate_context_and_schema_before_exposure(self):
+        bad = {"runtime": "other-runtime", "transaction_id": remote.PLACEHOLDER_TRANSACTION,
+               "base_revision": "changed", "binding_revision": "changed", "version": True,
+               "counts": {"channelLists": 2, "channelMemberships": 0, "mediaFavorites": True, "unresolved": 0},
+               "unresolved": [{"reason": "missing"}]}
+        for ready in (True, False):
+            for field, value in bad.items():
+                with self.subTest(ready=ready, field=field):
+                    self.setUp()
+                    self.api.mutators["preview"] = lambda data: data | {"ready": ready, field: value}
+                    client = self.client()
+                    snapshot = self.snapshot(client)
+                    result = client.preview(snapshot, snapshot.document_bytes)
+                    self.assertEqual((result.ready, result.data, result.reason, result.cleanup),
+                                     (None, None, "invalid_response", "aborted"))
+                    self.assert_preview_safe()
+
+    def test_preview_size_and_remaining_deadline_refuse_before_begin(self):
+        for case in ("oversized", "large_budget", "short_budget", "expired"):
+            with self.subTest(case=case):
+                self.setUp()
+                client = self.client(timeout=15 if case == "short_budget" else 45)
+                snapshot = self.snapshot(client)
+                raw = snapshot.document_bytes
+                if case in ("oversized", "large_budget"):
+                    raw += b" " * (1048576 + int(case == "oversized") - len(raw))
+                elif case == "expired":
+                    self.clock.now += 44
+                code = "invalid_document" if case == "oversized" else "deadline_insufficient"
+                self.error(code, client.preview, snapshot, raw)
+                self.assertEqual(self.api.posts(), ["snapshot"])
+                self.assert_preview_safe()
+
+    def test_preview_budget_reserves_abort_but_does_not_require_commit_admission(self):
+        client = self.client(timeout=17, receipt_retention_seconds=1)
+        snapshot = self.snapshot(client)
+        result = client.preview(snapshot, snapshot.document_bytes)
+        self.assertEqual((result.ready, result.cleanup), (True, "aborted"))
+        self.assertLess(self.clock(), 117)
+        self.assert_preview_safe()
+        self.setUp()
+        client = self.client(timeout=17)
+        snapshot = self.snapshot(client)
+        self.error("deadline_insufficient", client.replace, snapshot, snapshot.document_bytes)
+        self.assertEqual(self.api.posts(), ["snapshot"])
+
+    def test_preview_uncertain_staging_and_late_receipt_never_commit(self):
+        def lost(_api, _params):
+            raise OSError(PRIVATE)
+        def late(_api, response):
+            self.clock.now = 140
+            return 200, response
+        for phase in ("begin", "append", "preview", "late"):
+            with self.subTest(phase=phase):
+                self.setUp()
+                if phase == "late":
+                    self.api.get_effects["preview"] = [late]
+                else:
+                    self.api.post_effects[phase] = lost
+                client = self.client()
+                snapshot = self.snapshot(client)
+                result = client.preview(snapshot, snapshot.document_bytes)
+                self.assertIsNone(result.ready)
+                self.assertIsNone(result.data)
+                self.assertEqual(result.outcome, "not_applied")
+                self.assertEqual(result.cleanup, "unconfirmed" if phase == "begin" else "aborted")
+                self.assertEqual(self.api.posts().count(phase if phase != "late" else "preview"), 1)
+                self.assertLessEqual(self.clock(), 145)
+                self.assert_preview_safe()
 
     def test_large_document_refused_before_begin_and_lower_chunk_limit_honored(self):
         client = self.client()
@@ -403,6 +536,7 @@ class RemoteFavoritesTests(unittest.TestCase):
         snapshot = self.snapshot(client)
         foreign = remote.Snapshot(("wrong", "device-1", RUNTIME), snapshot._result)
         self.error("invalid_snapshot", client.replace, foreign, snapshot.document_bytes)
+        self.error("invalid_snapshot", client.preview, foreign, snapshot.document_bytes)
         self.assertEqual(self.api.posts(), ["snapshot"])
         stalled = self.client(sleep=lambda _: None)
         self.error("clock_invalid", stalled.snapshot, FIXTURE["scope"])
@@ -469,21 +603,30 @@ class RemoteFavoritesTests(unittest.TestCase):
             method = self.api.api if payload is not None else self.api.api_raw
             status, body = method(parsed.path + "?" + parsed.query, payload, timeout)
             return Response(status, body)
-        real = ott.Client.__new__(ott.Client)
-        real.server, real.timeout, real.token = self.api.server, 45, PRIVATE
-        real.opener = mock.Mock(open=open_request)
-        client = self.client()
-        client.client = real
-        with mock.patch.object(ott.time, "monotonic", self.clock):
-            snapshot = self.snapshot(client)
-            result = client.replace(snapshot, snapshot.document_bytes)
-        self.assertTrue(result.verified)
-        self.assertTrue(all(x.get_method() in ("GET", "POST") for x in observed))
-        self.assertEqual(sum(x.get_method() == "POST" for x in observed), 5)
-        for request in observed:
-            if request.data:
-                self.assertEqual(request.data, json.dumps(json.loads(request.data), ensure_ascii=False).encode())
-        self.assertNotIn(PRIVATE, json.dumps(result.summary()))
+        for operation in ("replace", "preview"):
+            with self.subTest(operation=operation):
+                self.setUp()
+                observed.clear()
+                real = ott.Client.__new__(ott.Client)
+                real.server, real.timeout, real.token = self.api.server, 45, PRIVATE
+                real.opener = mock.Mock(open=open_request)
+                client = self.client()
+                client.client = real
+                with mock.patch.object(ott.time, "monotonic", self.clock):
+                    snapshot = self.snapshot(client)
+                    result = getattr(client, operation)(snapshot, snapshot.document_bytes)
+                if operation == "replace":
+                    self.assertTrue(result.verified)
+                else:
+                    self.assertTrue(result.ready)
+                    self.assertEqual(result.cleanup, "aborted")
+                    self.assert_preview_safe()
+                self.assertTrue(all(x.get_method() in ("GET", "POST") for x in observed))
+                self.assertEqual(sum(x.get_method() == "POST" for x in observed), 5)
+                for request in observed:
+                    if request.data:
+                        self.assertEqual(request.data, json.dumps(json.loads(request.data), ensure_ascii=False).encode())
+                self.assertNotIn(PRIVATE, json.dumps(result.summary()))
 
 
 if __name__ == "__main__":
