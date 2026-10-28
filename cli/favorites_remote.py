@@ -1,0 +1,452 @@
+"""Inactive favorites transport: one deadline, paced HTTP, no POST replay.
+
+The host supplies verified runtime/limits, scope codec and durable storage
+bound to controller/device. No discovery, CLI wiring or filesystem I/O here.
+"""
+import copy
+import hashlib
+import json
+import math
+import queue
+import re
+import threading
+import time
+import urllib.parse
+import uuid
+from collections import deque
+from dataclasses import dataclass, field
+
+import favorites_protocol as protocol
+import favorites_transfer as transfer
+
+ACTION = "favorites_transfer"
+POST_INTERVAL, HTTP_INTERVAL, POLL_INTERVAL = 1.5, 0.5, 1.5
+RECONCILE_RESERVE = 10.0
+MAX_RECOVERY_BYTES = 128 * 1024
+PLACEHOLDER_TRANSACTION = "00000000-0000-4000-8000-000000000000"
+RECOVERY_FIELDS = frozenset(("version", "operation_id", "runtime", "begin_request", "begin_response",
+                             "begin_request_id", "preview_request", "preview_response", "preview_request_id",
+                             "commit_request"))
+ERROR_CODES = frozenset(("invalid_configuration", "invalid_snapshot", "invalid_document", "invalid_context",
+                         "deadline_insufficient", "deadline", "clock_invalid", "already_started", "invalid_response",
+                         "transport", "http_error", "pending_timeout", "player_rejected", "player_unsupported",
+                         "not_ready", "context_not_saved"))
+
+
+class RemoteError(ValueError):
+    """Fixed diagnostics; never expose exception text, URLs, payloads or stage IDs."""
+    def __init__(self, code, *, request_id=None, phase=None, http_status=None):
+        self.code = code if code in ERROR_CODES else "invalid_response"
+        self.request_id, self.phase, self.http_status = request_id, phase, http_status
+        super().__init__("Favorites transfer: " + self.code.replace("_", " ") + ".")
+
+
+@dataclass(frozen=True)
+class Limits:
+    """All fields come from an explicitly validated adapter advertisement."""
+    max_document_bytes: int
+    max_chunk_bytes: int
+    max_chunks: int
+    max_envelope_bytes: int
+    max_snapshot_response_bytes: int
+    max_active_stages: int
+    idle_ttl_seconds: int
+    absolute_ttl_seconds: int
+
+    def validate(self):
+        maxima = (1048576, 8192, 256, 16384, 2097152, 1, 120, 600)
+        values = tuple(getattr(self, key) for key in self.__dataclass_fields__)
+        if (any(type(v) is not int or not 1 <= v <= m for v, m in zip(values, maxima, strict=True))
+                or self.idle_ttl_seconds > self.absolute_ttl_seconds):
+            raise RemoteError("invalid_configuration")
+        return self
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    _target: tuple = field(repr=False)
+    _result: protocol.ValidatedResult = field(repr=False)
+
+    @property
+    def data(self):
+        return self._result.data
+
+    @property
+    def document_bytes(self):
+        return self._result.raw_document
+
+
+@dataclass(frozen=True)
+class Outcome:
+    operation_id: str
+    outcome: str
+    verified: bool
+    reason: str
+    request_id: str | None = None
+    cleanup: str = "not_needed"
+    result: protocol.ValidatedResult | None = field(default=None, repr=False)
+
+    def summary(self):
+        return {"operation_id": self.operation_id, "outcome": self.outcome, "verified": self.verified,
+                "reason": self.reason, "request_id": self.request_id, "cleanup": self.cleanup}
+
+
+def _json(value):
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+
+def _restore(record):
+    try:
+        if (type(record) is not dict or set(record) != RECOVERY_FIELDS or type(record["version"]) is not int
+                or record["version"] != 1 or len(_json(record)) > MAX_RECOVERY_BYTES):
+            raise RemoteError("invalid_context")
+        saved = json.loads(_json(record))
+        begin = protocol.validate_result(saved["begin_request"], saved["begin_response"],
+                                         request_id=saved["begin_request_id"], response_id=saved["begin_request_id"], status="ok")
+        preview = protocol.validate_result(saved["preview_request"], saved["preview_response"],
+                                           request_id=saved["preview_request_id"], response_id=saved["preview_request_id"], status="ok")
+        context = protocol.retain_context(begin, preview)
+        expected = {"op": "commit", "runtime": begin.request["runtime"],
+                    "transaction_id": begin.data["transaction_id"], "operation_id": begin.request["operation_id"],
+                    "expected_revision": begin.request["expected_revision"], "plan_digest": preview.data["plan_digest"]}
+        if (saved["commit_request"] != expected or saved["runtime"] != expected["runtime"]
+                or saved["operation_id"] != expected["operation_id"]):
+            raise RemoteError("invalid_context")
+        protocol.validate_request(expected)
+        return saved, context
+    except (KeyError, TypeError, ValueError, RecursionError):
+        raise RemoteError("invalid_context") from None
+
+
+def validate_recovery_record(record):
+    """Storage validator: no document/base64/URL or filesystem access."""
+    return _restore(record)[0]
+
+
+def restore_context(record):
+    """Restore receipt bindings after CLI restart; never authorize commit replay."""
+    return _restore(record)[1]
+
+
+def recovery_record(begin, preview, commit_request):
+    return validate_recovery_record({
+        "version": 1, "operation_id": begin.request["operation_id"], "runtime": begin.request["runtime"],
+        "begin_request": begin.request, "begin_response": begin.data, "begin_request_id": begin.request_id,
+        "preview_request": preview.request, "preview_response": preview.data, "preview_request_id": preview.request_id,
+        "commit_request": commit_request,
+    })
+
+
+class RemoteFavorites:
+    def __init__(self, client, device, *, runtime, limits, receipt_retention_seconds, scope_validator,
+                 save_context, timeout=45, monotonic=time.monotonic, sleep=time.sleep, uuid_factory=uuid.uuid4):
+        if (not callable(getattr(client, "api", None)) or not callable(getattr(client, "api_raw", None)) or type(device) is not str
+                or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", device) is None
+                or type(runtime) is not str or protocol.RUNTIME.fullmatch(runtime) is None
+                or type(limits) is not Limits or type(receipt_retention_seconds) is not int
+                or not 1 <= receipt_retention_seconds <= 86400 or not callable(scope_validator)
+                or not callable(save_context) or not callable(monotonic) or not callable(sleep)
+                or not callable(uuid_factory) or type(timeout) not in (int, float)
+                or not math.isfinite(timeout) or not 0 < timeout <= 300):
+            raise RemoteError("invalid_configuration")
+        server = getattr(client, "server", None)
+        if type(server) is not str or not server or len(server) > 2048:
+            raise RemoteError("invalid_configuration")
+        self.client, self.device, self.runtime = client, device, runtime
+        self.limits = limits.validate()
+        self.receipt_retention_seconds = receipt_retention_seconds
+        self.scope_validator, self.save_context = scope_validator, save_context
+        self.clock, self.sleep, self.uuid_factory = monotonic, sleep, uuid_factory
+        self._clock_last = None
+        self._deadline = self._now() + timeout
+        self._target = (hashlib.sha256(server.encode("utf-8")).hexdigest(), device, runtime)
+        self._query = "/api/requests?" + urllib.parse.urlencode({"device_id": device})
+        self._last_post = self._last_http = None
+        self._http_times = deque()
+        self._replacement_started = False
+
+    def _now(self):
+        value = self.clock()
+        if (type(value) not in (int, float) or not math.isfinite(value) or value < 0
+                or self._clock_last is not None and value < self._clock_last):
+            raise RemoteError("clock_invalid")
+        self._clock_last = float(value)
+        return float(value)
+
+    def _wait(self, target, deadline):
+        while True:
+            now = self._now()
+            if now >= deadline or target >= deadline:
+                raise RemoteError("deadline")
+            if now >= target:
+                return
+            self.sleep(min(5, target - now))
+            if self._now() <= now:
+                raise RemoteError("clock_invalid")
+
+    def _slot(self, *, post, deadline, not_before=0):
+        now = self._now()
+        while self._http_times and self._http_times[0] <= now - 60:
+            self._http_times.popleft()
+        start = max(now, not_before)
+        if self._last_http is not None:
+            start = max(start, self._last_http + HTTP_INTERVAL)
+        if post and self._last_post is not None:
+            start = max(start, self._last_post + POST_INTERVAL)
+        # Conservatively enforce the lower controller240/device120 HTTP budget.
+        # Shared traffic is unknown and may still cause server backpressure.
+        if len(self._http_times) >= 120:
+            start = max(start, self._http_times[0] + 60)
+        self._wait(start, deadline)
+
+    def _api(self, path, payload, *, deadline, not_before=0):
+        server = getattr(self.client, "server", None)
+        if (type(server) is not str or hashlib.sha256(server.encode("utf-8")).hexdigest() != self._target[0]):
+            raise RemoteError("invalid_configuration")
+        self._slot(post=payload is not None, deadline=deadline, not_before=not_before)
+        started = self._now()
+        self._last_http = started
+        if payload is not None:
+            self._last_post = started
+        self._http_times.append(started)
+        try:
+            call = self.client.api if payload is not None else self.client.api_raw
+            response = call(path, payload, timeout=min(10, deadline - started))
+        except Exception as error:  # noqa: BLE001 - transport text may expose credentials
+            code = getattr(error, "code", None)
+            if type(code) is int and 100 <= code <= 599:
+                raise RemoteError("http_error", http_status=code) from None
+            category = getattr(error, "category", None)
+            if isinstance(error, OSError) or category in ("deadline", "dns", "tls", "socket", "protocol", "truncated", "unknown"):
+                raise RemoteError("transport") from None
+            raise RemoteError("invalid_response") from None
+        if self._now() >= deadline:
+            raise RemoteError("deadline")
+        if type(response) is not tuple or len(response) != 2 or type(response[0]) is not int:
+            raise RemoteError("invalid_response")
+        return response
+
+    def _params(self, params):
+        try:
+            params = protocol.validate_request(params)
+            envelopes = transfer.request_envelopes(ACTION, params)
+            if max(len(envelopes.client), len(envelopes.queued_upper_bound)) > self.limits.max_envelope_bytes:
+                raise RemoteError("invalid_configuration")
+            return params
+        except (protocol.ProtocolError, transfer.TransferError):
+            raise RemoteError("invalid_response") from None
+
+    def _rpc(self, params, *, deadline, context=None):
+        params = self._params(params)
+        request_id, phase = None, "enqueue"
+        try:
+            status, queued = self._api(self._query, {"action": ACTION, "params": copy.deepcopy(params)}, deadline=deadline)
+            if (status != 202 or type(queued) is not dict or set(queued) != {"id", "status"}
+                    or queued["status"] != "queued" or type(queued["id"]) is not str
+                    or protocol.REQUEST_ID.fullmatch(queued["id"]) is None):
+                raise RemoteError("invalid_response")
+            request_id, phase = queued["id"], "receipt"
+            path = self._query + "&id=" + request_id
+            not_before, delay, last_error = 0, POLL_INTERVAL, None
+            while self._now() < deadline:
+                try:
+                    status, body = self._api(path, None, deadline=deadline, not_before=not_before)
+                except RemoteError as error:
+                    if error.code == "transport" or error.code == "http_error" and error.http_status in (429, 502, 503, 504):
+                        last_error = error.code
+                        delay = min(8, max(2, delay * 2))
+                        not_before = self._now() + delay
+                        continue
+                    raise
+                if type(body) is not bytes or len(body) > self.limits.max_snapshot_response_bytes:
+                    raise RemoteError("invalid_response")
+                if status == 202:
+                    try:
+                        pending = transfer.validate_document_bytes(body, max_bytes=min(protocol.MAX_METADATA_BYTES,
+                                                                                       self.limits.max_snapshot_response_bytes))
+                    except transfer.TransferError:
+                        raise RemoteError("invalid_response") from None
+                    if pending != {"status": "pending"}:
+                        raise RemoteError("invalid_response")
+                    last_error, delay = None, POLL_INTERVAL
+                    not_before = self._now() + delay
+                    continue
+                if status != 200:
+                    raise RemoteError("invalid_response")
+                try:
+                    result = protocol.validate_response(params, body, request_id=request_id, context=context,
+                                                        scope_validator=self.scope_validator)
+                except (protocol.ProtocolError, TypeError, ValueError, RecursionError):
+                    raise RemoteError("invalid_response") from None
+                if result.status != "ok":
+                    raise RemoteError("player_rejected" if result.status == "rejected" else "player_unsupported")
+                return result
+            raise RemoteError(last_error or "pending_timeout")
+        except RemoteError as error:
+            raise RemoteError(error.code, request_id=request_id, phase=phase, http_status=error.http_status) from None
+
+    def snapshot(self, scope):
+        """Read a complete snapshot; do not change provider, favorites or UI."""
+        response = self._rpc({"op": "snapshot", "runtime": self.runtime, "scope": scope}, deadline=self._deadline)
+        if response.data["size_bytes"] > self.limits.max_document_bytes:
+            raise RemoteError("invalid_response", request_id=response.request_id, phase="receipt")
+        return Snapshot(self._target, response)
+
+    def _snapshot(self, snapshot):
+        if type(snapshot) is not Snapshot or snapshot._target != self._target:
+            raise RemoteError("invalid_snapshot")
+        try:
+            response = protocol.validate_result(snapshot._result.request, snapshot.data,
+                                                request_id=snapshot._result.request_id, response_id=snapshot._result.request_id,
+                                                status="ok", scope_validator=self.scope_validator)
+            if response.request["op"] != "snapshot" or response.request["runtime"] != self.runtime:
+                raise RemoteError("invalid_snapshot")
+            return response.data
+        except (protocol.ProtocolError, ValueError):
+            raise RemoteError("invalid_snapshot") from None
+
+    def _preflight(self, snapshot, raw):
+        baseline = self._snapshot(snapshot)
+        try:
+            document = transfer.validate_document_bytes(raw, max_bytes=self.limits.max_document_bytes)
+            checked = self.scope_validator(copy.deepcopy(document))
+            if type(document) is not dict or checked != document or document.get("scope") != baseline["scope"]:
+                raise RemoteError("invalid_document")
+            operation = str(self.uuid_factory())
+            if protocol.UUID.fullmatch(operation) is None:
+                raise RemoteError("invalid_configuration")
+            def params(chunk, transaction=PLACEHOLDER_TRANSACTION):
+                return {"op": "append", "runtime": self.runtime, "transaction_id": transaction,
+                        "seq": chunk.seq, "offset": chunk.offset, "chunk_sha256": chunk.payload.sha256,
+                        "data_base64": chunk.payload.data_base64}
+            packed = transfer.pack_document(raw, lambda chunk: transfer.request_envelopes(ACTION, params(chunk)),
+                                            chunk_bytes=self.limits.max_chunk_bytes, max_bytes=self.limits.max_document_bytes,
+                                            rpc_bytes=self.limits.max_envelope_bytes, max_chunks=self.limits.max_chunks)
+            begin = self._params({"op": "begin", "runtime": self.runtime, "operation_id": operation,
+                                  "scope": baseline["scope"], "expected_revision": baseline["revision"],
+                                  "binding_revision": baseline["binding_revision"], "document_sha256": packed.sha256,
+                                  "size_bytes": packed.size_bytes, "chunk_count": len(packed.chunks), "persistence": "persistent"})
+            for op in ("preview", "abort"):
+                self._params({"op": op, "runtime": self.runtime, "transaction_id": PLACEHOLDER_TRANSACTION})
+            self._params({"op": "commit", "runtime": self.runtime, "transaction_id": PLACEHOLDER_TRANSACTION,
+                          "operation_id": operation, "expected_revision": baseline["revision"], "plan_digest": "0" * 64})
+            self._params({"op": "status", "runtime": self.runtime, "operation_id": operation})
+            commands = len(packed.chunks) + 5  # begin/preview/commit and cleanup/status admission.
+            budget = transfer.estimate_budget(len(packed.chunks), control_commands=5,
+                                              controller_requests=commands * 3, device_requests=commands * 3,
+                                              final_receipt_reserve=RECONCILE_RESERVE)
+            transfer.require_budget(budget, deadline=self._deadline, now=self._now())
+            if (budget.minimum_seconds > self.limits.absolute_ttl_seconds
+                    or self.limits.idle_ttl_seconds < POST_INTERVAL + HTTP_INTERVAL
+                    or self.receipt_retention_seconds < budget.minimum_seconds):
+                raise RemoteError("deadline_insufficient")
+            return begin, packed, params
+        except transfer.TransferError as error:
+            raise RemoteError("deadline_insufficient" if error.code == "deadline_insufficient" else "invalid_document") from None
+        except RemoteError:
+            raise
+        except Exception:  # noqa: BLE001 - codec/generator failures may expose private data
+            raise RemoteError("invalid_document") from None
+
+    def _cutoff(self, commands):
+        return self._deadline - RECONCILE_RESERVE - (commands - 1) * POST_INTERVAL
+
+    def _save(self, record, deadline):
+        """Late callback completion may save context but can never send commit."""
+        remaining = deadline - self._now()
+        if remaining <= 0:
+            raise RemoteError("context_not_saved")
+        completed = queue.Queue(maxsize=1)
+        def persist():
+            try:
+                completed.put(self.save_context(copy.deepcopy(record)) is True)
+            except Exception:  # noqa: BLE001 - private storage errors are not public metadata
+                completed.put(False)
+        threading.Thread(target=persist, name="ott-favorites-context", daemon=True).start()
+        while True:
+            remaining = deadline - self._now()
+            if remaining <= 0:
+                raise RemoteError("context_not_saved")
+            try:
+                saved = completed.get(timeout=min(5, remaining))
+                break
+            except queue.Empty:
+                continue
+        if not saved or self._now() >= deadline:
+            raise RemoteError("context_not_saved")
+
+    def _abort(self, transaction):
+        if transaction is None:
+            return "unconfirmed"
+        try:
+            self._rpc({"op": "abort", "runtime": self.runtime, "transaction_id": transaction}, deadline=self._deadline)
+            return "aborted"
+        except RemoteError:
+            return "unconfirmed"
+
+    def _outcome(self, result, operation):
+        data = result.data
+        if result.verified:
+            return Outcome(operation, "verified", True, "verified_receipt", result.request_id, result=result)
+        outcome = data.get("outcome", "unknown")
+        if outcome not in ("not_applied", "partial", "unknown"):
+            outcome = "unknown"
+        return Outcome(operation, outcome, False, "observed_" + outcome, result.request_id, result=result)
+
+    def reconcile(self, record):
+        """Read status only; load record from the same target-bound private store.
+
+        A player restart requires a fresh complete snapshot of the original
+        scope and unchanged binding revision. Original commit evidence stays
+        immutable and cannot authorize mutations under the new runtime.
+        """
+        saved, context = _restore(record)
+        try:
+            if saved["runtime"] != self.runtime:
+                snapshot = self.snapshot(saved["begin_request"]["scope"])
+                self._snapshot(snapshot)  # Same controller/device/current-runtime ownership.
+                context = protocol.status_context(context, snapshot._result)
+            result = self._rpc({"op": "status", "runtime": self.runtime, "operation_id": saved["operation_id"]},
+                               deadline=self._deadline, context=context)
+            return self._outcome(result, saved["operation_id"])
+        except RemoteError as error:
+            return Outcome(saved["operation_id"], "unknown", False, error.code, error.request_id)
+        except protocol.ProtocolError:
+            return Outcome(saved["operation_id"], "unknown", False, "invalid_context")
+
+    def replace(self, snapshot, document):
+        """Replace exactly this known scope; merging/planning belongs above."""
+        if self._replacement_started:
+            raise RemoteError("already_started")
+        begin_params, packed, append_params = self._preflight(snapshot, document)
+        operation, transaction = begin_params["operation_id"], None
+        self._replacement_started = True
+        try:
+            begin = self._rpc(begin_params, deadline=self._cutoff(len(packed.chunks) + 3))
+            transaction = begin.data["transaction_id"]
+            if begin.data["next_seq"] != 0 or begin.data["received_bytes"] != 0:
+                raise RemoteError("invalid_response", request_id=begin.request_id, phase="receipt")
+            for index, packed_chunk in enumerate(packed.chunks):
+                self._rpc(append_params(packed_chunk.chunk, transaction), deadline=self._cutoff(len(packed.chunks) - index + 2))
+            preview = self._rpc({"op": "preview", "runtime": self.runtime, "transaction_id": transaction}, deadline=self._cutoff(2))
+            if preview.data["ready"] is not True:
+                raise RemoteError("not_ready", request_id=preview.request_id, phase="receipt")
+            context = protocol.retain_context(begin, preview)
+            commit = {"op": "commit", "runtime": self.runtime, "transaction_id": transaction,
+                      "operation_id": operation, "expected_revision": begin_params["expected_revision"],
+                      "plan_digest": preview.data["plan_digest"]}
+            record = recovery_record(begin, preview, commit)
+            self._save(record, self._cutoff(1))
+        except protocol.ProtocolError:
+            return Outcome(operation, "not_applied", False, "invalid_response", cleanup=self._abort(transaction))
+        except RemoteError as error:
+            return Outcome(operation, "not_applied", False, error.code, error.request_id, self._abort(transaction))
+        try:
+            result = self._rpc(commit, deadline=self._cutoff(1), context=context)
+            if result.data.get("outcome") == "unknown":
+                return self.reconcile(record)
+            return self._outcome(result, operation)
+        except RemoteError:
+            # The attempt may still execute: only status can establish its
+            # outcome. Never abort, resend commit or fabricate not_applied.
+            return self.reconcile(record)

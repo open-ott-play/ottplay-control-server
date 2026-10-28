@@ -3,7 +3,10 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py` and `fleet.py`. Python 3.12 is the version used by CI. Commands take a short
+`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`,
+`favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
+`favorites_operations.py`, `favorites_remote.py` and `preset_favorites.py`.
+Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -45,7 +48,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles), [Local videos profiles](#local-videos-profiles) and [named setups](#named-setups)
-- [Favorites across profiles](#favorites-across-profiles)
+- [Saved favorites documents](#saved-favorites-documents) and [favorites across profiles](#favorites-across-profiles)
 - [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
