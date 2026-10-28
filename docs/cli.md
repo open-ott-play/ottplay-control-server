@@ -1981,6 +1981,18 @@ original Plex source or profile is inactive or deleted. It does not switch
 providers, recreate a profile or copy credentials. The original record supplies
 its scope.
 
+On updated players that include the standby-recovery fix, `fav recovery` and
+`fav recovery inspect` work while the player remains in standby; no `go` command
+is needed for these reads. Remote-control authorization, parental restrictions,
+kiosk policy and runtime checks still apply. Acknowledgement and new transfers
+remain blocked in standby and require the player to be awake with the relevant
+controls unlocked. Read-only access does not grant permission to write.
+
+```sh
+ott d1 fav recovery
+ott d1 fav recovery inspect OPERATION_UUID
+```
+
 This requires a compatible controller and CLI plus the independent
 `favorites_transfer_recovery` capability. A new mutating transfer, clear or
 binding change first checks recovery support and authorization through a
@@ -2006,6 +2018,17 @@ guard can expose read-only recovery without accepting an acknowledgement.
 
 Troubleshooting:
 
+- Missing `favorites_transfer_recovery` in `ott d1 caps`: verify the build at
+  this player's actual hosting URL contains the standby-recovery fix. A published
+  web update does not replace code already loaded by an open player, and a new
+  controller or CLI cannot add a missing player capability. Player
+  `v1.1.61-beta.16` blocks these reads in standby. After the correct
+  assets are deployed, reload that existing instance once with `ott d1 restart`
+  when its restart policy permits it, then inspect `ott d1 caps` and
+  `ott d1 doctor --lane web --json`. Confirm the new build/runtime before
+  `ott d1 fav recovery`; do not repeatedly retry the
+  request or wake the player merely to discover support. Older builds without
+  this fix must not be assumed to support standby recovery.
 - `busy`: a physical writer still owns the storage lock. Let it settle, or
   restart the player/tab that owns the stalled operation, then inspect again.
   Another tab sharing the same storage can still hold the lock.
