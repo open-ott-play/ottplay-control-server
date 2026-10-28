@@ -208,6 +208,7 @@ class UpdatePlan:
     after_revision: str
     changed: bool
     _document: dict = field(repr=False)
+    storage_key: str = KEY
 
     def summary(self):
         return {key: getattr(self, key) for key in
@@ -215,6 +216,8 @@ class UpdatePlan:
 
 
 class Store:
+    _key = KEY
+
     def __init__(self, path, *, preset_names, resolve_preset, validate_document):
         self.path = Path(path).expanduser().absolute()
         self.preset_names = preset_names
@@ -248,13 +251,13 @@ class Store:
     def inspect(self, config):
         """Validate all stored documents; report and retain orphan entries."""
         names = self._names(config)
-        if KEY not in config:
+        if self._key not in config:
             return {"present": False, "presets": {}, "orphans": []}
-        extension = config[KEY]
+        extension = config[self._key]
         if (not isinstance(extension, dict) or set(extension) != {"version", "presets"}
                 or type(extension["version"]) is not int or extension["version"] != 1
                 or not isinstance(extension["presets"], dict)):
-            raise StorageError("invalid_extension", "Use the version 1 preset_favorites extension with a presets mapping.")
+            raise StorageError("invalid_extension", f"Use the version 1 {self._key} extension with a presets mapping.")
         keys = self._names({"presets": extension["presets"]})
         canonical = {name.casefold(): name for name in names}
         if any(key.casefold() in canonical and key != canonical[key.casefold()] for key in keys):
@@ -308,13 +311,13 @@ class Store:
         if revision[:12] != match.group(1):
             raise StorageError("invalid_backup", "The favorites backup does not match its recorded byte digest.")
         config = _decode(raw)
-        if KEY not in config:
+        if self._key not in config:
             raise StorageError("backup_document_missing", "The backup has no favorites document for the selected preset.")
-        extension = config[KEY]
+        extension = config[self._key]
         if (not isinstance(extension, dict) or set(extension) != {"version", "presets"}
                 or type(extension["version"]) is not int or extension["version"] != 1
                 or not isinstance(extension["presets"], dict)):
-            raise StorageError("invalid_extension", "Use the version 1 preset_favorites extension with a presets mapping.")
+            raise StorageError("invalid_extension", f"Use the version 1 {self._key} extension with a presets mapping.")
         self._names({"presets": extension["presets"]})
         if name not in extension["presets"]:
             raise StorageError("backup_document_missing", "The backup has no favorites document for the selected preset.")
@@ -329,10 +332,11 @@ class Store:
         before, after = self.get(config, name), self._document(document)
         before_revision, after_revision = _document_digest(before), _document_digest(after)
         return UpdatePlan(str(self.path), name, _digest(raw), before_revision, after_revision,
-                          before_revision != after_revision, after)
+                          before_revision != after_revision, after, self._key)
 
     def _check_plan(self, plan, raw):
-        if not isinstance(plan, UpdatePlan) or plan.path != str(self.path):
+        if (not isinstance(plan, UpdatePlan) or plan.path != str(self.path)
+                or plan.storage_key != self._key):
             raise StorageError("invalid_plan", "The favorites plan belongs to another configuration.")
         if _digest(raw) != plan.source_revision:
             raise StorageError("config_changed", "The configuration changed; prepare a new favorites plan.")
@@ -362,7 +366,7 @@ class Store:
         raw, identity = parent.read(self.path.name)
         config, document = self._check_plan(plan, raw)
         updated = copy.deepcopy(config)
-        updated.setdefault(KEY, {"version": 1, "presets": {}})["presets"][plan.preset] = document
+        updated.setdefault(self._key, {"version": 1, "presets": {}})["presets"][plan.preset] = document
         after = (json.dumps(updated, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode("utf-8")
         if len(after) > MAX_CONFIG_BYTES:
             raise StorageError("too_large", "The updated private configuration exceeds the 4 MiB limit.")
