@@ -80,6 +80,33 @@ no command payloads, provider URLs, tokens, screenshots or response bodies.
 Pending commands are not persisted. This is bounded deduplication and outcome
 tracking, not exactly-once execution, a durable work queue or multi-server HA.
 
+### Upgrade and rollback compatibility
+
+Revisions with the forward-compatible journal reader preserve structurally valid
+version-1 records whose operation name belongs to a newer server. Such names are
+bounded ASCII identifiers; accepting a saved name does not register a command or
+grant an operator permission. The older reader exposes an unfamiliar operation as
+`state: "unknown"` with an empty `result_status`, while preserving its original
+transport audit fields on disk. No queue entry is reconstructed or replayed.
+Normal expiry, capacity, ownership and private-file checks still apply.
+
+Before enabling a newly added action:
+
+1. Establish a rollback binary that contains this reader and verify its startup
+   against a private fixture copy of the expected journal format.
+2. Retain an operator configuration accepted by that binary. Unknown commands in
+   operator configuration remain invalid; journal compatibility does not expand
+   configured permissions or make every future configuration compatible.
+3. Keep the current journal through rollback. Never delete or truncate it to make
+   startup succeed, or restore an older copy that loses unresolved operations.
+4. Reconcile unknown outcomes using a compatible controller/player before another
+   mutation. A hidden result status, expired record or missing ACK is not evidence
+   that the original command had no effect.
+
+Binaries predating this reader can still refuse a journal containing newer
+operation names. This change provides a future rollback baseline; it cannot
+retroactively change an already installed older binary.
+
 ## Plan, apply, resume and verify Local/Home
 
 Existing `ott PLAYER load PRESET` behavior is preserved. For the new workflow:
