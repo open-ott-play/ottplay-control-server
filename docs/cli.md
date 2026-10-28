@@ -1820,7 +1820,7 @@ the current file and retained backup before another write. Do not run older CLI
 versions or editors that ignore the configuration lock concurrently.
 
 Standalone `fav bindings`, `bind`, `collect`, `load`, `diff`, `clear` and `status`
-are implemented in the pinned source; their coordinated deployment is described
+are implemented in the pinned source; compatibility requirements are described
 below. Automatic favorites delivery through ordinary `ott PLAYER load PRESET`
 is not yet integrated. A preset with its own saved favorites document stops that
 ordinary load before any preset settings are sent. For example, after
@@ -1838,11 +1838,14 @@ and current implementation limits. Existing remote bookmarks below are unchanged
 
 ### Scoped synchronization rollout and recovery
 
-The coordinated player/controller/CLI release is still being qualified. The
-first adapter covers the **current verified Plex source**, including its TV
+Scoped synchronization requires compatible player, controller and CLI versions.
+The first adapter covers the **current verified Plex source**, including its TV
 favorite lists and media favorites. It does not export all configured providers
 or inactive profiles. Merely installing a new controller does not enable this
-adapter on an older player.
+adapter on an older player. Check `ott PLAYER caps` on each target; the
+`favorites_transfer` capability is advertised only after the player qualifies
+its current source and storage. An omitted capability does not authorize a
+transfer, even if another player with the same application version supports it.
 
 Once both ends advertise support, the explicit workflow is:
 
