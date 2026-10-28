@@ -271,6 +271,20 @@ class RecoveryHostTests(unittest.TestCase):
         self.assertEqual(list(self.directory.iterdir()), [self.path])
         self.assertEqual(self.path.read_bytes(), original)
 
+    def test_standby_recovery_list_and_inspect_do_not_require_transfer_or_wake(self):
+        self.client.caps_change = lambda data: {
+            **{key: value for key, value in data.items() if key != "favorites_transfer"},
+            "player": data["player"] | {"standby": True},
+        }
+        original = self.path.read_bytes()
+        self.assertEqual(self.call(["recovery"])["status"], "recovery_list")
+        self.assertEqual(self.call(["recovery", "inspect", OPERATION])["status"], "recovery_inspected")
+        self.assertEqual(self.client.posts(), ["capabilities", "recovery"] * 2)
+        self.assertEqual(self.modes(), ["list", "inspect"])
+        self.assertEqual(self.client.effects, 0)
+        self.assertEqual(list(self.directory.iterdir()), [self.path])
+        self.assertEqual(self.path.read_bytes(), original)
+
     def test_confirm_private_intent_then_exact_ack_preserves_unknown(self):
         result = self.call(["ack", OPERATION, "--confirm", PLAN])
         self.assertEqual(result["status"], "acknowledgement_confirmed")

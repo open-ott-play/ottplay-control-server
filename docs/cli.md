@@ -1987,6 +1987,9 @@ is needed for these reads. Remote-control authorization, parental restrictions,
 kiosk policy and runtime checks still apply. Acknowledgement and new transfers
 remain blocked in standby and require the player to be awake with the relevant
 controls unlocked. Read-only access does not grant permission to write.
+If ordinary transfer discovery reports standby without a transfer capability,
+the CLI explains how to wake the player with `ott PLAYER go`; it never wakes or
+retries automatically. Waking starts the player's configured playback.
 
 ```sh
 ott d1 fav recovery

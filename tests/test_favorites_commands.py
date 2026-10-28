@@ -232,6 +232,72 @@ class FavoritesCommandsTests(unittest.TestCase):
             self.call("load", preset="Home", mode="replace")
         self.assertEqual(self.client.posts(), [])
 
+    def test_missing_transfer_marker_in_standby_explains_manual_wake_without_mutation(self):
+        for op, params in (("bindings", {}), ("bind", {"new": True}),
+                           ("collect", {"preset": "Home"}), ("load", {"preset": "Home"}),
+                           ("diff", {"preset": "Home"}), ("clear", {})):
+            with self.subTest(op=op):
+                self.setUp()
+                original = self.path.read_bytes()
+                self.client.caps_change = lambda data: {
+                    **{key: value for key, value in data.items() if key != "favorites_transfer"},
+                    "player": data["player"] | {"standby": True},
+                }
+                with self.assertRaisesRegex(ott.Error, "player is in standby") as error:
+                    self.call(op, **params)
+                self.assertIn("ott <player> go", str(error.exception))
+                self.assertIn("start configured playback", str(error.exception))
+                self.assertEqual(self.client.posts(), ["capabilities"])
+                self.assertEqual(self.path.read_bytes(), original)
+                self.assertEqual(list(self.directory.iterdir()), [self.path])
+
+    def test_missing_transfer_marker_does_not_infer_standby_or_accept_invalid_metadata(self):
+        for standby in ({}, {"standby": False}, {"standby": None}, {"standby": 1}, {"standby": "true"},
+                        {"standby": True, "runtime": "bad runtime"}):
+            with self.subTest(standby=standby):
+                self.setUp()
+                self.client.caps_change = lambda data, standby=standby: {
+                    **{key: value for key, value in data.items() if key != "favorites_transfer"},
+                    "player": data["player"] | standby,
+                }
+                expected = ("unsupported player or controller" if not standby or standby["standby"] is False
+                            else "could not be verified")
+                with self.assertRaisesRegex(ott.Error, expected) as error:
+                    self.call("clear")
+                self.assertNotIn("ott <player> go", str(error.exception))
+                self.assertEqual(self.client.posts(), ["capabilities"])
+                self.no_stage_or_context()
+
+    def test_collect_standby_second_target_keeps_the_local_profile_unchanged(self):
+        original = self.path.read_bytes()
+        self.client.caps_change = lambda data: ({
+            **{key: value for key, value in data.items() if key != "favorites_transfer"},
+            "player": data["player"] | {"standby": True},
+        } if self.client.device == "two" else data)
+        with self.assertRaisesRegex(ott.Error, "player is in standby"):
+            self.call("collect", preset="Home", mode="replace", targets=[("t1", "one"), ("t2", "two")])
+        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "snapshot", "capabilities"])
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(list(self.directory.iterdir()), [self.path])
+
+    def test_standby_does_not_override_a_present_transfer_marker(self):
+        self.client.caps_change = lambda data: data | {"player": data["player"] | {"standby": True}}
+        self.assertEqual(self.call("bindings")["status"], "available")
+        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog"])
+
+    def test_standby_status_fallback_remains_read_only_and_unverified(self):
+        record = self.retain_pending_intent()
+        original = record.read_bytes()
+        self.client.caps_change = lambda data: {
+            **{key: value for key, value in data.items() if key != "favorites_transfer"},
+            "player": data["player"] | {"standby": True},
+        }
+        before = len(self.client.posts())
+        result = self.call("status", operation_id=fixture.OPERATION)
+        self.assertEqual((result["status"], result["verified"], result["replay_allowed"]), ("unknown", False, False))
+        self.assertEqual(self.client.posts()[before:], ["capabilities", "status"])
+        self.assertEqual(record.read_bytes(), original)
+
     def test_pms_mismatch_in_media_channels_or_shuffle_is_not_name_matched(self):
         for collection in ("media", "channels", "shuffle"):
             self.setUp()
