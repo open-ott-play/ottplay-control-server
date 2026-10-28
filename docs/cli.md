@@ -153,7 +153,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`c27dacf00a0fa5eacd4c68276ee1f7168003010d`](https://github.com/open-ott-play/ottplay-control-server/commit/c27dacf00a0fa5eacd4c68276ee1f7168003010d).
+[`e2515c6833074dfe729134aad868ecc15b9fc8f2`](https://github.com/open-ott-play/ottplay-control-server/commit/e2515c6833074dfe729134aad868ecc15b9fc8f2).
 This is an exact source pin, not a claim about the latest published release.
 The examples retain this reviewed signed source commit; a server release does
 not install the Python CLI or player. Matching controller and player support is
@@ -182,8 +182,9 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-This source also contains all 20 CLI Python modules for
-[saved favorites documents](#saved-favorites-documents) and explicit current-Plex
+This source contains all 27 CLI Python modules, including
+[global favorites transfer](#global-favorites-transfer), its separate recovery
+commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
 `fav recovery` inspection and explicit `fav acknowledge` confirmation without
 replaying an uncertain write. These commands require compatible controller and
@@ -213,8 +214,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=c27dacf00a0fa5eacd4c68276ee1f7168003010d
-  ott_source="$HOME/.local/share/ottplay-control-server-local-c27dacf00a0f"
+  ott_ref=e2515c6833074dfe729134aad868ecc15b9fc8f2
+  ott_source="$HOME/.local/share/ottplay-control-server-local-e2515c683307"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -236,7 +237,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c27dacf00a0f/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-e2515c683307/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -250,7 +251,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-c27dacf00a0f/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-e2515c683307/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -272,8 +273,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'c27dacf00a0fa5eacd4c68276ee1f7168003010d'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c27dacf00a0f'
+$ottRef = 'e2515c6833074dfe729134aad868ecc15b9fc8f2'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-e2515c683307'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -319,12 +320,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c27dacf00a0f/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-e2515c683307/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c27dacf00a0f\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-e2515c683307\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -353,7 +354,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-c27dacf00a0f`, stages the replacement beside it, then switches atomically.
+`ott.before-local-e2515c683307`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -365,9 +366,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-c27dacf00a0f")
-staged = launcher.with_name("ott.switch-local-c27dacf00a0f")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-c27dacf00a0f/cli/ott.py"
+backup = launcher.with_name("ott.before-local-e2515c683307")
+staged = launcher.with_name("ott.switch-local-e2515c683307")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-e2515c683307/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -984,7 +985,8 @@ Existing resume checkpoints are checked rather than replaced. The ordinary
 private-file and no-overwrite protections still apply.
 
 Only output arguments are expanded: screenshot `-o` / `--output`, `profile export`
-files, `bundle` and `perf export` / `perf trial` `--out`, test `--report`, and
+and `fav global export` files, `bundle` and `perf export` / `perf trial` `--out`,
+test `--report`, and
 explicit load `--checkpoint`. Input paths such as `provider-config`,
 `profile-config`, `profile import`, Plex `--token-file` and settings `--value-file`
 are passed unchanged to each player command.
@@ -1827,8 +1829,10 @@ player's result and are not an atomic transaction across devices.
 
 Global documents use `preset_global_favorites`, separately from the older scoped
 `preset_favorites` format below. `ott presets Home fav global restore BACKUP
---dry-run` previews restoring only that document from a private backup. Use the
-actual backup path printed by a successful update. The backup contains the full
+--dry-run` previews restoring only that document from a private backup. Use `-j`
+for an update, for example `ott -j presets Home fav global import
+family-favorites.json replace`, and take the actual path from its `backup_path`
+JSON field. An unchanged update creates no backup. The backup contains the full
 private configuration; keep it private. Ordinary `load Home` refuses to omit
 either saved favorites companion silently. Use `load Home --settings-only` for
 settings and then `fav global load Home` explicitly for this list.
