@@ -20,7 +20,15 @@ import (
 const maxJournalBytes = 4 * 1024 * 1024
 
 var operationKey = regexp.MustCompile(`^[a-zA-Z0-9_-]{16,80}$`)
+var journalPermission = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
 var journalError = errors.New("command journal unavailable")
+
+// A journal may outlive the binary that admitted an operation. Accept bounded
+// opaque permission names on disk without making them valid request actions or
+// operator grants. Unknown records remain audit/idempotency entries, not work.
+func validJournalPermission(permission string) bool {
+	return len(permission) <= 128 && journalPermission.MatchString(permission)
+}
 
 type operationRecord struct {
 	ID               string `json:"id"`
@@ -119,7 +127,7 @@ func newCommandJournal(c *config.CommandJournal) (*commandJournal, error) {
 	ids := make(map[string]bool)
 	for k, v := range j.records {
 		digest, err := hex.DecodeString(v.Digest)
-		if k != journalIndex(v.Owner, v.Key) || !operationKey.MatchString(v.Key) || !commandID.MatchString(v.ID) || ids[v.ID] || !config.ValidCommandAction(v.Permission) || v.Owner == "" || len(v.Owner) > 256 || v.Device == "" || err != nil || len(digest) != 32 || hex.EncodeToString(digest) != v.Digest || v.CommandExpiresAt <= 0 || v.CommandExpiresAt > v.ExpiresAt || v.ExpiresAt > now.Add(24*time.Hour).Unix()+60 {
+		if k != journalIndex(v.Owner, v.Key) || !operationKey.MatchString(v.Key) || !commandID.MatchString(v.ID) || ids[v.ID] || !validJournalPermission(v.Permission) || v.Owner == "" || len(v.Owner) > 256 || v.Device == "" || err != nil || len(digest) != 32 || hex.EncodeToString(digest) != v.Digest || v.CommandExpiresAt <= 0 || v.CommandExpiresAt > v.ExpiresAt || v.ExpiresAt > now.Add(24*time.Hour).Unix()+60 {
 			return nil, journalError
 		}
 		ids[v.ID] = true
@@ -304,7 +312,13 @@ func (s *Server) operation(w http.ResponseWriter, r *http.Request) {
 		failure(w, 403, "operation scope is not allowed")
 		return
 	}
-	if v.State == "pending" && v.CommandExpiresAt <= s.now().Unix() {
+	if !config.ValidCommandAction(v.Permission) {
+		// This binary cannot interpret a future action's outcome. Project only
+		// the response copy; preserve completed transport evidence on disk for
+		// audit and a later binary that understands the action.
+		v.State = "unknown"
+		v.ResultStatus = ""
+	} else if v.State == "pending" && v.CommandExpiresAt <= s.now().Unix() {
 		v.State = "unknown"
 	}
 	reply(w, 200, map[string]any{"id": v.ID, "state": v.State, "result_status": v.ResultStatus, "expires_at": v.ExpiresAt, "command_expires_at": v.CommandExpiresAt, "action": v.Permission})
