@@ -69,6 +69,10 @@
 
 ### Fixed
 
+- Preserve bounded newer operation names when reading version-1 command journals,
+  so a compatible rollback baseline can retain their audit and deduplication
+  records. Unknown operations report an uncertain outcome without replaying or
+  expanding command permissions; older operator configuration remains required.
 - Preserve safe RPC action, request ID, stage and reason in failed group-command
   rows, with a bounded transport category when available. Distinguish a failed
   capability read from the outer command without replaying uncertain requests.

@@ -1420,6 +1420,14 @@ second command while retained. This does not return a second copy of the result
 body. Original RPC receipts remain in memory for 60 seconds. Pending journal
 records become `unknown` on restart and no commands are replayed.
 
+The forward-compatible version-1 journal reader retains bounded unfamiliar
+operation names as audit metadata. When the running server does not implement a
+saved operation, this endpoint reports `state: "unknown"` and an empty
+`result_status`; the original transport audit remains on disk. This does not
+enable that action, widen operator permissions or authorize replay. Existing
+ownership/device checks, retention and malformed-record rejection remain in
+effect. See the [upgrade and rollback procedure](reliable-control.md#upgrade-and-rollback-compatibility).
+
 ## Exact settings comparison
 
 `settings_compare` reads saved values without selecting a provider:
