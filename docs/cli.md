@@ -1827,8 +1827,10 @@ ordinary load before any preset settings are sent. For example, after
 `ott t1 fav collect Home replace`, `ott t1 load Home` refuses to perform a
 settings-only load; `ott t1 fav load Home replace` is the separate favorites-only
 operation for an already paired current source. Presets without their own
-companion retain their existing behavior. Document validation does not establish
-a player binding, native folder grant or provider support. See the
+companion retain their existing behavior when the saved favorites metadata is
+valid or absent. Malformed metadata stops the load before preset settings are
+sent. Document validation does not establish a player binding, native folder
+grant or provider support. See the
 [synchronization design](design/favorites-sync-proposal.md) for the exact coverage
 and current implementation limits. Existing remote bookmarks below are unchanged.
 
