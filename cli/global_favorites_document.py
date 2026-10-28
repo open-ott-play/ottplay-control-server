@@ -16,7 +16,7 @@ MAX_DOCUMENTS = 64
 # Valid documents need only four nested containers. Check before JSON parsing.
 MAX_JSON_DEPTH = 8
 JS_TRIM = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
-PROVIDER = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
+PROVIDER = re.compile(r"[a-z0-9][a-z0-9_.-]*(?:/[a-z0-9][a-z0-9_.-]*)*\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 PMS = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
 RATING_KEY = re.compile(r"[1-9][0-9]{0,19}\Z")
@@ -59,6 +59,7 @@ def _pattern(value, pattern):
 
 def _origin(value):
     _shape(value, ("provider", "profile", "subprofile", "sourceAlias"))
+    _require(type(value["provider"]) is str and 1 <= len(value["provider"]) <= 64)
     return {"profile": _text(value["profile"], 256),
             "provider": _pattern(value["provider"], PROVIDER),
             "sourceAlias": _text(value["sourceAlias"], 256),
@@ -78,7 +79,8 @@ def _locator(provider, value):
         _require(not path.startswith("/") and not re.match(r"[A-Za-z]:", path) and "\\" not in path
                  and all(segment not in ("", ".", "..") for segment in path.split("/")))
         return {"kind": "local-media", "relativePath": path, "rootAlias": _text(value["rootAlias"], 256)}
-    if provider == "vportal":
+    if (provider == "vportal" or provider == "m3u" and type(value) is dict
+            and set(value) == {"kind", "idField", "id"} and value["kind"] == "vportal-media"):
         _shape(value, ("kind", "idField", "id"))
         _require(value["kind"] == "vportal-media" and type(value["idField"]) is str
                  and value["idField"] in VPORTAL_ID_FIELDS)

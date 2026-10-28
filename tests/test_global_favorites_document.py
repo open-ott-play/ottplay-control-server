@@ -84,6 +84,62 @@ class GlobalFavoritesDocumentTests(unittest.TestCase):
         for spelling in (b"NaN", b"Infinity", b"1e999"):
             self.error(codec.load_document, b'{"version":' + spelling + b',"entries":[]}', "invalid_json")
 
+    def test_v5_provider_ids_are_exact_bounded_opaque_segments(self):
+        for provider in ("vendor/service", "d/provider-tv", "example.tv", "1provider", "x..y",
+                         "source_a/source-b.ext", "a" * 64, "a/" + "b" * 62):
+            with self.subTest(provider=provider):
+                value = row()
+                value["origin"]["provider"] = provider
+                normalized = codec.validate_document(document(value))
+                self.assertEqual(normalized, document(value))
+                self.assertEqual(codec.load_document(codec.canonical_bytes(normalized)), normalized)
+        for provider in ("", "A", "/a", "a/", "a//b", "a/.", "a/..", "a/../b", "../a", ".a",
+                         "a/.hidden", "a/-b", "a/_b", "a\\b", "https://host", "a?token=x", "a#fragment",
+                         "a%2fb", "a\n", "a\x00", "a\x7f", " a", "a ", "a\ufeff", "é", "😀", "\ud800",
+                         "a" * 65, "a/" + "b" * 63, 1, None, True):
+            with self.subTest(provider=repr(provider)):
+                value = row()
+                value["origin"]["provider"] = provider
+                self.error(codec.validate_document, document(value))
+
+    def test_v5_shared_neutral_provider_fixtures(self):
+        content = (ROOT / "contracts/global-favorites-provider-id.fixtures.json").read_bytes()
+        self.assertEqual(hashlib.sha256(content).hexdigest(),
+                         "ba232bfce383fde18d81c1d8f71a911b418c6cf21fca3afdd9a5256f3aa10742")
+        fixtures = json.loads(content)
+        for case in fixtures["cases"]:
+            with self.subTest(case=repr(case["value"])):
+                value = row()
+                value["origin"]["provider"] = case["value"]
+                if case["valid"]:
+                    origin = codec._origin(value["origin"])
+                    self.assertEqual(origin["provider"], case["canonical"])
+                else:
+                    self.error(codec.validate_document, document(value))
+        for left, right in fixtures["distinct_pairs"]:
+            first, second = row(), row()
+            first["origin"]["provider"], second["origin"]["provider"] = left, right
+            self.assertNotEqual(codec.identity(first), codec.identity(second))
+
+    def test_v5_provider_lookalikes_remain_distinct_without_relabeling(self):
+        for left, right in (("vendor/service", "vendor-service"), ("example.tv", "example-tv"),
+                            ("1source", "source"), ("vendor/a.b", "vendor/a-b")):
+            first, second = row(), row()
+            first["origin"]["provider"], second["origin"]["provider"] = left, right
+            self.assertNotEqual(codec.identity(first), codec.identity(second))
+            plan = codec.plan_documents(document(first), [document(second)], "merge")
+            self.assertTrue(plan["can_commit"])
+            self.assertEqual(plan["document"], document(first, second))
+        for provider in ("vendor/plex", "local.example", "m3u/portal", "vportal-extension"):
+            value = row()
+            value["origin"]["provider"] = provider
+            self.assertEqual(codec.validate_document(document(value)), document(value))
+            for locator in ({"kind": "vportal-media", "idField": "id", "id": "1"},
+                            {"kind": "plex-media", "serverId": "server", "ratingKey": "1"},
+                            {"kind": "local-media", "rootAlias": "Movies", "relativePath": "movie.mp4"}):
+                value["locator"] = locator
+                self.error(codec.validate_document, document(value))
+
     def test_provider_specific_locators_and_unavailable_origins_are_data(self):
         examples = [("plex", {"kind": "plex-media", "serverId": "PMS-a_1.test", "ratingKey": "78777"}),
                     ("local", {"kind": "local-media", "rootAlias": "Offline disk", "relativePath": "Films/Три кота 01.mp4"}),
@@ -98,7 +154,7 @@ class GlobalFavoritesDocumentTests(unittest.TestCase):
             rows.append(value)
             self.assertEqual(codec.validate_document(document(value)), document(value))
             wrong = copy.deepcopy(value)
-            wrong["origin"]["provider"] = "m3u" if provider in ("plex", "local", "vportal") else "plex"
+            wrong["origin"]["provider"] = "m3u" if provider in ("plex", "local") else "stalker" if provider == "vportal" else "plex"
             self.error(codec.validate_document, document(wrong))
         self.assertEqual(codec.load_document(codec.canonical_bytes(document(*rows))), document(*rows))
 
@@ -120,6 +176,56 @@ class GlobalFavoritesDocumentTests(unittest.TestCase):
             self.assertEqual(codec.validate_document(document(value)), document(value))
         value["locator"]["idField"] = "unknown"
         self.error(codec.validate_document, document(value))
+
+    def test_v4_embedded_m3u_portal_shared_cases_preserve_outer_origin(self):
+        content = (ROOT / "contracts/global-favorites-nested-m3u-vportal.fixtures.json").read_bytes()
+        self.assertEqual(hashlib.sha256(content).hexdigest(),
+                         "362978d296107b331f815f178d0f51c7893e86e0a412f0304f476b6e0b866d83")
+        examples = json.loads(content)
+        for case in examples["cases"]:
+            with self.subTest(case=case["id"]):
+                value = document(case["entry"])
+                if not case["valid"]:
+                    self.error(codec.validate_document, value)
+                    continue
+                self.assertEqual(codec.validate_document(value), value)
+                self.assertEqual(codec.load_document(codec.canonical_bytes(value)), value)
+                self.assertEqual(value["entries"][0]["origin"]["provider"], "m3u")
+                self.assertEqual(codec.required_locator_kinds(value), ["vportal-media"])
+                self.assertFalse(codec.supports(value, ["channel", "channel-name"]))
+                self.assertTrue(codec.supports(value, ["vportal-media"]))
+        root, folder = (examples["cases"][index]["entry"] for index in (0, 1))
+        moved = copy.deepcopy(root)
+        moved["origin"]["subprofile"] = folder["origin"]["subprofile"]
+        self.assertNotEqual(codec.identity(root), codec.identity(moved))
+        direct = copy.deepcopy(root)
+        direct["origin"]["provider"] = "vportal"
+        self.assertNotEqual(codec.identity(root), codec.identity(direct))
+
+    def test_v4_exception_keeps_provider_kind_and_safe_id_restrictions(self):
+        value = row()
+        value["locator"] = {"kind": "vportal-media", "idField": "id", "id": "0002"}
+        for provider in ("m3u", "vportal"):
+            value["origin"]["provider"] = provider
+            for field in codec.VPORTAL_ID_FIELDS:
+                value["locator"]["idField"] = field
+                self.assertEqual(codec.validate_document(document(value)), document(value))
+            value["locator"]["idField"] = "id"
+            for identifier in (0, 42, "", "https://secret", "id/path", "x" * 257):
+                bad = copy.deepcopy(value)
+                bad["locator"]["id"] = identifier
+                self.error(codec.validate_document, document(bad))
+            bad = copy.deepcopy(value)
+            bad["locator"]["idField"] = "cmd"
+            self.error(codec.validate_document, document(bad))
+        for provider in ("plex", "local", "stalker", "future-provider"):
+            value["origin"]["provider"] = provider
+            self.error(codec.validate_document, document(value))
+        value["origin"]["provider"] = "m3u"
+        for locator in ({"kind": "plex-media", "serverId": "pms", "ratingKey": "1"},
+                        {"kind": "local-media", "rootAlias": "Movies", "relativePath": "movie.mp4"}):
+            value["locator"] = locator
+            self.error(codec.validate_document, document(value))
 
     def test_relative_paths_do_not_decode_or_grant_filesystem_access(self):
         value = row()

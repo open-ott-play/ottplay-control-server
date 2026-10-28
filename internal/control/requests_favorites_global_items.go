@@ -14,7 +14,7 @@ const maxFavoritesGlobalItemsMetadata = 64 * 1024
 const maxFavoritesGlobalItemsPage = 100
 
 var favoritesGlobalItemsCursorPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,512}$`)
-var favoritesGlobalProviderPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+var favoritesGlobalProviderPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*(?:/[a-z0-9][a-z0-9_.-]*)*$`)
 var favoritesGlobalIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
 var favoritesGlobalPMSPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$`)
 var favoritesGlobalRatingPattern = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
@@ -22,7 +22,7 @@ var favoritesGlobalReservedChannelPattern = regexp.MustCompile(`^channel:[0-9]+$
 var favoritesGlobalDrivePattern = regexp.MustCompile(`^[A-Za-z]:`)
 
 // Count UTF-16 units and use the exact ECMAScript edge-whitespace set, matching
-// the existing V3 portable codec. Never normalize identities or trim values.
+// the existing portable codec. Never normalize identities or trim values.
 func favoritesGlobalPortableText(raw json.RawMessage, maximum int) (string, bool) {
 	var value *string
 	if json.Unmarshal(raw, &value) != nil || value == nil || *value == "" {
@@ -67,7 +67,11 @@ func favoritesGlobalPortableIdentity(raw json.RawMessage) (string, bool) {
 		return "", false
 	}
 	origin, ok := inspectObject(entry["origin"], "provider", "profile", "subprofile", "sourceAlias")
-	if !ok || !favoritesGlobalPortablePattern(origin["provider"], favoritesGlobalProviderPattern) {
+	if !ok {
+		return "", false
+	}
+	provider, valid := favoritesGlobalPortableText(origin["provider"], 64)
+	if !valid || !favoritesGlobalProviderPattern.MatchString(provider) {
 		return "", false
 	}
 	for _, key := range []string{"profile", "sourceAlias"} {
@@ -84,12 +88,12 @@ func favoritesGlobalPortableIdentity(raw json.RawMessage) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	switch favoritesGlobalString(origin["provider"]) {
-	case "plex":
+	switch {
+	case provider == "plex":
 		if !favoritesTransferFields(locator, "kind", "serverId", "ratingKey") || !inspectEnum(locator["kind"], "plex-media") || !favoritesGlobalPortablePattern(locator["serverId"], favoritesGlobalPMSPattern) || !favoritesGlobalPortablePattern(locator["ratingKey"], favoritesGlobalRatingPattern) {
 			return "", false
 		}
-	case "local":
+	case provider == "local":
 		if !favoritesTransferFields(locator, "kind", "rootAlias", "relativePath") || !inspectEnum(locator["kind"], "local-media") {
 			return "", false
 		}
@@ -105,7 +109,8 @@ func favoritesGlobalPortableIdentity(raw json.RawMessage) (string, bool) {
 				return "", false
 			}
 		}
-	case "vportal":
+	case provider == "vportal" || (provider == "m3u" && inspectEnum(locator["kind"], "vportal-media")):
+		// The receiver must separately prove that an M3U profile owns its embedded portal.
 		if !favoritesTransferFields(locator, "kind", "idField", "id") || !inspectEnum(locator["kind"], "vportal-media") || !inspectEnum(locator["idField"], "id", "fid", "stream_id", "itemId", "media_id", "episode_id") || !favoritesGlobalPortablePattern(locator["id"], favoritesGlobalIdentifierPattern) {
 			return "", false
 		}
