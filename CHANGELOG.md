@@ -92,6 +92,8 @@
 
 ### Fixed
 
+- Explain confirmed player standby before favorites transfers with an explicit
+  wake command, without automatic wake or retry; recovery reads remain available.
 - Preserve bounded newer operation names when reading version-1 command journals,
   so a compatible rollback baseline can retain their audit and deduplication
   records. Unknown operations report an uncertain outcome without replaying or
