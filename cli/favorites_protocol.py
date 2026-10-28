@@ -361,6 +361,11 @@ def _bind_context(params, data, receipt, context):
     begin, accepted, preview = _context_parts(context)
     if context._status_runtime is not None:
         _require(params["op"] == "status", "context_mismatch")
+        if context._status_runtime != begin["runtime"]:
+            # RAM stage identity cannot establish anything after a restart.
+            # Only reconciled persisted commit outcomes have cross-runtime
+            # authority; stale aborted/expired must not become not_applied.
+            _require(data.get("state") == "committed", "context_mismatch")
     expected = ((params["runtime"], context._status_runtime or begin["runtime"]),
                 (params.get("operation_id"), begin["operation_id"]))
     for actual, wanted in expected:

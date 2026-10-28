@@ -301,6 +301,11 @@ class FavoritesProtocolTests(unittest.TestCase):
         checked = protocol.validate_result(status["request"], status["response"], request_id=REQUEST_ID,
                                            response_id=REQUEST_ID, status="ok", context=derived)
         self.assertTrue(checked.verified)
+        for state, data in FIXTURE["status_fixtures"].items():
+            with self.subTest(restarted_stage=state):
+                self.error(protocol.validate_result, status["request"], data | {"runtime": "restarted-runtime"},
+                           request_id=REQUEST_ID, response_id=REQUEST_ID, status="ok", context=derived,
+                           code="context_mismatch")
         for runtime in ("restarted-runtime", fixture("commit")["request"]["runtime"]):
             commit = fixture("commit")
             commit["request"]["runtime"] = commit["response"]["runtime"] = runtime
