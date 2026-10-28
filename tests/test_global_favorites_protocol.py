@@ -83,6 +83,7 @@ class GlobalFavoritesProtocolTests(unittest.TestCase):
             "preview": common("preview", operation_id=OPID, transaction_id=TXID, expected_revision="1" * 64,
                               context_revision="2" * 64, input_document_sha256=sha(self.raw), result_document_sha256=sha(self.raw),
                               plan_digest="3" * 64, counts=self.counts,
+                              legacy_effects={"linked_removed": 0, "unmapped_retained": 0},
                               resolution_counts={"resolved": 1, "missing": 1, "ambiguous": 0, "unsupported": 0},
                               ready=True, blocker=None, page_offset=0, rows=[{"entry_index": 0, "state": "resolved"}],
                               next_offset=1, required_kinds=self.kinds),
@@ -387,6 +388,53 @@ class GlobalFavoritesProtocolTests(unittest.TestCase):
         empty.update(counts=dict.fromkeys(protocol.COUNT_FIELDS, 0), resolution_counts=dict.fromkeys(protocol.RESOLUTION, 0),
                      rows=[], next_offset=None)
         self.result("preview", data=empty)
+
+    def test_legacy_effects_are_required_bounded_and_immutable(self):
+        data = copy.deepcopy(self.responses["preview"])
+        del data["legacy_effects"]
+        self.error(self.result, "preview", data=data)
+        for invalid in (True, -1, 101, 0.0):
+            for key in ("linked_removed", "unmapped_retained"):
+                data = copy.deepcopy(self.responses["preview"])
+                data["legacy_effects"][key] = invalid
+                self.error(self.result, "preview", data=data)
+        data = self.second_preview().data
+        data["legacy_effects"]["linked_removed"] = 1
+        self.error(self.result, "preview", data=data, params=self.second_preview().request, context=self.context())
+
+    def test_metadata_conflicts_require_merge_complete_unique_and_bound_rows(self):
+        params = {**self.requests["begin"], "mode": "merge"}
+        begin = self.result("begin", params=params)
+        first_data = copy.deepcopy(self.responses["preview"])
+        first_data.update(ready=False, blocker="metadata_conflict")
+        first_data["rows"][0]["metadata_conflict"] = {"reason": "title_mismatch", "incoming_entry_index": 0}
+        first = self.result("preview", data=first_data)
+        context = protocol.retain_context(begin, first)
+        second_data = self.second_preview().data
+        second_data.update(ready=False, blocker="metadata_conflict")
+        second = self.result("preview", data=second_data, params=self.second_preview().request, context=context)
+        rows = protocol.validate_preview_pages(context, [first, second])
+        incoming = copy.deepcopy(self.document)
+        incoming["entries"][0]["title"] = "New title"
+        protocol.validate_metadata_conflicts(rows, incoming, self.document)
+        self.error(protocol.validate_metadata_conflicts, rows, self.document, self.document)
+        incoming["entries"][0]["locator"]["name"] = "Different identity"
+        self.error(protocol.validate_metadata_conflicts, rows, incoming, self.document)
+        self.error(protocol.retain_context, self.result("begin"), first)
+        for changes in ({"ready": True, "blocker": None}, {"blocker": "context_changed"}):
+            self.error(self.result, "preview", data={**first_data, **changes})
+        for bad in (True, -1, 1000):
+            changed = copy.deepcopy(first_data)
+            changed["rows"][0]["metadata_conflict"]["incoming_entry_index"] = bad
+            self.error(self.result, "preview", data=changed)
+        second_data["rows"][0]["metadata_conflict"] = {"reason": "title_mismatch", "incoming_entry_index": 0}
+        duplicate = self.result("preview", data=second_data, params=second.request, context=context)
+        self.error(protocol.validate_preview_pages, context, [first, duplicate])
+        no_conflicts = copy.deepcopy(first_data)
+        del no_conflicts["rows"][0]["metadata_conflict"]
+        empty_first = self.result("preview", data=no_conflicts)
+        empty_context = protocol.retain_context(begin, empty_first)
+        self.error(protocol.validate_preview_pages, empty_context, [empty_first, second])
 
     def test_changed_revision_and_noop_receipt_consistency(self):
         for change in ({"changed": False}, {"new_revision": "1" * 64}, {"changed": 1}):

@@ -123,8 +123,23 @@ def _outcome(target, result):
     if isinstance(result, remote.Preview):
         return {"status": "planned" if result.ready else "blocked", "operation_id": result.operation_id,
                 "ready": result.ready, "cleanup": result.cleanup, "summary": result.data["counts"],
-                "resolution": result.data["resolution_counts"], "replay_allowed": False}
+                "resolution": result.data["resolution_counts"],
+                "legacy_effects": result.data["legacy_effects"], "replay_allowed": False}
     return {"status": result.outcome, **shared._completion(target, result)}
+
+
+def conflict_result(plan, incoming):
+    """Render only bounded details from a verified local document plan."""
+    if plan["can_commit"]:
+        return None
+    details = []
+    for conflict in plan["title_conflicts"][:64]:
+        old = plan["document"]["entries"][conflict["existing_index"]]
+        new = incoming[conflict["incoming_document"]]["entries"][conflict["incoming_index"]]
+        details.append({**conflict, "existing_title": old["title"], "incoming_title": new["title"]})
+    return {"status": "blocked", "reason": "metadata_conflict", "summary": plan["summary"],
+            "title_conflicts": details, "title_conflicts_total": len(plan["title_conflicts"]),
+            "replay_allowed": False}
 
 
 def _retain_audit(target, inspection, request, evidence):
@@ -248,6 +263,9 @@ def _run(api, client, config_path, targets, params, timeout, clock, sleep, uuid_
             plan = document.plan_documents(snapshot.document, [incoming], "replace")
             same = document.canonical_bytes(snapshot.document) == document.canonical_bytes(plan["document"])
             return {"op": op, "status": "matched" if same else "different", "summary": plan["summary"]}
+        conflict = conflict_result(document.plan_documents(snapshot.document, [incoming], params["mode"]), [incoming])
+        if conflict is not None:
+            return {"op": op, **conflict}
         if params.get("dry_run"):
             result = target.peer.preview(snapshot, incoming, params["mode"])
         else:
@@ -255,8 +273,11 @@ def _run(api, client, config_path, targets, params, timeout, clock, sleep, uuid_
             result = target.peer.apply(snapshot, incoming, params["mode"])
         return {"op": op, **_outcome(target, result)}
     plan = document.plan_documents(saved["document"], collected, params["mode"])
-    if not plan["can_commit"] or params.get("dry_run"):
-        return {"op": op, "status": "planned" if plan["can_commit"] else "blocked",
+    conflict = conflict_result(plan, collected)
+    if conflict is not None:
+        return {"op": op, "players": len(targets), **conflict}
+    if params.get("dry_run"):
+        return {"op": op, "status": "planned",
                 "summary": plan["summary"], "players": len(targets)}
     update = store.plan(saved["preset"], plan["document"], expected_revision=saved["config_revision"])
     applied = store.apply(update)
@@ -296,8 +317,9 @@ def offline(api, config_path, params):
         mode = "replace" if op == "restore" else params.get("mode", "replace")
         plan = document.plan_documents(saved["document"], [incoming], mode)
         result["summary"] = plan["summary"]
-        if not plan["can_commit"]:
-            return {**result, "status": "blocked"}
+        conflict = conflict_result(plan, [incoming])
+        if conflict is not None:
+            return {**result, **conflict}
         update = store.plan(saved["preset"], plan["document"], expected_revision=saved["config_revision"])
         if op == "diff":
             return {**result, "status": "different" if update.changed else "matched"}
@@ -346,6 +368,17 @@ def print_result(result):
         print("Administrative acknowledgement only; the original transfer remains uncertain and was not replayed.")
     if "resolution" in result:
         print("Resolution: " + ", ".join(f"{key} {value}" for key, value in result["resolution"].items()))
+    if "legacy_effects" in result:
+        effects = result["legacy_effects"]
+        print(f"Planned legacy memberships: remove {effects['linked_removed']} linked; "
+              f"retain {effects['unmapped_retained']} unmapped.")
+    for conflict in result.get("title_conflicts", []):
+        print(f"Title conflict: {conflict['existing_title']!r} -> {conflict['incoming_title']!r} "
+              f"(input {conflict['incoming_document'] + 1}, entry {conflict['incoming_index'] + 1}).")
+    if result.get("title_conflicts"):
+        shown = len(result["title_conflicts"])
+        print(f"Showing {shown} of {result['title_conflicts_total']} title conflicts. "
+              "Match the incoming titles or intentionally replace the whole list; no changes were made.")
     if "cleanup" in result:
         print("Preview cleanup: " + result["cleanup"].replace("_", " ") + ".")
     for warning in result.get("warnings", []):

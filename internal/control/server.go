@@ -38,6 +38,7 @@ type entry struct {
 	favoritesTransfer       *favoritesTransferRequest
 	favoritesGlobal         *favoritesGlobalRequest
 	favoritesGlobalRecovery *favoritesGlobalRecoveryRequest
+	favoritesGlobalItems    *favoritesGlobalItemsRequest
 	handoff                 *handoffRequest
 	offlineProfile          *offlineProfileRequest
 	owner, permission       string

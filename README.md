@@ -289,13 +289,18 @@ capabilities, portable-format limits and troubleshooting.
 ott l fav add "Evening cartoons"    # capture this player's current item and profile
 ott l fav                           # list saved entries and their stable IDs
 ott l fav play "Evening cartoons"  # load that profile, then resolve and play the item
-ott l fav rm fav-abc123              # use the actual ID from the list
+ott l fav rm id:00000000-0000-4000-8000-000000000001 # replace with an actual listed UUID
+ott l fav global current            # inspect the current portable item without saving
+ott l fav legacy list               # inspect legacy-only bookmarks explicitly
 ```
 
-Favorites persist on the target player across normal restarts. Selecting one
-loads its saved provider/profile and resolves a fresh link; a changed source or
-missing item fails without substituting another channel/movie. The CLI, controller
-and player must support `favorites`; `ott l` shows available operations. See
+With `favorites_global_items` support, ordinary `fav` commands use the complete
+global list across providers and profiles. Add/remove use the existing guarded
+global transfer; playback resolves the selected receiver UUID against the current
+list and never substitutes a channel number or similar name. Missing items remain
+visible. When that marker is absent, the CLI announces legacy mode; it never falls
+back after an error on the global path. `fav legacy` accesses old bookmarks
+explicitly, including the legacy-only count shown below the global list. See
 [favorites across profiles](docs/cli.md#favorites-across-profiles) for aliases,
 limits, acknowledgement semantics and troubleshooting.
 
@@ -332,8 +337,8 @@ only; restore preserves the current provider settings and other profiles.
 Ordinary `ott t1 load Home` does not yet deliver either favorites companion and
 stops before changing a preset that contains one. Use `ott t1 load Home
 --settings-only` explicitly for settings, then a separate `fav global load` for
-global favorites. The existing scoped `fav load` and `fav play` commands keep
-their meanings. No command silently substitutes a source or retries an
+global favorites. Existing scoped `fav load` remains separate; ordinary `fav play`
+uses the global list when supported. No command silently substitutes a source or retries an
 uncertain write.
 
 Recovery has its own capability. An acknowledgement requires one player and

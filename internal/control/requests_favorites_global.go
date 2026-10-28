@@ -44,7 +44,7 @@ var favoritesGlobalResultFields = map[string][]string{
 	"export":   {"version", "runtime", "op", "subject", "snapshot_id", "revision", "document_sha256", "size_bytes", "offset", "chunk_sha256", "data_base64", "next_offset", "eof"},
 	"begin":    {"version", "runtime", "op", "subject", "operation_id", "transaction_id", "expected_revision", "context_revision", "document_sha256", "size_bytes", "chunk_count", "next_seq", "received_bytes", "idle_expires_at", "absolute_expires_at", "required_kinds"},
 	"append":   {"version", "runtime", "op", "subject", "operation_id", "transaction_id", "seq", "offset", "chunk_sha256", "next_seq", "received_bytes", "duplicate"},
-	"preview":  {"version", "runtime", "op", "subject", "operation_id", "transaction_id", "expected_revision", "context_revision", "input_document_sha256", "result_document_sha256", "plan_digest", "counts", "resolution_counts", "ready", "blocker", "page_offset", "rows", "next_offset", "required_kinds"},
+	"preview":  {"version", "runtime", "op", "subject", "operation_id", "transaction_id", "expected_revision", "context_revision", "input_document_sha256", "result_document_sha256", "plan_digest", "counts", "resolution_counts", "legacy_effects", "ready", "blocker", "page_offset", "rows", "next_offset", "required_kinds"},
 	"commit":   {"version", "runtime", "op", "subject", "operation_id", "transaction_id", "receipt"},
 	"status":   {"version", "runtime", "op", "subject", "operation_id", "operation_runtime", "transaction_id", "state", "outcome", "receipt"},
 	"abort":    {"version", "runtime", "op", "subject", "operation_id", "transaction_id", "state", "outcome"},
@@ -310,6 +310,10 @@ func validFavoritesGlobalDescription(m map[string]json.RawMessage) bool {
 }
 
 func validFavoritesGlobalPreview(m map[string]json.RawMessage, q *favoritesGlobalRequest) bool {
+	legacy, legacyOK := inspectObject(m["legacy_effects"], "linked_removed", "unmapped_retained")
+	if !legacyOK || !profileInteger(legacy["linked_removed"], 0, 100) || !profileInteger(legacy["unmapped_retained"], 0, 100) {
+		return false
+	}
 	if !validFavoritesGlobalCounts(m["counts"]) || !inspectBool(m["ready"], false) || !profileInteger(m["page_offset"], q.PageOffset, q.PageOffset) {
 		return false
 	}
@@ -320,7 +324,7 @@ func validFavoritesGlobalPreview(m map[string]json.RawMessage, q *favoritesGloba
 		if !inspectNull(m["blocker"]) {
 			return false
 		}
-	} else if !inspectEnum(m["blocker"], "revision_conflict", "context_changed", "invalid_document", "policy_denied", "unsupported_persistence", "storage_unavailable", "limits_exceeded", "reconciliation_required") {
+	} else if !inspectEnum(m["blocker"], "metadata_conflict", "revision_conflict", "context_changed", "invalid_document", "policy_denied", "unsupported_persistence", "storage_unavailable", "limits_exceeded", "reconciliation_required") {
 		return false
 	}
 	resolution, ok := inspectObject(m["resolution_counts"], "resolved", "missing", "ambiguous", "unsupported")
@@ -343,8 +347,25 @@ func validFavoritesGlobalPreview(m map[string]json.RawMessage, q *favoritesGloba
 		return false
 	}
 	seen := map[string]int{}
+	conflicts := map[int]bool{}
+	metadataConflict := inspectEnum(m["blocker"], "metadata_conflict")
 	for i, row := range rows {
-		x, valid := inspectObject(row, "entry_index", "state")
+		x, err := decodeObject(row)
+		if err != nil {
+			return false
+		}
+		valid := favoritesTransferFields(x, "entry_index", "state")
+		if detail, exists := x["metadata_conflict"]; exists {
+			info, detailOK := inspectObject(detail, "reason", "incoming_entry_index")
+			if !metadataConflict || !detailOK || !favoritesTransferFields(x, "entry_index", "state", "metadata_conflict") || !inspectEnum(info["reason"], "title_mismatch") || !profileInteger(info["incoming_entry_index"], 0, maxFavoritesGlobalEntries-1) {
+				return false
+			}
+			index := favoritesGlobalInt(info["incoming_entry_index"])
+			if conflicts[index] {
+				return false
+			}
+			conflicts[index], valid = true, true
+		}
 		if !valid || !profileInteger(x["entry_index"], q.PageOffset+i, q.PageOffset+i) || !inspectEnum(x["state"], "resolved", "missing", "ambiguous", "unsupported") {
 			return false
 		}
@@ -353,6 +374,12 @@ func validFavoritesGlobalPreview(m map[string]json.RawMessage, q *favoritesGloba
 		if seen[state] > favoritesGlobalInt(resolution[state]) {
 			return false
 		}
+	}
+	// Only the orchestrator retaining begin/input/all pages can validate merge
+	// mode, cross-page uniqueness and identity/title equality. A complete single
+	// page must already contain the conflict asserted by its global blocker.
+	if metadataConflict && (total == 0 || (q.PageOffset == 0 && len(rows) == total && len(conflicts) == 0)) {
+		return false
 	}
 	next := q.PageOffset + len(rows)
 	if next == total {

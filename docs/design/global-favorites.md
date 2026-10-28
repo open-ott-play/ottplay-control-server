@@ -19,6 +19,13 @@ order/titles and appends new identities; conflicting titles yield
 counts retained entries whose absolute position changed, including deletion
 shifts. Preview results do not prove receiver availability or durable storage.
 
+A merge title conflict blocks the whole plan. The CLI shows up to 64 conflicting
+title pairs from its validated documents, with the total count, before starting
+a transfer. Edit the incoming titles to match or deliberately replace the whole
+list. The wire represents this as `blocker: "metadata_conflict"` with bounded
+input indices on the affected preview rows; it does not transmit private source
+resolution details or choose a title policy implicitly.
+
 Each document is limited to 1000 entries and 1 MiB canonical UTF-8. Raw JSON has
 the same byte ceiling and rejects duplicate keys, non-finite numbers and excess
 nesting. Multi-document previews admit at most 64 documents, collectively 1000
@@ -44,6 +51,23 @@ The CLI validates a complete export, computes the expected result locally and
 refreshes describe before uploading. The fresh one-use operation ID, whole-store
 revision, context and negotiated kinds must match. A changed snapshot stops the
 transfer before begin. Every preview page must describe the same immutable plan.
+
+Every preview also includes `legacy_effects`: `linked_removed` counts old
+memberships associated with global entries that the plan removes, and
+`unmapped_retained` counts legacy memberships that cannot yet be represented
+portably and remain untouched. Each count is bounded by the 100-entry legacy
+store. They are separate from global document counts, identical on every page,
+and bound by the plan digest together with the full private-store baseline.
+Commit rechecks that baseline under the shared writer lock. A preview describes
+planned effects, not completed cleanup; preserved unmapped rows are not silently
+invented as global entries.
+
+The separate [items interface](favorites-global-items-v1.md) reads the complete
+global list and current portable item and dispatches playback by receiver UUID.
+UUIDs are local selectors, not portable identities. Ordinary add/remove reuse
+the same staged transfer above, after matching items and export revisions. This
+keeps one mutation and recovery path. The legacy wire stays available explicitly
+for unresolved old memberships.
 
 The original command deadline covers discovery, every page/chunk, preview and
 reconciliation. A necessary lower-bound budget rejects oversized transfers before

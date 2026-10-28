@@ -26,6 +26,7 @@ var CommandOperations = map[string]string{
 	"favorites": "list add play remove", "vportal_queue": "status next previous restart stop play",
 	"favorites_global":          "describe export begin append preview commit status abort",
 	"favorites_global_recovery": "inspect acknowledge",
+	"favorites_global_items":    "list current play",
 	"favorites_transfer":        "snapshot begin append preview commit status abort bindingcatalog bind provision prepare recovery",
 	"maintenance":               "health logs recover_video update", "app_update": "status prepare install",
 	"categories":            "list select",

@@ -36,7 +36,7 @@ ERRORS = frozenset(("invalid_request", "envelope_too_large", "unsupported", "run
                     "unsupported_persistence", "storage_unavailable", "limits_exceeded", "reconciliation_required"))
 WRITE_BLOCKERS = frozenset(("busy", "policy_denied", "unsupported_persistence", "storage_unavailable",
                             "limits_exceeded", "reconciliation_required"))
-PREVIEW_BLOCKERS = WRITE_BLOCKERS - {"busy"} | {"revision_conflict", "context_changed", "invalid_document"}
+PREVIEW_BLOCKERS = WRITE_BLOCKERS - {"busy"} | {"revision_conflict", "context_changed", "invalid_document", "metadata_conflict"}
 RESOLUTION = ("resolved", "missing", "ambiguous", "unsupported")
 COUNT_FIELDS = ("before", "after", "added", "removed", "retained", "updated", "moved", "duplicates_skipped")
 COMMON = frozenset(("version", "runtime", "op", "subject"))
@@ -47,7 +47,7 @@ REQUEST_ID = re.compile(r"[0-9a-f]{32}\Z")
 TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})\Z")
 PREVIEW_FIELDS = frozenset(("operation_id", "transaction_id", "expected_revision", "context_revision",
                             "input_document_sha256", "result_document_sha256", "plan_digest", "counts",
-                            "resolution_counts", "ready", "blocker", "page_offset", "rows", "next_offset", "required_kinds"))
+                            "resolution_counts", "legacy_effects", "ready", "blocker", "page_offset", "rows", "next_offset", "required_kinds"))
 RECEIPT_FIELDS = frozenset(("version", "subject", "operation_id", "operation_runtime", "transaction_id",
                             "input_document_sha256", "result_document_sha256", "expected_revision", "new_revision",
                             "context_revision", "plan_digest", "counts", "changed", "outcome", "persistence", "required_kinds"))
@@ -328,6 +328,9 @@ def _preview(params, data):
         _pattern(data[key], DIGEST)
     _kinds(data["required_kinds"])
     _counts(data["counts"])
+    _shape(data["legacy_effects"], ("linked_removed", "unmapped_retained"))
+    for count in data["legacy_effects"].values():
+        _integer(count, 0, 100)
     _shape(data["resolution_counts"], RESOLUTION)
     for count in data["resolution_counts"].values():
         _integer(count)
@@ -342,11 +345,22 @@ def _preview(params, data):
     end = data["page_offset"] + len(data["rows"])
     _require(end <= total and (len(data["rows"]) > 0 or end == total))
     page_counts = dict.fromkeys(RESOLUTION, 0)
+    conflict_indices = set()
     for index, row in enumerate(data["rows"], data["page_offset"]):
-        _shape(row, ("entry_index", "state"))
+        _require(type(row) is dict)
+        conflict = "metadata_conflict" in row
+        _shape(row, ("entry_index", "state", "metadata_conflict") if conflict else ("entry_index", "state"))
         _integer(row["entry_index"], 0, 999)
         _require(row["entry_index"] == index and type(row["state"]) is str and row["state"] in RESOLUTION)
         page_counts[row["state"]] += 1
+        if conflict:
+            _require(not data["ready"] and data["blocker"] == "metadata_conflict")
+            detail = row["metadata_conflict"]
+            _shape(detail, ("reason", "incoming_entry_index"))
+            _require(detail["reason"] == "title_mismatch")
+            _integer(detail["incoming_entry_index"], 0, 999)
+            _require(detail["incoming_entry_index"] not in conflict_indices)
+            conflict_indices.add(detail["incoming_entry_index"])
     _require(all(page_counts[state] <= data["resolution_counts"][state] for state in RESOLUTION))
     if end == total:
         _require(data["next_offset"] is None)
@@ -475,6 +489,8 @@ def _bind_begin(begin, accepted, params, data):
         if "transaction_id" in item:
             _require(item["transaction_id"] == accepted["transaction_id"], "context_mismatch")
     if params["op"] == "preview":
+        if data["blocker"] == "metadata_conflict":
+            _require(begin["mode"] == "merge", "context_mismatch")
         _require(data["expected_revision"] == begin["expected_revision"]
                  and data["context_revision"] == begin["expected_context_revision"]
                  and data["input_document_sha256"] == begin["document_sha256"]
@@ -685,6 +701,7 @@ def validate_preview_pages(context, pages):
     _require(first is not None and type(pages) is list and 1 <= len(pages) <= max(1, first.data["counts"]["after"]),
              "context_mismatch")
     offset, previous, totals, rows = 0, None, dict.fromkeys(RESOLUTION, 0), []
+    conflict_indices = set()
     for page in pages:
         page = _checked(page, "preview")
         _require(page.request["page_offset"] == offset, "context_mismatch")
@@ -693,8 +710,29 @@ def validate_preview_pages(context, pages):
         for row in checked.data["rows"]:
             totals[row["state"]] += 1
             rows.append(row)
+            if "metadata_conflict" in row:
+                incoming_index = row["metadata_conflict"]["incoming_entry_index"]
+                _require(incoming_index not in conflict_indices, "context_mismatch")
+                conflict_indices.add(incoming_index)
         offset += len(checked.data["rows"])
         previous = checked
     _require(offset == first.data["counts"]["after"] and previous.data["next_offset"] is None
              and totals == first.data["resolution_counts"], "context_mismatch")
+    _require(bool(conflict_indices) == (first.data["blocker"] == "metadata_conflict"), "context_mismatch")
     return rows
+
+
+def validate_metadata_conflicts(rows, incoming, result_document):
+    """Bind bounded conflict indices to the locally verified documents."""
+    try:
+        source = document_codec.validate_document(incoming)["entries"]
+        result = document_codec.validate_document(result_document)["entries"]
+        for row in rows:
+            if "metadata_conflict" not in row:
+                continue
+            old = result[row["entry_index"]]
+            new = source[row["metadata_conflict"]["incoming_entry_index"]]
+            _require(document_codec.identity(old) == document_codec.identity(new)
+                     and old["title"] != new["title"], "context_mismatch")
+    except (document_codec.DocumentError, IndexError, KeyError, TypeError):
+        raise ProtocolError("context_mismatch") from None

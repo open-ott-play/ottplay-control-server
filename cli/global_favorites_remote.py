@@ -242,7 +242,8 @@ class RemoteGlobalFavorites(transport._RequestTransport):
                 if data["next_offset"] is None:
                     break
                 offset = data["next_offset"]
-            protocol.validate_preview_pages(context, previews)
+            rows = protocol.validate_preview_pages(context, previews)
+            protocol.validate_metadata_conflicts(rows, incoming, plan["document"])
             return begin, previews[0], context
         except (RemoteError, protocol.ProtocolError) as error:
             reason = error.code if isinstance(error, RemoteError) else "invalid_response"

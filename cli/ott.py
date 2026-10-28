@@ -148,6 +148,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME fav add [NAME]            save the currently playing item and its profile
   ott NAME fav play ID_OR_NAME       load the saved profile and play that exact item
   ott NAME fav remove ID_OR_NAME     remove one saved favorite
+  ott NAME fav global current        read the current portable item without saving it
+  ott NAME fav legacy [list|add|play|remove]  explicitly use legacy bookmarks
   ott NAME fav load PRESET [merge|replace] [--dry-run]
   ott NAME fav collect PRESET [merge|replace] [--dry-run]
   ott NAME fav diff PRESET            preview differences without changes
@@ -1186,7 +1188,15 @@ def parse_command(words):
         return "playback", {"operation": "step_channel", "offset": offset}
     if verb == "favorites":
         if tail and tail[0].casefold() == "global":
+            if len(tail) > 1 and tail[1].casefold() in ("list", "current", "play"):
+                params = favorites_module("global_favorites_items_commands").parse(SimpleNamespace(**globals()), tail[1:])
+                return "favorites", dict(params, _global=True)
             return "favorites_global", favorites_module("global_favorites_commands").parse(SimpleNamespace(**globals()), tail[1:])
+        if tail and tail[0].casefold() == "legacy":
+            params = parse_favorites(tail[1:])
+            if params["op"] not in FAVORITES_OPERATIONS:
+                raise Error("Use fav legacy [list|add|play|remove]; use fav play legacy for that literal name")
+            return "favorites", dict(params, _legacy=True)
         params = parse_favorites(tail)
         return ("favorites_profile" if params["op"] in FAVORITES_PROFILE_OPERATIONS else "favorites"), params
     if verb == "notifications":
@@ -2754,7 +2764,8 @@ def favorites_module(name):
     names = ("favorites_document", "preset_favorites", "favorites_transfer", "favorites_protocol",
              "favorites_remote", "favorites_operations", "favorites_commands", "global_favorites_document",
              "preset_global_favorites", "global_favorites_protocol", "global_favorites_remote", "global_favorites_recovery",
-             "global_favorites_operations", "global_favorites_commands")
+             "global_favorites_operations", "global_favorites_commands", "global_favorites_items",
+             "global_favorites_items_commands")
     if name not in names:
         raise Error("Invalid favorites module")
     for current in names[:names.index(name) + 1]:
@@ -3197,8 +3208,8 @@ def parse_favorites(words):
         return {"op": "add", "name": text}
     if text.casefold().startswith("id:"):
         item_id = text[3:]
-        if not re.fullmatch(FAVORITE_ID_PATTERN, item_id):
-            raise Error("Favorite IDs must match an ID shown by fav, for example fav-abc123")
+        if not re.fullmatch(FAVORITE_ID_PATTERN, item_id) and not FAVORITES_UUID_V4.fullmatch(item_id):
+            raise Error("Favorite IDs must match an ID shown by fav: a global UUID or legacy fav-abc123")
         return {"op": operation, "id": item_id}
     if re.fullmatch(FAVORITE_ID_PATTERN, text):
         return {"op": operation, "id": text}
@@ -3257,18 +3268,30 @@ def favorites_metadata(data, runtime, params, max_items=MAX_FAVORITES):
     return dict(data, entry=row)
 
 
-def favorites_command(client, device, params, timeout):
+def favorites_command(client, device, params, timeout, *, config_path=None):
     deadline = time.monotonic() + timeout
     previous_timeout, runtime = client.timeout, None
+    params = dict(params)
+    force_global, force_legacy = params.pop("_global", False), params.pop("_legacy", False)
     try:
         client.timeout = max(0, deadline - time.monotonic())
         controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        if not force_legacy and "favorites_global_items" in controls:
+            return favorites_module("global_favorites_items_commands").run(
+                SimpleNamespace(**globals()), client, device, params, controls, config_path, deadline)
+        if force_global:
+            raise Error("This player does not advertise global favorites items; no legacy fallback was attempted")
+        if (FAVORITES_UUID_V4.fullmatch(params.get("id", "")) or
+                not force_legacy and FAVORITES_UUID_V4.fullmatch(params.get("query", ""))):
+            raise Error("Global favorite UUIDs require global favorites support; no legacy command was sent")
         capability = controls.get("favorites", {})
         if params["op"] not in capability.get("operations", []):
             raise Error("Favorites require an updated player and controller advertising favorites. No favorites command was sent")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Favorite capability discovery exceeded --timeout; no favorites command was sent")
+        print("Legacy favorites explicitly selected." if force_legacy else
+              "Legacy favorites: this player does not advertise global favorites items.", file=sys.stderr)
         client.timeout = remaining
         runtime = controls["player"]["runtime"]
         result = client.call(device, "favorites", dict(params, runtime=runtime))
@@ -3347,6 +3370,9 @@ def print_favorites_profile(data):
 
 
 def print_favorites(data):
+    if data.get("collection") == "global":
+        favorites_module("global_favorites_items_commands").print_result(SimpleNamespace(**globals()), data)
+        return
     def label(row):
         profile = f"profile {row['profile_number']}" if row["profile_number"] is not None else "provider settings"
         if row["profile_name"]:
@@ -4255,6 +4281,13 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "favorites_global_items" in data:
+        try:
+            result["favorites_global_items"] = favorites_module("global_favorites_items").validate_capability(data["favorites_global_items"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - capability values must not enter diagnostics
+            raise Error(invalid) from None
     if "favorites_global_recovery" in data:
         try:
             result["favorites_global_recovery"] = favorites_module("global_favorites_recovery").validate_recovery_capability(data["favorites_global_recovery"])
@@ -4681,6 +4714,11 @@ def print_player_help(data, name):
         print(f'  {prefix} category "NAME" / cat id:ID  — select a category without starting playback')
         print(f"  {prefix} cat all  — show all videos again; use s to list the selected category")
     favorites = controls.get("favorites", {}).get("operations", [])
+    global_items = "favorites_global_items" in controls
+    if global_items:
+        favorites = ["list", "play"]
+        if "favorites_global" in controls and "favorites_global_recovery" in controls:
+            favorites += ["add", "remove"]
     for operation, command, description in (
             ("list", "fav", "list this player's saved favorites"),
             ("add", "fav add [NAME]", "save the current item and profile"),
@@ -4688,6 +4726,11 @@ def print_player_help(data, name):
             ("remove", "fav remove ID_OR_NAME", "remove one saved favorite")):
         if operation in favorites:
             print(f"  {prefix} {command}  — {description}")
+    if global_items:
+        print(f"  {prefix} fav global list / fav global current / fav global play UUID_OR_NAME")
+        print("    fav uses the complete global list; current only reads the playing item. R and numbers are literal names.")
+    if controls.get("favorites", {}).get("operations"):
+        print(f"  {prefix} fav legacy list / add / play ID_OR_NAME / remove ID_OR_NAME  — explicit legacy bookmarks")
     if "favorites_transfer_recovery" in controls:
         print(f"  {prefix} fav recovery / fav recovery inspect OPERATION_UUID  — inspect global uncertainty records")
         print(f"  {prefix} fav ack OPERATION_UUID --dry-run / --confirm PLAN_SHA256  — explicit acknowledgement; never replay")
@@ -4739,7 +4782,7 @@ def print_player_help(data, name):
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
             and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
-            and not any(key in controls for key in ("favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery"))):
+            and not any(key in controls for key in ("favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:
@@ -6334,7 +6377,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "channels":
         data = channels_command(client, device, params, args.timeout)
     elif action == "favorites":
-        data = favorites_command(client, device, params, args.timeout)
+        data = favorites_command(client, device, params, args.timeout, config_path=args.config)
     elif action == "aspect":
         data = aspect_command(client, device, params, args.timeout)
     elif action == "notifications":
@@ -6573,6 +6616,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         print("The media catalog is still loading; this listing is incomplete. Run the listing again when loading finishes.", file=sys.stderr)
     if playback_error:
         raise playback_error
+    if action == "favorites" and data.get("collection") == "global":
+        return 0 if data.get("status") in ("ready", "dispatched", "verified") else 1
     return 3 if (action == "programs" and data.get("partial")) or (action in ("categories", "channels") and data.get("loading")) else 0
 
 

@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -209,7 +210,8 @@ class GlobalFavoritesCLITests(unittest.TestCase):
         self.assertEqual(self.offline("validate")[0], 0)
         self.assertEqual(self.offline("export", str(destination))[0], 0)
         self.assertEqual(json.loads(destination.read_bytes()), document(entry()))
-        self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
         code, _, err = self.offline("export", str(destination))
         self.assertEqual(code, 1)
         self.assertIn("already exists", err)

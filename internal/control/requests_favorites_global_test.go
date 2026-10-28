@@ -59,7 +59,7 @@ func globalTestResults(t *testing.T) map[string]json.RawMessage {
 		"export":   {"snapshot_id": globalTestSnapshot, "revision": strings.Repeat("1", 64), "document_sha256": globalTestHash(globalTestDocument), "size_bytes": len(globalTestDocument), "offset": 0, "chunk_sha256": globalTestHash(globalTestDocument), "data_base64": base64.StdEncoding.EncodeToString([]byte(globalTestDocument)), "next_offset": len(globalTestDocument), "eof": true},
 		"begin":    {"operation_id": globalTestOperation, "transaction_id": globalTestTransaction, "expected_revision": strings.Repeat("1", 64), "context_revision": strings.Repeat("2", 64), "document_sha256": globalTestHash(globalTestDocument), "size_bytes": len(globalTestDocument), "chunk_count": 1, "next_seq": 0, "received_bytes": 0, "idle_expires_at": "2026-10-28T20:01:00.000000001Z", "absolute_expires_at": "2026-10-28T20:05:00Z", "required_kinds": []string{}},
 		"append":   {"operation_id": globalTestOperation, "transaction_id": globalTestTransaction, "seq": 0, "offset": 0, "chunk_sha256": globalTestHash(globalTestDocument), "next_seq": 1, "received_bytes": len(globalTestDocument), "duplicate": false},
-		"preview":  {"operation_id": globalTestOperation, "transaction_id": globalTestTransaction, "expected_revision": strings.Repeat("1", 64), "context_revision": strings.Repeat("2", 64), "input_document_sha256": globalTestHash(globalTestDocument), "result_document_sha256": globalTestHash(globalTestDocument), "plan_digest": strings.Repeat("3", 64), "counts": globalTestCounts(), "resolution_counts": map[string]int{"resolved": 0, "missing": 0, "ambiguous": 0, "unsupported": 0}, "ready": true, "blocker": nil, "page_offset": 0, "rows": []any{}, "next_offset": nil, "required_kinds": []string{}},
+		"preview":  {"operation_id": globalTestOperation, "transaction_id": globalTestTransaction, "expected_revision": strings.Repeat("1", 64), "context_revision": strings.Repeat("2", 64), "input_document_sha256": globalTestHash(globalTestDocument), "result_document_sha256": globalTestHash(globalTestDocument), "plan_digest": strings.Repeat("3", 64), "counts": globalTestCounts(), "resolution_counts": map[string]int{"resolved": 0, "missing": 0, "ambiguous": 0, "unsupported": 0}, "legacy_effects": map[string]int{"linked_removed": 0, "unmapped_retained": 0}, "ready": true, "blocker": nil, "page_offset": 0, "rows": []any{}, "next_offset": nil, "required_kinds": []string{}},
 		"commit":   {"operation_id": globalTestOperation, "transaction_id": globalTestTransaction, "receipt": globalTestReceipt()},
 		"status":   {"operation_id": globalTestOperation, "operation_runtime": "global-runtime", "transaction_id": globalTestTransaction, "state": "committed", "outcome": "verified", "receipt": globalTestReceipt()},
 		"abort":    {"operation_id": globalTestOperation, "transaction_id": globalTestTransaction, "state": "aborted", "outcome": "not_applied"},
@@ -476,4 +476,61 @@ func TestFavoritesGlobalBeginMustUseDescribedOperation(t *testing.T) {
 	}
 	// Consumption/expiry and duplicate payload ownership are player RAM duties;
 	// this pure validator only binds the exact grant and current context claims.
+}
+
+func TestFavoritesGlobalPreviewMetadataConflictsAndLegacyEffects(t *testing.T) {
+	q := globalTestBound(t, globalTestRequests(t)["preview"])
+	base := transferObject(t, globalTestResults(t)["preview"])
+	for _, badValue := range []json.RawMessage{json.RawMessage(`null`), json.RawMessage(`{"linked_removed":true,"unmapped_retained":0}`), json.RawMessage(`{"linked_removed":1.0,"unmapped_retained":0}`), json.RawMessage(`{"linked_removed":0,"unmapped_retained":101}`), json.RawMessage(`{"linked_removed":-1,"unmapped_retained":0}`), json.RawMessage(`{"linked_removed":0,"unmapped_retained":0,"extra":0}`)} {
+		bad := transferObject(t, transferJSON(t, base))
+		bad["legacy_effects"] = badValue
+		if validFavoritesGlobalResult(transferJSON(t, bad), "ok", q) {
+			t.Fatal("invalid legacy effects accepted")
+		}
+	}
+	base["legacy_effects"] = json.RawMessage(`{"linked_removed":100,"unmapped_retained":100}`)
+	if !validFavoritesGlobalResult(transferJSON(t, base), "ok", q) {
+		t.Fatal("legacy effects incorrectly tied to global counts")
+	}
+	base["ready"] = json.RawMessage("false")
+	base["blocker"] = transferJSON(t, "metadata_conflict")
+	if validFavoritesGlobalResult(transferJSON(t, base), "ok", q) {
+		t.Fatal("metadata conflict with empty result accepted")
+	}
+	base["counts"] = transferJSON(t, map[string]int{"before": 1, "after": 1, "added": 0, "removed": 0, "retained": 1, "updated": 0, "moved": 0, "duplicates_skipped": 0})
+	base["resolution_counts"] = json.RawMessage(`{"resolved":1,"missing":0,"ambiguous":0,"unsupported":0}`)
+	detail := map[string]any{"reason": "title_mismatch", "incoming_entry_index": 0}
+	row := map[string]any{"entry_index": 0, "state": "resolved", "metadata_conflict": detail}
+	base["rows"] = transferJSON(t, []any{row})
+	if !validFavoritesGlobalResult(transferJSON(t, base), "ok", q) {
+		t.Fatal("bounded metadata conflict rejected")
+	}
+	for field, value := range map[string]any{"ready": true, "blocker": "invalid_document", "rows": []any{map[string]any{"entry_index": 0, "state": "resolved"}}} {
+		bad := transferObject(t, transferJSON(t, base))
+		bad[field] = transferJSON(t, value)
+		if validFavoritesGlobalResult(transferJSON(t, bad), "ok", q) {
+			t.Fatal("contradictory metadata conflict", field)
+		}
+	}
+	for _, badDetail := range []any{nil, map[string]any{"reason": "title_mismatch", "incoming_entry_index": true}, map[string]any{"reason": "title_mismatch", "incoming_entry_index": 1000}, map[string]any{"reason": "other", "incoming_entry_index": 0}, map[string]any{"reason": "title_mismatch", "incoming_entry_index": 0, "title": "private"}} {
+		row["metadata_conflict"] = badDetail
+		bad := transferObject(t, transferJSON(t, base))
+		bad["rows"] = transferJSON(t, []any{row})
+		if validFavoritesGlobalResult(transferJSON(t, bad), "ok", q) {
+			t.Fatal("invalid conflict detail accepted")
+		}
+	}
+	// A first page may contain no conflict when a later result row has it.
+	base["counts"] = transferJSON(t, map[string]int{"before": 2, "after": 2, "added": 0, "removed": 0, "retained": 2, "updated": 0, "moved": 0, "duplicates_skipped": 0})
+	base["resolution_counts"] = json.RawMessage(`{"resolved":2,"missing":0,"ambiguous":0,"unsupported":0}`)
+	base["rows"] = json.RawMessage(`[{"entry_index":0,"state":"resolved"}]`)
+	base["next_offset"] = json.RawMessage("1")
+	if !validFavoritesGlobalResult(transferJSON(t, base), "ok", q) {
+		t.Fatal("nonconflicting prefix page rejected")
+	}
+	base["rows"] = json.RawMessage(`[{"entry_index":0,"state":"resolved","metadata_conflict":{"reason":"title_mismatch","incoming_entry_index":0}},{"entry_index":1,"state":"resolved","metadata_conflict":{"reason":"title_mismatch","incoming_entry_index":0}}]`)
+	base["next_offset"] = json.RawMessage("null")
+	if validFavoritesGlobalResult(transferJSON(t, base), "ok", q) {
+		t.Fatal("duplicate incoming conflict index accepted")
+	}
 }

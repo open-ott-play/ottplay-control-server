@@ -1,0 +1,645 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ottplay:favorites-global-items:v1",
+  "title": "favorites_global_items v1 — accepted source contract",
+  "$comment": "This validates RPC params/data, not the unchanged controller envelope. Additional byte, codec, permission, correlation and pagination requirements are normative in the sibling Markdown document.",
+  "$defs": {
+    "runtime": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9-]{1,64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9_-]{1,512}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "profile",
+        "subprofile",
+        "sourceAlias"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "subprofile": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceAlias": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "channelId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "channel"
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+        }
+      }
+    },
+    "channel_name": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "group"
+      ],
+      "properties": {
+        "kind": {
+          "const": "channel-name"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "plex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "serverId",
+        "ratingKey"
+      ],
+      "properties": {
+        "kind": {
+          "const": "plex-media"
+        },
+        "serverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"
+        },
+        "ratingKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^[1-9][0-9]{0,19}$"
+        }
+      }
+    },
+    "local": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "rootAlias",
+        "relativePath"
+      ],
+      "properties": {
+        "kind": {
+          "const": "local-media"
+        },
+        "rootAlias": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "relativePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      }
+    },
+    "vportal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "idField",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "const": "vportal-media"
+        },
+        "idField": {
+          "enum": [
+            "id",
+            "fid",
+            "stream_id",
+            "itemId",
+            "media_id",
+            "episode_id"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+        }
+      }
+    },
+    "portable_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "origin",
+        "locator"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "locator": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/channel"
+            },
+            {
+              "$ref": "#/$defs/channel_name"
+            },
+            {
+              "$ref": "#/$defs/plex"
+            },
+            {
+              "$ref": "#/$defs/local"
+            },
+            {
+              "$ref": "#/$defs/vportal"
+            }
+          ]
+        }
+      },
+      "$comment": "Structural envelope only: normative existing V3 portable codec additionally enforces UTF-16 text bounds, well-formed Unicode, exact JS trim, text/path exclusions, provider/locator parity and reserved channel:<digits> rejection. No normalization or private receiver mapping."
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "entry"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "entry": {
+          "$ref": "#/$defs/portable_entry"
+        }
+      }
+    },
+    "list_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "subject",
+        "cursor",
+        "max_entries"
+      ],
+      "properties": {
+        "op": {
+          "const": "list"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "cursor": {
+          "$ref": "#/$defs/cursor"
+        },
+        "max_entries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "current_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "subject"
+      ],
+      "properties": {
+        "op": {
+          "const": "current"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "subject": {
+          "const": "global"
+        }
+      }
+    },
+    "play_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "subject",
+        "id",
+        "expected_revision",
+        "expected_context_revision"
+      ],
+      "properties": {
+        "op": {
+          "const": "play"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expected_context_revision": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "list_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "revision",
+        "context_revision",
+        "cursor",
+        "page_offset",
+        "total",
+        "entries",
+        "next_cursor",
+        "unresolved_legacy_count"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "list"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cursor": {
+          "$ref": "#/$defs/cursor"
+        },
+        "page_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/row"
+          }
+        },
+        "next_cursor": {
+          "$ref": "#/$defs/cursor"
+        },
+        "unresolved_legacy_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "current_available": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "revision",
+        "context_revision",
+        "entry",
+        "unavailable_reason"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "current"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "entry": {
+          "$ref": "#/$defs/portable_entry"
+        },
+        "unavailable_reason": {
+          "const": null
+        }
+      }
+    },
+    "current_unavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "revision",
+        "context_revision",
+        "entry",
+        "unavailable_reason"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "current"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "entry": {
+          "const": null
+        },
+        "unavailable_reason": {
+          "enum": [
+            "no_portable_current_item",
+            "standby",
+            "unsupported_provider"
+          ]
+        }
+      }
+    },
+    "play_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "revision",
+        "context_revision",
+        "id",
+        "dispatched"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "play"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "dispatched": {
+          "const": true
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "error"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "enum": [
+            "list",
+            "current",
+            "play"
+          ]
+        },
+        "subject": {
+          "const": "global"
+        },
+        "error": {
+          "enum": [
+            "invalid_request",
+            "envelope_too_large",
+            "unsupported",
+            "runtime_changed",
+            "expired",
+            "cancelled",
+            "policy_denied",
+            "busy",
+            "storage_unavailable",
+            "unsupported_persistence",
+            "limits_exceeded",
+            "invalid_cursor",
+            "revision_conflict",
+            "context_changed",
+            "favorite_not_found",
+            "source_unavailable",
+            "ambiguous_source",
+            "item_unavailable",
+            "ambiguous_item",
+            "unsupported_item",
+            "playback_failed"
+          ]
+        }
+      }
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/list_request"
+        },
+        {
+          "$ref": "#/$defs/current_request"
+        },
+        {
+          "$ref": "#/$defs/play_request"
+        }
+      ]
+    },
+    "result": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/list_result"
+        },
+        {
+          "$ref": "#/$defs/current_available"
+        },
+        {
+          "$ref": "#/$defs/current_unavailable"
+        },
+        {
+          "$ref": "#/$defs/play_result"
+        },
+        {
+          "$ref": "#/$defs/error"
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/result"
+    },
+    {
+      "$ref": "#/$defs/capability"
+    }
+  ]
+}

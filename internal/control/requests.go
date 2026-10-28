@@ -33,6 +33,7 @@ type requestResult struct {
 	favoritesTransfer       *favoritesTransferRequest
 	favoritesGlobal         *favoritesGlobalRequest
 	favoritesGlobalRecovery *favoritesGlobalRecoveryRequest
+	favoritesGlobalItems    *favoritesGlobalItemsRequest
 	handoff                 *handoffRequest
 	offlineProfile          *offlineProfileRequest
 }
@@ -128,6 +129,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	var favoritesTransferBound *favoritesTransferRequest
 	var favoritesGlobalBound *favoritesGlobalRequest
 	var favoritesGlobalRecoveryBound *favoritesGlobalRecoveryRequest
+	var favoritesGlobalItemsBound *favoritesGlobalItemsRequest
 	switch action {
 	case "kiosk":
 		var mode string
@@ -183,6 +185,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	case "favorites_global":
 		favoritesGlobalBound = parseFavoritesGlobalRequest(m["params"])
 		ok = favoritesGlobalBound != nil && len(b) <= maxFavoritesTransferEnvelopeBytes && validFavoritesTransferJSON(b)
+	case "favorites_global_items":
+		favoritesGlobalItemsBound = parseFavoritesGlobalItemsRequest(m["params"])
+		ok = favoritesGlobalItemsBound != nil && len(b) <= maxFavoritesTransferEnvelopeBytes && validFavoritesTransferJSON(b)
 	case "favorites_global_recovery":
 		favoritesGlobalRecoveryBound = parseFavoritesGlobalRecoveryRequest(m["params"])
 		ok = favoritesGlobalRecoveryBound != nil && len(b) <= maxFavoritesTransferEnvelopeBytes && validFavoritesTransferJSON(b)
@@ -291,7 +296,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 413, "favorites transfer envelope is too large or invalid")
 		return
 	}
-	if (action == "favorites_global" && !validFavoritesGlobalEnvelope(data)) || (action == "favorites_global_recovery" && !validFavoritesGlobalRecoveryEnvelope(data)) {
+	if (action == "favorites_global" && !validFavoritesGlobalEnvelope(data)) || (action == "favorites_global_recovery" && !validFavoritesGlobalRecoveryEnvelope(data)) || (action == "favorites_global_items" && !validFavoritesGlobalItemsEnvelope(data)) {
 		failure(w, 413, "global favorites envelope is too large or invalid")
 		return
 	}
@@ -360,6 +365,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	e.favoritesGlobal = favoritesGlobalBound
 	e.favoritesGlobalRecovery = favoritesGlobalRecoveryBound
+	e.favoritesGlobalItems = favoritesGlobalItemsBound
 	if action == "profile_save" || action == "profile_export" || action == "profile_import" {
 		var number int
 		_ = json.Unmarshal(params["number"], &number)
@@ -473,6 +479,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var favoritesTransfer *favoritesTransferRequest
 	var favoritesGlobal *favoritesGlobalRequest
 	var favoritesGlobalRecovery *favoritesGlobalRecoveryRequest
+	var favoritesGlobalItems *favoritesGlobalItemsRequest
 	var handoff *handoffRequest
 	var offlineProfile *offlineProfileRequest
 	var inspect *inspectRequest
@@ -497,6 +504,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			favoritesTransfer = pending.favoritesTransfer
 			favoritesGlobal = pending.favoritesGlobal
 			favoritesGlobalRecovery = pending.favoritesGlobalRecovery
+			favoritesGlobalItems = pending.favoritesGlobalItems
 			handoff = pending.handoff
 			offlineProfile = pending.offlineProfile
 			playbackOperation = pending.playbackOperation
@@ -562,6 +570,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	if favoritesGlobalRecovery == nil {
 		favoritesGlobalRecovery = d.results[id].favoritesGlobalRecovery
 	}
+	if favoritesGlobalItems == nil {
+		favoritesGlobalItems = d.results[id].favoritesGlobalItems
+	}
 	if offlineProfile == nil {
 		offlineProfile = d.results[id].offlineProfile
 	}
@@ -587,7 +598,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 400, "invalid local media capability")
 			return
 		}
-		for _, key := range []string{"favorites_global", "favorites_global_recovery"} {
+		for _, key := range []string{"favorites_global", "favorites_global_recovery", "favorites_global_items"} {
 			if marker, exists := capabilities[key]; exists && !validFavoritesGlobalCapability(marker) {
 				failure(w, 400, "invalid global favorites capability")
 				return
@@ -692,6 +703,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid global favorites recovery result")
 		return
 	}
+	if favoritesGlobalItems != nil && !validFavoritesGlobalItemsResultEnvelope(b, id, favoritesGlobalItems) {
+		failure(w, 400, "invalid global favorites items result")
+		return
+	}
 	if offlineProfile != nil && !validOfflineProfileResult(m["data"], status, offlineProfile) {
 		failure(w, 400, "invalid Local videos profile result")
 		return
@@ -729,7 +744,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

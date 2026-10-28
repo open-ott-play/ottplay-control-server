@@ -172,7 +172,8 @@ class Peer:
         self._call("preview")
         plan = commands.document.plan_documents(snapshot.document, [incoming], mode)
         return commands.remote.Preview(OPERATION, self.environment.preview_ready, "aborted",
-                                       {"counts": plan["summary"], "resolution_counts": {"resolved": len(incoming["entries"])}})
+                                       {"counts": plan["summary"], "resolution_counts": {"resolved": len(incoming["entries"])},
+                                        "legacy_effects": {"linked_removed": 0, "unmapped_retained": 0}})
 
     def apply(self, snapshot, incoming, mode):
         self._call("apply")
@@ -273,7 +274,8 @@ class GlobalFavoritesCommandsTests(unittest.TestCase):
         expected["preset_global_favorites"]["presets"]["Home"] = document(row("1"), row("2"))
         self.assertEqual(current, expected)
         self.assertEqual(result["summary"]["added"], 1)
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
     def test_collection_failure_and_dry_run_leave_no_partial_profile_or_backup(self):
         before = self.path.read_bytes()
@@ -302,6 +304,18 @@ class GlobalFavoritesCommandsTests(unittest.TestCase):
         result = self.run_command(["collect", "Home"], [("first", "one"), ("second", "two")])
         self.assertEqual((result["status"], result["summary"]["title_conflicts"]), ("blocked", 1))
         self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(result["reason"], "metadata_conflict")
+        self.assertEqual(result["title_conflicts"][0]["incoming_title"], "Other title")
+
+    def test_conflict_details_are_bounded_and_keep_titles_local(self):
+        old = document(*(row(str(i), "Existing") for i in range(70)))
+        incoming = document(*(row(str(i), "Incoming") for i in range(70)))
+        plan = commands.document.plan_documents(old, [incoming], "merge")
+        result = commands.conflict_result(plan, [incoming])
+        self.assertEqual(result["title_conflicts_total"], 70)
+        self.assertEqual(len(result["title_conflicts"]), 64)
+        self.assertEqual(result["title_conflicts"][0]["existing_title"], "Existing")
+        self.assertEqual(self.environment.calls, [])
 
     def test_import_file_is_bounded_regular_strict_json_before_network(self):
         candidates = []
@@ -329,7 +343,8 @@ class GlobalFavoritesCommandsTests(unittest.TestCase):
         result = self.run_command(["export", str(destination)])
         self.assertEqual(result["status"], "exported")
         self.assertEqual(json.loads(destination.read_bytes()), self.environment.documents["one"])
-        self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
         before, calls = destination.read_bytes(), len(self.client.calls)
         self.fail(["export", str(destination)])
         self.assertEqual(destination.read_bytes(), before)
@@ -465,11 +480,13 @@ class GlobalFavoritesCommandsTests(unittest.TestCase):
         global_dirs = list(self.directory.glob(".favorites-global-operations-*"))
         self.assertEqual(len(global_dirs), 1)
         self.assertNotEqual(global_dirs[0], old_dir)
-        self.assertEqual(global_dirs[0].stat().st_mode & 0o777, 0o700)
+        if os.name != "nt":
+            self.assertEqual(global_dirs[0].stat().st_mode & 0o777, 0o700)
         store = commands.remote.ContextStore(global_dirs[0], server=self.client.server, device="one")
         self.assertEqual(store.load(OPERATION), record)
         for path in global_dirs[0].iterdir():
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         saved = {path.name: path.read_bytes() for path in global_dirs[0].iterdir()}
         self.environment.calls.clear()
         result = self.run_command(["status", OPERATION])
@@ -567,7 +584,8 @@ class GlobalFavoritesCommandsTests(unittest.TestCase):
         self.assertEqual(len(folders), 1)
         files = list(folders[0].glob("*.json"))
         self.assertEqual(len(files), 2)
-        self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in files))
+        if os.name != "nt":
+            self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in files))
         retained = {path.name: path.read_bytes() for path in files}
         self.client.global_requests.clear()
         result = self.run_command(["ack", operation, "--confirm", confirmation])

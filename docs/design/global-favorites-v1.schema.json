@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Global favorites staged wire v1 — proposal revision 2",
+  "title": "Global favorites staged wire v1 — proposal revision 3",
   "$comment": "Source contract for an unactivated action; all semantic correlation and persistence requirements in the design remain mandatory.",
   "$defs": {
     "runtime": {
@@ -236,6 +236,24 @@
             "ambiguous",
             "unsupported"
           ]
+        },
+        "metadata_conflict": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reason",
+            "incoming_entry_index"
+          ],
+          "properties": {
+            "reason": {
+              "const": "title_mismatch"
+            },
+            "incoming_entry_index": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999
+            }
+          }
         }
       }
     },
@@ -956,7 +974,8 @@
         "page_offset",
         "rows",
         "next_offset",
-        "required_kinds"
+        "required_kinds",
+        "legacy_effects"
       ],
       "properties": {
         "version": {
@@ -1012,7 +1031,8 @@
                 "unsupported_persistence",
                 "storage_unavailable",
                 "limits_exceeded",
-                "reconciliation_required"
+                "reconciliation_required",
+                "metadata_conflict"
               ]
             },
             {
@@ -1046,6 +1066,26 @@
         },
         "required_kinds": {
           "$ref": "#/$defs/locator_kinds"
+        },
+        "legacy_effects": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "linked_removed",
+            "unmapped_retained"
+          ],
+          "properties": {
+            "linked_removed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "unmapped_retained": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          }
         }
       }
     },

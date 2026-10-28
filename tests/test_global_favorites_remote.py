@@ -131,6 +131,7 @@ class MemoryAPI:
                     "result_document_sha256": digest(document.canonical_bytes(self.plan["document"])),
                     "plan_digest": "3" * 64, "counts": counts,
                     "resolution_counts": {"resolved": total, "missing": 0, "ambiguous": 0, "unsupported": 0},
+                    "legacy_effects": {"linked_removed": 0, "unmapped_retained": 0},
                     "ready": True, "blocker": None, "page_offset": start,
                     "rows": [{"entry_index": index, "state": "resolved"} for index in range(start, end)],
                     "next_offset": None if end == total else end, "required_kinds": self.begin["required_kinds"]}

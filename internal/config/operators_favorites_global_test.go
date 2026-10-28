@@ -24,3 +24,16 @@ func TestGlobalFavoritesExactPermissionsOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestGlobalItemsExactPermissionsOnly(t *testing.T) {
+	for _, op := range []string{"list", "current", "play"} {
+		if !ValidCommandAction("favorites_global_items." + op) {
+			t.Fatal("missing items permission", op)
+		}
+	}
+	for _, action := range []string{"favorites_global_items", "favorites_global_items.*", "favorites_global_items.add", "favorites_global_items.remove", "favorites_global_items.commit", "favorites_global_items.recovery"} {
+		if ValidCommandAction(action) {
+			t.Fatal("invented items permission accepted", action)
+		}
+	}
+}
