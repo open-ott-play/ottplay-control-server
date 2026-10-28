@@ -121,6 +121,19 @@ class FavoritesDocumentTests(unittest.TestCase):
         value["mediaFavorites"] = [local("Films/Три кота 01.mp4")]
         self.assertEqual(codec.validate_document(bundle(value)), bundle(value))
 
+    def test_plex_server_id_matches_player_safe_grammar(self):
+        value = scope()
+        value["scope"]["provider"] = "plex"
+        locator = {"kind": "plex-media", "serverId": "PMS-1.test_id", "ratingKey": "1"}
+        value["mediaFavorites"] = [{"state": "located", "locator": locator}]
+        for server in ("a", "PMS-1.test_id", "A" + "0" * 255):
+            locator["serverId"] = server
+            self.assertEqual(codec.validate_document(bundle(value)), bundle(value))
+        for server in ("", ".pms", "-pms", "_pms", "pms id", "https://fixture.invalid/pms",
+                       "pms?token=fixture", "pms\n", "pms\r", "pms\x00", "сервер", "a" * 257):
+            locator["serverId"] = server
+            self.error(bundle(value))
+
     def test_auxiliary_shuffle_baseline_can_differ_after_membership_edits(self):
         value = scope()
         row = value["channelLists"]["lists"][0]

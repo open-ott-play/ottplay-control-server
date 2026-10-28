@@ -112,6 +112,7 @@ def _locator(value, scope, channel_codec):
     elif kind == "plex-media":
         _shape(value, ("kind", "serverId", "ratingKey"))
         _text(value["serverId"], 256)
+        _require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", value["serverId"]) is not None)
         _require(type(value["ratingKey"]) is str and re.fullmatch(r"[1-9][0-9]{0,19}", value["ratingKey"]) is not None)
     elif kind == "vportal":
         _shape(value, ("kind", "mediaType", "leafId"))
