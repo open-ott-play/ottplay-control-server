@@ -90,6 +90,9 @@ network client. The player-side collect/load/diff/clear commands remain disabled
 before client creation or config writes:
 
 ```sh
+ott t1 fav bindings
+ott t1 fav bind current --new --dry-run
+ott t1 fav bind current --new
 ott t1 fav collect Home --dry-run
 ott t1,t2 fav collect Home merge
 ott presets Home fav validate
@@ -102,7 +105,24 @@ ott t1 fav load Home merge --dry-run
 ott t1 fav load Home replace
 ott t1 fav clear --dry-run
 ott t1 fav clear
+ott t1 fav status OPERATION_UUID
 ```
+
+The first player adapter reads the current verified Plex source only. Commands
+must report the exact scope; a current-source collection is not an export of all
+profiles or providers. `--scope current` makes that selection explicit. An exact
+scope selector uses `provider:PROFILE_UUID:SOURCE_UUID`; it never identifies a
+destination merely by its name or profile slot.
+
+`fav bindings` lists safe public identities and supported current targets.
+`fav bind current --new` explicitly provisions a new current-source binding.
+Pair another player with `fav bind Home`, using `--scope` and `--target TARGET_ID`
+when the selection is not unique. The host must require a fresh, compatible
+verified source and binding revision; matching display labels is insufficient.
+`fav status OPERATION_UUID` reconciles the same controller/device's retained
+operation without resubmitting it. Unknown, partial or missing evidence must not
+be reported as success. A bookmark named after one of these commands remains
+accessible through `fav play bindings` or `fav play status`.
 
 Collect reads complete snapshots; load applies saved scoped favorites. Local
 bundle merge/replace differs from player application: each approved scope is a
@@ -232,6 +252,10 @@ present companion before provider writes, including an empty or malformed one.
 Group load checks this common prerequisite before processing its first member.
 An absent or unrelated companion keeps the legacy path and does not load new
 favorites helpers.
+The current-Plex adapter cannot verify a scope after ordinary preset loading
+switches to M3U. Complete preset delivery needs a separately authorized persistent
+store adapter or a reviewed integration that preserves exact ownership throughout;
+the standalone adapter does not establish that capability.
 Preflight schema, coverage, bindings, helper availability and read-only compatibility
 before provider writes; create staging only after setup. Include present companions
 in checkpoint identity. Absent companions retain exact legacy normalized settings,
@@ -247,6 +271,15 @@ endpoint and exact device, keeps at most 32 records/256 KiB total, and never evi
 unknown outcomes automatically. Missing local evidence is unknown, not permission
 to retry. These files contain bounded begin/preview metadata, not a copy of the
 favorites payload or credentials; remote orchestration still has separate gates.
+The store may reclaim oldest completed records only when space is needed and
+after revalidating their same-runtime commit/status receipt against the retained
+begin/preview. A caller's success flag is insufficient. Pending, partial, unknown,
+foreign or damaged records remain protected; reconciliation after a runtime
+change does not yet permit automatic reclamation. Re-saving the same intent
+preserves its completion evidence. At most eight interrupted completion staging
+files are admitted, reserving a new slot before creation; their bytes also count
+against the storage budget. A failed replacement or durability check reports
+uncertain local retention and never authorizes replay on the player.
 Numbered Local import/export remains separate. A server update alone does not
 install CLI modules: package/install the complete reviewed helper set atomically,
 preserving private config, before advertising these commands as usable.
