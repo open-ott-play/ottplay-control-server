@@ -153,7 +153,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`33050a0c61972b35d1cb0679a627d585bd842ffe`](https://github.com/open-ott-play/ottplay-control-server/commit/33050a0c61972b35d1cb0679a627d585bd842ffe).
+[`b8dbd39e2e8ab87d047eb13d687963ee8d742f66`](https://github.com/open-ott-play/ottplay-control-server/commit/b8dbd39e2e8ab87d047eb13d687963ee8d742f66).
 This is an exact source pin, not a claim about the latest published release.
 The examples retain this reviewed signed source commit; a server release does
 not install the Python CLI or player. Matching controller and player support is
@@ -188,7 +188,8 @@ binding, collect, load, diff, clear and status commands. It adds global
 `fav recovery` inspection and explicit `fav acknowledge` confirmation without
 replaying an uncertain write. These commands require compatible controller and
 player capabilities; the source pin does not assert that your running components
-support them. Automatic favorites delivery through an ordinary `load PRESET`
+support them. Explicit `load PRESET --settings-only` preserves the saved companion and
+reports skipped favorites. Automatic favorites delivery through an ordinary `load PRESET`
 is still gated as described below.
 
 The full source hash is verified before and after checkout. Record
@@ -212,8 +213,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=33050a0c61972b35d1cb0679a627d585bd842ffe
-  ott_source="$HOME/.local/share/ottplay-control-server-local-33050a0c6197"
+  ott_ref=b8dbd39e2e8ab87d047eb13d687963ee8d742f66
+  ott_source="$HOME/.local/share/ottplay-control-server-local-b8dbd39e2e8a"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -235,7 +236,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-33050a0c6197/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-b8dbd39e2e8a/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -249,7 +250,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-33050a0c6197/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-b8dbd39e2e8a/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -271,8 +272,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '33050a0c61972b35d1cb0679a627d585bd842ffe'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-33050a0c6197'
+$ottRef = 'b8dbd39e2e8ab87d047eb13d687963ee8d742f66'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-b8dbd39e2e8a'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -318,12 +319,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-33050a0c6197/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-b8dbd39e2e8a/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-33050a0c6197\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-b8dbd39e2e8a\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -352,7 +353,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-33050a0c6197`, stages the replacement beside it, then switches atomically.
+`ott.before-local-b8dbd39e2e8a`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -364,9 +365,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-33050a0c6197")
-staged = launcher.with_name("ott.switch-local-33050a0c6197")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-33050a0c6197/cli/ott.py"
+backup = launcher.with_name("ott.before-local-b8dbd39e2e8a")
+staged = launcher.with_name("ott.switch-local-b8dbd39e2e8a")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-b8dbd39e2e8a/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -828,6 +829,7 @@ ott t1,t2,t3,t4 settings
 ott t1,t2,t3,t4 setting bufSize 3
 ott t1,t2,t3,t4 load Home plan    # inspect a configured private preset
 ott t1,t2,t3,t4 load Home apply   # separate default checkpoint per player
+ott t1,t2,t3,t4 load Home apply --settings-only # explicitly skip saved favorites
 ```
 
 Keep the list in one shell argument: `t1,t2,t3,t4`, or quote it when adding
@@ -1831,9 +1833,34 @@ are implemented in the pinned source; compatibility requirements are described
 below. Automatic favorites delivery through ordinary `ott PLAYER load PRESET`
 is not yet integrated. A preset with its own saved favorites document stops that
 ordinary load before any preset settings are sent. For example, after
-`ott t1 fav collect Home replace`, `ott t1 load Home` refuses to perform a
-settings-only load; `ott t1 fav load Home replace` is the separate favorites-only
-operation for an already paired current source. Presets without their own
+`ott t1 fav collect Home replace`, `ott t1 load Home` refuses to silently perform
+a settings-only load. Explicitly choose the subset when needed:
+
+```sh
+ott t1 load Home --settings-only
+ott t1 load Home plan --settings-only
+ott t1 load Home apply --settings-only --checkpoint /private/home-settings.json
+ott t1 load Home resume --settings-only --checkpoint /private/home-settings.json
+ott t1 load Home verify --settings-only
+```
+
+`--settings-only` keeps the saved favorites document intact and sends no favorites
+commands. It applies the normal preset settings, including configured Local
+folders and provider/profile selection; playback follows those existing settings.
+JSON results include `settings_only: true` and `favorites: "skipped"`, and the
+plain load result explicitly says "favorites skipped". This is not verification
+or delivery of the saved favorites. The flag deliberately does not validate the
+favorites companion, including malformed companion metadata. Use `ott presets
+Home fav validate` separately to validate that document.
+
+Use the same flag when resuming: settings-only checkpoints bind this intent and
+cannot be resumed as complete preset loads, or vice versa. Default checkpoint
+paths are separate for these modes. Existing unflagged checkpoint formats and
+preset revisions remain unchanged. Groups support the same flag and retain
+separate checkpoints for each player; there is no cross-player atomic apply.
+
+`ott t1 fav load Home replace` remains the separate favorites-only operation for
+an already paired current source. Presets without their own
 companion retain their existing behavior when the favorites extension is absent
 or its top-level value and `presets` mapping are dictionaries. A malformed
 top-level extension or `presets` mapping stops the load before preset settings

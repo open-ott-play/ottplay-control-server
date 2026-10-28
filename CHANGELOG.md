@@ -4,6 +4,10 @@
 
 ### Added
 
+- Add explicit `load PRESET --settings-only` for ordinary and grouped loads,
+  including plan/apply/resume/verify. It preserves saved favorites, reports that
+  they were skipped and binds resumable checkpoints to settings-only intent.
+  Unflagged loads still refuse to silently omit a selected favorites companion.
 - Add explicit favorites uncertainty inspection and acknowledgement with a
   separate recovery permission, exact record/ledger confirmation and retained
   original outcomes. Check recovery support before new mutating transfers;

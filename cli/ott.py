@@ -83,8 +83,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show available controls, then a player summary
-  ott NAME load PRESET               apply a private preset, including configured local folders
-  ott NAME load PRESET plan|apply|resume|verify [--checkpoint FILE]
+  ott NAME load PRESET [--settings-only]  apply preset settings; explicitly skip saved favorites
+  ott NAME load PRESET plan|apply|resume|verify [--settings-only] [--checkpoint FILE]
                                      inspect or safely resume exact preset settings
   ott handoff SOURCE TARGET          continue live/archive viewing on another player
   ott NAME 12                        play channel 12 from the s listing
@@ -1215,9 +1215,8 @@ def parse_command(words):
             params["query"] = query.strip()
         return "kiosk", params
     if verb == "load":
-        if len(tail) != 1 or not preset_name(tail[0]):
-            raise Error("Use load PRESET with a short preset name")
-        return "load", {"preset": tail[0]}
+        parsed = parse_preset_load([verb, *tail])
+        return "load", {key: value for key, value in parsed.items() if value is not None and value is not False}
     if verb == "profiles":
         if tail:
             raise Error("Use profiles without arguments")
@@ -2019,20 +2018,46 @@ def validate_preset(config, requested):
     return name, result
 
 
-def require_preset_favorites_support(config, name):
+def parse_preset_load(words):
+    """One load grammar for direct, resumable and grouped settings application."""
+    usage = "Use load PRESET [plan|apply|resume|verify] [--settings-only] [--checkpoint FILE]"
+    if len(words) < 2 or words[0].casefold() != "load" or not preset_name(words[1]):
+        raise Error(usage)
+    result = {"preset": words[1], "mode": None, "checkpoint": None, "settings_only": False}
+    index = 2
+    while index < len(words):
+        word = words[index]
+        if word == "--settings-only" and not result["settings_only"]:
+            result["settings_only"] = True
+        elif word == "--checkpoint" and result["checkpoint"] is None:
+            index += 1
+            if index >= len(words) or not words[index] or words[index].startswith("--"):
+                raise Error(usage)
+            result["checkpoint"] = words[index]
+        elif word in ("plan", "apply", "resume", "verify") and result["mode"] is None:
+            result["mode"] = word
+        else:
+            raise Error(usage)
+        index += 1
+    if result["checkpoint"] is not None and result["mode"] is None:
+        raise Error(usage)
+    return result
+
+
+def require_preset_favorites_support(config, name, *, settings_only=False):
     """Never report a settings-only load as a complete favorites-bearing preset.
 
     Keep unrelated/absent companions on the legacy path without importing new
     helpers. The remote integration must replace this gate with full preflight
     before it can deliver the selected companion and bind it to a checkpoint.
     """
-    if "preset_favorites" not in config:
+    if settings_only or "preset_favorites" not in config:
         return
     extension = config["preset_favorites"]
     if not isinstance(extension, dict) or not isinstance(extension.get("presets"), dict):
         raise Error("Invalid saved favorites metadata; no preset settings were sent")
     if any(isinstance(key, str) and key.casefold() == name.casefold() for key in extension["presets"]):
-        raise Error("This preset contains saved favorites, but complete preset favorites delivery is not available yet; no preset settings were sent")
+        raise Error("This preset contains saved favorites, but complete preset favorites delivery is not available yet; no preset settings were sent. Use --settings-only to explicitly skip favorites")
 
 
 def load_preset(client, device, name, preset, session=None):
@@ -2201,7 +2226,8 @@ def load_preset(client, device, name, preset, session=None):
 
 
 def preset_command(config, words, timeout, json_output, on_receipt=None, *, client=None, device=None):
-    if len(words) > 3:
+    params = parse_preset_load(words[1:])
+    if params["mode"] is not None:
         path = Path(__file__).resolve().with_name("preset_session.py")
         if not path.is_file():
             raise Error("Install preset_session.py beside ott.py")
@@ -2212,9 +2238,8 @@ def preset_command(config, words, timeout, json_output, on_receipt=None, *, clie
                           client=client, device=device)
     receipt = {"status": "failed", "stage": "validate", "completed": [], "error": "Invalid preset configuration or command."}
     try:
-        _, params = parse_command(words[1:])
         name, preset = validate_preset(config, params["preset"])
-        require_preset_favorites_support(config, name)
+        require_preset_favorites_support(config, name, settings_only=params["settings_only"])
         receipt["preset"] = name
         receipt["stage"] = "connect"
         receipt["error"] = "Could not prepare the player connection."
@@ -2230,10 +2255,15 @@ def preset_command(config, words, timeout, json_output, on_receipt=None, *, clie
         pass
     except KeyboardInterrupt:
         receipt.update(status="interrupted", error="Preset loading interrupted before connecting.")
+    if params["settings_only"]:
+        receipt.update(settings_only=True, favorites="skipped")
     if json_output:
         print(json.dumps(receipt, ensure_ascii=False, indent=2))
     elif receipt["status"] == "loaded":
-        print(f"Preset loaded: {receipt['preset']} (M3U profile {receipt['active_profile']}).")
+        if params["settings_only"]:
+            print(f"Preset settings loaded: {receipt['preset']} (M3U profile {receipt['active_profile']}); favorites skipped.")
+        else:
+            print(f"Preset loaded: {receipt['preset']} (M3U profile {receipt['active_profile']}).")
     else:
         done = ", ".join(receipt["completed"]) or "none"
         print(f"Preset loading stopped at {receipt['stage']}. Completed: {done}. {receipt['error']}", file=sys.stderr)
@@ -4626,6 +4656,7 @@ def print_player_help(data, name):
         print("  Favorites profile sync: CURRENT VERIFIED PLEX ONLY; explicit bindings required.")
         print(f"  {prefix} fav bindings  — show exact current-source scope IDs")
         print(f"  {prefix} fav collect Home / fav diff Home  — save or compare this current scope")
+        print(f"  {prefix} load Home --settings-only  — apply preset settings; keep saved favorites and skip their delivery")
         print(f"  {prefix} fav load Home replace --dry-run  — validate and preview without applying")
         print(f"  {prefix} fav load Home replace / fav clear  — persist changes after a validated preview")
         print(f"  {prefix} fav bind Home --dry-run / fav status OPERATION_UUID  — check pairing or retained evidence")
@@ -5989,8 +6020,11 @@ def group_output_arguments(words, route, prepared, suffix):
         words[-1] = value
     elif route == "android" and len(words) == 4 and words[1].casefold() == "screenshot" and words[2] in ("-o", "--output"):
         words[3] = expand(words[3])
-    elif route == "preset" and len(words) == 5 and words[3] == "--checkpoint" and words[2] in ("apply", "resume"):
-        words[4] = expand(words[4], checkpoint=True, resume=words[2] == "resume")
+    elif route == "preset":
+        parsed = parse_preset_load(words)
+        if parsed["checkpoint"] is not None and parsed["mode"] in ("apply", "resume"):
+            index = words.index("--checkpoint") + 1
+            words[index] = expand(words[index], checkpoint=True, resume=parsed["mode"] == "resume")
     else:
         verb = words[0].casefold() if words else ""
         flag = ("--out" if route == "performance" or (route == "workbench" and verb == "bundle") else
@@ -6070,10 +6104,9 @@ def player_group_command(client, config, targets, args, argv):
     if route == "android" and len(words) > 1 and words[1].casefold() == "bind" and len(targets) > 1:
         raise Error("android bind requires one player; a native queue cannot be shared by multiple players")
     if route == "preset":
-        if len(words) not in (2, 3, 5) or (len(words) > 2 and words[2] not in ("plan", "apply", "resume", "verify")):
-            raise Error("Use PLAYER load PRESET [plan|apply|resume|verify [--checkpoint FILE]]")
-        name, _ = validate_preset(config, words[1])
-        require_preset_favorites_support(config, name)
+        parsed = parse_preset_load(words)
+        name, _ = validate_preset(config, parsed["preset"])
+        require_preset_favorites_support(config, name, settings_only=parsed["settings_only"])
     plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
     group_output_preflight(plans)
     json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))
@@ -6567,9 +6600,11 @@ def main(argv=None):
             # Validate grammar before constructing the authoritative Client.
             parse_command(args.words[1:])
         if (len(args.words) > 1 and args.words[1].casefold() == "load"
-                and args.words[0].casefold() not in TOP_LEVEL_COMMANDS and "," not in args.words[0]):
-            return preset_command(config, args.words, args.timeout, args.json,
-                                  print_request_receipt if args.receipt else None)
+                and args.words[0].casefold() not in TOP_LEVEL_COMMANDS):
+            parse_preset_load(args.words[1:])
+            if "," not in args.words[0]:
+                return preset_command(config, args.words, args.timeout, args.json,
+                                      print_request_receipt if args.receipt else None)
         client = Client(config, args.timeout)
         client.on_receipt = print_request_receipt if args.receipt else None
         if args.words[0].casefold() == "handoff":
