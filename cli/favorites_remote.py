@@ -77,6 +77,16 @@ class Snapshot:
 
 
 @dataclass(frozen=True)
+class BindingCatalog:
+    _target: tuple = field(repr=False)
+    _result: protocol.ValidatedResult = field(repr=False)
+
+    @property
+    def data(self):
+        return self._result.data
+
+
+@dataclass(frozen=True)
 class Outcome:
     operation_id: str
     outcome: str
@@ -162,7 +172,8 @@ def recovery_record(begin, preview, commit_request):
 
 class RemoteFavorites:
     def __init__(self, client, device, *, runtime, limits, receipt_retention_seconds, scope_validator,
-                 save_context, timeout=45, monotonic=time.monotonic, sleep=time.sleep, uuid_factory=uuid.uuid4):
+                 save_context, timeout=45, monotonic=time.monotonic, sleep=time.sleep, uuid_factory=uuid.uuid4,
+                 max_metadata_bytes=protocol.MAX_METADATA_BYTES, deadline=None):
         if (not callable(getattr(client, "api", None)) or not callable(getattr(client, "api_raw", None)) or type(device) is not str
                 or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", device) is None
                 or type(runtime) is not str or protocol.RUNTIME.fullmatch(runtime) is None
@@ -170,7 +181,9 @@ class RemoteFavorites:
                 or not 1 <= receipt_retention_seconds <= 86400 or not callable(scope_validator)
                 or not callable(save_context) or not callable(monotonic) or not callable(sleep)
                 or not callable(uuid_factory) or type(timeout) not in (int, float)
-                or not math.isfinite(timeout) or not 0 < timeout <= 300):
+                or not math.isfinite(timeout) or not 0 < timeout <= 300
+                or type(max_metadata_bytes) is not int or not 1 <= max_metadata_bytes <= protocol.MAX_METADATA_BYTES
+                or deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline))):
             raise RemoteError("invalid_configuration")
         server = getattr(client, "server", None)
         if type(server) is not str or not server or len(server) > 2048:
@@ -178,10 +191,14 @@ class RemoteFavorites:
         self.client, self.device, self.runtime = client, device, runtime
         self.limits = limits.validate()
         self.receipt_retention_seconds = receipt_retention_seconds
+        self.max_metadata_bytes = max_metadata_bytes
         self.scope_validator, self.save_context = scope_validator, save_context
         self.clock, self.sleep, self.uuid_factory = monotonic, sleep, uuid_factory
         self._clock_last = None
-        self._deadline = self._now() + timeout
+        started = self._now()
+        self._deadline = min(started + timeout, deadline) if deadline is not None else started + timeout
+        if self._deadline <= started:
+            raise RemoteError("deadline")
         self._target = (hashlib.sha256(server.encode("utf-8")).hexdigest(), device, runtime)
         self._query = "/api/requests?" + urllib.parse.urlencode({"device_id": device})
         self._last_post = self._last_http = None
@@ -285,7 +302,7 @@ class RemoteFavorites:
                     raise RemoteError("invalid_response")
                 if status == 202:
                     try:
-                        pending = transfer.validate_document_bytes(body, max_bytes=min(protocol.MAX_METADATA_BYTES,
+                        pending = transfer.validate_document_bytes(body, max_bytes=min(self.max_metadata_bytes,
                                                                                        self.limits.max_snapshot_response_bytes))
                     except transfer.TransferError:
                         raise RemoteError("invalid_response") from None
@@ -298,7 +315,8 @@ class RemoteFavorites:
                     raise RemoteError("invalid_response")
                 try:
                     result = protocol.validate_response(params, body, request_id=request_id, context=context,
-                                                        scope_validator=self.scope_validator)
+                                                        scope_validator=self.scope_validator,
+                                                        max_metadata_bytes=self.max_metadata_bytes)
                 except (protocol.ProtocolError, TypeError, ValueError, RecursionError):
                     raise RemoteError("invalid_response") from None
                 if result.status != "ok":
@@ -314,6 +332,30 @@ class RemoteFavorites:
         if response.data["size_bytes"] > self.limits.max_document_bytes:
             raise RemoteError("invalid_response", request_id=response.request_id, phase="receipt")
         return Snapshot(self._target, response)
+
+    def catalog(self):
+        """Read the current target projection under this adapter's deadline."""
+        result = self._rpc({"op": "bindingcatalog", "runtime": self.runtime}, deadline=self._deadline)
+        return BindingCatalog(self._target, result)
+
+    def confirm_binding(self, catalog, scope, target_id):
+        """Confirm an existing exact pairing only; no bootstrap or rebinding."""
+        if type(catalog) is not BindingCatalog or catalog._target != self._target:
+            raise RemoteError("invalid_configuration")
+        try:
+            checked = protocol.validate_result(catalog._result.request, catalog.data,
+                request_id=catalog._result.request_id, response_id=catalog._result.request_id, status="ok",
+                max_metadata_bytes=self.max_metadata_bytes)
+            if checked.request != {"op": "bindingcatalog", "runtime": self.runtime}:
+                raise RemoteError("invalid_configuration")
+            matches = [row for row in checked.data["bindings"] if row["scope"] == scope and row["target_id"] == target_id]
+            if len(matches) != 1:
+                raise RemoteError("invalid_configuration")
+            return self._rpc({"op": "bind", "runtime": self.runtime, "scope": copy.deepcopy(scope),
+                              "target_id": target_id, "codecVersion": matches[0]["codecVersion"],
+                              "expected_binding_revision": checked.data["binding_revision"]}, deadline=self._deadline)
+        except protocol.ProtocolError:
+            raise RemoteError("invalid_response") from None
 
     def _snapshot(self, snapshot):
         if type(snapshot) is not Snapshot or snapshot._target != self._target:

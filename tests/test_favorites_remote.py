@@ -530,7 +530,8 @@ class RemoteFavoritesTests(unittest.TestCase):
     def test_snapshot_target_binding_invalid_settings_and_clock_are_checked(self):
         for override in ({"receipt_retention_seconds": None}, {"runtime": "bad runtime"},
                          {"limits": replace(LIMITS, max_chunk_bytes=9000)}, {"scope_validator": None},
-                         {"save_context": None}, {"timeout": 301}):
+                         {"save_context": None}, {"timeout": 301}, {"max_metadata_bytes": True},
+                         {"max_metadata_bytes": 0}, {"max_metadata_bytes": 131073}, {"deadline": True}):
             self.error("invalid_configuration", self.client, **override)
         client = self.client()
         snapshot = self.snapshot(client)
@@ -545,6 +546,19 @@ class RemoteFavoritesTests(unittest.TestCase):
         self.api.server = "https://different.invalid"
         self.error("invalid_configuration", changed.snapshot, FIXTURE["scope"])
         self.assertEqual(len(self.api.calls), before)
+
+    def test_outer_deadline_is_preserved_and_lower_pending_metadata_bound_is_raw(self):
+        client = self.client(deadline=105)
+        snapshot = self.snapshot(client)
+        self.error("deadline_insufficient", client.preview, snapshot, snapshot.document_bytes)
+        self.assertEqual(client._deadline, 105)
+        self.error("deadline", self.client, deadline=100)
+        self.setUp()
+        self.api.get_effects["snapshot"] = ["pending"]
+        self.api.raw_mutators["snapshot"] = lambda raw: raw + b" " * 100
+        client = self.client(max_metadata_bytes=100)
+        self.error("invalid_response", self.snapshot, client)
+        self.assertEqual(self.api.posts(), ["snapshot"])
 
     def test_context_store_roundtrip_restores_actual_receipt_proof(self):
         with tempfile.TemporaryDirectory() as directory:

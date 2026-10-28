@@ -280,6 +280,12 @@ preserves its completion evidence. At most eight interrupted completion staging
 files are admitted, reserving a new slot before creation; their bytes also count
 against the storage budget. A failed replacement or durability check reports
 uncertain local retention and never authorizes replay on the player.
+`fav status` is read-only on the player. A verified response may update this
+local completion evidence and reclaim older proved-completed records under
+pressure. A local retention failure is reported separately and does not turn
+verified player persistence into a failed commit. Missing or uncertain evidence
+still cannot authorize retry. Bindings, diff and dry-run create no local
+operation directory or recovery record.
 Numbered Local import/export remains separate. A server update alone does not
 install CLI modules: package/install the complete reviewed helper set atomically,
 preserving private config, before advertising these commands as usable.

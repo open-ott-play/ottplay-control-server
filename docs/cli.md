@@ -5,7 +5,7 @@ Keep all files from the same `cli/` revision together: `ott.py`, `programme_sear
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
 `player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`,
 `favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
-`favorites_operations.py`, `favorites_remote.py` and `preset_favorites.py`.
+`favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py` and `preset_favorites.py`.
 Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
