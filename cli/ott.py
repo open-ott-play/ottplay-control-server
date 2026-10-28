@@ -761,7 +761,7 @@ class Client:
                 return None
         self.opener = urllib.request.build_opener(NoRedirect(), https_handler())
 
-    def api(self, path, payload=None, timeout=None):
+    def api(self, path, payload=None, timeout=None, *, raw=False):
         budget = min(10, self.timeout if timeout is None else timeout)
         deadline = time.monotonic() + budget
         cancelled = threading.Event()
@@ -769,7 +769,11 @@ class Client:
 
         def perform():
             try:
-                outcome.put((True, self._api(path, payload, budget, deadline, cancelled)))
+                if raw:
+                    result = self._api(path, payload, budget, deadline, cancelled, return_raw=True)
+                else:
+                    result = self._api(path, payload, budget, deadline, cancelled)
+                outcome.put((True, result))
             except Exception as exc:
                 outcome.put((False, exc))
 
@@ -788,7 +792,15 @@ class Client:
             raise value
         return value
 
-    def _api(self, path, payload, budget, deadline, cancelled):
+    def api_raw(self, path, payload=None, timeout=None):
+        """Retain original response bytes for protocol-specific byte validation.
+
+        Authentication, redirect policy, total deadline and 2 MiB read bounds
+        are identical to api(). The caller must validate the returned bytes.
+        """
+        return self.api(path, payload, timeout, raw=True)
+
+    def _api(self, path, payload, budget, deadline, cancelled, *, return_raw=False):
         headers = {"Authorization": "Bearer " + self.token, "User-Agent": "ottplay-cli/1.0"}
         body = None
         if payload is not None:
@@ -812,7 +824,7 @@ class Client:
                         remaining = getattr(response, "length", None)
                         if isinstance(remaining, int) and remaining > 0:
                             raise TransportError("The server closed the connection before sending the complete response", "truncated")
-                        return response.status, decode_response_json(body)
+                        return response.status, bytes(body) if return_raw else decode_response_json(body)
                     body.extend(chunk)
                     if len(body) > 2 * 1024 * 1024:
                         raise Error("The server response exceeds the size limit")
