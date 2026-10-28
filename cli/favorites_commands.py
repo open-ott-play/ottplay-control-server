@@ -26,7 +26,11 @@ import preset_favorites as storage
 class CommandError(ValueError):
     def __init__(self, code):
         self.code = code
-        super().__init__("Favorites synchronization: " + code.replace("_", " ") + ". No automatic replay is permitted.")
+        message = "Favorites synchronization: " + code.replace("_", " ") + ". No automatic replay is permitted."
+        if code == "player_in_standby":
+            message = ("The player is in standby. Run 'ott <player> go' to wake it and start configured playback, "
+                       "then retry this favorites command. No wake or favorites mutation was sent.")
+        super().__init__(message)
 
 
 def _json(value):
@@ -196,6 +200,8 @@ class _Target:
             if advertised is None:
                 if status_recovery:
                     return False
+                if controls["player"].get("standby") is True:
+                    raise CommandError("player_in_standby")
                 raise CommandError("unsupported_player_or_controller")
             self.capability = protocol.validate_capability(advertised)
             break
@@ -496,17 +502,30 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
     def make(device, budget, deadline=None):
         return _Target(api, client, config_path, device, budget, clock, sleep, uuid_factory, deadline)
     if op == "collect":
+        standby_refused = False
         def export(device, budget):
+            nonlocal standby_refused
             target = make(device, budget)
-            target.discover()
+            try:
+                target.discover()
+            except CommandError as error:
+                standby_refused = error.code == "player_in_standby"
+                raise
             scope = target.select(params.get("scope", "current"))
             snapshot = target.snapshot(scope)
             sources.append({"scope": scope, "coverage": "current-source"})
             return {"complete": True, "document": _bundle(json.loads(snapshot.document_bytes))}
-        result = api.collect_favorites_profile(config_path, params["preset"], resolved, timeout,
-            mode=params.get("mode", "merge"), dry_run=params.get("dry_run", False),
-            validate_document=document.validate_document, planner=document.plan_documents,
-            store_factory=storage.Store, export_snapshot=export, storage_errors=(storage.StorageError,))
+        try:
+            result = api.collect_favorites_profile(config_path, params["preset"], resolved, timeout,
+                mode=params.get("mode", "merge"), dry_run=params.get("dry_run", False),
+                validate_document=document.validate_document, planner=document.plan_documents,
+                store_factory=storage.Store, export_snapshot=export, storage_errors=(storage.StorageError,))
+        except api.Error:
+            # Collection redacts exporter failures. Preserve only this fixed,
+            # locally validated discovery reason, never arbitrary remote text.
+            if standby_refused:
+                raise CommandError("player_in_standby") from None
+            raise
         return {**result, "sources": sources}
     if len(resolved) != 1:
         raise CommandError("one_target_required")
