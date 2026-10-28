@@ -1,7 +1,7 @@
 package control
 
-// Bounded relay for the agreed seven-operation transfer subset. Capability
-// advertisement and destination binding remain gated on actual player support.
+// Bounded relay for transfer and current-Plex binding metadata. Validating a
+// player capability never advertises it or creates/rebinds private identities.
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"regexp"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -29,6 +30,7 @@ const maxFavoritesTransferDiagnostics = 128
 
 var favoritesTransferUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var favoritesTransferSHAPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var favoritesTransferPMSPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$`)
 var favoritesTransferErrors = map[string]bool{
 	"invalid_request": true, "envelope_too_large": true, "runtime_changed": true,
 	"busy": true, "expired": true, "operation_conflict": true,
@@ -55,6 +57,111 @@ type favoritesTransferRequest struct {
 	Scope                                   *favoritesTransferScope
 	SizeBytes, ChunkCount, Seq, Offset      int
 	ChunkBytes                              int
+	TargetID                                string
+}
+
+var favoritesTransferCapabilityLimits = map[string]int{
+	"max_document_bytes": 1048576, "max_chunk_bytes": 8192, "max_chunks": 256,
+	"max_envelope_bytes": 16384, "max_snapshot_response_bytes": 2097152,
+	"max_active_stages": 1, "idle_ttl_seconds": 120, "absolute_ttl_seconds": 600,
+	"max_plan_bytes": 65536, "max_metadata_bytes": 131072, "max_json_depth": 20,
+	"max_json_nodes": 32768, "max_channel_lists": 256, "max_entries_per_list": 10000,
+	"max_media_favorites": 1000, "max_receipt_entries": 32,
+	"max_receipt_ledger_bytes": 65536, "max_admitted_operations_per_adapter_instance": 16,
+}
+
+func validFavoritesTransferCapability(raw json.RawMessage) bool {
+	if len(raw) > maxFavoritesTransferMetadataBytes || !validFavoritesTransferJSON(raw) {
+		return false
+	}
+	m, ok := inspectObject(raw, "version", "persistence", "codecs", "limits", "receipt_retention_seconds", "receipt_retention_origin")
+	if !ok || !profileInteger(m["version"], 1, 1) || !profileInteger(m["receipt_retention_seconds"], 1, 86400) || !inspectEnum(m["receipt_retention_origin"], "reservation") {
+		return false
+	}
+	persistence, p := inspectArray(m["persistence"], 1)
+	codecs, c := inspectArray(m["codecs"], 1)
+	if !p || len(persistence) != 1 || !inspectEnum(persistence[0], "persistent") || !c || len(codecs) != 1 {
+		return false
+	}
+	codec, c := inspectObject(codecs[0], "provider", "codecVersion", "locatorKinds", "targetScope", "coverage")
+	if !c || !inspectEnum(codec["provider"], "plex") || !profileInteger(codec["codecVersion"], 1, 1) || !inspectEnum(codec["targetScope"], "current-verified-source") {
+		return false
+	}
+	kinds, k := inspectArray(codec["locatorKinds"], 1)
+	coverage, v := inspectArray(codec["coverage"], 2)
+	if !k || len(kinds) != 1 || !inspectEnum(kinds[0], "plex-media") || !v || len(coverage) != 2 || !inspectEnum(coverage[0], "channelLists") || !inspectEnum(coverage[1], "mediaFavorites") {
+		return false
+	}
+	limits, err := decodeObject(m["limits"])
+	if err != nil || len(limits) != len(favoritesTransferCapabilityLimits) {
+		return false
+	}
+	for field, maximum := range favoritesTransferCapabilityLimits {
+		if !profileInteger(limits[field], 1, maximum) {
+			return false
+		}
+	}
+	var idle, absolute int
+	_ = json.Unmarshal(limits["idle_ttl_seconds"], &idle)
+	_ = json.Unmarshal(limits["absolute_ttl_seconds"], &absolute)
+	return idle <= absolute
+}
+
+func favoritesTransferPublicText(raw json.RawMessage, token bool) (string, bool) {
+	value, ok := favoritesTransferText(raw, 256)
+	if !ok {
+		return "", false
+	}
+	for _, character := range value {
+		// Graphic/space excludes all Unicode C categories, including unassigned
+		// code points. Control whitespace is also forbidden in display labels.
+		if unicode.IsControl(character) || !unicode.IsGraphic(character) && !unicode.IsSpace(character) || token && unicode.IsSpace(character) {
+			return "", false
+		}
+	}
+	return value, true
+}
+
+func validFavoritesTransferBindingCatalog(m map[string]json.RawMessage) bool {
+	if !favoritesTransferFields(m, "version", "runtime", "op", "binding_revision", "targets", "bindings") {
+		return false
+	}
+	if _, ok := favoritesTransferText(m["binding_revision"], 256); !ok {
+		return false
+	}
+	targets, t := inspectArray(m["targets"], 1)
+	bindings, b := inspectArray(m["bindings"], 256)
+	if !t || len(targets) != 1 || !b {
+		return false
+	}
+	target, t := inspectObject(targets[0], "target_id", "display", "provider", "codecVersion", "serverId")
+	id, i := favoritesTransferPublicText(target["target_id"], true)
+	_, display := favoritesTransferPublicText(target["display"], false)
+	server, s := favoritesTransferText(target["serverId"], 256)
+	if !t || !i || !display || !s || !favoritesTransferPMSPattern.MatchString(server) || !inspectEnum(target["provider"], "plex") || !profileInteger(target["codecVersion"], 1, 1) {
+		return false
+	}
+	seen := map[favoritesTransferScope]bool{}
+	profiles, sources := map[string]bool{}, map[string]bool{}
+	for _, rawBinding := range bindings {
+		binding, ok := inspectObject(rawBinding, "scope", "target_id", "codecVersion")
+		scope := parseFavoritesTransferScope(binding["scope"])
+		bindingTarget, valid := favoritesTransferPublicText(binding["target_id"], true)
+		if !ok || scope == nil || scope.Provider != "plex" || seen[*scope] || !valid || bindingTarget != id || !profileInteger(binding["codecVersion"], 1, 1) {
+			return false
+		}
+		// Registry row IDs are globally unique: one source has one parent,
+		// and an ID cannot simultaneously identify a profile and a source.
+		if scope.ProfileBindingID == scope.SourceBindingID || sources[scope.SourceBindingID] || sources[scope.ProfileBindingID] || profiles[scope.SourceBindingID] {
+			return false
+		}
+		// Several exact public scope pairs may resolve to one physical target.
+		// Keep them distinct; only the host can disambiguate the selected scope.
+		seen[*scope] = true
+		profiles[scope.ProfileBindingID] = true
+		sources[scope.SourceBindingID] = true
+	}
+	return true
 }
 
 func favoritesTransferFields(value map[string]json.RawMessage, keys ...string) bool {
@@ -199,6 +306,21 @@ func parseFavoritesTransferRequest(params map[string]json.RawMessage) *favorites
 		return nil
 	}
 	switch v.Op {
+	case "bindingcatalog":
+		if favoritesTransferFields(params, "op", "runtime") {
+			return v
+		}
+	case "bind":
+		if !favoritesTransferFields(params, "op", "runtime", "scope", "target_id", "expected_binding_revision", "codecVersion") || !profileInteger(params["codecVersion"], 1, 1) {
+			return nil
+		}
+		var target, revision bool
+		v.TargetID, target = favoritesTransferPublicText(params["target_id"], true)
+		v.BindingRevision, revision = favoritesTransferText(params["expected_binding_revision"], 256)
+		v.Scope = parseFavoritesTransferScope(params["scope"])
+		if target && revision && v.Scope != nil && v.Scope.Provider == "plex" && v.Scope.ProfileBindingID != v.Scope.SourceBindingID {
+			return v
+		}
 	case "snapshot":
 		v.Scope = parseFavoritesTransferScope(params["scope"])
 		if favoritesTransferFields(params, "op", "runtime", "scope") && v.Scope != nil {
@@ -282,8 +404,8 @@ func parseFavoritesTransferRequest(params map[string]json.RawMessage) *favorites
 			return v
 		}
 	}
-	// bindingcatalog/bind await the explicit target_id wire contract. No implicit
-	// name matching, destination UUID guessing or capability claim is admitted.
+	// No implicit name matching, destination UUID guessing, creation or
+	// different-target rebinding is admitted by the current binding packet.
 	return nil
 }
 
@@ -461,6 +583,14 @@ func validFavoritesTransferResult(raw json.RawMessage, status string, request *f
 		return false
 	}
 	switch request.Op {
+	case "bindingcatalog":
+		return validFavoritesTransferBindingCatalog(m)
+	case "bind":
+		target, valid := favoritesTransferPublicText(m["target_id"], true)
+		revision, r := favoritesTransferText(m["binding_revision"], 256)
+		// This packet confirms an existing pairing only: no creation, new
+		// revision or different-target rebinding can be reported as success.
+		return favoritesTransferFields(m, "version", "runtime", "op", "binding_revision", "scope", "target_id", "paired") && valid && target == request.TargetID && r && revision == request.BindingRevision && sameFavoritesTransferScope(parseFavoritesTransferScope(m["scope"]), request.Scope) && bytes.Equal(bytes.TrimSpace(m["paired"]), []byte("true"))
 	case "snapshot":
 		if !favoritesTransferFields(m, "version", "runtime", "op", "scope", "revision", "binding_revision", "document_sha256", "size_bytes", "document_base64") || !sameFavoritesTransferScope(parseFavoritesTransferScope(m["scope"]), request.Scope) || !profileInteger(m["size_bytes"], 1, maxFavoritesTransferDocumentBytes) {
 			return false

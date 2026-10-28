@@ -136,12 +136,12 @@ func TestFavoritesTransferHTTPOperationPermissionsDoNotInheritLegacyFavorites(t 
 	if s.devices[0].queue[0].favorites == nil || s.devices[0].queue[0].favoritesTransfer != nil {
 		t.Fatal("legacy favorites was reinterpreted as transfer")
 	}
-	for _, action := range []string{"favorites_transfer", "favorites_transfer.*", "favorites_transfer.bind", "favorites_transfer.bindingcatalog", "favorites_transfer.unknown"} {
+	for _, action := range []string{"favorites_transfer", "favorites_transfer.*", "favorites_transfer.unknown"} {
 		if config.ValidCommandAction(action) {
 			t.Fatal("unscoped/unfrozen action allowed", action)
 		}
 	}
-	for _, op := range []string{"snapshot", "begin", "append", "preview", "commit", "status", "abort"} {
+	for _, op := range []string{"snapshot", "begin", "append", "preview", "commit", "status", "abort", "bindingcatalog", "bind"} {
 		if !config.ValidCommandAction("favorites_transfer." + op) {
 			t.Fatal("exact operation permission missing", op)
 		}

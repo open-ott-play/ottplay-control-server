@@ -755,12 +755,22 @@ capability or make synchronization available. Binding discovery, provider codecs
 persistent adapters and CLI reconciliation must be qualified together before use.
 The legacy `favorites` action below is unchanged.
 
-The implemented relay operations are `snapshot`, `begin`, `append`, `preview`,
-`commit`, `status` and `abort`. Command operators need each exact
+The transfer operations are `snapshot`, `begin`, `append`, `preview`,
+`commit`, `status` and `abort`. The relay also validates `bindingcatalog` and
+idempotent confirmation through `bind`. Command operators need each exact
 `favorites_transfer.OPERATION` permission; existing `favorites.*` permissions do
 not grant these operations, and family-wide wildcards are not accepted. Device
-credentials cannot enqueue them. `bindingcatalog` and `bind` remain unadmitted
-until their complete runtime integration is available.
+credentials cannot enqueue them. A binding catalog describes one current verified
+Plex target and its public profile/source UUID pairs; it does not expose private
+selectors or grants. Source UUIDs have one parent, and UUID roles cannot overlap.
+The current `bind` contract only confirms an existing exact pair at the captured
+binding revision. It cannot create, import or move a binding. Provisioning and
+runtime activation remain separate integration work.
+
+An optional `favorites_transfer` capability marker is checked against the frozen
+current-Plex codec and bounded limit schema. An absent marker remains compatible
+with older players. Controller acceptance does not advertise support on a player;
+the CLI must require fresh runtime capabilities and an exact compatible binding.
 
 Every request carries `op` and the expected `runtime`. The actual queued
 `{id,action,params,expires_at}` envelope must fit 16 KiB after JSON escaping, before

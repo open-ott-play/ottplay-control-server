@@ -16,12 +16,16 @@ with mock.patch.object(sys, "path", [str(ROOT / "cli"), *sys.path]):
     sys.modules[spec.name] = protocol
     spec.loader.exec_module(protocol)
 FIXTURE = json.loads((ROOT / "contracts/favorites-transfer-v1.json").read_bytes())
+CURRENT_PACKET = json.loads((ROOT / "contracts/favorites-current-plex-v1.json").read_bytes())
 REQUEST_ID = "a" * 32
 OTHER_UUID = "00000000-0000-4000-8000-000000000009"
 PRIVATE = "fixture-private-token"
 
 
 def fixture(op):
+    if op in ("bindingcatalog", "bind"):
+        return {"request": copy.deepcopy(CURRENT_PACKET[op + "_request"]),
+                "response": copy.deepcopy(CURRENT_PACKET[op + "_response"])}
     return copy.deepcopy(FIXTURE["fixtures"][op])
 
 
@@ -54,7 +58,7 @@ class FavoritesProtocolTests(unittest.TestCase):
 
     def test_all_seven_fixtures_validate_without_promoting_verified_claims(self):
         self.assertEqual(protocol.ERRORS, frozenset(FIXTURE["error_allowlist"]))
-        for op in protocol.OPS:
+        for op in protocol.TRANSFER_OPS:
             with self.subTest(op=op):
                 pair = fixture(op)
                 self.assertEqual(protocol.validate_request(pair["request"]), pair["request"])
@@ -69,9 +73,7 @@ class FavoritesProtocolTests(unittest.TestCase):
                 else:
                     self.assertIsNone(response.raw_document)
 
-    def test_binding_extra_fields_legacy_discriminator_and_session_mode_refused(self):
-        for op in ("bindingcatalog", "bind"):
-            self.error(protocol.validate_request, fixture(op)["request"])
+    def test_extra_fields_legacy_discriminator_and_session_mode_refused(self):
         for op in protocol.OPS:
             params = fixture(op)["request"]
             self.error(protocol.validate_request, params | {"private": PRIVATE})
@@ -79,6 +81,162 @@ class FavoritesProtocolTests(unittest.TestCase):
             self.error(protocol.validate_request, params)
         for mode in (None, True, "session-only", "", PRIVATE):
             self.error(protocol.validate_request, fixture("begin")["request"] | {"persistence": mode})
+
+    def test_frozen_current_plex_capability_and_binding_fixtures_are_copies(self):
+        packet = (ROOT / "contracts/favorites-current-plex-v1.json").read_bytes()
+        self.assertEqual(hashlib.sha256(packet).hexdigest(),
+                         "86b9ed0fa8412bb7f1805811bf92ec6e21492c7667ad4ba38d020106e29f57e5")
+        source = CURRENT_PACKET["capability"]["favorites_transfer"]
+        checked = protocol.validate_capability(source)
+        self.assertEqual(checked, source)
+        checked["codecs"][0]["coverage"].clear()
+        checked["limits"].clear()
+        self.assertEqual(protocol.validate_capability(source), source)
+        for op in protocol.BINDING_OPS:
+            pair = fixture(op)
+            self.assertEqual(protocol.validate_request(pair["request"]), pair["request"])
+            response = result(op)
+            self.assertEqual(response.data, pair["response"])
+            self.assertFalse(response.verified)  # Pairing syntax is not a commit receipt.
+            response.data.clear()
+            self.assertEqual(response.data, pair["response"])
+
+    def test_capability_all_eighteen_limit_bounds_and_actual_ttl_relationship(self):
+        source = CURRENT_PACKET["capability"]["favorites_transfer"]
+        self.assertEqual(len(protocol.CAPABILITY_LIMITS), 18)
+        self.assertEqual(source["limits"], protocol.CAPABILITY_LIMITS)
+        for name, ceiling in protocol.CAPABILITY_LIMITS.items():
+            for invalid in (0, -1, True, 1.0, "1", ceiling + 1):
+                with self.subTest(limit=name, value=invalid):
+                    self.error(protocol.validate_capability, source | {"limits": source["limits"] | {name: invalid}})
+            self.error(protocol.validate_capability, source | {"limits": {k: v for k, v in source["limits"].items() if k != name}})
+        self.error(protocol.validate_capability, source | {"limits": source["limits"] | {"future": 1}})
+        self.error(protocol.validate_capability, source | {"limits": source["limits"] | {"absolute_ttl_seconds": 119}})
+        smaller = source | {"limits": {name: 1 for name in protocol.CAPABILITY_LIMITS}, "receipt_retention_seconds": 1}
+        self.assertEqual(protocol.validate_capability(smaller), smaller)
+        # Independent ceilings intersect; a lower chunk count need not support
+        # every payload below the independent maximum document byte ceiling.
+        smaller = source | {"limits": source["limits"] | {"max_chunks": 1}}
+        self.assertEqual(protocol.validate_capability(smaller), smaller)
+
+    def test_future_codec_persistence_capability_fields_and_raw_excess_fail_closed(self):
+        source = CURRENT_PACKET["capability"]["favorites_transfer"]
+        for change in ({"version": True}, {"version": 2}, {"persistence": ["session-only"]},
+                       {"persistence": ["persistent", "session-only"]}, {"receipt_retention_origin": "completion"},
+                       {"receipt_retention_seconds": 0}, {"receipt_retention_seconds": True},
+                       {"receipt_retention_seconds": 86401}, {"future": PRIVATE}, {"codecs": []},
+                       {"codecs": source["codecs"] * 2}):
+            self.error(protocol.validate_capability, source | change)
+        for change in ({"provider": "m3u"}, {"codecVersion": True}, {"codecVersion": 2},
+                       {"locatorKinds": ["channel"]}, {"targetScope": "all-sources"},
+                       {"coverage": ["mediaFavorites"]}, {"future": PRIVATE}):
+            self.error(protocol.validate_capability, source | {"codecs": [source["codecs"][0] | change]})
+        raw = protocol._encoded(source)
+        self.assertEqual(protocol.validate_capability(raw), source)
+        self.error(protocol.validate_capability, raw + b" " * protocol.MAX_METADATA_BYTES, code="envelope_too_large")
+        self.error(protocol.validate_capability, raw.replace(b'"version":1', b'"version":1,"version":1'))
+
+    def test_binding_catalog_current_target_scope_uniqueness_and_compatible_references(self):
+        data = fixture("bindingcatalog")["response"]
+        second = copy.deepcopy(data["bindings"][0])
+        second["scope"]["sourceBindingId"] = OTHER_UUID
+        # Multiple public identities may point to one physical current target;
+        # runtime selection must require explicit disambiguation above this peer.
+        self.assertEqual(result("bindingcatalog", data | {"bindings": [*data["bindings"], second]}).data["bindings"][-1], second)
+        self.assertEqual(result("bindingcatalog", data | {"bindings": []}).data["bindings"], [])
+        rows = []
+        for number in range(256):
+            row = copy.deepcopy(second)
+            row["scope"]["sourceBindingId"] = f"00000000-0000-4000-8000-{number:012x}"
+            rows.append(row)
+        self.assertEqual(len(result("bindingcatalog", data | {"bindings": rows}).data["bindings"]), 256)
+        self.error(result, "bindingcatalog", data | {"bindings": rows + [second]})
+        for change in ({"targets": []}, {"targets": data["targets"] * 2},
+                       {"bindings": data["bindings"] * 2}, {"binding_revision": ""}, {"private": PRIVATE}):
+            self.error(result, "bindingcatalog", data | change)
+        for change in ({"target_id": "not-in-catalog"}, {"codecVersion": 2}, {"codecVersion": True},
+                       {"scope": second["scope"] | {"provider": "m3u"}}, {"owner": PRIVATE}):
+            self.error(result, "bindingcatalog", data | {"bindings": [second | change]})
+        for change in ({"provider": "offline"}, {"codecVersion": True}, {"codecVersion": 2},
+                       {"serverId": "https://private.invalid/token"}, {"serverId": ""},
+                       {"display": "x\u200by"}, {"display": "é" * 129}, {"grant": PRIVATE}):
+            self.error(result, "bindingcatalog", data | {"targets": [data["targets"][0] | change]})
+
+    def test_bind_exact_runtime_scope_target_revision_codec_and_no_guessed_creation(self):
+        params = fixture("bind")["request"]
+        data = fixture("bind")["response"]
+        for change in ({"codecVersion": True}, {"codecVersion": 2}, {"scope": params["scope"] | {"provider": "m3u"}},
+                       {"expected_binding_revision": ""}, {"create": True}, {"selector": PRIVATE},
+                       {"scope": params["scope"] | {"sourceBindingId": params["scope"]["profileBindingId"]}}):
+            self.error(protocol.validate_request, params | change)
+        for target in ("", "x" * 257, "é" * 129, "two words", "x\x00y", "x\x85y", "x\u200by", "\ud800"):
+            self.error(protocol.validate_request, params | {"target_id": target})
+        self.assertEqual(protocol.validate_request(params | {"target_id": "é" * 128})["target_id"], "é" * 128)
+        for change in ({"scope": params["scope"] | {"sourceBindingId": OTHER_UUID}},
+                       {"scope": params["scope"] | {"profileBindingId": OTHER_UUID}},
+                       {"runtime": "different"}, {"target_id": "other-target"}, {"binding_revision": "3"},
+                       {"paired": False}, {"paired": 1}, {"codecVersion": 1}, {"private": PRIVATE}):
+            self.error(result, "bind", data | change)
+
+    def test_catalog_cannot_project_conflicting_global_registry_uuid_roles(self):
+        data = fixture("bindingcatalog")["response"]
+        original = data["bindings"][0]
+        scope = original["scope"]
+        impossible = [
+            [original, original | {"scope": scope | {"profileBindingId": OTHER_UUID}}],
+            [original, original | {"scope": scope | {
+                "profileBindingId": scope["sourceBindingId"], "sourceBindingId": OTHER_UUID}}],
+            [original | {"scope": scope | {"sourceBindingId": scope["profileBindingId"]}}],
+        ]
+        for rows in impossible:
+            with self.subTest(rows=rows):
+                self.error(result, "bindingcatalog", data | {"bindings": rows})
+                self.error(result, "bindingcatalog", data | {"bindings": list(reversed(rows))})
+
+    def test_binding_raw_metadata_errors_and_outer_request_identity(self):
+        for op in protocol.BINDING_OPS:
+            pair = fixture(op)
+            for status in ("ok", "rejected", "unsupported"):
+                data = pair["response"] if status == "ok" else {
+                    "version": 1, "runtime": pair["request"]["runtime"], "op": op, "error": "binding_changed"}
+                raw = protocol._encoded(data)
+                padded = raw[:-1] + b" " * (protocol.MAX_METADATA_BYTES - len(raw)) + b"}"
+                envelope = b'{"id":"' + REQUEST_ID.encode() + b'","status":"' + status.encode() + b'","data":' + padded + b'}'
+                checked = protocol.validate_response(pair["request"], envelope, request_id=REQUEST_ID)
+                self.assertEqual(checked.data, data)
+                self.assertFalse(checked.verified)
+                oversized = envelope[:-2] + b" " + envelope[-2:]
+                self.error(protocol.validate_response, pair["request"], oversized, request_id=REQUEST_ID, code="envelope_too_large")
+                self.error(protocol.validate_response, pair["request"], envelope, request_id="b" * 32)
+            args = {"request_id": REQUEST_ID, "response_id": REQUEST_ID, "status": "rejected"}
+            error = {"version": 1, "runtime": pair["request"]["runtime"], "op": op, "error": "policy_denied"}
+            for change in ({"error": PRIVATE}, {"runtime": "wrong"}, {"target_id": PRIVATE}):
+                self.error(protocol.validate_result, pair["request"], error | change, **args)
+
+    def test_advertised_metadata_limit_counts_original_data_padding(self):
+        for op in ("bindingcatalog", "preview", "snapshot"):
+            pair = fixture(op)
+            statuses = ("rejected", "unsupported") if op == "snapshot" else ("ok", "rejected", "unsupported")
+            for status in statuses:
+                data = pair["response"] if status == "ok" else {
+                    "version": 1, "runtime": pair["request"]["runtime"], "op": op, "error": "policy_denied"}
+                raw = protocol._encoded(data)
+                limit = len(raw) + 17
+                padded = raw[:-1] + b" " * 17 + raw[-1:]
+                envelope = (b'{"id":"' + REQUEST_ID.encode() + b'","status":"' + status.encode()
+                            + b'","data":' + padded + b'}')
+                options = {"request_id": REQUEST_ID, "max_metadata_bytes": limit}
+                with self.subTest(op=op, status=status):
+                    self.assertEqual(protocol.validate_response(pair["request"], envelope, **options).data, data)
+                    self.error(protocol.validate_response, pair["request"], envelope,
+                               **(options | {"max_metadata_bytes": limit - 1}), code="envelope_too_large")
+                    self.error(protocol.validate_result, pair["request"], padded, request_id=REQUEST_ID,
+                               response_id=REQUEST_ID, status=status, max_metadata_bytes=limit - 1,
+                               code="envelope_too_large")
+        for invalid in (0, True, 1.5, None, protocol.MAX_METADATA_BYTES + 1):
+            self.error(result, "preview", max_metadata_bytes=invalid)
+        # Successful snapshot payloads use their separate 2 MiB boundary.
+        self.assertIsNotNone(result("snapshot", max_metadata_bytes=1).raw_document)
 
     def test_uuid_runtime_revision_digest_and_numeric_boundaries(self):
         params = fixture("begin")["request"]

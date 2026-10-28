@@ -24,7 +24,7 @@ var CommandOperations = map[string]string{
 	"restart":   "stream player", "kiosk": "status off on set", "aspect": "get set",
 	"plex_queue": "status preview play next previous stop", "plex_library": "list preview play",
 	"favorites": "list add play remove", "vportal_queue": "status next previous restart stop play",
-	"favorites_transfer": "snapshot begin append preview commit status abort",
+	"favorites_transfer": "snapshot begin append preview commit status abort bindingcatalog bind",
 	"maintenance":        "health logs recover_video update", "app_update": "status prepare install",
 	"categories":            "list select",
 	"notifications":         "get set",

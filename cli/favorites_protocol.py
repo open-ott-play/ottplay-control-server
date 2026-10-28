@@ -1,7 +1,7 @@
 """Pure, inactive peer for the agreed favorites-transfer wire subset.
 
 No capability registration, RPC, clock, persistence, or retry lives here.
-Binding operations and unspecified diagnostic variants fail closed.
+Current verified Plex negotiation is syntax-only; other codecs fail closed.
 Parsing an outcome named ``verified`` is not receipt verification: only a
 matching retained begin/preview context sets ValidatedResult.verified. Even
 that confirms the correlated player's readback claim, not fsync/atomicity or
@@ -13,6 +13,7 @@ import datetime
 import json
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 import favorites_document as document_codec
@@ -21,7 +22,18 @@ import favorites_transfer as transfer
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_METADATA_BYTES = 128 * 1024
 MAX_COUNT = 1000000
-OPS = frozenset(("snapshot", "begin", "append", "preview", "commit", "status", "abort"))
+TRANSFER_OPS = frozenset(("snapshot", "begin", "append", "preview", "commit", "status", "abort"))
+BINDING_OPS = frozenset(("bindingcatalog", "bind"))
+OPS = TRANSFER_OPS | BINDING_OPS
+CAPABILITY_LIMITS = {
+    "max_document_bytes": 1048576, "max_chunk_bytes": 8192, "max_chunks": 256,
+    "max_envelope_bytes": 16384, "max_snapshot_response_bytes": 2097152,
+    "max_active_stages": 1, "idle_ttl_seconds": 120, "absolute_ttl_seconds": 600,
+    "max_plan_bytes": 65536, "max_metadata_bytes": 131072, "max_json_depth": 20,
+    "max_json_nodes": 32768, "max_channel_lists": 256, "max_entries_per_list": 10000,
+    "max_media_favorites": 1000, "max_receipt_entries": 32, "max_receipt_ledger_bytes": 65536,
+    "max_admitted_operations_per_adapter_instance": 16,
+}
 ERRORS = frozenset((
     "invalid_request", "envelope_too_large", "runtime_changed", "busy", "expired",
     "operation_conflict", "transaction_not_found", "out_of_order", "chunk_conflict",
@@ -170,6 +182,79 @@ def _object(value, limit):
         raise ProtocolError() from None
 
 
+def validate_capability(value):
+    """Validate/copy the inner favorites_transfer advertisement, not ownership.
+
+    The frozen first adapter supports persistent current-verified Plex only.
+    Independent byte/item ceilings intersect; smaller advertisements are not
+    promises that every individually bounded collection can be admitted.
+    """
+    value, _ = _object(value, MAX_METADATA_BYTES)
+    _shape(value, ("version", "persistence", "codecs", "limits",
+                   "receipt_retention_seconds", "receipt_retention_origin"))
+    _integer(value["version"], 1, 1)
+    _require(value["persistence"] == ["persistent"] and value["receipt_retention_origin"] == "reservation")
+    _integer(value["receipt_retention_seconds"], 1, 86400)
+    codecs = value["codecs"]
+    _require(type(codecs) is list and len(codecs) == 1)
+    codec = codecs[0]
+    _shape(codec, ("provider", "codecVersion", "locatorKinds", "targetScope", "coverage"))
+    _integer(codec["codecVersion"], 1, 1)
+    _require(codec["provider"] == "plex" and codec["locatorKinds"] == ["plex-media"]
+             and codec["targetScope"] == "current-verified-source"
+             and codec["coverage"] == ["channelLists", "mediaFavorites"])
+    _shape(value["limits"], CAPABILITY_LIMITS)
+    for name, ceiling in CAPABILITY_LIMITS.items():
+        _integer(value["limits"][name], 1, ceiling)
+    _require(value["limits"]["idle_ttl_seconds"] <= value["limits"]["absolute_ttl_seconds"])
+    return value
+
+
+def _binding_text(value, *, target=False):
+    _text(value)
+    _require(not any(unicodedata.category(char).startswith("C") or target and char.isspace() for char in value))
+
+
+def _plex_scope(value):
+    _scope(value)
+    _require(value["provider"] == "plex" and value["profileBindingId"] != value["sourceBindingId"])
+
+
+def _binding_catalog(data):
+    _shape(data, COMMON | {"binding_revision", "targets", "bindings"})
+    _text(data["binding_revision"])
+    targets = data["targets"]
+    _require(type(targets) is list and len(targets) == 1)
+    target = targets[0]
+    _shape(target, ("target_id", "display", "provider", "codecVersion", "serverId"))
+    _binding_text(target["target_id"], target=True)
+    _binding_text(target["display"])
+    _require(target["provider"] == "plex")
+    _integer(target["codecVersion"], 1, 1)
+    _pattern(target["serverId"], re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z"))
+    bindings, seen = data["bindings"], set()
+    profiles, sources = set(), set()
+    _require(type(bindings) is list and len(bindings) <= 256)
+    for binding in bindings:
+        _shape(binding, ("scope", "target_id", "codecVersion"))
+        _plex_scope(binding["scope"])
+        _binding_text(binding["target_id"], target=True)
+        _integer(binding["codecVersion"], 1, 1)
+        _require(binding["target_id"] == target["target_id"]
+                 and binding["scope"]["provider"] == target["provider"]
+                 and binding["codecVersion"] == target["codecVersion"])
+        identity = tuple(binding["scope"][key] for key in ("provider", "profileBindingId", "sourceBindingId"))
+        _require(identity not in seen)
+        seen.add(identity)
+        profile, source = binding["scope"]["profileBindingId"], binding["scope"]["sourceBindingId"]
+        _require(source not in sources)
+        profiles.add(profile)
+        sources.add(source)
+    # Registry row IDs are globally unique. One source has one parent, and a
+    # source row cannot simultaneously be the parent profile of another row.
+    _require(profiles.isdisjoint(sources))
+
+
 def _chunk(params):
     encoded = params["data_base64"]
     _require(type(encoded) is str and 0 < len(encoded) <= 4 * ((transfer.MAX_CHUNK_BYTES + 2) // 3))
@@ -192,7 +277,11 @@ def validate_request(params, *, idempotency_key=None):
     _require(type(op) is str and op in OPS)
     _pattern(params.get("runtime"), RUNTIME)
     fields = {"op", "runtime"}
-    if op == "snapshot":
+    if op == "bindingcatalog":
+        pass
+    elif op == "bind":
+        fields |= {"scope", "target_id", "expected_binding_revision", "codecVersion"}
+    elif op == "snapshot":
         fields |= {"scope"}
     elif op == "begin":
         fields |= {"operation_id", "scope", "expected_revision", "binding_revision",
@@ -211,13 +300,17 @@ def validate_request(params, *, idempotency_key=None):
             _pattern(params[key], UUID)
     if "scope" in params:
         _scope(params["scope"])
-    for key in ("expected_revision", "binding_revision"):
+    for key in ("expected_revision", "binding_revision", "expected_binding_revision"):
         if key in params:
             _text(params[key])
     for key in ("document_sha256", "chunk_sha256", "plan_digest"):
         if key in params:
             _pattern(params[key], DIGEST)
-    if op == "begin":
+    if op == "bind":
+        _plex_scope(params["scope"])
+        _binding_text(params["target_id"], target=True)
+        _integer(params["codecVersion"], 1, 1)
+    elif op == "begin":
         _require(params["persistence"] == "persistent")
         _integer(params["size_bytes"], 1)
         _integer(params["chunk_count"], 1, transfer.MAX_CHUNKS)
@@ -412,7 +505,19 @@ def _validate_data(params, data, status, context, scope_validator):
     for key in ("transaction_id", "operation_id"):
         if key in params:
             _require(data.get(key) == params[key])
-    if op == "snapshot":
+    if op == "bindingcatalog":
+        _binding_catalog(data)
+    elif op == "bind":
+        _shape(data, COMMON | {"binding_revision", "scope", "target_id", "paired"})
+        _text(data["binding_revision"])
+        _plex_scope(data["scope"])
+        _binding_text(data["target_id"], target=True)
+        # This packet confirms an existing pairing only, without bootstrap or
+        # rebind. A changed revision cannot confirm the requested operation.
+        _require(data["paired"] is True and data["scope"] == params["scope"]
+                 and data["target_id"] == params["target_id"]
+                 and data["binding_revision"] == params["expected_binding_revision"])
+    elif op == "snapshot":
         _shape(data, COMMON | {"scope", "revision", "binding_revision", "document_sha256", "size_bytes", "document_base64"})
         _require(data["scope"] == params["scope"])
         _text(data["revision"])
@@ -508,19 +613,21 @@ def _validate_data(params, data, status, context, scope_validator):
     return receipt is not None and context is not None, raw
 
 
-def validate_result(params, data, *, request_id, response_id, status, context=None, scope_validator=None):
+def validate_result(params, data, *, request_id, response_id, status, context=None, scope_validator=None,
+                    max_metadata_bytes=MAX_METADATA_BYTES):
     """Correlate parsed data; use validate_response when original envelope bytes exist.
 
     Snapshot additionally requires scope_validator(document) to validate the
     actual document schema/provider codec and return its unchanged value. No
     identity, pairing or grant authority is inferred from syntax validation.
     """
+    _integer(max_metadata_bytes, 1, MAX_METADATA_BYTES)
     params = validate_request(params)
     _pattern(request_id, REQUEST_ID)
     _require(response_id == request_id and type(status) is str and status in ("ok", "rejected", "unsupported"))
     data, raw = _object(data, MAX_RESPONSE_BYTES)
     if params["op"] != "snapshot" or status != "ok":
-        _require(len(raw) <= MAX_METADATA_BYTES, "envelope_too_large")
+        _require(len(raw) <= max_metadata_bytes, "envelope_too_large")
     # Include outer receipt fields in the bound, rather than budgeting data only.
     overhead = len(_encoded({"id": response_id, "status": status, "data": None})) - 4
     _require(len(raw) + overhead <= MAX_RESPONSE_BYTES, "envelope_too_large")
@@ -528,8 +635,10 @@ def validate_result(params, data, *, request_id, response_id, status, context=No
     return ValidatedResult(_encoded(params), _encoded(data), status, request_id, verified, document)
 
 
-def validate_response(params, response, *, request_id, context=None, scope_validator=None):
+def validate_response(params, response, *, request_id, context=None, scope_validator=None,
+                      max_metadata_bytes=MAX_METADATA_BYTES):
     """Validate the complete authenticated {id,status,data} response, without I/O."""
+    _integer(max_metadata_bytes, 1, MAX_METADATA_BYTES)
     response, raw = _object(response, MAX_RESPONSE_BYTES)
     _shape(response, ("id", "status", "data"))
     # Keep the original data token (including interior padding) for its own
@@ -551,4 +660,5 @@ def validate_response(params, response, *, request_id, context=None, scope_valid
             data = text[start:position].encode("utf-8")
             break
     return validate_result(params, data, request_id=request_id, response_id=response["id"],
-                           status=response["status"], context=context, scope_validator=scope_validator)
+                           status=response["status"], context=context, scope_validator=scope_validator,
+                           max_metadata_bytes=max_metadata_bytes)

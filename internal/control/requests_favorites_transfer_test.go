@@ -84,10 +84,10 @@ func TestFavoritesTransferDraftSharedStableOperations(t *testing.T) {
 			}
 		})
 	}
-	for _, pending := range []string{"bindingcatalog", "bind"} {
-		if parseFavoritesTransferRequest(transferObject(t, c.Fixtures[pending].Request)) != nil {
-			t.Fatal("unfrozen target binding API was enabled")
-		}
+	// The separate current-Plex packet only confirms an existing pairing;
+	// the obsolete draft's changed-revision bind result must remain rejected.
+	if validFavoritesTransferResult(c.Fixtures["bind"].Response, "ok", transferBound(t, c.Fixtures["bind"].Request)) {
+		t.Fatal("obsolete different-revision binding success accepted")
 	}
 }
 

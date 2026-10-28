@@ -1,0 +1,166 @@
+{
+  "status": "FROZEN_PLAYER_SIDE_PROPOSAL_NOT_REGISTERED; requires Control/player approval before activation",
+  "source_base": "099c1a50eae37f4c3d5dc6b6141ed4cc22f3e95c",
+  "seven_transfer_operations": "UNCHANGED",
+  "capability": {
+    "favorites_transfer": {
+      "version": 1,
+      "persistence": [
+        "persistent"
+      ],
+      "codecs": [
+        {
+          "provider": "plex",
+          "codecVersion": 1,
+          "locatorKinds": [
+            "plex-media"
+          ],
+          "targetScope": "current-verified-source",
+          "coverage": [
+            "channelLists",
+            "mediaFavorites"
+          ]
+        }
+      ],
+      "limits": {
+        "max_document_bytes": 1048576,
+        "max_chunk_bytes": 8192,
+        "max_chunks": 256,
+        "max_envelope_bytes": 16384,
+        "max_snapshot_response_bytes": 2097152,
+        "max_active_stages": 1,
+        "idle_ttl_seconds": 120,
+        "absolute_ttl_seconds": 600,
+        "max_plan_bytes": 65536,
+        "max_metadata_bytes": 131072,
+        "max_json_depth": 20,
+        "max_json_nodes": 32768,
+        "max_channel_lists": 256,
+        "max_entries_per_list": 10000,
+        "max_media_favorites": 1000,
+        "max_receipt_entries": 32,
+        "max_receipt_ledger_bytes": 65536,
+        "max_admitted_operations_per_adapter_instance": 16
+      },
+      "receipt_retention_seconds": 86400,
+      "receipt_retention_origin": "reservation"
+    }
+  },
+  "bindingcatalog_request": {
+    "op": "bindingcatalog",
+    "runtime": "synthetic-runtime-1"
+  },
+  "bindingcatalog_response": {
+    "version": 1,
+    "runtime": "synthetic-runtime-1",
+    "op": "bindingcatalog",
+    "binding_revision": "2",
+    "targets": [
+      {
+        "target_id": "plex-current-target-synthetic-1",
+        "display": "Synthetic current Plex profile / source",
+        "provider": "plex",
+        "codecVersion": 1,
+        "serverId": "server-one"
+      }
+    ],
+    "bindings": [
+      {
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "target_id": "plex-current-target-synthetic-1",
+        "codecVersion": 1
+      }
+    ]
+  },
+  "bind_request": {
+    "op": "bind",
+    "runtime": "synthetic-runtime-1",
+    "scope": {
+      "profileBindingId": "11111111-1111-4111-8111-111111111111",
+      "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+      "provider": "plex"
+    },
+    "target_id": "plex-current-target-synthetic-1",
+    "expected_binding_revision": "2",
+    "codecVersion": 1
+  },
+  "bind_response": {
+    "version": 1,
+    "op": "bind",
+    "runtime": "synthetic-runtime-1",
+    "binding_revision": "2",
+    "scope": {
+      "profileBindingId": "11111111-1111-4111-8111-111111111111",
+      "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+      "provider": "plex"
+    },
+    "target_id": "plex-current-target-synthetic-1",
+    "paired": true
+  },
+  "bind_semantics": [
+    "Example is an idempotent explicit bind to the already-bound current verified target: no registry mutation and unchanged revision.",
+    "Only existing profile/source UUID rows of the same provider and parent are admitted. Missing IDs require separate explicit registry import/create policy; bind never invents identities.",
+    "Require exact runtime, captured binding revision and current opaque target, then resolve both private registry owners/selectors on player. Wire callers cannot supply selectors, grants or owner fields.",
+    "Binding source and parent to a different target is NOT implemented by this packet: refuse until a host atomic-or-honest-partial multi-row binding policy is qualified. Never claim registry.bind(source) also changes its parent.",
+    "Read back the actual registry and re-resolve before acknowledging. Conflict/unknown is not success and is not retried.",
+    "Targets and bindingcatalog are player projections: Control consumes this exact shape and never derives private bindings from registry public rows."
+  ],
+  "coverage": {
+    "channelLists": "complete-for-scope",
+    "mediaFavorites": "complete-for-scope",
+    "history": "excluded-preserved",
+    "remoteAliases": "excluded-preserved"
+  },
+  "registry_public_input": {
+    "version": 1,
+    "revision": 2,
+    "entries": [
+      {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "kind": "profile",
+        "provider": "plex"
+      },
+      {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "kind": "source",
+        "provider": "plex",
+        "profile_id": "11111111-1111-4111-8111-111111111111"
+      }
+    ]
+  },
+  "projection_rules": [
+    "Join each public source row to its profile_id profile row; require same provider and both actual private registry.resolve owners/selectors to match the current verified target. Do not pass registry.list().entries directly as wire bindings.",
+    "A wire binding is exactly {scope,target_id,codecVersion}; scope carries profile/source UUIDs and provider. Its binding_revision is the outer registry revision encoded as a string. Private selectors/owner data are never returned.",
+    "target_id is an opaque runtime-owned association, not a slot, display name, playlist URL, configuration hash or a persistent identity. Only the active verified target is enumerated in this first scope.",
+    "The bindings/target projection is not yet registered; Control must not infer or implement an alternative projection. Bindingcatalog/bind remain separate from the frozen seven transfer operations."
+  ],
+  "unsupported": [
+    "Non-Plex providers",
+    "Inactive or all-configured sources",
+    "Manual/unverified PMS sources",
+    "Foreign paired PMS without explicit rebinding",
+    "Empty list collections or present defaults other than the retained generated Favorites default (including null)",
+    "Arbitrary unportable legacy strings, negative/unsafe legacy numbers or unsupported reference codecs",
+    "Uninitialized or isolated-context media/favorites runtime; inspection never initializes, migrates or writes legacy claims",
+    "The first document carries canonical Plex locators and optional title snapshots; it does not assert full folder ancestry or physical file paths"
+  ],
+  "persistence_and_retention": {
+    "retention_origin": "reservation",
+    "seconds": 86400,
+    "maximum_entries": 32,
+    "maximum_ledger_bytes": 65536,
+    "cross_store_atomicity": false,
+    "missing_or_expired_receipt": "unknown; never replay permission",
+    "restart_status": "Fresh read-only same-scope grant/binding authorization plus actual favorites-store readback; no old runtime write-ticket revival."
+  },
+  "limit_notes": [
+    "No current runtime advertises this object. All modules, exact storage/key codecs, explicit binding authorization and trusted fresh-operation/budget admission must be integrated and qualified first.",
+    "Persistent means actual adapter persisted readback, not filesystem fsync or cross-store atomicity. Cookie-backed stores are admitted only when every required readback succeeds.",
+    "Limits intersect: byte/node/plan/ledger limits can refuse a collection below its per-list item ceiling; admission never raises caps or evicts uncertain receipts."
+  ],
+  "schema_decision_remaining": "Approved current-only idempotent-existing-binding policy; no creation or different-target rebinding in first packet. Runtime registration remains absent."
+}

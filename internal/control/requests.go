@@ -561,6 +561,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 400, "invalid local media capability")
 			return
 		}
+		if marker, exists := capabilities["favorites_transfer"]; exists && !validFavoritesTransferCapability(marker) {
+			failure(w, 400, "invalid favorites transfer capability")
+			return
+		}
 		if marker, exists := capabilities["local_media_progressive"]; exists && (!validLocalMediaExtensionCapability(marker) || !validLocalMediaCapability(capabilities["local_media"])) {
 			failure(w, 400, "invalid progressive local media capability")
 			return
