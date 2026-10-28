@@ -289,8 +289,12 @@ class FavoritesProfileAdapterTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), store.current)
             if os.name != "nt":
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-            with self.assertRaises(FileExistsError):
+            original = path.read_bytes()
+            store.current = document("different/source/item")
+            with self.assertRaises(ott.Error) as error:
                 ott.presets_favorites_command("config.json", params, **dependencies)
+            self.assertEqual(str(error.exception), "Export file already exists; choose a new path. The existing file was not changed")
+            self.assertEqual(path.read_bytes(), original)
             self.assertEqual((store.plans, store.applies), ([], []))
             with self.assertRaisesRegex(ott.Error, "no saved"):
                 ott.presets_favorites_command("config.json", params, **self.dependencies(FixtureStore(None)))
@@ -299,6 +303,16 @@ class FavoritesProfileAdapterTests(unittest.TestCase):
                 ott.presets_favorites_command("config.json", dict(params, path=str(oversized)),
                                              **self.dependencies(FixtureStore(document("x" * ott.MAX_FAVORITES_PROFILE_FILE_BYTES))))
             self.assertFalse(oversized.exists())
+
+    def test_export_filesystem_errors_are_actionable_and_redacted(self):
+        store = FixtureStore(document("private-favorite"))
+        params = {"op": "export", "preset": "Home", "path": "fixture-export.json"}
+        for failure in (PermissionError("private filesystem detail"), OSError("private payload detail")):
+            with mock.patch.object(ott, "write_private", side_effect=failure) as write, self.assertRaises(ott.Error) as error:
+                ott.presets_favorites_command("config.json", params, **self.dependencies(store))
+            self.assertEqual(str(error.exception), "Could not create the favorites export file")
+            write.assert_called_once_with("fixture-export.json", store.current, exclusive=True)
+            self.assertEqual((store.plans, store.applies), ([], []))
 
     def test_bad_import_never_plans_writes_or_echoes_private_content(self):
         with tempfile.TemporaryDirectory() as directory:

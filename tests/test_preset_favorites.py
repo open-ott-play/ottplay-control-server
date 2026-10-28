@@ -505,10 +505,16 @@ class PresetFavoritesTests(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'POSIX hardlink and flock semantics')
     def test_hardlinked_lock_and_busy_lock_fail_before_backup(self):
         plan = self.store.plan('Home', document('movie'))
+        raw = self.path.read_bytes()
         lock = self.path.with_name(self.path.name + '.preset-favorites.lock')
-        os.link(self.path, lock)
-        with self.assertRaises(storage.StorageError):
-            self.store.apply(plan)
+        peer = self.directory / 'private-lock-peer'
+        peer.write_bytes(b'fixture lock')
+        peer.chmod(0o600)
+        os.link(peer, lock)
+        self.assertEqual(self.path.stat().st_nlink, 1)
+        self.assert_error('unsafe_lock', self.store.apply, plan)
+        self.assertEqual(self.path.read_bytes(), raw)
+        self.assertEqual(self.backups(), [])
         lock.unlink()
         with storage._Parent(self.directory) as parent, storage._Lock(parent, lock.name):
             self.assert_error('lock_unavailable', self.store.apply, plan)

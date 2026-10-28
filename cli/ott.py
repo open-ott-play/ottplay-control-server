@@ -2681,7 +2681,12 @@ def presets_favorites_command(config_path, params, *, validate_document=None, pl
             raise Error("Invalid portable favorites document; no export was written") from None
         if len(encoded) > MAX_FAVORITES_PROFILE_FILE_BYTES:
             raise Error("Favorites export exceeds the local document size limit; no export was written")
-        write_private(params["path"], saved, exclusive=True)
+        try:
+            write_private(params["path"], saved, exclusive=True)
+        except FileExistsError:
+            raise Error("Export file already exists; choose a new path. The existing file was not changed") from None
+        except OSError:
+            raise Error("Could not create the favorites export file") from None
         return dict(result, status="exported", path=str(Path(params["path"]).expanduser()))
     if operation not in ("import", "diff", "restore"):
         raise Error("Unsupported offline favorites profile operation")

@@ -275,8 +275,11 @@ renames require an explicit policy distinct from live programme/title updates.
 
 ## Bounded staging and conditional commit
 
-All requests carry a fresh runtime. Results bind runtime/op and relevant
-scope/snapshot/plan/digest, including retained duplicate acknowledgements.
+Capture the player's existing runtime from a fresh capabilities response and
+reuse that same value throughout the transaction. Never generate a new runtime
+identifier. A player runtime change invalidates the transaction and requires new
+discovery and planning. Results bind runtime/op and relevant scope/snapshot/plan/
+digest, including retained duplicate acknowledgements.
 
 1. **Begin:** scope, expected revision, `merge|replace|clear`, declared count and
    `document_digest`. Return a bounded temporary plan ID and expiry; no membership
@@ -293,9 +296,12 @@ scope/snapshot/plan/digest, including retained duplicate acknowledgements.
    before the first write. Conflict rejects without writing. Success echoes the
    commit ID, scope, plan digest, before/after revisions, summary and verified
    persistence.
-5. **Status/abort:** status is read-only and distinguishes staging, previewed,
-   committing, committed, aborted, expired and unknown. Abort releases a
-   pre-commit plan; it cannot cancel an already started commit and imply rollback.
+5. **Status/abort:** status is read-only. Lifecycle stages include staging,
+   previewed, committing and committed. Pre-commit termination may be aborted or
+   expired. After a write, distinguish `partial`, `rolled_back_verified`,
+   `outcome_unknown` and `recovery_required`; missing evidence remains unknown.
+   Final wire enum names still require agreement. Abort releases only a pre-commit
+   plan; it cannot cancel an already started commit and imply rollback.
 
 The outer `idempotency_key` is retained by the controller but **not forwarded to
 the player**. Therefore player status needs an explicit bounded `commit_id` in
@@ -304,7 +310,8 @@ automatic commit replay. Different content with the same identifier conflicts.
 
 Normal states: `staging → previewed → committing → committed`. Before committing,
 expiry/cancellation/conflict leaves memberships unchanged. After the first write,
-report committed, verified rollback, or `outcome_unknown`/`recovery_required`;
+report committed, verified rollback, partial completion with per-store outcomes,
+or `outcome_unknown`/`recovery_required`;
 deadline expiry alone cannot justify claiming an untouched rejection.
 
 Merge preserves existing memberships and labels unless an explicit rename policy
