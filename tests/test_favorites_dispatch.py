@@ -118,6 +118,10 @@ class FavoritesDispatchTests(unittest.TestCase):
         self.assertEqual((code, err, result["verified"], result["reason"]), (1, "", False, "incomplete_evidence"))
         self.assertEqual(host.run.call_args.args[5], {"op": "status", "operation_id": OPERATION})
         client.call.assert_not_called()
+        code, out, err, client, _ = self.run_cli(["t1", "fav", "status", OPERATION], host)
+        self.assertEqual((code, err), (1, ""))
+        self.assertIn("Status was read, but current scope and storage evidence are insufficient", out)
+        client.call.assert_not_called()
 
     def test_capability_is_optional_strict_and_controls_help_examples(self):
         controls = ott.capabilities_metadata(caps())

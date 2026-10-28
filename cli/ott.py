@@ -2797,6 +2797,7 @@ def print_favorites_command(data):
             "local_context_unavailable": "The retained local operation context is unavailable; the player outcome cannot be verified.",
             "scope_not_bound": "The operation's saved scope is not bound to the current verified Plex source.",
             "invalid_context": "The retained operation context cannot authorize this status verification.",
+            "incomplete_evidence": "Status was read, but current scope and storage evidence are insufficient to verify the outcome.",
             "invalid_response": "The response could not be validated against this operation.",
             "transport": "Communication failed before a verified result was obtained.",
             "deadline": "The command deadline expired before a verified result was obtained.",
