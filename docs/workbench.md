@@ -54,6 +54,14 @@ needed. The workbench does not print those credentials or the server URL.
 inspection sections, alongside its controls. `ott a1 test list` always lists the
 local scenarios; that list does not claim the player supports their observations.
 
+For retained favorites uncertainty, `ott a1 fav recovery` and
+`ott a1 fav recovery inspect OPERATION_UUID` are separate read-only ledger
+commands. Players containing the standby-recovery fix can answer them without
+waking playback, subject to normal authorization and player policy. Acknowledgement
+and new transfers still require an awake, unlocked player. See the
+[recovery compatibility and update guidance](cli.md#acknowledge-a-retained-uncertain-operation)
+before treating a missing capability as a transport failure.
+
 ## Runtime debug snapshots
 
 For a temporary event timeline and a notification A–B–A experiment, use
