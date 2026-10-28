@@ -81,8 +81,9 @@ class _DurableContext:
         self.name = ".favorites-operations-" + prototype.target
         self.store = operations.ContextStore(self.parent / self.name, server=client.server, device=device,
                                              validate_context=remote.validate_recovery_record)
+        self.admin = operations.AcknowledgementStore(self.parent / self.name, server=client.server, device=device)
 
-    def save(self, record):
+    def _ensure(self):
         # Creation is deferred until RemoteFavorites has a ready preview and
         # is about to authorize commit. Read-only/preview paths never call this.
         with storage._Parent(self.parent) as parent:
@@ -99,8 +100,15 @@ class _DurableContext:
                 child.assert_current()
                 child.sync()
             parent.assert_current()
+
+    def save(self, record):
+        self._ensure()
         self.store.save(record)
         return True
+
+    def save_acknowledgement(self, inspection, request):
+        self._ensure()
+        return self.admin.save_intent(inspection, request)
 
 
 class _Target:
@@ -115,6 +123,7 @@ class _Target:
         self.uuid_factory = uuid_factory
         self.peer = self.capability = self.catalog = self.target = None
         self.runtime = None
+        self.recovery = None
 
     def now(self):
         value = self.clock()
@@ -141,7 +150,7 @@ class _Target:
             if self.now() <= before:
                 raise CommandError("invalid_clock")
 
-    def discover(self, *, status_recovery=False):
+    def discover(self, *, status_recovery=False, recovery_only=False):
         query = "/api/requests?" + urllib.parse.urlencode({"device_id": self.device})
         self.wait(self.now() + remote.POST_INTERVAL)
         status, queued = self.client.api(query, {"action": "capabilities", "params": {}}, timeout=min(10, self.remaining()))
@@ -173,6 +182,16 @@ class _Target:
                 raise CommandError("capability_unavailable")
             controls = self.api.capabilities_metadata(body["data"])
             self.runtime = controls["player"]["runtime"]
+            marker = body["data"].get("favorites_transfer_recovery")
+            if marker is not None:
+                protocol.validate_recovery_capability(marker)
+                self.recovery = remote.RecoveryPeer(self.client, self.device, runtime=self.runtime,
+                    timeout=self.remaining(), monotonic=self.clock, sleep=self.sleep, deadline=self.deadline)
+            if recovery_only:
+                if self.recovery is None:
+                    raise CommandError("recovery_unsupported")
+                self.wait(self.now() + remote.POST_INTERVAL)
+                return True
             advertised = body["data"].get("favorites_transfer")
             if advertised is None:
                 if status_recovery:
@@ -200,6 +219,16 @@ class _Target:
             raise
         self.target = self.catalog.data["targets"][0]
         return True
+
+    def require_recovery(self):
+        if self.recovery is None:
+            raise CommandError("recovery_unsupported")
+        self.wait(self.now() + remote.POST_INTERVAL)
+        result = self.recovery.list()
+        if any(row["acknowledgement"] is None for row in result.data["records"]):
+            raise CommandError("recovery_required")
+        self.wait(self.now() + remote.POST_INTERVAL)
+        return result
 
     def observe_status(self, record):
         # Fresh generic metadata and the target-bound local record are required,
@@ -300,6 +329,7 @@ def _bind(target, saved, params):
     protocol.validate_request(request)
     if params.get("dry_run", False):
         return {"op": "bind", "status": "planned", "mode": mode, "scope": scope, "target_id": target_id}
+    target.require_recovery()
     try:
         response = target.peer.provision(target.catalog, mode, target_id, scope=scope,
                                          prior_scope=prior if mode == "replace-current" else None)
@@ -356,6 +386,65 @@ def _completion(target, outcome):
     return {**outcome.summary(), "warnings": warnings, "replay_allowed": False}
 
 
+def _recover(target, params):
+    op = params["op"]
+    if op == "recovery" and params.get("mode", "list") == "list":
+        result = target.recovery.list()
+        return {"op": op, "status": "recovery_list", "recovery": result.data, "replay_allowed": False}
+    inspected = target.recovery.inspect(params["operation_id"])
+    if op == "recovery":
+        return {"op": op, "status": "recovery_inspected", "recovery": inspected.data, "replay_allowed": False}
+    if params.get("dry_run"):
+        return {"op": op, "status": "planned" if inspected.data["acknowledge_allowed"] else "blocked",
+                "recovery": inspected.data, "replay_allowed": False}
+    if not inspected.data["acknowledge_allowed"]:
+        record = inspected.data["record"]
+        audit = record.get("acknowledgement") if record is not None else None
+        if audit is None:
+            return {"op": op, "status": "blocked", "reason": "acknowledgement_unavailable",
+                    "recovery": inspected.data, "replay_allowed": False}
+        try:
+            original, request = target.durable.admin.load_intent(
+                audit["acknowledgement_id"], params["operation_id"], params.get("confirm"))
+            if record != {**original.data["record"], "acknowledgement": protocol.recovery_audit(request)}:
+                raise ValueError
+        except Exception:  # noqa: BLE001 - missing or mismatched private intent confers no authority
+            return {"op": op, "status": "blocked", "reason": "acknowledgement_unavailable",
+                    "recovery": inspected.data, "replay_allowed": False}
+        result = {"operation_id": request["operation_id"], "acknowledgement_id": request["acknowledgement_id"],
+                  "plan_sha256": request["plan_sha256"], "original_outcome": record["original_outcome"],
+                  "replay_allowed": False, "status": "acknowledgement_observed", "evidence": inspected.data,
+                  "request_id": inspected.request_id}
+        inspected = original
+    else:
+        if params.get("confirm") != inspected.data["plan_sha256"]:
+            return {"op": op, "status": "blocked", "reason": "confirmation_changed", "replay_allowed": False}
+        request = protocol.recovery_ack_request(inspected)
+        result = target.recovery.acknowledge(inspected, params["confirm"], target.durable.save_acknowledgement)
+    warnings = []
+    if result.get("evidence") is not None:
+        completed = queue.Queue(maxsize=1)
+        def retain():
+            try:
+                target.durable.admin.save_evidence(inspected, request, result["evidence"])
+                completed.put(True)
+            except Exception:  # noqa: BLE001 - local evidence never changes player acknowledgement
+                completed.put(False)
+        remaining = target.deadline - target.now()
+        if remaining > 0:
+            wall = time.perf_counter() + remaining
+            threading.Thread(target=retain, name="ott-favorites-ack-evidence", daemon=True).start()
+            try:
+                confirmed = completed.get(timeout=max(0, min(remaining, wall - time.perf_counter())))
+            except queue.Empty:
+                confirmed = False
+        else:
+            confirmed = False
+        if not confirmed:
+            warnings.append("local_acknowledgement_evidence_unconfirmed")
+    return {"op": op, **result, "warnings": warnings}
+
+
 def run(api, client, config, config_path, targets, params, timeout, *, monotonic=time.monotonic,
         sleep=time.sleep, uuid_factory=uuid.uuid4):
     """Return structured results using one supplied authority.
@@ -391,7 +480,7 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
     if not 1 <= len(resolved) <= 64:
         raise CommandError("invalid_targets")
     op = params.get("op")
-    if op not in ("bindings", "bind", "status", "collect", "load", "diff", "clear"):
+    if op not in ("bindings", "bind", "status", "collect", "load", "diff", "clear", "recovery", "acknowledge"):
         raise CommandError("unsupported_operation")
     if op == "status":
         protocol.validate_request({"op": "status", "runtime": "validation", "operation_id": params.get("operation_id")})
@@ -432,6 +521,9 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
         except operations.OperationStoreError:
             return {"op": op, "status": "unknown", "operation_id": params["operation_id"],
                     "verified": False, "reason": "local_context_unavailable", "replay_allowed": False}
+    if op in ("recovery", "acknowledge"):
+        target.discover(recovery_only=True)
+        return _recover(target, params)
     qualified = target.discover(status_recovery=op == "status")
     if op == "status" and not qualified:
         outcome = target.observe_status(record)
@@ -464,11 +556,13 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
     if op == "diff":
         return {"op": op, "status": "matched" if current == desired else "different", "scope": scope, "summary": summary}
     if params.get("dry_run", False):
+        target.require_recovery()
         preview = target.peer.preview(snapshot, _json(desired))
         status = "planned" if preview.ready is True else "blocked" if preview.ready is False else "failed"
         return {"op": op, "status": status, "scope": scope, "summary": summary,
                 **preview.summary(), "preview": preview.data}
     if current == desired:
         return {"op": op, "status": "unchanged", "scope": scope, "summary": summary}
+    target.require_recovery()
     outcome = target.peer.replace(snapshot, _json(desired))
     return {"op": op, "status": outcome.outcome, "scope": scope, "summary": summary, **_completion(target, outcome)}

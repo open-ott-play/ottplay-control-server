@@ -153,6 +153,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME fav bind current --new [--dry-run]
                                      explicitly create a new current-source binding
   ott NAME fav status OPERATION_UUID  inspect a retained operation; never replay it
+  ott NAME fav recovery [inspect UUID]  list or inspect global uncertainty records
+  ott NAME fav ack UUID --dry-run / --confirm SHA256  explicitly acknowledge uncertainty; never replay
                                      remote profile sync: CURRENT VERIFIED PLEX ONLY
                                      requires compatible controller/player; other sources refused
   ott NAME profiles                  list the active provider’s 15 profiles without URLs
@@ -369,7 +371,8 @@ CATEGORY_ERRORS = {
 
 
 FAVORITES_OPERATIONS = frozenset(("list", "add", "play", "remove"))
-FAVORITES_PROFILE_OPERATIONS = frozenset(("load", "collect", "diff", "clear", "bindings", "bind", "status"))
+FAVORITES_PROFILE_OPERATIONS = frozenset(("load", "collect", "diff", "clear", "bindings", "bind", "status",
+                                         "recovery", "recover", "ack", "acknowledge"))
 FAVORITES_UUID_V4 = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}")
 MAX_FAVORITES_PROFILE_FILE_BYTES = 1024 * 1024
 FAVORITES_PROFILE_UNAVAILABLE = (
@@ -2562,6 +2565,25 @@ def parse_favorites_profile(words):
     if not words or words[0].casefold() not in FAVORITES_PROFILE_OPERATIONS:
         raise Error(usage)
     operation = words[0].casefold()
+    if operation in ("recovery", "recover"):
+        rest = words[1:]
+        if rest and rest[0].casefold() in ("ack", "acknowledge"):
+            return parse_favorites_profile(["acknowledge", *rest[1:]])
+        if not rest or len(rest) == 1 and rest[0].casefold() == "list":
+            return {"op": "recovery", "mode": "list"}
+        if len(rest) == 2 and rest[0].casefold() == "inspect":
+            rest = rest[1:]
+        if len(rest) == 1 and FAVORITES_UUID_V4.fullmatch(rest[0]):
+            return {"op": "recovery", "mode": "inspect", "operation_id": rest[0]}
+        raise Error("Use fav recovery [list|inspect UUIDv4]")
+    if operation in ("ack", "acknowledge"):
+        if len(words) not in (3, 4) or FAVORITES_UUID_V4.fullmatch(words[1]) is None:
+            raise Error("Use fav acknowledge UUIDv4 --dry-run or --confirm PLAN_SHA256")
+        if words[2:] == ["--dry-run"]:
+            return {"op": "acknowledge", "operation_id": words[1], "dry_run": True}
+        if len(words) == 4 and words[2] == "--confirm" and re.fullmatch(r"[0-9a-f]{64}", words[3]):
+            return {"op": "acknowledge", "operation_id": words[1], "dry_run": False, "confirm": words[3]}
+        raise Error("Use fav acknowledge UUIDv4 --dry-run or --confirm PLAN_SHA256")
     if operation == "bindings":
         if len(words) != 1:
             raise Error(usage)
@@ -2719,9 +2741,54 @@ def favorites_module(name):
     return sys.modules[name]
 
 
+def print_favorites_recovery(data):
+    labels = {"recovery_list": "global uncertainty records", "recovery_inspected": "operation inspected",
+              "planned": "confirmation preview only", "blocked": "confirmation blocked", "unknown": "acknowledgement unknown",
+              "acknowledgement_confirmed": "administrative acknowledgement confirmed",
+              "acknowledgement_observed": "administrative acknowledgement observed"}
+    if data.get("status") not in labels:
+        raise Error("Invalid favorites recovery result")
+    print("Favorites recovery: " + labels[data["status"]] + ".")
+    value = data.get("recovery", data.get("evidence"))
+    if value is not None:
+        protocol = favorites_module("favorites_protocol")
+        params = {"op": "recovery", "mode": value["mode"], "runtime": value["runtime"]}
+        if value["mode"] == "acknowledge":
+            # The host already correlated this success with its retained plan.
+            protocol._recovery_record(value["record"])
+            rows = [value["record"]]
+        else:
+            if value["mode"] == "inspect":
+                params["operation_id"] = value["operation_id"]
+            protocol.validate_result(params, value, request_id="0" * 32, response_id="0" * 32, status="ok")
+            rows = value["records"] if value["mode"] == "list" else ([] if value["record"] is None else [value["record"]])
+        print("Records: " + str(len(rows)) + ".")
+        for row in rows:
+            print("Operation: " + row["operation_id"] + "; original outcome: " + row["original_outcome"]
+                  + "; acknowledged: " + ("yes" if row["acknowledgement"] else "no") + ".")
+            print("Original scope: " + row["scope"]["provider"] + ":" + row["scope"]["profileBindingId"]
+                  + ":" + row["scope"]["sourceBindingId"])
+        if value.get("acknowledge_allowed"):
+            print("Plan SHA256: " + value["plan_sha256"])
+            print("Confirm with: fav acknowledge " + value["operation_id"] + " --confirm " + value["plan_sha256"])
+        elif value.get("mode") == "inspect":
+            print("Acknowledgement is unavailable for this record or current backend.")
+    reasons = {"confirmation_changed": "The plan changed; request a fresh dry-run.",
+               "acknowledgement_unconfirmed": "The acknowledgement was not confirmed. Inspect this operation; do not replay it.",
+               "context_not_saved": "The private administrative intent could not be confirmed; no acknowledgement was sent.",
+               "deadline_insufficient": "The remaining deadline is too short; no acknowledgement was sent."}
+    if data.get("reason") in reasons:
+        print(reasons[data["reason"]])
+    if data.get("warnings"):
+        print("Local administrative evidence was not confirmed; the observed player acknowledgement is unchanged.")
+    print("Original mutation outcome is unchanged. No favorites were replayed or repaired.")
+
+
 def print_favorites_command(data):
     """Print validated public metadata and local backup paths, never documents."""
     operation, status = data["op"], data["status"]
+    if operation in ("recovery", "acknowledge"):
+        return print_favorites_recovery(data)
     invalid = "Invalid favorites synchronization result"
     labels = {"available": "current verified Plex bindings", "paired": "pairing confirmed",
               "planned": "preview only", "matched": "matches", "different": "differences found",
@@ -2822,7 +2889,8 @@ def print_favorites_command(data):
 def favorites_host_command(client, config, args, targets, params):
     result = favorites_module("favorites_commands").run(SimpleNamespace(**globals()), client, config,
         args.config, targets, copy.deepcopy(params), args.timeout)
-    successful = {"available", "paired", "planned", "matched", "different", "unchanged", "collected", "verified"}
+    successful = {"available", "paired", "planned", "matched", "different", "unchanged", "collected", "verified",
+                  "recovery_list", "recovery_inspected", "acknowledgement_confirmed", "acknowledgement_observed"}
     failed = {"failed", "blocked", "unknown", "partial", "not_applied"}
     if (not isinstance(result, dict) or result.get("op") != params["op"]
             or result.get("status") not in successful | failed
@@ -4132,6 +4200,13 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "favorites_transfer_recovery" in data:
+        try:
+            result["favorites_transfer_recovery"] = favorites_module("favorites_protocol").validate_recovery_capability(data["favorites_transfer_recovery"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - invalid capability text must never escape
+            raise Error(invalid) from None
     if "favorites_transfer" in data:
         try:
             result["favorites_transfer"] = favorites_module("favorites_protocol").validate_capability(data["favorites_transfer"])
@@ -4544,6 +4619,9 @@ def print_player_help(data, name):
             ("remove", "fav remove ID_OR_NAME", "remove one saved favorite")):
         if operation in favorites:
             print(f"  {prefix} {command}  — {description}")
+    if "favorites_transfer_recovery" in controls:
+        print(f"  {prefix} fav recovery / fav recovery inspect OPERATION_UUID  — inspect global uncertainty records")
+        print(f"  {prefix} fav ack OPERATION_UUID --dry-run / --confirm PLAN_SHA256  — explicit acknowledgement; never replay")
     if "favorites_transfer" in controls:
         print("  Favorites profile sync: CURRENT VERIFIED PLEX ONLY; explicit bindings required.")
         print(f"  {prefix} fav bindings  — show exact current-source scope IDs")
@@ -5981,6 +6059,8 @@ def player_group_command(client, config, targets, args, argv):
     # validates ordinary commands once, before any target receives a request.
     prepared = parse_command(words) if route is None else None
     action = prepared[0] if prepared else (words[0].casefold() if words else "status")
+    if action == "favorites_profile" and prepared[1]["op"] == "acknowledge" and len(targets) != 1:
+        raise Error("Favorites acknowledgement requires exactly one player")
     if action == "favorites_profile" and prepared[1]["op"] == "collect":
         # Collection is one all-target snapshot/plan/CAS operation, never one
         # separate profile write per member of the existing group dispatcher.

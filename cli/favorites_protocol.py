@@ -10,6 +10,7 @@ provider/grant ownership. The host orchestrator enforces its admission gates.
 
 import base64
 import datetime
+import hashlib
 import json
 import math
 import re
@@ -26,7 +27,8 @@ TRANSFER_OPS = frozenset(("snapshot", "begin", "append", "preview", "commit", "s
 BINDING_OPS = frozenset(("bindingcatalog", "bind", "provision"))
 ADMISSION_OPS = frozenset(("prepare",))
 PROVISION_MODES = frozenset(("create", "import", "pair", "replace-current"))
-OPS = TRANSFER_OPS | BINDING_OPS | ADMISSION_OPS
+RECOVERY_OPS = frozenset(("recovery",))
+OPS = TRANSFER_OPS | BINDING_OPS | ADMISSION_OPS | RECOVERY_OPS
 CAPABILITY_LIMITS = {
     "max_document_bytes": 1048576, "max_chunk_bytes": 8192, "max_chunks": 256,
     "max_envelope_bytes": 16384, "max_snapshot_response_bytes": 2097152,
@@ -283,6 +285,163 @@ def _chunk(params):
         raise ProtocolError() from None
 
 
+RECOVERY_REASON = "accept-unknown-no-replay"
+RECOVERY_ERRORS = frozenset(("invalid_request", "envelope_too_large", "runtime_changed", "expired", "busy",
+                            "unsupported_persistence", "revision_conflict", "policy_denied", "storage_unavailable",
+                            "limits_exceeded"))
+RECOVERY_PROVIDER = re.compile(r"[a-z0-9][a-z0-9_./-]{0,63}\Z")
+EMPTY_LEDGER_SHA256 = hashlib.sha256(b"null").hexdigest()
+
+
+def validate_recovery_capability(value):
+    value, _ = _object(value, MAX_METADATA_BYTES)
+    _shape(value, {"version"})
+    _integer(value["version"], 1, 1)
+    return value
+
+
+def _recovery_scope(scope):
+    _shape(scope, {"provider", "profileBindingId", "sourceBindingId"})
+    _pattern(scope["provider"], RECOVERY_PROVIDER)
+    for key in ("profileBindingId", "sourceBindingId"):
+        _pattern(scope[key], UUID)
+
+
+def recovery_digests(runtime, operation_id, scope, entry, ledger, backend, after=None):
+    """Bind public commitments; never synthesize the private ledger after-image."""
+    _pattern(runtime, RUNTIME)
+    _pattern(operation_id, UUID)
+    _recovery_scope(scope)
+    for value in (entry, ledger, backend):
+        _pattern(value, DIGEST)
+    # A protected record cannot originate from an absent ledger. Its audit
+    # changes that existing ledger; neither deletion nor a no-op is an ACK.
+    _require(ledger != EMPTY_LEDGER_SHA256)
+    values = [runtime, operation_id, [scope["profileBindingId"], scope["sourceBindingId"], scope["provider"]],
+              entry, ledger, backend, RECOVERY_REASON]
+    ack = hashlib.sha256(_encoded(["ottplay-favorites-recovery-ack-v1", *values])).hexdigest()
+    plan = None
+    if after is not None:
+        _pattern(after, DIGEST)
+        _require(after not in (EMPTY_LEDGER_SHA256, ledger))
+        plan = hashlib.sha256(_encoded(["ottplay-favorites-recovery-plan-v1", *values, ack, after])).hexdigest()
+    return ack, plan
+
+
+def _recovery_record(value):
+    _shape(value, {"operation_id", "scope", "original_state", "original_outcome", "original_entry_sha256",
+                   "acknowledgement"})
+    _pattern(value["operation_id"], UUID)
+    _recovery_scope(value["scope"])
+    _pattern(value["original_entry_sha256"], DIGEST)
+    _require(type(value["original_state"]) is str and value["original_state"] in ("pending", "partial", "unknown"))
+    _require(value["original_outcome"] == ("partial" if value["original_state"] == "partial" else "unknown"))
+    audit = value["acknowledgement"]
+    if audit is not None:
+        _shape(audit, {"acknowledgement_id", "runtime", "ledger_revision_before", "backend_proof", "reason"})
+        _require(audit["reason"] == RECOVERY_REASON)
+        ack, _ = recovery_digests(audit["runtime"], value["operation_id"], value["scope"],
+                                  value["original_entry_sha256"], audit["ledger_revision_before"], audit["backend_proof"])
+        _require(audit["acknowledgement_id"] == ack)
+
+
+def _recovery_params(params):
+    mode = params.get("mode")
+    _require(type(mode) is str and mode in ("list", "inspect", "acknowledge"))
+    fields = {"op", "runtime", "mode"}
+    if mode != "list":
+        fields.add("operation_id")
+        _pattern(params.get("operation_id"), UUID)
+    if mode == "acknowledge":
+        fields |= {"scope", "original_entry_sha256", "expected_ledger_revision", "backend_proof", "plan_sha256",
+                   "acknowledgement_id", "accept_unknown", "after_ledger_sha256", "reason"}
+    _shape(params, fields)
+    if mode == "acknowledge":
+        _require(params["accept_unknown"] is True and params["reason"] == RECOVERY_REASON)
+        _pattern(params["after_ledger_sha256"], DIGEST)
+        ack, plan = recovery_digests(params["runtime"], params["operation_id"], params["scope"],
+            params["original_entry_sha256"], params["expected_ledger_revision"], params["backend_proof"],
+            params["after_ledger_sha256"])
+        _require(params["acknowledgement_id"] == ack and params["plan_sha256"] == plan)
+    return fields
+
+
+def _recovery_data(params, data):
+    mode = params["mode"]
+    _require(data.get("mode") == mode)
+    base = COMMON | {"mode", "ledger_revision"}
+    _pattern(data.get("ledger_revision"), DIGEST)
+    if mode == "acknowledge":
+        _shape(data, base | {"operation_id", "acknowledgement_id", "plan_sha256", "acknowledged", "persistence", "record"})
+        _require(data["acknowledged"] is True and data["persistence"] == "persistent"
+                 and data["acknowledgement_id"] == params["acknowledgement_id"]
+                 and data["plan_sha256"] == params["plan_sha256"]
+                 and data["ledger_revision"] == params["after_ledger_sha256"])
+        record = data["record"]
+        _recovery_record(record)
+        _require(record["operation_id"] == params["operation_id"] and record["scope"] == params["scope"]
+                 and record["original_entry_sha256"] == params["original_entry_sha256"]
+                 and record["acknowledgement"] == recovery_audit(params))
+        return
+    _integer(data.get("ledger_format"), 1, 2)
+    if data.get("backend_proof") is not None:
+        _pattern(data["backend_proof"], DIGEST)
+    base |= {"ledger_format", "backend_proof"}
+    if mode == "list":
+        _shape(data, base | {"records"})
+        _require(type(data["records"]) is list and len(data["records"]) <= 32)
+        ids = []
+        for row in data["records"]:
+            _recovery_record(row)
+            ids.append(row["operation_id"])
+        _require(ids == sorted(set(ids)))
+        rows = data["records"]
+    else:
+        _shape(data, base | {"operation_id", "record", "acknowledge_allowed", "plan_sha256",
+                            "acknowledgement_id", "after_ledger_sha256"})
+        _require(type(data["acknowledge_allowed"]) is bool)
+        record = data["record"]
+        rows = [] if record is None else [record]
+        if record is not None:
+            _recovery_record(record)
+            _require(record["operation_id"] == params["operation_id"])
+        if data["acknowledge_allowed"]:
+            _require(data["ledger_format"] == 2 and data["backend_proof"] is not None
+                     and record is not None and record["acknowledgement"] is None)
+            _pattern(data["after_ledger_sha256"], DIGEST)
+            ack, plan = recovery_digests(params["runtime"], params["operation_id"], record["scope"],
+                record["original_entry_sha256"], data["ledger_revision"], data["backend_proof"], data["after_ledger_sha256"])
+            _require(data["acknowledgement_id"] == ack and data["plan_sha256"] == plan)
+        else:
+            _require(all(data[key] is None for key in ("acknowledgement_id", "after_ledger_sha256", "plan_sha256")))
+    if data["ledger_format"] == 1:
+        _require(all(row["acknowledgement"] is None for row in rows))
+    if data["ledger_revision"] == EMPTY_LEDGER_SHA256:
+        _require(data["ledger_format"] == 2 and not rows)
+
+
+def recovery_audit(params):
+    return {"acknowledgement_id": params["acknowledgement_id"], "runtime": params["runtime"],
+            "ledger_revision_before": params["expected_ledger_revision"], "backend_proof": params["backend_proof"],
+            "reason": RECOVERY_REASON}
+
+
+def recovery_ack_request(inspect):
+    """Construct exactly the inspected CAS request; eligibility remains player-owned."""
+    _require(type(inspect) is ValidatedResult and inspect.status == "ok")
+    data = inspect.data
+    _require(inspect.request["op"] == "recovery" and inspect.request["mode"] == "inspect")
+    validate_result(inspect.request, data, request_id=inspect.request_id, response_id=inspect.request_id, status="ok")
+    _require(data["acknowledge_allowed"])
+    record = data["record"]
+    return validate_request({"op": "recovery", "mode": "acknowledge", "runtime": data["runtime"],
+        "operation_id": data["operation_id"], "scope": record["scope"],
+        "original_entry_sha256": record["original_entry_sha256"], "expected_ledger_revision": data["ledger_revision"],
+        "backend_proof": data["backend_proof"], "plan_sha256": data["plan_sha256"],
+        "acknowledgement_id": data["acknowledgement_id"], "after_ledger_sha256": data["after_ledger_sha256"],
+        "reason": RECOVERY_REASON, "accept_unknown": True})
+
+
 def validate_request(params, *, idempotency_key=None):
     """Validate params and both real-client/conservative queued envelope sizes.
 
@@ -294,7 +453,9 @@ def validate_request(params, *, idempotency_key=None):
     _require(type(op) is str and op in OPS)
     _pattern(params.get("runtime"), RUNTIME)
     fields = {"op", "runtime"}
-    if op == "bindingcatalog":
+    if op == "recovery":
+        fields = _recovery_params(params)
+    elif op == "bindingcatalog":
         pass
     elif op == "bind":
         fields |= {"scope", "target_id", "expected_binding_revision", "codecVersion"}
@@ -325,7 +486,7 @@ def validate_request(params, *, idempotency_key=None):
     for key in ("operation_id", "transaction_id"):
         if key in params:
             _pattern(params[key], UUID)
-    if "scope" in params:
+    if "scope" in params and op != "recovery":
         _scope(params["scope"])
     for key in ("expected_revision", "binding_revision", "expected_binding_revision"):
         if key in params:
@@ -540,13 +701,17 @@ def _validate_data(params, data, status, context, scope_validator):
         _shape(data, COMMON | {"error"})
         _require(status in ("rejected", "unsupported") and type(data["error"]) is str
                  and (data["error"] in ERRORS or params["op"] == "provision" and data["error"] == "outcome_unknown"))
+        if params["op"] == "recovery":
+            _require(data["error"] in RECOVERY_ERRORS)
         return False, None
     _require(status == "ok")
     op, raw, receipt = params["op"], None, None
     for key in ("transaction_id", "operation_id"):
         if key in params:
             _require(data.get(key) == params[key])
-    if op == "bindingcatalog":
+    if op == "recovery":
+        _recovery_data(params, data)
+    elif op == "bindingcatalog":
         _binding_catalog(data)
     elif op == "prepare":
         _shape(data, set(params) | {"version", "operation_id", "admission_ttl_ms"})

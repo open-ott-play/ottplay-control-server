@@ -373,6 +373,75 @@ class StatusReader(_RequestTransport):
         return self._observe_unverified(record)
 
 
+class RecoveryPeer(_RequestTransport):
+    """Global ledger operations; no transfer admission, provider switch or replay."""
+
+    def __init__(self, client, device, *, runtime, timeout=45, monotonic=time.monotonic,
+                 sleep=time.sleep, deadline=None):
+        super().__init__(client, device, runtime=runtime, envelope_limit=16384,
+            response_limit=protocol.MAX_METADATA_BYTES, scope_validator=None, timeout=timeout,
+            monotonic=monotonic, sleep=sleep, max_metadata_bytes=protocol.MAX_METADATA_BYTES,
+            deadline=deadline, allowed_ops=protocol.RECOVERY_OPS)
+
+    def list(self):
+        return self._rpc({"op": "recovery", "mode": "list", "runtime": self.runtime}, deadline=self._deadline)
+
+    def inspect(self, operation_id):
+        return self._rpc({"op": "recovery", "mode": "inspect", "runtime": self.runtime,
+                          "operation_id": operation_id}, deadline=self._deadline)
+
+    def acknowledge(self, inspection, confirmation, save_intent):
+        request = protocol.recovery_ack_request(inspection)
+        if request["runtime"] != self.runtime or confirmation != request["plan_sha256"] or not callable(save_intent):
+            raise RemoteError("invalid_context")
+        record = inspection.data["record"]
+        base = {"operation_id": request["operation_id"], "acknowledgement_id": request["acknowledgement_id"],
+                "plan_sha256": request["plan_sha256"], "original_outcome": record["original_outcome"],
+                "replay_allowed": False}
+        cutoff = self._deadline - RECONCILE_RESERVE
+        if cutoff - self._now() <= POST_INTERVAL + HTTP_INTERVAL:
+            return {**base, "status": "blocked", "reason": "deadline_insufficient"}
+        completed = queue.Queue(maxsize=1)
+        def retain():
+            try:
+                completed.put(save_intent(inspection, request))
+            except Exception:  # noqa: BLE001 - private filesystem errors stay private
+                completed.put(None)
+        threading.Thread(target=retain, name="ott-favorites-ack-intent", daemon=True).start()
+        wall = time.perf_counter() + max(0, cutoff - self._now())
+        authorized = None
+        while self._now() < cutoff and time.perf_counter() < wall:
+            try:
+                authorized = completed.get(timeout=max(0, min(1, cutoff - self._now(), wall - time.perf_counter())))
+                break
+            except queue.Empty:
+                continue
+        if type(authorized) is not bool:
+            return {**base, "status": "blocked", "reason": "context_not_saved"}
+        # A new explicit --confirm invocation authorizes one conditional ACK.
+        # False means the identical immutable intent was already retained,
+        # including a possible crash before its earlier HTTP request was sent.
+        try:
+            result = self._rpc(request, deadline=cutoff)
+            expected = {**record, "acknowledgement": protocol.recovery_audit(request)}
+            if result.data["record"] != expected:
+                raise RemoteError("invalid_response")
+            return {**base, "status": "acknowledgement_confirmed", "evidence": result.data,
+                    "request_id": result.request_id}
+        except RemoteError:
+            pass
+        # At most one fresh read follows an uncertain ACK in this invocation.
+        # Its result never authorizes an automatic resend.
+        try:
+            observed = self.inspect(request["operation_id"])
+            if observed.data["record"] == {**record, "acknowledgement": protocol.recovery_audit(request)}:
+                return {**base, "status": "acknowledgement_observed", "evidence": observed.data,
+                        "request_id": observed.request_id}
+        except RemoteError:
+            pass
+        return {**base, "status": "unknown", "reason": "acknowledgement_unconfirmed"}
+
+
 class RemoteFavorites(_RequestTransport):
     def __init__(self, client, device, *, runtime, limits, receipt_retention_seconds, scope_validator,
                  save_context, timeout=45, monotonic=time.monotonic, sleep=time.sleep, uuid_factory=uuid.uuid4,
