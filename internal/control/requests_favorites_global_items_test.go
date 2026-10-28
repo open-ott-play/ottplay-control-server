@@ -331,6 +331,71 @@ func TestGlobalItemsPortableV4ProviderBoundary(t *testing.T) {
 	}
 }
 
+func TestGlobalItemsPortableProviderIdentity(t *testing.T) {
+	raw, err := os.ReadFile("../../contracts/global-favorites-provider-id.fixtures.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Cases []struct {
+			Value string `json:"value"`
+			Valid bool   `json:"valid"`
+		} `json:"cases"`
+		DistinctPairs [][2]string `json:"distinct_pairs"`
+	}
+	if json.Unmarshal(raw, &corpus) != nil || len(corpus.Cases) != 34 || len(corpus.DistinctPairs) != 4 {
+		t.Fatal("missing provider identity fixtures")
+	}
+	entryFor := func(provider string) json.RawMessage {
+		entry := transferObject(t, globalItemsEntry(t))
+		origin := transferObject(t, entry["origin"])
+		origin["provider"] = transferJSON(t, provider)
+		entry["origin"] = transferJSON(t, origin)
+		switch provider {
+		case "plex":
+			entry["locator"] = json.RawMessage(`{"kind":"plex-media","serverId":"PMS-1","ratingKey":"42"}`)
+		case "local":
+			entry["locator"] = json.RawMessage(`{"kind":"local-media","rootAlias":"Movies","relativePath":"movie.mp4"}`)
+		case "vportal":
+			entry["locator"] = json.RawMessage(`{"kind":"vportal-media","idField":"id","id":"42"}`)
+		}
+		return transferJSON(t, entry)
+	}
+	for _, row := range corpus.Cases {
+		t.Run(row.Value, func(t *testing.T) {
+			entry := entryFor(row.Value)
+			identity, valid := favoritesGlobalPortableIdentity(entry)
+			if valid != row.Valid {
+				t.Fatal("provider identity boundary")
+			}
+			if valid {
+				origin := transferObject(t, transferObject(t, json.RawMessage(identity))["origin"])
+				if favoritesGlobalString(origin["provider"]) != row.Value {
+					t.Fatal("provider identity was normalized")
+				}
+			}
+			for _, f := range globalItemsFixtures(t)[:2] {
+				result := transferObject(t, f.result)
+				if f.op == "list" {
+					result["entries"] = transferJSON(t, []any{map[string]any{"id": globalTestOperation, "entry": entry}})
+				} else {
+					result["entry"] = entry
+				}
+				if validFavoritesGlobalItemsResult(transferJSON(t, result), "ok", parseFavoritesGlobalItemsRequest(f.params)) != row.Valid {
+					t.Fatal("provider result boundary", f.op)
+				}
+			}
+		})
+	}
+	for _, pair := range corpus.DistinctPairs {
+		left, leftOK := favoritesGlobalPortableIdentity(entryFor(pair[0]))
+		right, rightOK := favoritesGlobalPortableIdentity(entryFor(pair[1]))
+		if !leftOK || !rightOK || left == right {
+			t.Fatal("distinct provider identities collapsed")
+		}
+	}
+}
+
 func TestGlobalItemsHundredRowsAndRawByteBoundary(t *testing.T) {
 	f := globalItemsFixtures(t)[0]
 	q := parseFavoritesGlobalItemsRequest(f.params)

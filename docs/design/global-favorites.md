@@ -18,6 +18,14 @@ the root. The receiver must verify that the matched M3U configuration owns that
 portal and folder; the portable document carries no endpoint or credentials.
 Other channel providers do not gain this provider/locator combination.
 
+Provider IDs are exact opaque registry keys of at most 64 ASCII characters.
+Each slash-separated segment starts with a lowercase letter or digit and
+continues with lowercase letters, digits, dots, underscores or hyphens.
+Do not replace punctuation with hyphens: `provider/source`, `provider.source`
+and `provider-source` are distinct. These keys are never filesystem paths or
+dynamic plugin names. The receiver requires an exact known registry match;
+unknown safe keys remain portable but unresolved.
+
 Identity is full canonical origin plus locator, excluding title. Order, case,
 Unicode normalization and leading zeroes are preserved. Merge keeps existing
 order/titles and appends new identities; conflicting titles yield

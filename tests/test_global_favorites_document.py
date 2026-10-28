@@ -84,6 +84,62 @@ class GlobalFavoritesDocumentTests(unittest.TestCase):
         for spelling in (b"NaN", b"Infinity", b"1e999"):
             self.error(codec.load_document, b'{"version":' + spelling + b',"entries":[]}', "invalid_json")
 
+    def test_v5_provider_ids_are_exact_bounded_opaque_segments(self):
+        for provider in ("vendor/service", "d/provider-tv", "example.tv", "1provider", "x..y",
+                         "source_a/source-b.ext", "a" * 64, "a/" + "b" * 62):
+            with self.subTest(provider=provider):
+                value = row()
+                value["origin"]["provider"] = provider
+                normalized = codec.validate_document(document(value))
+                self.assertEqual(normalized, document(value))
+                self.assertEqual(codec.load_document(codec.canonical_bytes(normalized)), normalized)
+        for provider in ("", "A", "/a", "a/", "a//b", "a/.", "a/..", "a/../b", "../a", ".a",
+                         "a/.hidden", "a/-b", "a/_b", "a\\b", "https://host", "a?token=x", "a#fragment",
+                         "a%2fb", "a\n", "a\x00", "a\x7f", " a", "a ", "a\ufeff", "é", "😀", "\ud800",
+                         "a" * 65, "a/" + "b" * 63, 1, None, True):
+            with self.subTest(provider=repr(provider)):
+                value = row()
+                value["origin"]["provider"] = provider
+                self.error(codec.validate_document, document(value))
+
+    def test_v5_shared_neutral_provider_fixtures(self):
+        content = (ROOT / "contracts/global-favorites-provider-id.fixtures.json").read_bytes()
+        self.assertEqual(hashlib.sha256(content).hexdigest(),
+                         "ba232bfce383fde18d81c1d8f71a911b418c6cf21fca3afdd9a5256f3aa10742")
+        fixtures = json.loads(content)
+        for case in fixtures["cases"]:
+            with self.subTest(case=repr(case["value"])):
+                value = row()
+                value["origin"]["provider"] = case["value"]
+                if case["valid"]:
+                    origin = codec._origin(value["origin"])
+                    self.assertEqual(origin["provider"], case["canonical"])
+                else:
+                    self.error(codec.validate_document, document(value))
+        for left, right in fixtures["distinct_pairs"]:
+            first, second = row(), row()
+            first["origin"]["provider"], second["origin"]["provider"] = left, right
+            self.assertNotEqual(codec.identity(first), codec.identity(second))
+
+    def test_v5_provider_lookalikes_remain_distinct_without_relabeling(self):
+        for left, right in (("vendor/service", "vendor-service"), ("example.tv", "example-tv"),
+                            ("1source", "source"), ("vendor/a.b", "vendor/a-b")):
+            first, second = row(), row()
+            first["origin"]["provider"], second["origin"]["provider"] = left, right
+            self.assertNotEqual(codec.identity(first), codec.identity(second))
+            plan = codec.plan_documents(document(first), [document(second)], "merge")
+            self.assertTrue(plan["can_commit"])
+            self.assertEqual(plan["document"], document(first, second))
+        for provider in ("vendor/plex", "local.example", "m3u/portal", "vportal-extension"):
+            value = row()
+            value["origin"]["provider"] = provider
+            self.assertEqual(codec.validate_document(document(value)), document(value))
+            for locator in ({"kind": "vportal-media", "idField": "id", "id": "1"},
+                            {"kind": "plex-media", "serverId": "server", "ratingKey": "1"},
+                            {"kind": "local-media", "rootAlias": "Movies", "relativePath": "movie.mp4"}):
+                value["locator"] = locator
+                self.error(codec.validate_document, document(value))
+
     def test_provider_specific_locators_and_unavailable_origins_are_data(self):
         examples = [("plex", {"kind": "plex-media", "serverId": "PMS-a_1.test", "ratingKey": "78777"}),
                     ("local", {"kind": "local-media", "rootAlias": "Offline disk", "relativePath": "Films/Три кота 01.mp4"}),

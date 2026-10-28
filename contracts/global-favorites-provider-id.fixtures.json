@@ -1,0 +1,194 @@
+{
+  "contract": "opaque-provider-registry-id-v1",
+  "semantics": "Exact strings, never a filesystem path and never lossily aliased; runtime requires exact known registry membership.",
+  "cases": [
+    {
+      "value": "provider/source",
+      "valid": true,
+      "canonical": "provider/source"
+    },
+    {
+      "value": "x/service",
+      "valid": true,
+      "canonical": "x/service"
+    },
+    {
+      "value": "provider.example",
+      "valid": true,
+      "canonical": "provider.example"
+    },
+    {
+      "value": "demo.example",
+      "valid": true,
+      "canonical": "demo.example"
+    },
+    {
+      "value": "provider-source",
+      "valid": true,
+      "canonical": "provider-source"
+    },
+    {
+      "value": "x-service",
+      "valid": true,
+      "canonical": "x-service"
+    },
+    {
+      "value": "provider-example",
+      "valid": true,
+      "canonical": "provider-example"
+    },
+    {
+      "value": "demo-example",
+      "valid": true,
+      "canonical": "demo-example"
+    },
+    {
+      "value": "m3u",
+      "valid": true,
+      "canonical": "m3u"
+    },
+    {
+      "value": "plex",
+      "valid": true,
+      "canonical": "plex"
+    },
+    {
+      "value": "local",
+      "valid": true,
+      "canonical": "local"
+    },
+    {
+      "value": "vportal",
+      "valid": true,
+      "canonical": "vportal"
+    },
+    {
+      "value": "1provider",
+      "valid": true,
+      "canonical": "1provider"
+    },
+    {
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "canonical": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "value": "x..y",
+      "valid": true,
+      "canonical": "x..y"
+    },
+    {
+      "value": "",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "/a",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a/",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a//b",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a/.",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a/..",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a/../b",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "../a",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": ".a",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a/.hidden",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a/-b",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a\\b",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "http://host",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a?token=x",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a#fragment",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a%2fb",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "A",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "a\n",
+      "valid": false,
+      "canonical": null
+    },
+    {
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false,
+      "canonical": null
+    }
+  ],
+  "distinct_pairs": [
+    [
+      "provider/source",
+      "provider-source"
+    ],
+    [
+      "x/service",
+      "x-service"
+    ],
+    [
+      "provider.example",
+      "provider-example"
+    ],
+    [
+      "demo.example",
+      "demo-example"
+    ]
+  ]
+}

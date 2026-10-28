@@ -14,7 +14,7 @@ const maxFavoritesGlobalItemsMetadata = 64 * 1024
 const maxFavoritesGlobalItemsPage = 100
 
 var favoritesGlobalItemsCursorPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,512}$`)
-var favoritesGlobalProviderPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+var favoritesGlobalProviderPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*(?:/[a-z0-9][a-z0-9_.-]*)*$`)
 var favoritesGlobalIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
 var favoritesGlobalPMSPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$`)
 var favoritesGlobalRatingPattern = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
@@ -67,7 +67,11 @@ func favoritesGlobalPortableIdentity(raw json.RawMessage) (string, bool) {
 		return "", false
 	}
 	origin, ok := inspectObject(entry["origin"], "provider", "profile", "subprofile", "sourceAlias")
-	if !ok || !favoritesGlobalPortablePattern(origin["provider"], favoritesGlobalProviderPattern) {
+	if !ok {
+		return "", false
+	}
+	provider, valid := favoritesGlobalPortableText(origin["provider"], 64)
+	if !valid || !favoritesGlobalProviderPattern.MatchString(provider) {
 		return "", false
 	}
 	for _, key := range []string{"profile", "sourceAlias"} {
@@ -84,7 +88,6 @@ func favoritesGlobalPortableIdentity(raw json.RawMessage) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	provider := favoritesGlobalString(origin["provider"])
 	switch {
 	case provider == "plex":
 		if !favoritesTransferFields(locator, "kind", "serverId", "ratingKey") || !inspectEnum(locator["kind"], "plex-media") || !favoritesGlobalPortablePattern(locator["serverId"], favoritesGlobalPMSPattern) || !favoritesGlobalPortablePattern(locator["ratingKey"], favoritesGlobalRatingPattern) {

@@ -2179,6 +2179,9 @@ Favorites from a configured VPortal inside M3U retain their M3U profile and
 source alias, including the actual portal folder when present. The receiving
 player must have the matching embedded portal configured; imports do not copy
 portal URLs or credentials or silently switch to a top-level VPortal profile.
+Provider IDs are preserved exactly, including valid digits, dots and slash
+separators; punctuation lookalikes are distinct. An unknown provider stays
+unresolved until the receiving player has the exact configured provider.
 
 The list has at most 1,000 entries. Every page contains at most 100 rows and
 64 KiB of original response data; long titles can reduce the rows per page.

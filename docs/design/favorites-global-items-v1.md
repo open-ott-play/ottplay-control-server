@@ -23,6 +23,8 @@ All IDs are lower-case UUIDv4, hashes are 64 lower-case hex characters, and runt
 
 Provider/locator rules remain exact: Plex uses `plex-media`, Local uses `local-media`, VPortal uses `vportal-media`, other supported channel providers use `channel` or `channel-name`. The sole additional pairing is `m3u` plus `vportal-media` for a configured embedded VPortal: preserve the outer M3U origin and actual folder subprofile (`null` at the root), and require receiver-owned portal/folder provenance. Reject derived `channel:<digits>` identities. Local paths are relative and exclude absolute/drive prefixes, backslashes and empty/dot/dot-dot segments. Do not return resolved URLs, credentials, signed query strings, private selectors, absolute native roots, profile slot numbers as identity, or backend storage bytes. Canonical identity remains origin plus locator, excluding title.
 
+Provider keys follow the [portable origin rules](global-favorites.md): exact lowercase ASCII registry IDs, at most 64 characters, with digit-led segments and safe dots, underscores, hyphens and slash separators. Preserve punctuation; no alias normalization, URL decoding, path resolution or dynamic plugin loading is implied. Unknown safe keys require receiver resolution and grant no authority.
+
 A receiver UUID identifies one local stored row and stays stable while that row exists. It is not portable identity, is not retained by an import solely because another receiver used it, and cannot authorize access to another target/runtime. Each full list has unique UUIDs and unique portable identities.
 
 ## Complete bounded pagination
