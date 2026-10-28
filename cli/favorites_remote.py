@@ -412,7 +412,7 @@ class RecoveryPeer(_RequestTransport):
         authorized = None
         while self._now() < cutoff and time.perf_counter() < wall:
             try:
-                authorized = completed.get(timeout=min(1, cutoff - self._now(), wall - time.perf_counter()))
+                authorized = completed.get(timeout=max(0, min(1, cutoff - self._now(), wall - time.perf_counter())))
                 break
             except queue.Empty:
                 continue

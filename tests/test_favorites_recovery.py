@@ -42,9 +42,15 @@ class RecoveryProtocolTests(unittest.TestCase):
             self.assertEqual(checked(name).data, FIX[name]["result"])
             self.assertFalse(checked(name).verified)
         self.assertEqual(protocol.recovery_ack_request(checked()), FIX["acknowledge"]["request"])
-        for key in ("original_entry", "before_ledger", "after_ledger"):
-            self.assertEqual(hashlib.sha256(FIX["derivation"][key + "_utf8"].encode()).hexdigest(),
-                             FIX["derivation"][key + "_sha256"])
+        for raw_key, digest_key in (("original_entry_utf8", "original_entry_sha256"),
+                                    ("before_ledger_utf8", "before_ledger_sha256"),
+                                    ("after_ledger_utf8", "after_ledger_sha256"),
+                                    ("backend_proof_input_utf8", "backend_proof"),
+                                    ("acknowledgement_input_utf8", "acknowledgement_id"),
+                                    ("plan_input_utf8", "plan_sha256")):
+            with self.subTest(raw=raw_key):
+                self.assertEqual(hashlib.sha256(FIX["derivation"][raw_key].encode()).hexdigest(),
+                                 FIX["derivation"][digest_key])
         for name in ("list", "inspect"):
             pair = EMPTY[name]
             protocol.validate_result(pair["request"], pair["result"], request_id="a" * 32,
@@ -313,6 +319,25 @@ class RecoveryHostTests(unittest.TestCase):
         result = self.call(["ack", OPERATION, "--confirm", PLAN], timeout=6)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(self.modes(), ["inspect", "inspect"])
+
+    def test_intent_wait_deadline_crossing_between_clock_reads_blocks_without_ack(self):
+        for crossing in ("monotonic", "wall"):
+            with self.subTest(crossing=crossing):
+                peer = remote.RecoveryPeer(self.client, "one", runtime=RUNTIME,
+                    monotonic=self.clock, sleep=self.clock.sleep)
+                save = mock.Mock(return_value=True)
+                # Leave the real queue empty while the saving worker is pending.
+                # Cross the deadline only after the while-condition accepted it,
+                # making the subsequent Queue.get timeout calculation negative.
+                before, after = self.clock(), peer._deadline + 1
+                now = mock.Mock(side_effect=[before, before, before, after, after]) if crossing == "monotonic" else mock.Mock(return_value=before)
+                wall = mock.Mock(return_value=0) if crossing == "monotonic" else mock.Mock(side_effect=[0, 0, 100, 100])
+                with mock.patch.object(remote.threading, "Thread"), mock.patch.object(peer, "_now", now), \
+                        mock.patch.object(remote.time, "perf_counter", wall):
+                    result = peer.acknowledge(checked(), PLAN, save)
+                self.assertEqual((result["status"], result["reason"]), ("blocked", "context_not_saved"))
+                self.assertEqual(self.client.posts(), [])
+                save.assert_not_called()
 
     def test_missing_and_legacy_records_are_inspect_only(self):
         self.client.inspect_mode = "legacy_inspect"

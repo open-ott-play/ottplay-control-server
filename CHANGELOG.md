@@ -114,10 +114,12 @@
 
 - The current CLI contains 20 Python modules. Install the complete `cli/`
   directory from one reviewed revision; keep the existing private configuration
-  and recovery evidence. The source installation examples pin reviewed signed
-  commit `7185de57559e89438bc7d6a6d436fffd8d6c91ff`, whose tree matches merge
-  `66b87a3ff3e8edd50dabce67b2017170c09bb058` used for controller beta27. This does
-  not claim that matching CLI, controller and player components are installed.
+  and recovery evidence. Use the reviewed signed source pinned in the
+  [CLI installation guide](docs/cli.md#choose-the-cli-source-revision).
+  The earlier source `7185de57559e89438bc7d6a6d436fffd8d6c91ff` matched merge
+  `66b87a3ff3e8edd50dabce67b2017170c09bb058` used for controller beta27; it predates
+  explicit uncertainty recovery. Source examples do not establish that matching
+  CLI, controller and player components are installed.
 
 ## [0.1.6] - 2026-10-24
 

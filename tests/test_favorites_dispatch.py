@@ -140,6 +140,17 @@ class FavoritesDispatchTests(unittest.TestCase):
             self.assertEqual("fav bindings" in out.getvalue(), present)
             self.assertEqual("CURRENT VERIFIED PLEX ONLY" in out.getvalue(), present)
 
+    def test_recovery_capability_preserves_partial_installation_guidance(self):
+        value = caps(False)
+        value["favorites_transfer_recovery"] = {"version": 1}
+        original = Path.is_file
+        def missing_protocol(path):
+            return False if path == ROOT / "cli/favorites_protocol.py" else original(path)
+        with mock.patch.object(ott.Path, "is_file", missing_protocol), self.assertRaises(ott.Error) as caught:
+            ott.capabilities_metadata(value)
+        self.assertEqual(str(caught.exception), "Install all CLI Python files from the same revision to synchronize favorites")
+        self.assertNotIn("invalid capabilities", str(caught.exception))
+
     def test_legacy_favorites_remain_available_without_transfer_marker(self):
         contract = json.loads((ROOT / "contracts/favorites-v1.json").read_bytes())
         client = self.client()

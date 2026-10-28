@@ -4203,6 +4203,8 @@ def capabilities_metadata(data):
     if "favorites_transfer_recovery" in data:
         try:
             result["favorites_transfer_recovery"] = favorites_module("favorites_protocol").validate_recovery_capability(data["favorites_transfer_recovery"])
+        except Error:
+            raise
         except Exception:  # noqa: BLE001 - invalid capability text must never escape
             raise Error(invalid) from None
     if "favorites_transfer" in data:
