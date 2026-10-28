@@ -162,6 +162,76 @@ class FavoritesCommandsTests(unittest.TestCase):
         self.assertNotIn("commit", self.client.posts())
         self.assertEqual(list(self.directory.glob(".favorites-operations-*")), [])
 
+    def test_capability_receipt_timeout_reports_phase_without_replay_or_private_text(self):
+        before = self.path.read_bytes()
+        def timeout(_api, _response):
+            self.clock.sleep(10)
+            raise ott.TransportError("https://private.invalid/?token=secret-request-id", "deadline")
+        self.client.get_effects["capabilities"] = [timeout]
+        target = commands._Target(ott, self.client, self.path, "one", 45,
+                                  self.clock, self.clock.sleep, lambda: fixture.OPERATION)
+        with self.assertRaises(commands.CommandError) as caught:
+            target.discover(recovery_only=True)
+        error = caught.exception
+        self.assertEqual(error.code, "capability_transport_failed")
+        self.assertIn("Capabilities receipt read failed (transport: deadline)", str(error))
+        self.assertIn("favorites or recovery RPC was not sent", str(error))
+        self.assertNotIn("private.invalid", str(error))
+        self.assertNotIn("secret-request-id", str(error))
+        self.assertTrue(error.__suppress_context__)
+        self.assertEqual([(row["method"], row["op"]) for row in self.client.calls],
+                         [("POST", "capabilities"), ("GET", "capabilities")])
+        self.assertEqual(self.clock(), 113)
+        self.assertEqual([row["timeout"] for row in self.client.calls], [10, 10])
+        self.assertEqual(self.path.read_bytes(), before)
+        self.no_stage_or_context()
+
+    def test_capability_receipt_diagnostics_allowlist_known_types_and_values(self):
+        private = "https://private.invalid/?token=secret-request-id"
+        cases = [(ott.HTTPError(403), "HTTP 403")]
+        for category in ("dns", "tls", "socket", "protocol", "truncated", "unknown"):
+            cases.append((ott.TransportError(private, category), "transport: " + category))
+        for category in (private, {"secret": private}, True, 403):
+            error = ott.TransportError(private)
+            error.category = category
+            cases.append((error, "transport: unknown"))
+        for code in (private, {"secret": private}, True, 403.0, 99, 600):
+            error = ott.HTTPError(403)
+            error.code = code
+            error.args = (private,)
+            cases.append((error, "transport: unknown"))
+        spoof = RuntimeError(private)
+        spoof.code, spoof.category = 403, "tls"
+        cases.append((spoof, "transport: unknown"))
+        for error, expected in cases:
+            with self.subTest(expected=expected, kind=type(error).__name__):
+                self.clock = fixture.Clock()
+                self.client = CurrentAPI(self.clock, self.directory)
+                self.client.get_effects["capabilities"] = [error]
+                with self.assertRaises(ott.Error) as caught:
+                    self.call("recovery", mode="list")
+                message = str(caught.exception)
+                self.assertIn("capability transport failed", message)
+                self.assertIn("Capabilities receipt read failed (" + expected + ")", message)
+                self.assertIn("favorites or recovery RPC was not sent", message)
+                self.assertNotIn(private, message)
+                self.assertNotIn("secret", message)
+                self.assertNotIn("00000000000000000000000000000001", message)
+                self.assertEqual(self.client.posts(), ["capabilities"])
+                self.assertEqual(len(self.client.calls), 2)
+                self.no_stage_or_context()
+
+    def test_capability_receipt_existing_http_backoff_is_unchanged(self):
+        self.client.get_effects["capabilities"] = [ott.HTTPError(503)]
+        result = self.call("recovery", mode="list")
+        self.assertEqual(result["status"], "recovery_list")
+        self.assertFalse(result["replay_allowed"])
+        self.assertEqual(self.client.posts(), ["capabilities", "recovery"])
+        reads = [row for row in self.client.calls if row["method"] == "GET" and row["op"] == "capabilities"]
+        self.assertEqual([row["at"] for row in reads], [103, 106])
+        self.assertTrue(all(row["at"] + row["timeout"] <= 145 for row in self.client.calls))
+        self.no_stage_or_context()
+
     def test_bindings_and_diff_are_read_only_and_exact_current_source(self):
         result = self.call("bindings")
         self.assertEqual(result["status"], "available")

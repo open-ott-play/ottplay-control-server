@@ -2021,6 +2021,13 @@ guard can expose read-only recovery without accepting an acknowledgement.
 
 Troubleshooting:
 
+- `capability transport failed`: the CLI could not read the capabilities
+  receipt; this player's favorites or recovery RPC was not sent. The message includes
+  only an allowlisted transport category (such as `deadline`, `dns`, or `tls`)
+  or a numeric HTTP status. `deadline` refers to that HTTP read, not proof that
+  the player is offline. Check controller connectivity or authorization for
+  the reported category/status; the CLI does not automatically replay the
+  capabilities POST or the requested operation.
 - Missing `favorites_transfer_recovery` in `ott d1 caps`: verify the build at
   this player's actual hosting URL contains the standby-recovery fix. A published
   web update does not replace code already loaded by an open player, and a new

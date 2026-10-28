@@ -24,9 +24,21 @@ import preset_favorites as storage
 
 
 class CommandError(ValueError):
-    def __init__(self, code):
+    def __init__(self, code, *, transport_category=None, http_status=None):
         self.code = code
         message = "Favorites synchronization: " + code.replace("_", " ") + ". No automatic replay is permitted."
+        if code == "capability_transport_failed":
+            # Only closed enums and an integer status reach the user. Never
+            # include exception text, causes, request IDs or endpoint details.
+            detail = "transport: unknown"
+            if type(http_status) is int and 100 <= http_status <= 599:
+                detail = f"HTTP {http_status}"
+            elif type(transport_category) is str and transport_category in (
+                    "deadline", "dns", "tls", "socket", "protocol", "truncated", "unknown"):
+                detail = "transport: " + transport_category
+            message = ("Favorites synchronization: capability transport failed. "
+                       f"Capabilities receipt read failed ({detail}); this player's favorites or recovery RPC was not sent. "
+                       "No automatic replay is permitted.")
         if code == "player_in_standby":
             message = ("The player is in standby. Run 'ott <player> go' to wake it and start configured playback, "
                        "then retry this favorites command. No wake or favorites mutation was sent.")
@@ -173,7 +185,9 @@ class _Target:
                 if getattr(error, "code", None) in (429, 502, 503, 504):
                     delay = min(8, delay * 2)
                     continue
-                raise CommandError("capability_transport_failed") from None
+                raise CommandError("capability_transport_failed",
+                    transport_category=error.category if isinstance(error, self.api.TransportError) else None,
+                    http_status=error.code if isinstance(error, self.api.HTTPError) else None) from None
             self.remaining()
             if type(raw) is not bytes or not 0 < len(raw) <= protocol.MAX_RESPONSE_BYTES:
                 raise CommandError("invalid_capability_receipt")
