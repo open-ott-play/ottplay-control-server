@@ -1,0 +1,364 @@
+{
+  "schema": 1,
+  "status": "SOURCE_PROTOCOL_FOUNDATION_ONLY_NOT_REGISTERED_NOT_ADVERTISED",
+  "seven_transfer_operations": "UNCHANGED",
+  "operation": "provision",
+  "request_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "op",
+      "runtime",
+      "mode",
+      "target_id",
+      "expected_binding_revision",
+      "codecVersion"
+    ],
+    "properties": {
+      "op": {
+        "const": "provision"
+      },
+      "runtime": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9-]{1,64}$",
+        "not": {
+          "pattern": "[^a-z0-9-]"
+        }
+      },
+      "mode": {
+        "enum": [
+          "create",
+          "import",
+          "pair",
+          "replace-current"
+        ]
+      },
+      "target_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        "not": {
+          "pattern": "[^A-Za-z0-9._:-]"
+        }
+      },
+      "expected_binding_revision": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 16,
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "not": {
+          "pattern": "[^0-9]"
+        }
+      },
+      "codecVersion": {
+        "const": 1
+      },
+      "scope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profileBindingId",
+          "sourceBindingId",
+          "provider"
+        ],
+        "properties": {
+          "profileBindingId": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "sourceBindingId": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "provider": {
+            "const": "plex"
+          }
+        }
+      },
+      "prior_scope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profileBindingId",
+          "sourceBindingId",
+          "provider"
+        ],
+        "properties": {
+          "profileBindingId": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "sourceBindingId": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "provider": {
+            "const": "plex"
+          }
+        }
+      }
+    },
+    "oneOf": [
+      {
+        "properties": {
+          "mode": {
+            "const": "create"
+          }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "scope"
+              ]
+            },
+            {
+              "required": [
+                "prior_scope"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "properties": {
+          "mode": {
+            "enum": [
+              "import",
+              "pair"
+            ]
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "not": {
+          "required": [
+            "prior_scope"
+          ]
+        }
+      },
+      {
+        "properties": {
+          "mode": {
+            "const": "replace-current"
+          }
+        },
+        "required": [
+          "scope",
+          "prior_scope"
+        ]
+      }
+    ]
+  },
+  "response_fields_exact": [
+    "version",
+    "runtime",
+    "op",
+    "mode",
+    "paired",
+    "changed",
+    "binding_revision",
+    "target_id",
+    "scope",
+    "persistence",
+    "outcome"
+  ],
+  "examples": {
+    "create": {
+      "request": {
+        "op": "provision",
+        "runtime": "synthetic-runtime-1",
+        "target_id": "plex-current-target-synthetic-1",
+        "expected_binding_revision": "0",
+        "codecVersion": 1,
+        "mode": "create"
+      },
+      "response": {
+        "version": 1,
+        "runtime": "synthetic-runtime-1",
+        "op": "provision",
+        "mode": "create",
+        "paired": true,
+        "changed": true,
+        "binding_revision": "1",
+        "target_id": "plex-current-target-synthetic-1",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "persistence": "persistent",
+        "outcome": "verified"
+      }
+    },
+    "import": {
+      "request": {
+        "op": "provision",
+        "runtime": "synthetic-runtime-1",
+        "target_id": "plex-current-target-synthetic-1",
+        "expected_binding_revision": "0",
+        "codecVersion": 1,
+        "mode": "import",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        }
+      },
+      "response": {
+        "version": 1,
+        "runtime": "synthetic-runtime-1",
+        "op": "provision",
+        "mode": "import",
+        "paired": true,
+        "changed": true,
+        "binding_revision": "1",
+        "target_id": "plex-current-target-synthetic-1",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "persistence": "persistent",
+        "outcome": "verified"
+      }
+    },
+    "pair": {
+      "request": {
+        "op": "provision",
+        "runtime": "synthetic-runtime-1",
+        "target_id": "plex-current-target-synthetic-1",
+        "expected_binding_revision": "1",
+        "codecVersion": 1,
+        "mode": "pair",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        }
+      },
+      "response": {
+        "version": 1,
+        "runtime": "synthetic-runtime-1",
+        "op": "provision",
+        "mode": "pair",
+        "paired": true,
+        "changed": false,
+        "binding_revision": "1",
+        "target_id": "plex-current-target-synthetic-1",
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "persistence": "persistent",
+        "outcome": "verified"
+      }
+    },
+    "replace-current": {
+      "request": {
+        "op": "provision",
+        "runtime": "synthetic-runtime-1",
+        "target_id": "plex-current-target-synthetic-1",
+        "expected_binding_revision": "1",
+        "codecVersion": 1,
+        "mode": "replace-current",
+        "scope": {
+          "profileBindingId": "33333333-3333-4333-8333-333333333333",
+          "sourceBindingId": "44444444-4444-4444-8444-444444444444",
+          "provider": "plex"
+        },
+        "prior_scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        }
+      },
+      "response": {
+        "version": 1,
+        "runtime": "synthetic-runtime-1",
+        "op": "provision",
+        "mode": "replace-current",
+        "paired": true,
+        "changed": true,
+        "binding_revision": "2",
+        "target_id": "plex-current-target-synthetic-1",
+        "scope": {
+          "profileBindingId": "33333333-3333-4333-8333-333333333333",
+          "sourceBindingId": "44444444-4444-4444-8444-444444444444",
+          "provider": "plex"
+        },
+        "persistence": "persistent",
+        "outcome": "verified"
+      }
+    }
+  },
+  "minimal_error_example": {
+    "version": 1,
+    "runtime": "synthetic-runtime-1",
+    "op": "provision",
+    "error": "outcome_unknown"
+  },
+  "semantics": [
+    "Additive provisioning packet separate from frozen snapshot/begin/append/preview/commit/status/abort. No route/capability activation is included.",
+    "Require exact current runtime, target_id and captured registry revision. target_id is an opaque current runtime association, never a name, slot, URL, token hash or a persistent identity.",
+    "expected_binding_revision and response binding_revision are canonical decimal safe integers encoded as strings, maximum9007199254740991. Reject noncanonical, negative, out-of-range or bool values. UUIDs are exact lowercase UUIDv4, profile/source distinct.",
+    "Wire callers supply ONLY public scope UUIDs and target_id. Private selectors, owners, credentials, server addresses and grant handles are forbidden. Current private target must already be a verified Plex PMS; unsupported/manual/unverified targets refuse.",
+    "create omits scope/prior_scope; host allocates a fresh random profile/source UUID pair and binds both to the selected verified current target in one physical registry document.",
+    "import requires scope and may add missing matching public profile/source rows, then pairs them explicitly; existing identities/provider/parent remain unchanged. Imported UUIDs alone confer no grant.",
+    "pair requires both existing matching public rows. Identical current pair is an idempotent changed:false response with captured revision unchanged. Different existing private target bindings refuse; pair/import do not silently rebind.",
+    "replace-current requires desired scope and exact prior_scope with ALL FOUR UUIDs distinct. Same scope uses pair; same or partially overlapping replacement identities reject. Prior profile/source provider and parent relationship must match and both private bindings must match the captured current verified target.",
+    "Refuse any additional bound child source on the prior profile. Also refuse a conflicting bound child on the desired profile; do not disturb unrelated grants. Unbound public child rows may remain inert.",
+    "Retain prior public rows and withdraw ONLY their two private binding fields, then attach/create desired matching public IDs to that same authorized current target in ONE registry CAS. Public identity rows are never deleted/reused. No favorites, history, media, credentials or other store is written.",
+    "Before CAS compare the exact full actual registry beforeRaw with both normal and persisted reads. Repeat captured target and both current-owner checks; prior private proof is required pre-CAS. After CAS require exact whole persisted afterRaw readback plus current target/new-pair checks. Prior rows are intentionally unbound after replacement.",
+    "Single-document optimistic CAS/readback is not a cross-tab, fsync or cross-store atomicity claim. Host must provide the actual physical registry read/CAS/persistedRead ports. No RAM-only verified persistent response.",
+    "Emit the exact success response ONLY after actual persisted readback/current proof. changed:false means binding_revision equals expected_binding_revision; changed:true requires a different verified revision. paired:true/outcome:verified/persistence:persistent are absent on errors.",
+    "Unknown CAS, failed readback or postwrite context change returns a minimal sanitized error, never a verified claim. Missing response/unknown is not proof of no write. Do not blindly replay; reconcile a fresh bindingcatalog/current registry revision and explicit requested scope before any new request.",
+    "All errors use exactly {version,runtime,op,error:string}. outcome_unknown is additive for provision only and does not expand the frozen seven-operation error set."
+  ],
+  "private_factory_mapping": {
+    "method": "registry.provisionPlex(value,expectedRevision)",
+    "value_fields": [
+      "mode",
+      "target_id",
+      "profile_id",
+      "source_id",
+      "prior_profile_id",
+      "prior_source_id"
+    ],
+    "scope_mapping": {
+      "profile_id": "scope.profileBindingId",
+      "source_id": "scope.sourceBindingId",
+      "prior_profile_id": "prior_scope.profileBindingId",
+      "prior_source_id": "prior_scope.sourceBindingId"
+    },
+    "create_omits_all_id_fields": true,
+    "ports": [
+      "read",
+      "persistedRead",
+      "compareAndSwap",
+      "uuid",
+      "provisionTarget",
+      "validateSelector",
+      "current"
+    ],
+    "private_target_contract": "provisionTarget resolves one current verified PMS/parent/source context. First scope deliberately requires shared parent/source owner, AND current(entry,binding) proof for both; owner-string equality alone is not authority."
+  },
+  "limitations": [
+    "No implemented remote DTO validator/router or runtime registration is claimed by this document.",
+    "Synthetic examples are not live grants or public identity allocation results.",
+    "Only current verified Plex foundation; no inactive/all-provider or cross-store provisioning guarantee."
+  ]
+}

@@ -14,11 +14,17 @@ import (
 
 func currentPlexContract(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
-	raw, err := os.ReadFile("../../contracts/favorites-current-plex-v1.json")
+	raw, err := os.ReadFile("../../contracts/favorites-current-plex-protocol-v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return transferObject(t, raw)
+	packet := transferObject(t, raw)
+	// The coherent packet records the catalog response directly; derive only
+	// its existing two-field read request from that exact runtime fixture.
+	catalog := transferObject(t, packet["bindingcatalog"])
+	packet["bindingcatalog_response"] = packet["bindingcatalog"]
+	packet["bindingcatalog_request"] = transferJSON(t, map[string]any{"op": "bindingcatalog", "runtime": catalog["runtime"]})
+	return packet
 }
 func currentPlexValue(t *testing.T, raw json.RawMessage) map[string]any {
 	t.Helper()
@@ -42,6 +48,9 @@ func TestFavoritesCurrentPlexCapabilityExactShapeAndAllLimitBounds(t *testing.T)
 		minimum["limits"].(map[string]any)[field] = 1
 	}
 	minimum["receipt_retention_seconds"] = 1
+	for _, field := range []string{"max_unconsumed_grants", "admission_ttl_ms", "max_budget_ms"} {
+		minimum["admission"].(map[string]any)[field] = 1
+	}
 	if !validFavoritesTransferCapability(transferJSON(t, minimum)) {
 		t.Fatal("valid lower limits rejected")
 	}
@@ -66,12 +75,36 @@ func TestFavoritesCurrentPlexCapabilityExactShapeAndAllLimitBounds(t *testing.T)
 			t.Fatal("missing capability field accepted", field)
 		}
 	}
+	for field, maximum := range map[string]int{"max_unconsumed_grants": 1, "admission_ttl_ms": 10000, "max_budget_ms": 300000} {
+		for _, invalid := range []any{nil, true, "1", 1.5, 0, -1, maximum + 1} {
+			changed := currentPlexValue(t, raw)
+			changed["admission"].(map[string]any)[field] = invalid
+			if validFavoritesTransferCapability(transferJSON(t, changed)) {
+				t.Fatalf("invalid admission %s=%v accepted", field, invalid)
+			}
+		}
+	}
+	for field := range currentPlexValue(t, raw)["admission"].(map[string]any) {
+		changed := currentPlexValue(t, raw)
+		delete(changed["admission"].(map[string]any), field)
+		if validFavoritesTransferCapability(transferJSON(t, changed)) {
+			t.Fatal("missing admission field accepted", field)
+		}
+	}
 	for name, mutate := range map[string]func(map[string]any){
-		"unknown":               func(v map[string]any) { v["supports_creation"] = true },
-		"version":               func(v map[string]any) { v["version"] = 2 },
-		"retention-zero":        func(v map[string]any) { v["receipt_retention_seconds"] = 0 },
-		"retention-high":        func(v map[string]any) { v["receipt_retention_seconds"] = 86401 },
-		"origin":                func(v map[string]any) { v["receipt_retention_origin"] = "completion" },
+		"unknown":        func(v map[string]any) { v["supports_creation"] = true },
+		"version":        func(v map[string]any) { v["version"] = 2 },
+		"retention-zero": func(v map[string]any) { v["receipt_retention_seconds"] = 0 },
+		"retention-high": func(v map[string]any) { v["receipt_retention_seconds"] = 86401 },
+		"origin":         func(v map[string]any) { v["receipt_retention_origin"] = "completion" },
+		"old-origin":     func(v map[string]any) { v["receipt_retention_origin"] = "reservation" },
+		"policy":         func(v map[string]any) { v["receipt_retention_policy"] = "guaranteed-24h" },
+		"old-limit": func(v map[string]any) {
+			v["limits"].(map[string]any)["max_admitted_operations_per_adapter_instance"] = 16
+		},
+		"admission-op":          func(v map[string]any) { v["admission"].(map[string]any)["op"] = "begin" },
+		"admission-owner":       func(v map[string]any) { v["admission"].(map[string]any)["operation_id"] = "client-generated-uuidv4" },
+		"admission-extra":       func(v map[string]any) { v["admission"].(map[string]any)["renewable"] = true },
 		"session":               func(v map[string]any) { v["persistence"] = []any{"session"} },
 		"duplicate-persistence": func(v map[string]any) { v["persistence"] = []any{"persistent", "persistent"} },
 		"empty-codecs":          func(v map[string]any) { v["codecs"] = []any{} },
@@ -100,6 +133,14 @@ func TestFavoritesCurrentPlexCapabilityExactShapeAndAllLimitBounds(t *testing.T)
 	padded := append(append([]byte{}, raw...), bytes.Repeat([]byte{' '}, maxFavoritesTransferMetadataBytes-len(raw))...)
 	if !validFavoritesTransferCapability(padded) || validFavoritesTransferCapability(append(padded, ' ')) {
 		t.Fatal("capability byte boundary changed")
+	}
+	legacy, err := os.ReadFile("../../contracts/favorites-current-plex-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCapability := transferObject(t, transferObject(t, legacy)["capability"])["favorites_transfer"]
+	if validFavoritesTransferCapability(oldCapability) {
+		t.Fatal("historical pre-admission capability was accepted")
 	}
 }
 

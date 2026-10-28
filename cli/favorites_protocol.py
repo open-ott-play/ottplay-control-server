@@ -1,11 +1,11 @@
-"""Pure, inactive peer for the agreed favorites-transfer wire subset.
+"""Pure protocol validation for the favorites-transfer host orchestrator.
 
 No capability registration, RPC, clock, persistence, or retry lives here.
 Current verified Plex negotiation is syntax-only; other codecs fail closed.
 Parsing an outcome named ``verified`` is not receipt verification: only a
 matching retained begin/preview context sets ValidatedResult.verified. Even
 that confirms the correlated player's readback claim, not fsync/atomicity or
-provider/grant ownership. The eventual orchestrator must enforce those gates.
+provider/grant ownership. The host orchestrator enforces its admission gates.
 """
 
 import base64
@@ -23,8 +23,10 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_METADATA_BYTES = 128 * 1024
 MAX_COUNT = 1000000
 TRANSFER_OPS = frozenset(("snapshot", "begin", "append", "preview", "commit", "status", "abort"))
-BINDING_OPS = frozenset(("bindingcatalog", "bind"))
-OPS = TRANSFER_OPS | BINDING_OPS
+BINDING_OPS = frozenset(("bindingcatalog", "bind", "provision"))
+ADMISSION_OPS = frozenset(("prepare",))
+PROVISION_MODES = frozenset(("create", "import", "pair", "replace-current"))
+OPS = TRANSFER_OPS | BINDING_OPS | ADMISSION_OPS
 CAPABILITY_LIMITS = {
     "max_document_bytes": 1048576, "max_chunk_bytes": 8192, "max_chunks": 256,
     "max_envelope_bytes": 16384, "max_snapshot_response_bytes": 2097152,
@@ -32,7 +34,7 @@ CAPABILITY_LIMITS = {
     "max_plan_bytes": 65536, "max_metadata_bytes": 131072, "max_json_depth": 20,
     "max_json_nodes": 32768, "max_channel_lists": 256, "max_entries_per_list": 10000,
     "max_media_favorites": 1000, "max_receipt_entries": 32, "max_receipt_ledger_bytes": 65536,
-    "max_admitted_operations_per_adapter_instance": 16,
+    "max_retained_admissions_per_adapter_instance": 16, "max_unstarted_drafts": 1,
 }
 ERRORS = frozenset((
     "invalid_request", "envelope_too_large", "runtime_changed", "busy", "expired",
@@ -49,6 +51,8 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a
 RUNTIME = re.compile(r"[a-z0-9-]{1,64}\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 REQUEST_ID = re.compile(r"[0-9a-f]{32}\Z")
+PROVISION_TARGET = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+PROVISION_REVISION = re.compile(r"(?:0|[1-9][0-9]{0,15})\Z")
 TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})\Z")
 
 
@@ -190,10 +194,12 @@ def validate_capability(value):
     promises that every individually bounded collection can be admitted.
     """
     value, _ = _object(value, MAX_METADATA_BYTES)
-    _shape(value, ("version", "persistence", "codecs", "limits",
-                   "receipt_retention_seconds", "receipt_retention_origin"))
+    _shape(value, ("version", "persistence", "codecs", "limits", "admission",
+                   "receipt_retention_seconds", "receipt_retention_origin", "receipt_retention_policy"))
     _integer(value["version"], 1, 1)
-    _require(value["persistence"] == ["persistent"] and value["receipt_retention_origin"] == "reservation")
+    _require(value["persistence"] == ["persistent"]
+             and value["receipt_retention_origin"] == "logical-reservation-plan"
+             and value["receipt_retention_policy"] == "up-to-count-and-byte-bounded")
     _integer(value["receipt_retention_seconds"], 1, 86400)
     codecs = value["codecs"]
     _require(type(codecs) is list and len(codecs) == 1)
@@ -207,6 +213,12 @@ def validate_capability(value):
     for name, ceiling in CAPABILITY_LIMITS.items():
         _integer(value["limits"][name], 1, ceiling)
     _require(value["limits"]["idle_ttl_seconds"] <= value["limits"]["absolute_ttl_seconds"])
+    admission = value["admission"]
+    _shape(admission, ("op", "max_unconsumed_grants", "admission_ttl_ms", "max_budget_ms", "operation_id"))
+    _require(admission["op"] == "prepare" and admission["operation_id"] == "player-generated-uuidv4")
+    _integer(admission["max_unconsumed_grants"], 1, 1)
+    _integer(admission["admission_ttl_ms"], 1, 10000)
+    _integer(admission["max_budget_ms"], 1, 300000)
     return value
 
 
@@ -218,6 +230,11 @@ def _binding_text(value, *, target=False):
 def _plex_scope(value):
     _scope(value)
     _require(value["provider"] == "plex" and value["profileBindingId"] != value["sourceBindingId"])
+
+
+def _provision_revision(value):
+    _pattern(value, PROVISION_REVISION)
+    _require(int(value) <= 9007199254740991)
 
 
 def _binding_catalog(data):
@@ -281,8 +298,18 @@ def validate_request(params, *, idempotency_key=None):
         pass
     elif op == "bind":
         fields |= {"scope", "target_id", "expected_binding_revision", "codecVersion"}
+    elif op == "provision":
+        mode = params.get("mode")
+        _require(type(mode) is str and mode in PROVISION_MODES)
+        fields |= {"mode", "target_id", "expected_binding_revision", "codecVersion"}
+        if mode != "create":
+            fields.add("scope")
+        if mode == "replace-current":
+            fields.add("prior_scope")
     elif op == "snapshot":
         fields |= {"scope"}
+    elif op == "prepare":
+        fields |= {"scope", "expected_revision", "binding_revision", "document_sha256", "size_bytes", "budget_ms"}
     elif op == "begin":
         fields |= {"operation_id", "scope", "expected_revision", "binding_revision",
                    "document_sha256", "size_bytes", "chunk_count", "persistence"}
@@ -306,10 +333,23 @@ def validate_request(params, *, idempotency_key=None):
     for key in ("document_sha256", "chunk_sha256", "plan_digest"):
         if key in params:
             _pattern(params[key], DIGEST)
-    if op == "bind":
-        _plex_scope(params["scope"])
-        _binding_text(params["target_id"], target=True)
+    if op in ("bind", "provision"):
+        if "scope" in params:
+            _plex_scope(params["scope"])
+        if "prior_scope" in params:
+            _plex_scope(params["prior_scope"])
+            _require(len({params[scope][key] for scope in ("scope", "prior_scope")
+                          for key in ("profileBindingId", "sourceBindingId")}) == 4)
+        if op == "provision":
+            _pattern(params["target_id"], PROVISION_TARGET)
+            _provision_revision(params["expected_binding_revision"])
+        else:
+            _binding_text(params["target_id"], target=True)
         _integer(params["codecVersion"], 1, 1)
+    elif op == "prepare":
+        _plex_scope(params["scope"])
+        _integer(params["size_bytes"], 1)
+        _integer(params["budget_ms"], 1, 300000)
     elif op == "begin":
         _require(params["persistence"] == "persistent")
         _integer(params["size_bytes"], 1)
@@ -498,7 +538,8 @@ def _validate_data(params, data, status, context, scope_validator):
              and data.get("runtime") == params["runtime"] and data.get("op") == params["op"])
     if "error" in data:
         _shape(data, COMMON | {"error"})
-        _require(status in ("rejected", "unsupported") and type(data["error"]) is str and data["error"] in ERRORS)
+        _require(status in ("rejected", "unsupported") and type(data["error"]) is str
+                 and (data["error"] in ERRORS or params["op"] == "provision" and data["error"] == "outcome_unknown"))
         return False, None
     _require(status == "ok")
     op, raw, receipt = params["op"], None, None
@@ -507,6 +548,13 @@ def _validate_data(params, data, status, context, scope_validator):
             _require(data.get(key) == params[key])
     if op == "bindingcatalog":
         _binding_catalog(data)
+    elif op == "prepare":
+        _shape(data, set(params) | {"version", "operation_id", "admission_ttl_ms"})
+        _require(all(type(data[key]) is type(value) and data[key] == value for key, value in params.items()))
+        _pattern(data["operation_id"], UUID)
+        _integer(data["admission_ttl_ms"], 1, min(10000, params["budget_ms"]))
+        # A runtime-owned grant is neither persistent evidence nor a commit
+        # receipt. Its clock/deadline and single consumption live in the host.
     elif op == "bind":
         _shape(data, COMMON | {"binding_revision", "scope", "target_id", "paired"})
         _text(data["binding_revision"])
@@ -517,6 +565,21 @@ def _validate_data(params, data, status, context, scope_validator):
         _require(data["paired"] is True and data["scope"] == params["scope"]
                  and data["target_id"] == params["target_id"]
                  and data["binding_revision"] == params["expected_binding_revision"])
+    elif op == "provision":
+        _shape(data, COMMON | {"mode", "paired", "changed", "binding_revision", "target_id", "scope",
+                               "persistence", "outcome"})
+        _provision_revision(data["binding_revision"])
+        _pattern(data["target_id"], PROVISION_TARGET)
+        _plex_scope(data["scope"])
+        _require(data["mode"] == params["mode"] and data["target_id"] == params["target_id"]
+                 and data["paired"] is True and type(data["changed"]) is bool
+                 and data["persistence"] == "persistent" and data["outcome"] == "verified"
+                 and data["changed"] == (data["binding_revision"] != params["expected_binding_revision"]))
+        if params["mode"] != "create":
+            _require(data["scope"] == params["scope"])
+        # This is only a correlated registry acknowledgement. In create mode
+        # the player chooses UUIDs; syntax cannot prove their entropy. Never
+        # turn binding outcome="verified" into a transfer commit receipt.
     elif op == "snapshot":
         _shape(data, COMMON | {"scope", "revision", "binding_revision", "document_sha256", "size_bytes", "document_base64"})
         _require(data["scope"] == params["scope"])

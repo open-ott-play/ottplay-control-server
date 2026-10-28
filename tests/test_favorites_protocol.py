@@ -17,12 +17,24 @@ with mock.patch.object(sys, "path", [str(ROOT / "cli"), *sys.path]):
     spec.loader.exec_module(protocol)
 FIXTURE = json.loads((ROOT / "contracts/favorites-transfer-v1.json").read_bytes())
 CURRENT_PACKET = json.loads((ROOT / "contracts/favorites-current-plex-v1.json").read_bytes())
+CANONICAL_PACKET = json.loads((ROOT / "contracts/favorites-current-plex-protocol-v1.json").read_bytes())
+PROVISION_PACKET = json.loads((ROOT / "contracts/favorites-provisioning-v1.json").read_bytes())
 REQUEST_ID = "a" * 32
 OTHER_UUID = "00000000-0000-4000-8000-000000000009"
 PRIVATE = "fixture-private-token"
 
 
+def provision_fixture(mode="create"):
+    """Use the actual agreed player packet, not a locally invented success."""
+    return copy.deepcopy(PROVISION_PACKET["examples"][mode])
+
+
 def fixture(op):
+    if op == "prepare":
+        return {"request": copy.deepcopy(CANONICAL_PACKET["prepare"]["request_example"]),
+                "response": copy.deepcopy(CANONICAL_PACKET["prepare"]["response_example"])}
+    if op == "provision":
+        return provision_fixture()
     if op in ("bindingcatalog", "bind"):
         return {"request": copy.deepcopy(CURRENT_PACKET[op + "_request"]),
                 "response": copy.deepcopy(CURRENT_PACKET[op + "_response"])}
@@ -86,13 +98,13 @@ class FavoritesProtocolTests(unittest.TestCase):
         packet = (ROOT / "contracts/favorites-current-plex-v1.json").read_bytes()
         self.assertEqual(hashlib.sha256(packet).hexdigest(),
                          "86b9ed0fa8412bb7f1805811bf92ec6e21492c7667ad4ba38d020106e29f57e5")
-        source = CURRENT_PACKET["capability"]["favorites_transfer"]
+        source = CANONICAL_PACKET["capability"]["favorites_transfer"]
         checked = protocol.validate_capability(source)
         self.assertEqual(checked, source)
         checked["codecs"][0]["coverage"].clear()
         checked["limits"].clear()
         self.assertEqual(protocol.validate_capability(source), source)
-        for op in protocol.BINDING_OPS:
+        for op in ("bindingcatalog", "bind"):
             pair = fixture(op)
             self.assertEqual(protocol.validate_request(pair["request"]), pair["request"])
             response = result(op)
@@ -101,9 +113,9 @@ class FavoritesProtocolTests(unittest.TestCase):
             response.data.clear()
             self.assertEqual(response.data, pair["response"])
 
-    def test_capability_all_eighteen_limit_bounds_and_actual_ttl_relationship(self):
-        source = CURRENT_PACKET["capability"]["favorites_transfer"]
-        self.assertEqual(len(protocol.CAPABILITY_LIMITS), 18)
+    def test_capability_all_nineteen_limit_bounds_and_actual_ttl_relationship(self):
+        source = CANONICAL_PACKET["capability"]["favorites_transfer"]
+        self.assertEqual(len(protocol.CAPABILITY_LIMITS), 19)
         self.assertEqual(source["limits"], protocol.CAPABILITY_LIMITS)
         for name, ceiling in protocol.CAPABILITY_LIMITS.items():
             for invalid in (0, -1, True, 1.0, "1", ceiling + 1):
@@ -120,7 +132,7 @@ class FavoritesProtocolTests(unittest.TestCase):
         self.assertEqual(protocol.validate_capability(smaller), smaller)
 
     def test_future_codec_persistence_capability_fields_and_raw_excess_fail_closed(self):
-        source = CURRENT_PACKET["capability"]["favorites_transfer"]
+        source = CANONICAL_PACKET["capability"]["favorites_transfer"]
         for change in ({"version": True}, {"version": 2}, {"persistence": ["session-only"]},
                        {"persistence": ["persistent", "session-only"]}, {"receipt_retention_origin": "completion"},
                        {"receipt_retention_seconds": 0}, {"receipt_retention_seconds": True},
@@ -135,6 +147,94 @@ class FavoritesProtocolTests(unittest.TestCase):
         self.assertEqual(protocol.validate_capability(raw), source)
         self.error(protocol.validate_capability, raw + b" " * protocol.MAX_METADATA_BYTES, code="envelope_too_large")
         self.error(protocol.validate_capability, raw.replace(b'"version":1', b'"version":1,"version":1'))
+
+    def test_exact_admission_capability_and_bounded_retention_reject_legacy_shape(self):
+        source = CANONICAL_PACKET["capability"]["favorites_transfer"]
+        self.error(protocol.validate_capability, CURRENT_PACKET["capability"]["favorites_transfer"])
+        for name in source:
+            self.error(protocol.validate_capability, {key: value for key, value in source.items() if key != name})
+        admission = source["admission"]
+        for name in admission:
+            self.error(protocol.validate_capability, source | {"admission": {k: v for k, v in admission.items() if k != name}})
+        for name, ceiling in (("max_unconsumed_grants", 1), ("admission_ttl_ms", 10000), ("max_budget_ms", 300000)):
+            for invalid in (0, -1, True, 1.0, "1", None, ceiling + 1):
+                self.error(protocol.validate_capability, source | {"admission": admission | {name: invalid}})
+        for change in ({"op": "begin"}, {"operation_id": "client-generated-uuidv4"}, {"future": PRIVATE}):
+            self.error(protocol.validate_capability, source | {"admission": admission | change})
+        for change in ({"receipt_retention_origin": "reservation"}, {"receipt_retention_policy": "guaranteed-24-hours"},
+                       {"limits": source["limits"] | {"max_admitted_operations_per_adapter_instance": 16}}):
+            self.error(protocol.validate_capability, source | change)
+        smaller = source | {"admission": admission | {"admission_ttl_ms": 1, "max_budget_ms": 1}}
+        self.assertEqual(protocol.validate_capability(smaller), smaller)
+
+    def test_prepare_frozen_request_exact_fields_and_typed_bounds(self):
+        pair = fixture("prepare")
+        request = pair["request"]
+        self.assertEqual(set(request), set(CANONICAL_PACKET["prepare"]["exact_request_fields"]))
+        self.assertEqual(protocol.validate_request(request), request)
+        for key in request:
+            self.error(protocol.validate_request, {k: v for k, v in request.items() if k != key})
+        for extra in ({"operation_id": OTHER_UUID}, {"persistence": "persistent"}, {"transaction_id": OTHER_UUID},
+                      {"target_id": "target-one"}, {"admission_ttl_ms": 10000}, {"private": PRIVATE}):
+            self.error(protocol.validate_request, request | extra)
+        for key, maximum in (("size_bytes", 1048576), ("budget_ms", 300000)):
+            for value in (1, maximum):
+                self.assertEqual(protocol.validate_request(request | {key: value})[key], value)
+            for value in (0, -1, True, 1.0, "1", None, maximum + 1):
+                self.error(protocol.validate_request, request | {key: value})
+        for key in ("expected_revision", "binding_revision"):
+            for value in ("0", "opaque-revision", "a" * 256):
+                self.assertEqual(protocol.validate_request(request | {key: value})[key], value)
+            for value in ("", None, True, 1, "a" * 257, "bad\nrevision", "bad\x7frevision"):
+                self.error(protocol.validate_request, request | {key: value})
+        for change in ({"provider": "m3u"}, {"sourceBindingId": request["scope"]["profileBindingId"]},
+                       {"sourceBindingId": OTHER_UUID.replace("4000", "5000")}, {"owner": PRIVATE}):
+            self.error(protocol.validate_request, request | {"scope": request["scope"] | change})
+        self.error(protocol.validate_request, request | {"document_sha256": "A" * 64})
+
+    def test_prepare_echo_ttl_and_player_uuid_do_not_create_commit_proof(self):
+        pair = fixture("prepare")
+        request, data = pair["request"], pair["response"]
+        self.assertEqual(set(data), set(CANONICAL_PACKET["prepare"]["exact_response_fields"]))
+        options = {"request_id": REQUEST_ID, "response_id": REQUEST_ID, "status": "ok", "context": context()}
+        checked = protocol.validate_result(request, data, **options)
+        self.assertEqual(checked.data, data)
+        self.assertFalse(checked.verified)
+        self.assertIsNone(checked.raw_document)
+        for key in data:
+            self.error(protocol.validate_result, request, {k: v for k, v in data.items() if k != key}, **options)
+        for change in ({"scope": data["scope"] | {"sourceBindingId": OTHER_UUID}}, {"expected_revision": "other"},
+                       {"binding_revision": "other"}, {"document_sha256": "b" * 64}, {"size_bytes": 651},
+                       {"budget_ms": 299999}, {"runtime": "stale-runtime"}, {"op": "begin"},
+                       {"paired": True}, {"outcome": "verified"}, {"persistence": "persistent"}):
+            self.error(protocol.validate_result, request, data | change, **options)
+        for operation in (None, True, 1, "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", OTHER_UUID.replace("4000", "5000"), "x" * 36):
+            self.error(protocol.validate_result, request, data | {"operation_id": operation}, **options)
+        self.assertEqual(protocol.validate_result(request, data | {"operation_id": OTHER_UUID}, **options).data["operation_id"], OTHER_UUID)
+        for budget in (1, 9999, 10000, 300000):
+            scoped = request | {"budget_ms": budget, "size_bytes": 1}
+            granted = data | {"budget_ms": budget, "size_bytes": 1, "admission_ttl_ms": min(budget, 10000)}
+            self.assertFalse(protocol.validate_result(scoped, granted, **options).verified)
+            for ttl in (0, True, 1.0, None, min(budget, 10000) + 1):
+                self.error(protocol.validate_result, scoped, granted | {"admission_ttl_ms": ttl}, **options)
+            for key in ("budget_ms", "size_bytes"):
+                self.error(protocol.validate_result, scoped, granted | {key: float(scoped[key])}, **options)
+            self.error(protocol.validate_result, scoped, granted | {"size_bytes": True}, **options)
+
+    def test_prepare_metadata_receipts_preserve_raw_byte_and_request_fences(self):
+        pair = fixture("prepare")
+        for status in ("ok", "rejected", "unsupported"):
+            data = pair["response"] if status == "ok" else copy.deepcopy(CANONICAL_PACKET["prepare"]["error_example"])
+            raw = protocol._encoded(data)
+            envelope = (b'{"id":"' + REQUEST_ID.encode() + b'","status":"' + status.encode()
+                        + b'","data":' + raw[:-1] + b' ' * 17 + b'}}')
+            options = {"request_id": REQUEST_ID, "max_metadata_bytes": len(raw) + 17}
+            checked = protocol.validate_response(pair["request"], envelope, **options)
+            self.assertEqual(checked.data, data)
+            self.assertFalse(checked.verified)
+            self.error(protocol.validate_response, pair["request"], envelope,
+                       **(options | {"max_metadata_bytes": len(raw) + 16}), code="envelope_too_large")
+            self.error(protocol.validate_response, pair["request"], envelope, **(options | {"request_id": "b" * 32}))
 
     def test_binding_catalog_current_target_scope_uniqueness_and_compatible_references(self):
         data = fixture("bindingcatalog")["response"]
@@ -192,6 +292,156 @@ class FavoritesProtocolTests(unittest.TestCase):
             with self.subTest(rows=rows):
                 self.error(result, "bindingcatalog", data | {"bindings": rows})
                 self.error(result, "bindingcatalog", data | {"bindings": list(reversed(rows))})
+
+    def test_provision_exact_modes_scope_presence_and_legacy_operations_unchanged(self):
+        self.assertEqual(protocol.TRANSFER_OPS,
+                         frozenset(("snapshot", "begin", "append", "preview", "commit", "status", "abort")))
+        for mode in protocol.PROVISION_MODES:
+            with self.subTest(mode=mode):
+                request = provision_fixture(mode)["request"]
+                self.assertEqual(protocol.validate_request(request), request)
+                for key in request:
+                    self.error(protocol.validate_request, {k: v for k, v in request.items() if k != key})
+                for field, value in (("selector", PRIVATE), ("owner", PRIVATE), ("id", OTHER_UUID),
+                                     ("persistence", "persistent"), ("operation_id", OTHER_UUID),
+                                     ("codecVersion", True), ("codecVersion", 2), ("target_id", "two words"),
+                                     ("expected_binding_revision", ""), ("runtime", "bad runtime")):
+                    self.error(protocol.validate_request, request | {field: value})
+                if mode == "create":
+                    self.error(protocol.validate_request, request | {"scope": fixture("bind")["request"]["scope"]})
+                if mode != "replace-current":
+                    self.error(protocol.validate_request, request | {"prior_scope": fixture("bind")["request"]["scope"]})
+                else:
+                    self.error(protocol.validate_request, request | {"prior_scope": request["scope"]})
+                for field in ("scope", "prior_scope"):
+                    if field not in request:
+                        continue
+                    for change in ({"provider": "m3u"}, {"sourceBindingId": request[field]["profileBindingId"]},
+                                   {"sourceBindingId": OTHER_UUID.replace("4000", "5000")}, {"private": PRIVATE}):
+                        self.error(protocol.validate_request, request | {field: request[field] | change})
+        for mode in (None, True, 1, [], {}, "", "rebind", "CREATE"):
+            self.error(protocol.validate_request, provision_fixture()["request"] | {"mode": mode})
+
+    def test_provision_correlates_revision_scope_mode_and_never_confers_commit_proof(self):
+        for mode in protocol.PROVISION_MODES:
+            pair = provision_fixture(mode)
+            request, data = pair["request"], pair["response"]
+            options = {"request_id": REQUEST_ID, "response_id": REQUEST_ID, "status": "ok", "context": context()}
+            checked = protocol.validate_result(request, data, **options)
+            self.assertEqual(checked.data, data)
+            self.assertFalse(checked.verified)
+            self.assertIsNone(checked.raw_document)
+            unchanged = data | {"changed": False, "binding_revision": request["expected_binding_revision"]}
+            self.assertFalse(protocol.validate_result(request, unchanged, **options).verified)
+            for change in ({"mode": "pair" if mode != "pair" else "create"}, {"paired": 1}, {"paired": False},
+                           {"changed": 1}, {"changed": None}, {"changed": not data["changed"]},
+                           {"binding_revision": request["expected_binding_revision"] if data["changed"] else "2"},
+                           {"binding_revision": ""},
+                           {"runtime": "stale-runtime"}, {"target_id": "different-target"},
+                           {"persistence": "session-only"}, {"outcome": "unknown"}, {"codecVersion": 1},
+                           {"receipt": fixture("commit")["response"]["receipt"]}, {"prior_scope": data["scope"]}):
+                self.error(protocol.validate_result, request, data | change, **options)
+            for key in data:
+                self.error(protocol.validate_result, request, {k: v for k, v in data.items() if k != key}, **options)
+            for change in ({"provider": "m3u"}, {"sourceBindingId": data["scope"]["profileBindingId"]},
+                           {"sourceBindingId": OTHER_UUID.replace("4000", "5000")}, {"private": PRIVATE}):
+                self.error(protocol.validate_result, request, data | {"scope": data["scope"] | change}, **options)
+            different_scope = data["scope"] | {"sourceBindingId": OTHER_UUID}
+            if mode == "create":
+                created = protocol.validate_result(request, data | {"scope": different_scope}, **options)
+                self.assertEqual(created.data["scope"], different_scope)
+                self.assertFalse(created.verified)
+            else:
+                self.error(protocol.validate_result, request, data | {"scope": different_scope}, **options)
+
+    def test_provision_canonical_safe_revisions_and_ascii_target_boundaries(self):
+        pair = provision_fixture("pair")
+        request, data = pair["request"], pair["response"]
+        options = {"request_id": REQUEST_ID, "response_id": REQUEST_ID, "status": "ok"}
+        for revision in ("0", "1", "9007199254740991"):
+            selected = request | {"expected_binding_revision": revision}
+            self.assertEqual(protocol.validate_request(selected), selected)
+            checked = protocol.validate_result(selected, data | {"binding_revision": revision}, **options)
+            self.assertFalse(checked.verified)
+        for revision in (None, True, 1, 1.0, "", "00", "01", "-1", "+1", "1.0", "1e2", " 1", "1 ",
+                         "1\n", "١", "9007199254740992", "9999999999999999", "10000000000000000", "bindings-8"):
+            with self.subTest(revision=revision):
+                self.error(protocol.validate_request, request | {"expected_binding_revision": revision})
+                self.error(protocol.validate_result, request, data | {"binding_revision": revision}, **options)
+        for target in ("A", "a" * 128, "A0._:-"):
+            selected = request | {"target_id": target}
+            self.assertEqual(protocol.validate_request(selected), selected)
+            self.assertEqual(protocol.validate_result(selected, data | {"target_id": target}, **options).data["target_id"], target)
+        for target in (None, True, 1, "", "a" * 129, "-a", "_a", ".a", ":a", "é", "a b", "a/b", "a\\b", "a\n"):
+            with self.subTest(target=target):
+                self.error(protocol.validate_request, request | {"target_id": target})
+                self.error(protocol.validate_result, request, data | {"target_id": target}, **options)
+        self.assertEqual(protocol.validate_request(request | {"runtime": "a" * 64})["runtime"], "a" * 64)
+        self.error(protocol.validate_request, request | {"runtime": "a" * 65})
+        # Provision restrictions do not silently alter the older binding ABI.
+        legacy = fixture("bind")["request"] | {"target_id": "é", "expected_binding_revision": "bindings-8"}
+        self.assertEqual(protocol.validate_request(legacy), legacy)
+
+    def test_replacement_all_four_uuids_are_distinct_including_cross_role_overlap(self):
+        request = provision_fixture("replace-current")["request"]
+        for prior_key in ("profileBindingId", "sourceBindingId"):
+            for desired_key in ("profileBindingId", "sourceBindingId"):
+                with self.subTest(prior=prior_key, desired=desired_key):
+                    overlap = request["prior_scope"] | {prior_key: request["scope"][desired_key]}
+                    self.error(protocol.validate_request, request | {"prior_scope": overlap})
+
+    def test_provision_raw_success_and_negative_receipts_use_metadata_and_request_fences(self):
+        pair = provision_fixture("replace-current")
+        for status in ("ok", "rejected", "unsupported"):
+            data = pair["response"] if status == "ok" else {
+                "version": 1, "op": "provision", "runtime": pair["request"]["runtime"], "error": "binding_changed"}
+            raw = protocol._encoded(data)
+            limit = len(raw) + 19
+            envelope = (b'{"id":"' + REQUEST_ID.encode() + b'","status":"' + status.encode()
+                        + b'","data":' + raw[:-1] + b" " * 19 + b'}}')
+            options = {"request_id": REQUEST_ID, "max_metadata_bytes": limit}
+            checked = protocol.validate_response(pair["request"], envelope, **options)
+            self.assertEqual(checked.data, data)
+            self.assertFalse(checked.verified)
+            self.error(protocol.validate_response, pair["request"], envelope,
+                       **(options | {"max_metadata_bytes": limit - 1}), code="envelope_too_large")
+            self.error(protocol.validate_response, pair["request"], envelope, **(options | {"request_id": "b" * 32}))
+            if status != "ok":
+                for change in ({"scope": pair["response"]["scope"]}, {"mode": "replace-current"},
+                               {"runtime": "stale-runtime"}, {"error": PRIVATE}):
+                    self.error(protocol.validate_result, pair["request"], data | change,
+                               request_id=REQUEST_ID, response_id=REQUEST_ID, status=status)
+
+    def test_outcome_unknown_string_is_only_a_minimal_negative_provision_error(self):
+        for op in protocol.OPS:
+            request = fixture(op)["request"]
+            data = {"version": 1, "runtime": request["runtime"], "op": op, "error": "outcome_unknown"}
+            for status in ("rejected", "unsupported"):
+                with self.subTest(op=op, status=status):
+                    options = {"request_id": REQUEST_ID, "response_id": REQUEST_ID, "status": status}
+                    if op == "provision":
+                        checked = protocol.validate_result(request, data, **options)
+                        self.assertEqual(checked.data, data)
+                        self.assertFalse(checked.verified)
+                        self.assertIsNone(checked.raw_document)
+                    else:
+                        self.error(protocol.validate_result, request, data, **options)
+                    self.error(protocol.validate_result, request, data | {"error": {"code": "outcome_unknown"}}, **options)
+            self.error(protocol.validate_result, request, data, request_id=REQUEST_ID, response_id=REQUEST_ID, status="ok")
+        request = provision_fixture()["request"]
+        data = {"version": 1, "runtime": request["runtime"], "op": "provision", "error": "outcome_unknown"}
+        options = {"request_id": REQUEST_ID, "response_id": REQUEST_ID, "status": "rejected"}
+        for extra in ({"paired": True}, {"outcome": "verified"}, {"scope": provision_fixture()["response"]["scope"]},
+                      {"runtime": "stale-runtime"}, {"error": PRIVATE}):
+            self.error(protocol.validate_result, request, data | extra, **options)
+        raw = protocol._encoded(data)
+        envelope = (b'{"id":"' + REQUEST_ID.encode() + b'","status":"rejected","data":'
+                    + raw[:-1] + b' ' * 17 + b'}}')
+        limit = len(raw) + 17
+        self.assertEqual(protocol.validate_response(request, envelope, request_id=REQUEST_ID,
+                                                   max_metadata_bytes=limit).data, data)
+        self.error(protocol.validate_response, request, envelope, request_id=REQUEST_ID,
+                   max_metadata_bytes=limit - 1, code="envelope_too_large")
 
     def test_binding_raw_metadata_errors_and_outer_request_identity(self):
         for op in protocol.BINDING_OPS:

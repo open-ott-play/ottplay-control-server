@@ -1,11 +1,11 @@
 # Favorites profile synchronization — current design
 
-**Status: local document commands are wired; remote synchronization remains disabled.**
+**Status: local and remote CLI commands are wired in source; coordinated rollout is pending.**
 The source CLI can validate, export, import, compare and restore saved documents.
 The controller relay and CLI transport implement the seven transfer operations,
 including lost-acknowledgement reconciliation. Player bindings, complete provider
-codecs, persistence adapters and command routing still need their release gates;
-remote commands below remain intended UX, not installed capabilities.
+codecs, persistence adapters and runtime registration still need their release gates;
+remote commands below are source functionality, not installed capabilities.
 Existing `favorites` v1 remains unchanged. Nothing here implicitly switches a
 provider/profile, starts playback or changes the visible UI.
 
@@ -83,16 +83,17 @@ Unresolved references remain faithful, inert and nonsecret or the complete scope
 is refused. Never export credentials, stream/signed URLs, raw requests or native
 absolute paths as portable locators. No recognized subset counts as complete.
 
-## Intended CLI and local-file behavior
+## CLI and local-file behavior
 
 The `ott presets NAME fav ...` commands operate locally and never construct a
-network client. The player-side collect/load/diff/clear commands remain disabled
-before client creation or config writes:
+network client. Player commands require a fresh compatible capability and explicit
+source identity before any favorites mutation:
 
 ```sh
 ott t1 fav bindings
 ott t1 fav bind current --new --dry-run
 ott t1 fav bind current --new
+ott t2 fav bind Home --replace-current --dry-run
 ott t1 fav collect Home --dry-run
 ott t1,t2 fav collect Home merge
 ott presets Home fav validate
@@ -119,6 +120,13 @@ destination merely by its name or profile slot.
 Pair another player with `fav bind Home`, using `--scope` and `--target TARGET_ID`
 when the selection is not unique. The host must require a fresh, compatible
 verified source and binding revision; matching display labels is insufficient.
+`--replace-current` is the explicit way to replace a different current pair. The
+player checks the exact previous pair, refuses shared/overlapping identities and
+additional bound children, and retains old public rows while withdrawing their
+private pairing. The registry changes in one guarded document update. Existing
+exact pairings are returned unchanged without a provisioning RPC. New pairing
+requires a located Plex reference proving the same server; an empty or entirely
+unresolved saved scope alone is insufficient.
 `fav status OPERATION_UUID` reconciles the same controller/device's retained
 operation without resubmitting it. Unknown, partial or missing evidence must not
 be reported as success. A bookmark named after one of these commands remains
@@ -201,9 +209,23 @@ Pace starts at least 1.5 seconds apart per device using actual prior start times
 and one whole deadline. Account for POSTs, receipt GETs/polls, backpressure and
 final-receipt reserve. Existing limits remain: 120 device/240 controller HTTP
 requests per minute; 50 results retained for 60 seconds. GET does not free a slot.
-Do not reset timeout per chunk. A full document plus five control commands needs
-at least 199.5 seconds of pacing before reserve/latency: reject a 45-second budget
-before begin. Explicit 300-second mode is not a guarantee under shared traffic.
+Do not reset timeout per chunk. The CLI budgets 201 seconds of POST pacing for a
+full document plus six control commands, before reserve/latency: reject a
+45-second budget before prepare. Explicit 300-second mode is not a guarantee
+under shared traffic.
+
+After local preflight, `prepare` asks the player to mint one operation UUID and
+one bounded RAM grant for the exact scope, base/binding revisions, digest and byte
+count. Begin consumes that grant; the caller cannot establish freshness merely
+by choosing a UUID or finding no receipt. An unconsumed grant expires within ten
+seconds. A lost prepare acknowledgement does not cause a retry, begin or durable
+write, and the CLI does not invent an operation ID for that result.
+
+The authenticated request's queue expiry gates dispatch, including completion of
+lazy code loading. The explicit operation budget, at most 300 seconds, anchors
+one whole deadline at prepare. Later requests must still be unexpired when
+dispatched, but they never renew that whole deadline. The default 60-second
+delivery TTL is unchanged; it is not a limit on the complete multi-request transfer.
 
 One RAM stage/device has idle TTL 120 seconds and absolute lifetime 600 seconds.
 Only valid accepted activity refreshes idle TTL. Create a target stage just before
@@ -280,6 +302,13 @@ preserves its completion evidence. At most eight interrupted completion staging
 files are admitted, reserving a new slot before creation; their bytes also count
 against the storage budget. A failed replacement or durability check reports
 uncertain local retention and never authorizes replay on the player.
+Player receipt retention is up to 24 hours from the logical reservation-plan
+timestamp, bounded by 32 entries and 64 KiB. Count/byte pressure may remove the
+oldest proved completed receipt earlier. Pending, partial and unknown entries
+remain protected. Missing or evicted evidence means unknown, never fresh
+admission or permission to repeat a mutation. Preview and abort do not reserve
+durable receipt slots; the exact prepared receipt is saved immediately before
+the first favorites write.
 `fav status` is read-only on the player. A verified response may update this
 local completion evidence and reclaim older proved-completed records under
 pressure. A local retention failure is reported separately and does not turn

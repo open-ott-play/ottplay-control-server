@@ -158,7 +158,8 @@ class FavoritesProfileParserTests(unittest.TestCase):
         self.assertEqual(ott.parse_command(["fav", "bind", "--target", "target", "--scope", SCOPE, "Home"])[1],
                          {"op": "bind", "preset": "Home", "scope": SCOPE_VALUE, "target_id": "target", "dry_run": False})
         for command in ("fav bindings", "fav status", "fav bind "):
-            self.assertNotIn(command, ott.HELP)
+            self.assertIn(command, ott.HELP)
+        self.assertIn("CURRENT VERIFIED PLEX ONLY", ott.HELP)
 
     def test_scope_selectors_preserve_unselected_shapes_and_accept_flag_order(self):
         for operation, suffix in (("load", ["Home", "REPLACE"]), ("collect", ["Home", "merge"]),
@@ -276,13 +277,13 @@ class FavoritesProfileParserTests(unittest.TestCase):
             with self.subTest(words=words), self.assertRaises(ott.Error):
                 ott.parse_presets_command(list(words))
 
-    def test_unwired_commands_fail_before_client_or_writes(self):
-        for words in (["t1", "fav", "load", "Home"], ["t1,t2", "fav", "collect", "Home"],
-                      ["t1", "fav", "clear"], ["t1", "fav", "clear", "--dry-run"],
-                      ["t1", "fav", "bindings"], ["t1", "fav", "status", OPERATION_ID],
-                      ["t1", "fav", "bind", "current", "--new"],
-                      ["t1,t2", "fav", "bind", "Home", "--scope", SCOPE, "--target", "target"],
-                      ["t1,t2", "fav", "collect", "Home", "--scope", "current"]):
+    def test_malformed_commands_fail_before_client_or_writes(self):
+        for words in (["t1", "fav", "load"], ["t1,t2", "fav", "collect", "Home", "invalid"],
+                      ["t1", "fav", "clear", "Home"], ["t1", "fav", "clear", "--dry-run", "--dry-run"],
+                      ["t1", "fav", "bindings", "Home"], ["t1", "fav", "status", "bad-id"],
+                      ["t1", "fav", "bind", "current", "--new", "--replace-current"],
+                      ["t1,t2", "fav", "bind", "Home", "--scope", SCOPE, "--target"],
+                      ["t1,t2", "fav", "collect", "Home", "--scope", "current", "--replace-current"]):
             out, err = io.StringIO(), io.StringIO()
             with mock.patch.object(ott, "read_json", return_value={"presets": {"Home": {}}}), \
                     mock.patch.object(ott, "Client") as client, mock.patch.object(ott, "write_private") as write, \
@@ -291,7 +292,7 @@ class FavoritesProfileParserTests(unittest.TestCase):
                 client.assert_not_called()
                 write.assert_not_called()
             self.assertEqual(out.getvalue(), "")
-            self.assertIn("not available", err.getvalue())
+            self.assertIn("Error:", err.getvalue())
         with mock.patch.object(ott, "read_json", return_value={"presets": {"Home": {}}}), \
                 mock.patch.object(ott, "Client") as client, contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(ott.main(["presets"]), 0)

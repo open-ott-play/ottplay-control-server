@@ -31,6 +31,8 @@ const maxFavoritesTransferDiagnostics = 128
 var favoritesTransferUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var favoritesTransferSHAPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var favoritesTransferPMSPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$`)
+var favoritesProvisionTargetPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+var favoritesProvisionRevisionPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,15})$`)
 var favoritesTransferErrors = map[string]bool{
 	"invalid_request": true, "envelope_too_large": true, "runtime_changed": true,
 	"busy": true, "expired": true, "operation_conflict": true,
@@ -56,8 +58,9 @@ type favoritesTransferRequest struct {
 	DocumentSHA256, PlanDigest              string
 	Scope                                   *favoritesTransferScope
 	SizeBytes, ChunkCount, Seq, Offset      int
-	ChunkBytes                              int
-	TargetID                                string
+	ChunkBytes, BudgetMS                    int
+	TargetID, Mode                          string
+	PriorScope                              *favoritesTransferScope
 }
 
 var favoritesTransferCapabilityLimits = map[string]int{
@@ -67,15 +70,20 @@ var favoritesTransferCapabilityLimits = map[string]int{
 	"max_plan_bytes": 65536, "max_metadata_bytes": 131072, "max_json_depth": 20,
 	"max_json_nodes": 32768, "max_channel_lists": 256, "max_entries_per_list": 10000,
 	"max_media_favorites": 1000, "max_receipt_entries": 32,
-	"max_receipt_ledger_bytes": 65536, "max_admitted_operations_per_adapter_instance": 16,
+	"max_receipt_ledger_bytes": 65536, "max_retained_admissions_per_adapter_instance": 16,
+	"max_unstarted_drafts": 1,
 }
 
 func validFavoritesTransferCapability(raw json.RawMessage) bool {
 	if len(raw) > maxFavoritesTransferMetadataBytes || !validFavoritesTransferJSON(raw) {
 		return false
 	}
-	m, ok := inspectObject(raw, "version", "persistence", "codecs", "limits", "receipt_retention_seconds", "receipt_retention_origin")
-	if !ok || !profileInteger(m["version"], 1, 1) || !profileInteger(m["receipt_retention_seconds"], 1, 86400) || !inspectEnum(m["receipt_retention_origin"], "reservation") {
+	m, ok := inspectObject(raw, "version", "persistence", "codecs", "limits", "receipt_retention_seconds", "receipt_retention_origin", "receipt_retention_policy", "admission")
+	if !ok || !profileInteger(m["version"], 1, 1) || !profileInteger(m["receipt_retention_seconds"], 1, 86400) || !inspectEnum(m["receipt_retention_origin"], "logical-reservation-plan") || !inspectEnum(m["receipt_retention_policy"], "up-to-count-and-byte-bounded") {
+		return false
+	}
+	admission, a := inspectObject(m["admission"], "op", "max_unconsumed_grants", "admission_ttl_ms", "max_budget_ms", "operation_id")
+	if !a || !inspectEnum(admission["op"], "prepare") || !profileInteger(admission["max_unconsumed_grants"], 1, 1) || !profileInteger(admission["admission_ttl_ms"], 1, 10000) || !profileInteger(admission["max_budget_ms"], 1, 300000) || !inspectEnum(admission["operation_id"], "player-generated-uuidv4") {
 		return false
 	}
 	persistence, p := inspectArray(m["persistence"], 1)
@@ -120,6 +128,16 @@ func favoritesTransferPublicText(raw json.RawMessage, token bool) (string, bool)
 		}
 	}
 	return value, true
+}
+
+func favoritesProvisionTarget(raw json.RawMessage) (string, bool) {
+	value, ok := inspectString(raw, 128)
+	return value, ok && favoritesProvisionTargetPattern.MatchString(value)
+}
+
+func favoritesProvisionRevision(raw json.RawMessage) (string, bool) {
+	value, ok := inspectString(raw, 16)
+	return value, ok && favoritesProvisionRevisionPattern.MatchString(value) && (len(value) < 16 || value <= "9007199254740991")
 }
 
 func validFavoritesTransferBindingCatalog(m map[string]json.RawMessage) bool {
@@ -306,6 +324,23 @@ func parseFavoritesTransferRequest(params map[string]json.RawMessage) *favorites
 		return nil
 	}
 	switch v.Op {
+	case "prepare":
+		if !favoritesTransferFields(params, "op", "runtime", "scope", "expected_revision", "binding_revision", "document_sha256", "size_bytes", "budget_ms") || !profileInteger(params["size_bytes"], 1, maxFavoritesTransferDocumentBytes) || !profileInteger(params["budget_ms"], 1, 300000) {
+			return nil
+		}
+		v.Scope = parseFavoritesTransferScope(params["scope"])
+		if v.Scope == nil || v.Scope.Provider != "plex" || v.Scope.ProfileBindingID == v.Scope.SourceBindingID {
+			return nil
+		}
+		var base, binding, digest bool
+		v.ExpectedRevision, base = favoritesTransferText(params["expected_revision"], 256)
+		v.BindingRevision, binding = favoritesTransferText(params["binding_revision"], 256)
+		v.DocumentSHA256, digest = favoritesTransferHash(params["document_sha256"])
+		if base && binding && digest {
+			_ = json.Unmarshal(params["size_bytes"], &v.SizeBytes)
+			_ = json.Unmarshal(params["budget_ms"], &v.BudgetMS)
+			return v
+		}
 	case "bindingcatalog":
 		if favoritesTransferFields(params, "op", "runtime") {
 			return v
@@ -319,6 +354,36 @@ func parseFavoritesTransferRequest(params map[string]json.RawMessage) *favorites
 		v.BindingRevision, revision = favoritesTransferText(params["expected_binding_revision"], 256)
 		v.Scope = parseFavoritesTransferScope(params["scope"])
 		if target && revision && v.Scope != nil && v.Scope.Provider == "plex" && v.Scope.ProfileBindingID != v.Scope.SourceBindingID {
+			return v
+		}
+	case "provision":
+		if !inspectEnum(params["mode"], "create", "import", "pair", "replace-current") || !profileInteger(params["codecVersion"], 1, 1) {
+			return nil
+		}
+		_ = json.Unmarshal(params["mode"], &v.Mode)
+		fields := []string{"op", "runtime", "mode", "target_id", "expected_binding_revision", "codecVersion"}
+		if v.Mode != "create" {
+			fields = append(fields, "scope")
+			v.Scope = parseFavoritesTransferScope(params["scope"])
+			if v.Scope == nil || v.Scope.Provider != "plex" || v.Scope.ProfileBindingID == v.Scope.SourceBindingID {
+				return nil
+			}
+		}
+		if v.Mode == "replace-current" {
+			fields = append(fields, "prior_scope")
+			v.PriorScope = parseFavoritesTransferScope(params["prior_scope"])
+			if v.PriorScope == nil || v.PriorScope.Provider != "plex" {
+				return nil
+			}
+			ids := map[string]bool{v.Scope.ProfileBindingID: true, v.Scope.SourceBindingID: true, v.PriorScope.ProfileBindingID: true, v.PriorScope.SourceBindingID: true}
+			if len(ids) != 4 {
+				return nil
+			}
+		}
+		var target, revision bool
+		v.TargetID, target = favoritesProvisionTarget(params["target_id"])
+		v.BindingRevision, revision = favoritesProvisionRevision(params["expected_binding_revision"])
+		if favoritesTransferFields(params, fields...) && target && revision {
 			return v
 		}
 	case "snapshot":
@@ -404,8 +469,8 @@ func parseFavoritesTransferRequest(params map[string]json.RawMessage) *favorites
 			return v
 		}
 	}
-	// No implicit name matching, destination UUID guessing, creation or
-	// different-target rebinding is admitted by the current binding packet.
+	// Provisioning requires its explicit operation/mode and captured revision;
+	// no implicit name matching or destination UUID guessing is admitted.
 	return nil
 }
 
@@ -577,12 +642,20 @@ func validFavoritesTransferResult(raw json.RawMessage, status string, request *f
 		code, valid := inspectString(problem, 64)
 		// The authenticated outer request ID correlates this minimal error. It
 		// never proves that a commit was not applied and cannot permit replay.
-		return favoritesTransferFields(m, "version", "runtime", "op", "error") && (status == "rejected" || status == "unsupported") && valid && favoritesTransferErrors[code]
+		return favoritesTransferFields(m, "version", "runtime", "op", "error") && (status == "rejected" || status == "unsupported") && valid && (favoritesTransferErrors[code] || request.Op == "provision" && code == "outcome_unknown")
 	}
 	if status != "ok" || (request.Op != "snapshot" && len(raw) > maxFavoritesTransferMetadataBytes) {
 		return false
 	}
 	switch request.Op {
+	case "prepare":
+		baseRevision, base := favoritesTransferText(m["expected_revision"], 256)
+		bindingRevision, binding := favoritesTransferText(m["binding_revision"], 256)
+		if !favoritesTransferFields(m, "version", "runtime", "op", "scope", "expected_revision", "binding_revision", "document_sha256", "size_bytes", "budget_ms", "operation_id", "admission_ttl_ms") || !sameFavoritesTransferScope(parseFavoritesTransferScope(m["scope"]), request.Scope) || !base || baseRevision != request.ExpectedRevision || !binding || bindingRevision != request.BindingRevision || !inspectEnum(m["document_sha256"], request.DocumentSHA256) || !profileInteger(m["size_bytes"], request.SizeBytes, request.SizeBytes) || !profileInteger(m["budget_ms"], request.BudgetMS, request.BudgetMS) {
+			return false
+		}
+		_, operation := favoritesTransferUUID(m["operation_id"])
+		return operation && profileInteger(m["admission_ttl_ms"], 1, min(10000, request.BudgetMS))
 	case "bindingcatalog":
 		return validFavoritesTransferBindingCatalog(m)
 	case "bind":
@@ -591,6 +664,21 @@ func validFavoritesTransferResult(raw json.RawMessage, status string, request *f
 		// This packet confirms an existing pairing only: no creation, new
 		// revision or different-target rebinding can be reported as success.
 		return favoritesTransferFields(m, "version", "runtime", "op", "binding_revision", "scope", "target_id", "paired") && valid && target == request.TargetID && r && revision == request.BindingRevision && sameFavoritesTransferScope(parseFavoritesTransferScope(m["scope"]), request.Scope) && bytes.Equal(bytes.TrimSpace(m["paired"]), []byte("true"))
+	case "provision":
+		if !favoritesTransferFields(m, "version", "runtime", "op", "mode", "paired", "changed", "binding_revision", "target_id", "scope", "persistence", "outcome") || !inspectEnum(m["mode"], request.Mode) || !bytes.Equal(bytes.TrimSpace(m["paired"]), []byte("true")) || !inspectEnum(m["persistence"], "persistent") || !inspectEnum(m["outcome"], "verified") {
+			return false
+		}
+		target, valid := favoritesProvisionTarget(m["target_id"])
+		revision, r := favoritesProvisionRevision(m["binding_revision"])
+		scope := parseFavoritesTransferScope(m["scope"])
+		var changed *bool
+		if !valid || target != request.TargetID || !r || json.Unmarshal(m["changed"], &changed) != nil || changed == nil || scope == nil || scope.Provider != "plex" || scope.ProfileBindingID == scope.SourceBindingID {
+			return false
+		}
+		// Binding verification is separate from transfer commit receipts. A
+		// create reply supplies player-generated identities; all other modes
+		// must echo the caller's exact scope without inventing a new pairing.
+		return (request.Mode == "create" || sameFavoritesTransferScope(scope, request.Scope)) && (*changed == (revision != request.BindingRevision))
 	case "snapshot":
 		if !favoritesTransferFields(m, "version", "runtime", "op", "scope", "revision", "binding_revision", "document_sha256", "size_bytes", "document_base64") || !sameFavoritesTransferScope(parseFavoritesTransferScope(m["scope"]), request.Scope) || !profileInteger(m["size_bytes"], 1, maxFavoritesTransferDocumentBytes) {
 			return false

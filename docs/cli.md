@@ -1818,6 +1818,64 @@ binding, native folder grant or provider support. See the
 [synchronization design](design/favorites-sync-proposal.md) for the exact coverage
 and current implementation limits. Existing remote bookmarks below are unchanged.
 
+### Scoped synchronization rollout and recovery
+
+The coordinated player/controller/CLI release is still being qualified. The
+first adapter covers the **current verified Plex source**, including its TV
+favorite lists and media favorites. It does not export all configured providers
+or inactive profiles. Merely installing a new controller does not enable this
+adapter on an older player.
+
+Once both ends advertise support, the explicit workflow is:
+
+```sh
+ott t1 fav bindings
+ott t1 fav bind current --new --dry-run
+ott t1 fav bind current --new
+ott t1 fav collect Home replace --dry-run
+ott t1 fav collect Home replace
+ott presets Home fav export home-favorites.json
+ott t2 fav bind Home --dry-run
+ott t2 fav bind Home
+ott t2 fav diff Home
+ott t2 fav load Home replace --dry-run
+ott t2 fav load Home replace
+```
+
+Both players must already use the same verified Plex server. Pairing does not
+switch providers, copy credentials, start playback or replace favorites. A
+destination already paired to different portable identities requires the
+explicit `fav bind Home --replace-current` option; preview it first. The player
+checks the exact prior pair and keeps the old public identities. An empty or
+entirely unresolved saved scope cannot prove which Plex server to pair with;
+collect a supported located favorite first, or use an existing exact pairing.
+
+Use `--scope plex:PROFILE_UUID:SOURCE_UUID` when a saved bundle or target has
+several possible scopes; copy the public UUIDs from `fav bindings`. Display names
+and profile numbers do not establish identity. `fav bind current --new` leaves
+an existing unique pair unchanged. A dry-run never creates a pairing.
+
+`ott t1,t2 fav collect Home replace` collects every complete snapshot before one
+local update. A failed or conflicting source leaves the local companion intact.
+`ott t1,t2 fav load Home replace` reports each player's result separately; it is
+not a transaction across devices. `fav clear --dry-run` previews clearing current
+memberships while retaining list structure and shuffle history. Removing
+`--dry-run` is an explicit clear of that scope.
+
+If a write has an unknown or partial result, retain the printed operation UUID
+and use `ott t1 fav status OPERATION_UUID`. This reads player evidence and may
+save a verified completion locally; it never resubmits the write. Keep the private
+`.favorites-operations-*` directory beside the CLI configuration. A missing or
+expired receipt is **unknown**, not proof that the write failed. A pairing whose
+acknowledgement was lost is instead inspected with `fav bindings`; an observed
+pair is reported separately from an acknowledged provisioning request.
+
+If a preview exceeds `--timeout`, no commit is sent. Choose a sufficient bounded
+budget, for example `ott -t 180 t1 fav load Home replace --dry-run`, inspect that
+preview, then explicitly apply. A `local_retention_unconfirmed` warning means
+local completion bookkeeping failed; it does not undo verified player storage.
+Do not delete pending recovery files to make room or replay uncertain operations.
+
 ## Favorites across profiles
 
 Save the item currently playing on the target player together with its active

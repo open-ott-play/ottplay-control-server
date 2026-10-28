@@ -58,6 +58,8 @@ class MemoryAPI:
         self.clock, self.calls, self.events, self.responses = clock, [], [], {}
         self.post_effects, self.get_effects, self.mutators, self.raw_mutators = {}, {}, {}, {}
         self.begin = self.preview = self.committed = None
+        self.prepared = None
+        self.minted_operation = OPERATION
         self.upload = bytearray()
 
     def fixture(self, op):
@@ -65,8 +67,15 @@ class MemoryAPI:
 
     def data(self, params):
         op = params["op"]
+        if op == "prepare":
+            self.prepared = copy.deepcopy(params)
+            return {"version": 1, **params, "operation_id": self.minted_operation,
+                    "admission_ttl_ms": min(10000, params["budget_ms"])}
         response = self.fixture(op)
         if op == "begin":
+            assert self.prepared is not None and params["operation_id"] == self.minted_operation
+            assert all(params[key] == self.prepared[key] for key in
+                       ("runtime", "scope", "expected_revision", "binding_revision", "document_sha256", "size_bytes"))
             self.begin = params
             response["operation_id"] = params["operation_id"]
         elif op == "append":
@@ -184,7 +193,7 @@ class RemoteFavoritesTests(unittest.TestCase):
         result = client.replace(snapshot, snapshot.document_bytes)
         self.assertTrue(result.verified)
         self.assertEqual(result.outcome, "verified")
-        self.assertEqual(self.api.posts(), ["snapshot", "begin", "append", "preview", "commit"])
+        self.assertEqual(self.api.posts(), ["snapshot", "prepare", "begin", "append", "preview", "commit"])
         self.assertEqual(self.api.events[-2:], ["saved", "commit"])
         self.assertEqual(len(self.saved), 1)
         self.assertNotIn("document_base64", json.dumps(self.saved))
@@ -199,6 +208,70 @@ class RemoteFavoritesTests(unittest.TestCase):
         self.assertNotIn("saved", self.api.events)
         self.assertNotIn("commit", self.api.posts())
         self.assertNotIn("status", self.api.posts())
+
+    def test_prepare_minted_id_is_used_for_begin_commit_and_retained_context(self):
+        minted = "55555555-5555-4555-8555-555555555555"
+        self.api.minted_operation = minted
+        client = self.client(receipt_retention_seconds=1)
+        snapshot = self.snapshot(client)
+        result = client.replace(snapshot, snapshot.document_bytes)
+        self.assertTrue(result.verified)
+        self.assertEqual(result.operation_id, minted)
+        self.assertEqual(self.api.begin["operation_id"], minted)
+        self.assertEqual(self.saved[0]["operation_id"], minted)
+        self.assertEqual(self.api.posts().count("prepare"), 1)
+        self.assertLessEqual(self.api.prepared["budget_ms"], 45000)
+
+    def test_prepare_ack_loss_never_begins_or_invents_an_operation_id(self):
+        def lost(_api, _params):
+            raise OSError(PRIVATE)
+        self.api.post_effects["prepare"] = lost
+        client = self.client()
+        snapshot = self.snapshot(client)
+        result = client.replace(snapshot, snapshot.document_bytes)
+        self.assertEqual(result.outcome, "not_applied")
+        self.assertNotIn("operation_id", result.summary())
+        self.assertEqual(self.api.posts(), ["snapshot", "prepare"])
+        self.assertEqual(self.saved, [])
+        self.error("already_started", client.replace, snapshot, snapshot.document_bytes)
+
+    def test_invalid_or_late_prepare_grant_cannot_start_a_transfer(self):
+        for case in ("digest", "advertised_ttl", "late"):
+            with self.subTest(case=case):
+                self.setUp()
+                if case == "digest":
+                    self.api.mutators["prepare"] = lambda data: data | {"document_sha256": "f" * 64}
+                elif case == "late":
+                    def delayed(api, response):
+                        api.clock.sleep(11)
+                        return 200, response
+                    self.api.get_effects["prepare"] = [delayed]
+                client = self.client(admission_ttl_ms=5000 if case == "advertised_ttl" else 10000)
+                snapshot = self.snapshot(client)
+                result = client.preview(snapshot, snapshot.document_bytes)
+                self.assertIsNone(result.ready)
+                self.assertEqual(self.api.posts(), ["snapshot", "prepare"])
+                self.assert_preview_safe()
+
+    def test_advertised_admission_budget_and_ttl_are_preflight_limits(self):
+        for settings in ({"admission_ttl_ms": 1500}, {"max_budget_ms": 3000}):
+            with self.subTest(settings=settings):
+                self.setUp()
+                client = self.client(**settings)
+                snapshot = self.snapshot(client)
+                self.error("deadline_insufficient", client.replace, snapshot, snapshot.document_bytes)
+                self.assertEqual(self.api.posts(), ["snapshot"])
+
+    def test_smaller_prepare_budget_bounds_receipt_polling_from_the_start(self):
+        self.api.get_effects["prepare"] = ["pending"] * 100
+        client = self.client(timeout=300, max_budget_ms=30000)
+        snapshot = self.snapshot(client)
+        started = self.clock()
+        result = client.replace(snapshot, snapshot.document_bytes)
+        self.assertEqual(result.outcome, "not_applied")
+        self.assertLessEqual(self.clock(), started + 30)
+        self.assertEqual(self.api.posts(), ["snapshot", "prepare"])
+        self.assertEqual(self.saved, [])
 
     def test_preview_ready_retains_immutable_evidence_and_aborts_without_save(self):
         save = mock.Mock(side_effect=AssertionError("preview must not save"))
@@ -215,7 +288,7 @@ class RemoteFavoritesTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             result.cleanup = "changed"
         self.assertEqual(bytes(self.api.upload), snapshot.document_bytes)
-        self.assertEqual(self.api.posts(), ["snapshot", "begin", *["append"] * 6, "preview", "abort"])
+        self.assertEqual(self.api.posts(), ["snapshot", "prepare", "begin", *["append"] * 6, "preview", "abort"])
         posts = [x["at"] for x in self.api.calls if x["method"] == "POST"]
         self.assertTrue(all(b - a >= 1.5 for a, b in pairwise(posts)))
         self.assertTrue(all(0 < x["timeout"] <= min(10, 145 - x["at"]) for x in self.api.calls))
@@ -291,14 +364,14 @@ class RemoteFavoritesTests(unittest.TestCase):
                 self.assert_preview_safe()
 
     def test_preview_budget_reserves_abort_but_does_not_require_commit_admission(self):
-        client = self.client(timeout=17, receipt_retention_seconds=1)
+        client = self.client(timeout=19, receipt_retention_seconds=1)
         snapshot = self.snapshot(client)
         result = client.preview(snapshot, snapshot.document_bytes)
         self.assertEqual((result.ready, result.cleanup), (True, "aborted"))
-        self.assertLess(self.clock(), 117)
+        self.assertLess(self.clock(), 119)
         self.assert_preview_safe()
         self.setUp()
-        client = self.client(timeout=17)
+        client = self.client(timeout=19)
         snapshot = self.snapshot(client)
         self.error("deadline_insufficient", client.replace, snapshot, snapshot.document_bytes)
         self.assertEqual(self.api.posts(), ["snapshot"])
@@ -373,7 +446,7 @@ class RemoteFavoritesTests(unittest.TestCase):
         self.assertEqual(result.outcome, "not_applied")
         self.assertEqual(result.cleanup, "unconfirmed")
         self.assertIsNone(result.request_id)
-        self.assertEqual(self.api.posts(), ["snapshot", "begin"])
+        self.assertEqual(self.api.posts(), ["snapshot", "prepare", "begin"])
         self.assertEqual(self.saved, [])
 
     def test_lost_commit_enqueue_ack_reconciles_once_without_commit_replay(self):
@@ -636,7 +709,7 @@ class RemoteFavoritesTests(unittest.TestCase):
                     self.assertEqual(result.cleanup, "aborted")
                     self.assert_preview_safe()
                 self.assertTrue(all(x.get_method() in ("GET", "POST") for x in observed))
-                self.assertEqual(sum(x.get_method() == "POST" for x in observed), 5)
+                self.assertEqual(sum(x.get_method() == "POST" for x in observed), 6)
                 for request in observed:
                     if request.data:
                         self.assertEqual(request.data, json.dumps(json.loads(request.data), ensure_ascii=False).encode())

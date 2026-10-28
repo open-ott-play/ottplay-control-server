@@ -22,7 +22,10 @@ fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
 ott = fixture.ott
 PACKET = json.loads((ROOT / "contracts/favorites-current-plex-v1.json").read_bytes())
+CANONICAL_PACKET = json.loads((ROOT / "contracts/favorites-current-plex-protocol-v1.json").read_bytes())
 SCOPE = copy.deepcopy(fixture.FIXTURE["scope"])
+PRIOR_SCOPE = {"provider": "plex", "profileBindingId": "00000000-0000-4000-8000-000000000077",
+               "sourceBindingId": "00000000-0000-4000-8000-000000000078"}
 PMS = "synthetic-verified-pms-id"
 BASE = json.loads(base64.b64decode(fixture.FIXTURE["fixtures"]["snapshot"]["response"]["document_base64"]))
 
@@ -35,8 +38,15 @@ class CurrentAPI(fixture.MemoryAPI):
         self.directory = directory
         self.documents = {"one": copy.deepcopy(BASE), "two": copy.deepcopy(BASE)}
         self.documents["two"]["scope"]["sourceBindingId"] = "00000000-0000-4000-8000-000000000099"
+        self.bindings = {device: [copy.deepcopy(value["scope"])] for device, value in self.documents.items()}
+        self.binding_revisions = {device: 8 for device in self.documents}
+        # Synthetic player-owned UUIDs; these are deliberately unrelated to the
+        # host's transfer-operation UUID factory or a preset's stored identity.
+        self.created_scope = {"provider": "plex",
+                              "profileBindingId": "00000000-0000-4000-8000-000000000071",
+                              "sourceBindingId": "00000000-0000-4000-8000-000000000072"}
         self.runtime = fixture.RUNTIME
-        self.capability = copy.deepcopy(PACKET["capability"]["favorites_transfer"])
+        self.capability = copy.deepcopy(CANONICAL_PACKET["capability"]["favorites_transfer"])
         self.caps_change = lambda data: data
 
     def api(self, path, payload=None, timeout=None):
@@ -55,21 +65,41 @@ class CurrentAPI(fixture.MemoryAPI):
         if op in ("bindingcatalog", "bind"):
             data = copy.deepcopy(PACKET[op + "_response"])
             if op == "bindingcatalog":
-                data["binding_revision"] = "bindings-8"
+                data["binding_revision"] = str(self.binding_revisions[self.device])
                 data["targets"][0].update(target_id="target-" + self.device, serverId=PMS)
-                data["bindings"][0].update(scope=copy.deepcopy(self.documents[self.device]["scope"]),
-                                           target_id="target-" + self.device)
+                data["bindings"] = [{"scope": copy.deepcopy(scope), "target_id": "target-" + self.device,
+                                     "codecVersion": 1} for scope in self.bindings[self.device]]
             else:
                 data.update(scope=copy.deepcopy(params["scope"]), target_id=params["target_id"],
                             binding_revision=params["expected_binding_revision"])
             data["runtime"] = params["runtime"]
             return data
+        if op == "provision":
+            assert params["target_id"] == "target-" + self.device
+            assert params["expected_binding_revision"] == str(self.binding_revisions[self.device])
+            current = self.bindings[self.device]
+            if params["mode"] == "create":
+                assert not current and "scope" not in params and "prior_scope" not in params
+                selected = copy.deepcopy(self.created_scope)
+            else:
+                selected = copy.deepcopy(params["scope"])
+                if params["mode"] == "replace-current":
+                    assert current == [params["prior_scope"]] and params["prior_scope"] != selected
+                else:
+                    assert params["mode"] in ("import", "pair") and not current and "prior_scope" not in params
+            self.bindings[self.device] = [selected]
+            self.binding_revisions[self.device] += 1
+            self.documents[self.device]["scope"] = copy.deepcopy(selected)
+            return {"version": 1, "op": op, "runtime": params["runtime"], "mode": params["mode"],
+                    "paired": True, "changed": True, "binding_revision": str(self.binding_revisions[self.device]),
+                    "target_id": params["target_id"], "scope": copy.deepcopy(selected),
+                    "persistence": "persistent", "outcome": "verified"}
         if op == "snapshot":
             encoded = remote.transfer.encode_document(commands._json(self.documents[self.device]))
             data = self.fixture(op)
             data.update(scope=copy.deepcopy(self.documents[self.device]["scope"]), runtime=params["runtime"],
                         document_base64=encoded.data_base64, document_sha256=encoded.sha256,
-                        size_bytes=encoded.size_bytes)
+                        size_bytes=encoded.size_bytes, binding_revision=str(self.binding_revisions[self.device]))
             return data
         if op == "commit":
             # Real durable storage must precede the fake player's write.
@@ -112,10 +142,14 @@ class FavoritesCommandsTests(unittest.TestCase):
         if os.name != "nt":
             self.path.chmod(0o600)
 
-    def call(self, op, *, targets=None, timeout=45, **params):
+    def call(self, op, *, targets=None, timeout=45, uuid_factory=None, **params):
         return commands.run(ott, self.client, self.config, self.path, targets or [("t1", "one")],
             {"op": op, **params}, timeout, monotonic=self.clock, sleep=self.clock.sleep,
-            uuid_factory=lambda: fixture.OPERATION)
+            uuid_factory=uuid_factory or (lambda: fixture.OPERATION))
+
+    def provision_requests(self):
+        return [json.loads(row["payload"])["params"] for row in self.client.calls
+                if row["method"] == "POST" and row["op"] == "provision"]
 
     def no_stage_or_context(self):
         self.assertNotIn("begin", self.client.posts())
@@ -138,7 +172,7 @@ class FavoritesCommandsTests(unittest.TestCase):
         original = self.path.read_bytes()
         result = self.call("load", preset="Home", mode="replace")
         self.assertEqual((result["status"], result["verified"], result["warnings"]), ("verified", True, []))
-        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "snapshot", "begin", "append", "preview", "commit"])
+        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "snapshot", "prepare", "begin", "append", "preview", "commit"])
         self.assertEqual(self.path.read_bytes(), original)
         records = list(self.directory.glob(".favorites-operations-*/*.json"))
         self.assertEqual(len(records), 1)
@@ -208,25 +242,185 @@ class FavoritesCommandsTests(unittest.TestCase):
             self.no_stage_or_context()
             self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog"])
 
-    def test_ambiguous_unbound_and_unprovisioned_bind_never_mutate_registry(self):
-        with self.assertRaisesRegex(ott.Error, "initial pairing not supported"):
-            self.call("bind", preset="current", new=True)
-        self.assertEqual(self.client.posts(), [])
-        def ambiguous(data):
-            second = copy.deepcopy(data["bindings"][0])
-            second["scope"]["sourceBindingId"] = "00000000-0000-4000-8000-000000000077"
-            return data | {"bindings": [*data["bindings"], second]}
-        self.client.mutators["bindingcatalog"] = ambiguous
-        with self.assertRaisesRegex(ott.Error, "scope not uniquely bound"):
-            self.call("clear")
+    def test_create_uses_player_generated_pair_once_without_local_identity_or_context(self):
+        self.client.bindings["one"] = []
+        original = self.path.read_bytes()
+        uuid_factory = mock.Mock(side_effect=AssertionError("host must not generate pair UUIDs"))
+        with mock.patch.object(commands._DurableContext, "save", side_effect=AssertionError("not a transfer")):
+            result = self.call("bind", new=True, uuid_factory=uuid_factory)
+        uuid_factory.assert_not_called()
+        self.assertEqual((result["status"], result["scope"], result["replay_allowed"]),
+                         ("paired", self.client.created_scope, False))
+        self.assertEqual(result["pairing"]["outcome"], "verified")
+        self.assertNotIn("verified", result)  # Binding proof cannot authorize a transfer receipt.
+        self.assertEqual(self.provision_requests(), [{"op": "provision", "runtime": fixture.RUNTIME,
+            "mode": "create", "target_id": "target-one", "expected_binding_revision": "8", "codecVersion": 1}])
+        self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "provision"])
+        self.assertEqual(self.path.read_bytes(), original)
         self.no_stage_or_context()
+
+    def test_existing_exact_new_or_saved_binding_never_sends_mutating_rpc(self):
+        for params in ({"new": True}, {"preset": "Home"}, {"preset": "Home", "scope": SCOPE}):
+            with self.subTest(params=params):
+                self.setUp()
+                before = copy.deepcopy(self.client.bindings)
+                result = self.call("bind", **params)
+                self.assertEqual((result["status"], result["scope"]), ("unchanged", SCOPE))
+                self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog"])
+                self.assertEqual(self.client.bindings, before)
+                self.no_stage_or_context()
+
+    def test_explicit_existing_scope_disambiguates_but_replacement_requires_unique_prior(self):
+        second = SCOPE | {"sourceBindingId": "00000000-0000-4000-8000-000000000077"}
+        self.client.bindings["one"].append(second)
+        for op, params in (("clear", {}), ("bind", {"new": True}), ("bind", {"preset": "Home"})):
+            with self.subTest(op=op, params=params), self.assertRaisesRegex(ott.Error, "scope not uniquely bound"):
+                self.call(op, **params)
         result = self.call("bind", preset="Home", scope=SCOPE, target_id="target-one")
+        self.assertEqual((result["status"], result["scope"]), ("unchanged", SCOPE))
+        third = SCOPE | {"sourceBindingId": "00000000-0000-4000-8000-000000000078"}
+        self.config["preset_favorites"]["presets"]["Home"]["scopes"][0]["scope"] = third
+        self.write_config()
+        with self.assertRaisesRegex(ott.Error, "scope not uniquely bound"):
+            self.call("bind", preset="Home", scope=third, replace_current=True)
+        self.assertNotIn("bind", self.client.posts())
+        self.assertEqual(self.provision_requests(), [])
+        self.no_stage_or_context()
+
+    def test_unbound_saved_pair_imports_exact_scope_and_revision_for_selected_device(self):
+        self.client.bindings["two"] = []
+        self.client.binding_revisions["two"] = 23
+        unchanged_one = copy.deepcopy(self.client.bindings["one"])
+        result = self.call("bind", preset="Home", targets=[("t2", "two")], scope=SCOPE, target_id="target-two")
+        self.assertEqual((result["status"], result["scope"]), ("paired", SCOPE))
+        self.assertEqual(self.provision_requests(), [{"op": "provision", "runtime": fixture.RUNTIME,
+            "mode": "import", "target_id": "target-two", "expected_binding_revision": "23",
+            "codecVersion": 1, "scope": SCOPE}])
+        self.assertEqual(self.client.bindings["one"], unchanged_one)
+        self.assertEqual(self.client.bindings["two"], [SCOPE])
+        self.no_stage_or_context()
+
+    def test_different_pair_requires_explicit_replacement_with_exact_prior(self):
+        prior = copy.deepcopy(PRIOR_SCOPE)
+        self.client.bindings["one"] = [prior]
+        with self.assertRaisesRegex(ott.Error, "different pair requires replace current"):
+            self.call("bind", preset="Home", scope=SCOPE)
+        self.assertEqual(self.provision_requests(), [])
+        result = self.call("bind", preset="Home", scope=SCOPE, replace_current=True)
         self.assertEqual(result["status"], "paired")
-        self.assertEqual(self.client.posts().count("bind"), 1)
-        self.client.mutators["bindingcatalog"] = lambda data: data | {"bindings": []}
-        with self.assertRaises(ott.Error):
-            self.call("bind", preset="Home")
-        self.assertEqual(self.client.posts().count("bind"), 1)
+        self.assertEqual(self.provision_requests(), [{"op": "provision", "runtime": fixture.RUNTIME,
+            "mode": "replace-current", "target_id": "target-one", "expected_binding_revision": "8",
+            "codecVersion": 1, "scope": SCOPE, "prior_scope": prior}])
+        self.no_stage_or_context()
+
+    def test_pairing_checks_explicit_target_and_saved_scope_before_provision(self):
+        self.client.bindings["one"] = []
+        absent = SCOPE | {"sourceBindingId": "00000000-0000-4000-8000-000000000077"}
+        for params, reason in (({"preset": "Home", "target_id": "target-two"}, "target not current"),
+                               ({"new": True, "target_id": "target-two"}, "target not current"),
+                               ({"preset": "Home", "scope": absent}, "saved scope not uniquely bound")):
+            with self.subTest(params=params), self.assertRaisesRegex(ott.Error, reason):
+                self.call("bind", **params)
+        self.assertEqual(self.provision_requests(), [])
+        self.no_stage_or_context()
+
+    def test_unbound_pairing_rejects_foreign_pms_in_all_located_collections(self):
+        for collection in ("media", "channels", "shuffle"):
+            with self.subTest(collection=collection):
+                self.setUp()
+                self.client.bindings["one"] = []
+                saved = self.config["preset_favorites"]["presets"]["Home"]["scopes"][0]
+                foreign = copy.deepcopy(saved["mediaFavorites"][0])
+                foreign["locator"]["serverId"] = "foreign-server"
+                if collection == "media":
+                    saved["mediaFavorites"] = [foreign]
+                else:
+                    saved["channelLists"]["lists"][0]["entries" if collection == "channels" else "shuffleBefore"] = [foreign]
+                self.write_config()
+                with self.assertRaisesRegex(ott.Error, "plex source identity mismatch"):
+                    self.call("bind", preset="Home", scope=SCOPE)
+                self.assertEqual(self.provision_requests(), [])
+                self.no_stage_or_context()
+
+    def test_channel_or_shuffle_only_document_can_establish_exact_current_pms(self):
+        for collection in ("entries", "shuffleBefore"):
+            with self.subTest(collection=collection):
+                self.setUp()
+                self.client.bindings["one"] = []
+                saved = self.config["preset_favorites"]["presets"]["Home"]["scopes"][0]
+                located = copy.deepcopy(saved["mediaFavorites"][0])
+                saved["mediaFavorites"] = []
+                for row in saved["channelLists"]["lists"]:
+                    row["entries"] = []
+                    row.pop("shuffleBefore", None)
+                saved["channelLists"]["lists"][0][collection] = [located]
+                self.write_config()
+                result = self.call("bind", preset="Home")
+                self.assertEqual((result["status"], result["scope"]), ("paired", SCOPE))
+                self.assertEqual(self.provision_requests()[0]["mode"], "import")
+                self.no_stage_or_context()
+
+    def test_empty_or_unresolved_unbound_document_cannot_establish_pms(self):
+        for unresolved in (False, True):
+            with self.subTest(unresolved=unresolved):
+                self.setUp()
+                self.client.bindings["one"] = []
+                saved = self.config["preset_favorites"]["presets"]["Home"]["scopes"][0]
+                saved["mediaFavorites"] = []
+                for row in saved["channelLists"]["lists"]:
+                    row["entries"] = []
+                    row.pop("shuffleBefore", None)
+                if unresolved:
+                    saved["mediaFavorites"] = [{"state": "unresolved", "reason": "legacy-unportable",
+                                                 "provenance": {"origin": "raw", "legacyId": 123}}]
+                self.write_config()
+                with self.assertRaisesRegex(ott.Error, "saved source identity unavailable"):
+                    self.call("bind", preset="Home", scope=SCOPE)
+                self.assertEqual(self.provision_requests(), [])
+                self.no_stage_or_context()
+
+    def test_pairing_dry_runs_do_not_mutate_or_generate_ids_or_save_context(self):
+        for mode in ("create", "import", "replace-current"):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.client.bindings["one"] = [] if mode != "replace-current" else [copy.deepcopy(PRIOR_SCOPE)]
+                before = copy.deepcopy(self.client.bindings)
+                original = self.path.read_bytes()
+                params = {"new": True} if mode == "create" else {"preset": "Home", "scope": SCOPE}
+                if mode == "replace-current":
+                    params["replace_current"] = True
+                uuid_factory = mock.Mock(side_effect=AssertionError("must not generate identities"))
+                with mock.patch.object(commands._DurableContext, "save", side_effect=AssertionError("must not save")):
+                    result = self.call("bind", dry_run=True, uuid_factory=uuid_factory, **params)
+                self.assertEqual((result["status"], result["mode"]), ("planned", mode))
+                self.assertEqual(result["scope"], None if mode == "create" else SCOPE)
+                uuid_factory.assert_not_called()
+                self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog"])
+                self.assertEqual(self.client.bindings, before)
+                self.assertEqual(self.path.read_bytes(), original)
+                self.no_stage_or_context()
+
+    def test_invalid_provision_metadata_is_refused_before_dry_run_or_mutation(self):
+        for case in ("revision", "target", "overlapping_pair"):
+            for dry_run in (False, True):
+                with self.subTest(case=case, dry_run=dry_run):
+                    self.setUp()
+                    self.client.bindings["one"] = []
+                    params = {"new": True}
+                    if case == "revision":
+                        self.client.mutators["bindingcatalog"] = lambda data: data | {"binding_revision": "08"}
+                    elif case == "target":
+                        def non_ascii_target(data):
+                            data["targets"][0]["target_id"] = "é"
+                            return data
+                        self.client.mutators["bindingcatalog"] = non_ascii_target
+                    else:
+                        self.client.bindings["one"] = [SCOPE | {"sourceBindingId": PRIOR_SCOPE["sourceBindingId"]}]
+                        params = {"preset": "Home", "scope": SCOPE, "replace_current": True}
+                    with self.assertRaises(ott.Error):
+                        self.call("bind", dry_run=dry_run, **params)
+                    self.assertEqual(self.provision_requests(), [])
+                    self.no_stage_or_context()
 
     def test_collect_all_targets_once_then_one_local_cas_write(self):
         result = self.call("collect", preset="Home", mode="replace",
@@ -372,12 +566,69 @@ class FavoritesCommandsTests(unittest.TestCase):
         self.assertNotIn("commit", self.client.posts())
         self.assertEqual(list(self.directory.glob(".favorites-operations-*")), [])
 
-    def test_lost_commit_and_existing_bind_ack_are_not_replayed(self):
+    def test_lost_pairing_ack_is_not_replayed_and_fresh_observation_remains_unknown(self):
         def lost(_api, _params):
             raise OSError("private-token")
-        self.client.post_effects["bind"] = lost
-        self.assertEqual(self.call("bind", preset="Home")["status"], "unknown")
-        self.assertEqual(self.client.posts().count("bind"), 1)
+        for mode in ("create", "import", "replace-current"):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.client.bindings["one"] = [] if mode != "replace-current" else [copy.deepcopy(PRIOR_SCOPE)]
+                params = {"new": True} if mode == "create" else {"preset": "Home", "scope": SCOPE}
+                if mode == "replace-current":
+                    params["replace_current"] = True
+                self.client.post_effects["provision"] = lost
+                result = self.call("bind", **params)
+                self.assertEqual((result["status"], result["request_id"], result["replay_allowed"]), ("unknown", None, False))
+                self.assertEqual(result["observed_pair"]["scope"], self.client.created_scope if mode == "create" else SCOPE)
+                self.assertEqual(result["observed_pair"]["binding_revision"], "9")
+                self.assertNotIn("verified", result)
+                self.assertNotIn("private-token", json.dumps(result))
+                self.assertEqual(self.client.posts(), ["capabilities", "bindingcatalog", "provision", "bindingcatalog"])
+                self.assertEqual(len(self.provision_requests()), 1)
+                self.no_stage_or_context()
+
+    def test_malformed_pairing_ack_preserves_known_request_id_without_replay(self):
+        self.client.bindings["one"] = []
+        # The actual import was applied, but its ACK echoes a different target.
+        self.client.mutators["provision"] = lambda data: data | {"target_id": "target-two"}
+        result = self.call("bind", preset="Home", scope=SCOPE)
+        self.assertEqual((result["status"], result["request_id"]), ("unknown", "00000000000000000000000000000003"))
+        self.assertEqual(result["observed_pair"]["scope"], SCOPE)
+        self.assertEqual(len(self.provision_requests()), 1)
+        self.no_stage_or_context()
+
+    def test_changed_target_observation_never_upgrades_uncertain_pairing(self):
+        self.client.bindings["one"] = []
+        def lost(api, _params):
+            def changed(data):
+                data["targets"][0]["serverId"] = "different-server"
+                return data
+            api.mutators["bindingcatalog"] = changed
+            raise OSError("private-token")
+        self.client.post_effects["provision"] = lost
+        result = self.call("bind", new=True)
+        self.assertEqual(result["status"], "unknown")
+        self.assertNotIn("observed_pair", result)
+        self.assertEqual(len(self.provision_requests()), 1)
+        self.no_stage_or_context()
+
+    def test_pending_pairing_reserves_observation_time_and_never_extends_whole_deadline(self):
+        self.client.bindings["one"] = []
+        self.client.get_effects["provision"] = ["pending"] * 100
+        result = self.call("bind", new=True, timeout=12)
+        self.assertEqual((result["status"], result["replay_allowed"]), ("unknown", False))
+        self.assertEqual(len(self.provision_requests()), 1)
+        self.assertEqual(self.client.posts().count("bindingcatalog"), 2)
+        self.assertLessEqual(self.clock(), 112)
+        for row in self.client.calls:
+            deadline = 108 if row["op"] == "provision" else 112
+            self.assertGreater(row["timeout"], 0)
+            self.assertLessEqual(row["at"] + row["timeout"], deadline)
+        self.no_stage_or_context()
+
+    def test_lost_commit_ack_is_not_replayed(self):
+        def lost(_api, _params):
+            raise OSError("private-token")
         self.client.post_effects["commit"] = lost
         result = self.call("load", preset="Home", mode="replace")
         self.assertTrue(result["verified"])
@@ -415,7 +666,7 @@ class FavoritesCommandsTests(unittest.TestCase):
         self.assertEqual(result["status"], "planned")
         read.assert_not_called()
         self.assertEqual(real.timeout, 45)
-        self.assertEqual(sum(request.get_method() == "POST" for request in observed), 7)
+        self.assertEqual(sum(request.get_method() == "POST" for request in observed), 8)
         for request in observed:
             if request.data is not None:
                 self.assertEqual(request.data, json.dumps(json.loads(request.data), ensure_ascii=False).encode("utf-8"))

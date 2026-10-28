@@ -147,7 +147,14 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME fav collect PRESET [merge|replace] [--dry-run]
   ott NAME fav diff PRESET            preview differences without changes
   ott NAME fav clear [--dry-run]      clear visible favorites or preview the change
-                                     profile sync requires an available compatible backend
+  ott NAME fav bindings              list exact bindings for the current verified Plex source
+  ott NAME fav bind PRESET [--scope SCOPE] [--target TARGET_ID] [--replace-current] [--dry-run]
+                                     explicitly pair a saved scope; replacing requires its flag
+  ott NAME fav bind current --new [--dry-run]
+                                     explicitly create a new current-source binding
+  ott NAME fav status OPERATION_UUID  inspect a retained operation; never replay it
+                                     remote profile sync: CURRENT VERIFIED PLEX ONLY
+                                     requires compatible controller/player; other sources refused
   ott NAME profiles                  list the active provider’s 15 profiles without URLs
   ott NAME profile N                 select M3U, VPortal or Local videos profile 1–15
   ott NAME profile save N [NAME]     save the active Local videos source and selection
@@ -2543,7 +2550,7 @@ def _favorites_target_selector(value):
 
 
 def parse_favorites_profile(words):
-    """Internal, disabled coordination grammar; never send these names as RPCs.
+    """Host coordination grammar; never send these names as player RPCs.
 
     Binding/capability negotiation remains a host activation gate. Parsed scope
     and target selectors cannot authorize label matching or implicit pairing.
@@ -2551,7 +2558,7 @@ def parse_favorites_profile(words):
     usage = ("Use fav load|collect PRESET [merge|replace] [--scope SCOPE] [--dry-run], "
              "fav diff PRESET [--scope SCOPE], fav clear [--scope SCOPE] [--dry-run], "
              "fav bindings, fav status UUIDv4, fav bind current --new [--dry-run] or "
-             "fav bind PRESET [--scope SCOPE] [--target TARGET_ID] [--dry-run]")
+             "fav bind PRESET [--scope SCOPE] [--target TARGET_ID] [--replace-current] [--dry-run]")
     if not words or words[0].casefold() not in FAVORITES_PROFILE_OPERATIONS:
         raise Error(usage)
     operation = words[0].casefold()
@@ -2568,7 +2575,7 @@ def parse_favorites_profile(words):
     while index < len(words):
         word = words[index]
         if word.startswith("-"):
-            allowed = {"--scope", "--dry-run"} | ({"--target", "--new"} if operation == "bind" else set())
+            allowed = {"--scope", "--dry-run"} | ({"--target", "--new", "--replace-current"} if operation == "bind" else set())
             if word not in allowed or word in options:
                 raise Error(usage)
             if word in ("--scope", "--target"):
@@ -2593,6 +2600,8 @@ def parse_favorites_profile(words):
             return {"op": operation, "preset": "current", "new": True, "dry_run": dry_run}
         if "--target" in options:
             selected["target_id"] = options["--target"]
+        if "--replace-current" in options:
+            selected["replace_current"] = True
         return {"op": operation, "preset": values[0], "dry_run": dry_run, **selected}
     if operation == "clear":
         if values:
@@ -2677,6 +2686,152 @@ def favorites_profile_dependencies():
     codec, storage = modules
     return {"validate_document": codec.validate_document, "planner": codec.plan_documents,
             "store_factory": storage.Store, "storage_errors": (storage.StorageError,)}
+
+
+def favorites_module(name):
+    """Load actual sibling module names from this CLI revision, in dependency order.
+
+    Protocol result classes must be shared by the host, transport and private
+    ContextStore. Never substitute similarly named modules from another path.
+    """
+    names = ("favorites_document", "preset_favorites", "favorites_transfer", "favorites_protocol",
+             "favorites_remote", "favorites_operations", "favorites_commands")
+    if name not in names:
+        raise Error("Invalid favorites module")
+    for current in names[:names.index(name) + 1]:
+        path = Path(__file__).resolve().with_name(current + ".py")
+        if not path.is_file():
+            raise Error("Install all CLI Python files from the same revision to synchronize favorites")
+        module = sys.modules.get(current)
+        if module is not None:
+            if Path(getattr(module, "__file__", "")).resolve() != path:
+                raise Error("Favorites modules must come from the same CLI revision")
+            continue
+        spec = importlib.util.spec_from_file_location(current, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[current] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:  # noqa: BLE001 - installation failures must not expose private environment values
+            if sys.modules.get(current) is module:
+                del sys.modules[current]
+            raise Error("Could not load favorites modules; install all CLI files from the same revision") from None
+    return sys.modules[name]
+
+
+def print_favorites_command(data):
+    """Print validated public metadata and local backup paths, never documents."""
+    operation, status = data["op"], data["status"]
+    invalid = "Invalid favorites synchronization result"
+    labels = {"available": "current verified Plex bindings", "paired": "pairing confirmed",
+              "planned": "preview only", "matched": "matches", "different": "differences found",
+              "unchanged": "unchanged", "collected": "collected", "verified": "persisted and verified",
+              "failed": "failed", "blocked": "blocked", "unknown": "outcome unknown",
+              "partial": "partially applied", "not_applied": "not applied"}
+    lines = ["Favorites " + operation + ": " + labels[status] + "."]
+    def scope_text(scope):
+        if (not isinstance(scope, dict) or set(scope) != {"provider", "profileBindingId", "sourceBindingId"}
+                or scope["provider"] != "plex" or any(not isinstance(scope[key], str) or
+                FAVORITES_UUID_V4.fullmatch(scope[key]) is None for key in ("profileBindingId", "sourceBindingId"))):
+            raise Error(invalid)
+        return "plex:" + scope["profileBindingId"] + ":" + scope["sourceBindingId"]
+    if data.get("scope") is not None:
+        lines.append("Scope: " + scope_text(data["scope"]))
+    catalog = data.get("catalog")
+    if catalog is not None:
+        if (not isinstance(catalog, dict) or not isinstance(catalog.get("targets"), list)
+                or len(catalog["targets"]) != 1 or not isinstance(catalog.get("bindings"), list)
+                or len(catalog["bindings"]) > 256):
+            raise Error(invalid)
+        targets = set()
+        for target in catalog["targets"]:
+            if (not isinstance(target, dict) or target.get("provider") != "plex"
+                    or not isinstance(target.get("target_id"), str)
+                    or not plex_library_text(target.get("display"), 256)
+                    or any(unicodedata.category(char).startswith("C") for char in target["display"])
+                    or not isinstance(target.get("serverId"), str)
+                    or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", target["serverId"]) is None):
+                raise Error(invalid)
+            target_id = _favorites_target_selector(target.get("target_id"))
+            targets.add(target_id)
+            lines.extend(("Target: " + target_id, "  Display: " + target["display"], "  PMS: " + target["serverId"]))
+        lines.append("Current-source bindings: " + str(len(catalog["bindings"])) + ".")
+        for row in catalog["bindings"]:
+            if (not isinstance(row, dict) or not isinstance(row.get("target_id"), str)
+                    or row["target_id"] not in targets):
+                raise Error(invalid)
+            lines.extend(("Scope: " + scope_text(row.get("scope")), "  Target: " + row["target_id"]))
+    if operation == "collect" and "sources" in data:
+        sources = data["sources"]
+        if not isinstance(sources, list) or not 1 <= len(sources) <= 64:
+            raise Error(invalid)
+        for source in sources:
+            if not isinstance(source, dict) or set(source) != {"scope", "coverage"} or source["coverage"] != "current-source":
+                raise Error(invalid)
+            lines.append("Collected scope (current-source): " + scope_text(source["scope"]))
+    if "operation_id" in data:
+        identifier = data["operation_id"]
+        if not isinstance(identifier, str) or FAVORITES_UUID_V4.fullmatch(identifier) is None:
+            raise Error(invalid)
+        lines.append("Operation: " + identifier)
+    if "summary" in data:
+        summary = favorites_summary_metadata(data["summary"])
+        for title, row in (("Items", summary), ("Memberships", summary["memberships"])):
+            lines.append(f"{title}: {row['before']} -> {row['after']}; added {row['added']}, removed {row['removed']}, retained {row['retained']}.")
+        lines.append(f"Duplicates skipped: {summary['skipped_duplicates']}; unresolved conflicts: {summary['conflicts']['unresolved']}.")
+    if "players" in data:
+        if type(data["players"]) is not int or not 1 <= data["players"] <= 64:
+            raise Error(invalid)
+        lines.append(f"Players collected: {data['players']}.")
+    if operation == "collect" and status in ("collected", "unchanged") and data.get("backup_path") is not None:
+        # The same private local-path validation used by print_favorites_profile.
+        if not plex_library_text(data["backup_path"], 4096):
+            raise Error(invalid)
+        lines.append("Backup: " + data["backup_path"])
+    if "local_retention_unconfirmed" in data.get("warnings", []):
+        lines.append("Local completion evidence was not confirmed; the verified player outcome is unchanged.")
+    if status == "unknown" and data.get("observed_pair") is not None:
+        lines.append("A current pairing was observed; it does not acknowledge this provisioning request.")
+    if status in ("failed", "blocked", "unknown", "partial", "not_applied"):
+        reasons = {
+            "local_context_unavailable": "The retained local operation context is unavailable; the player outcome cannot be verified.",
+            "scope_not_bound": "The operation's saved scope is not bound to the current verified Plex source.",
+            "invalid_context": "The retained operation context cannot authorize this status verification.",
+            "invalid_response": "The response could not be validated against this operation.",
+            "transport": "Communication failed before a verified result was obtained.",
+            "deadline": "The command deadline expired before a verified result was obtained.",
+            "pending_timeout": "The request remained pending until the command deadline.",
+            "deadline_insufficient": "The remaining deadline was too short to complete the transfer safely.",
+            "context_not_saved": "Durable local recovery evidence could not be confirmed before commit.",
+            "player_rejected": "The player rejected the request.",
+            "player_unsupported": "The player does not support this request.",
+            "not_ready": "The player preview was not ready to commit.",
+            "blocked": "The preview contains unresolved items or conflicts.",
+            "observed_unknown": "The player reported an unknown operation outcome.",
+            "observed_partial": "The player reported that only part of the operation was applied.",
+            "observed_not_applied": "The player reported that the operation was not applied.",
+        }
+        reason = data.get("reason")
+        if isinstance(reason, str) and reason in reasons:
+            lines.append("Reason: " + reasons[reason])
+        lines.append("No automatic replay was attempted; inspect the result before another change.")
+    print("\n".join(lines))
+
+
+def favorites_host_command(client, config, args, targets, params):
+    result = favorites_module("favorites_commands").run(SimpleNamespace(**globals()), client, config,
+        args.config, targets, copy.deepcopy(params), args.timeout)
+    successful = {"available", "paired", "planned", "matched", "different", "unchanged", "collected", "verified"}
+    failed = {"failed", "blocked", "unknown", "partial", "not_applied"}
+    if (not isinstance(result, dict) or result.get("op") != params["op"]
+            or result.get("status") not in successful | failed
+            or result.get("status") == "verified" and result.get("verified") is not True):
+        raise Error("Invalid favorites synchronization result; inspect before another change")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+    else:
+        print_favorites_command(result)
+    return 0 if result["status"] in successful else 1
 
 
 def _validated_favorites_document(document, validate_document):
@@ -3976,6 +4131,13 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "favorites_transfer" in data:
+        try:
+            result["favorites_transfer"] = favorites_module("favorites_protocol").validate_capability(data["favorites_transfer"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - rejected capability values must not appear in diagnostics
+            raise Error(invalid) from None
     if "standby" in player:
         if type(player["standby"]) is not bool:
             raise Error(invalid)
@@ -4381,6 +4543,13 @@ def print_player_help(data, name):
             ("remove", "fav remove ID_OR_NAME", "remove one saved favorite")):
         if operation in favorites:
             print(f"  {prefix} {command}  — {description}")
+    if "favorites_transfer" in controls:
+        print("  Favorites profile sync: CURRENT VERIFIED PLEX ONLY; explicit bindings required.")
+        print(f"  {prefix} fav bindings  — show exact current-source scope IDs")
+        print(f"  {prefix} fav collect Home / fav diff Home  — save or compare this current scope")
+        print(f"  {prefix} fav load Home replace --dry-run  — validate and preview without applying")
+        print(f"  {prefix} fav load Home replace / fav clear  — persist changes after a validated preview")
+        print(f"  {prefix} fav bind Home --dry-run / fav status OPERATION_UUID  — check pairing or retained evidence")
     aspect = controls.get("aspect", {})
     if "get" in aspect.get("operations", []):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
@@ -5811,6 +5980,10 @@ def player_group_command(client, config, targets, args, argv):
     # validates ordinary commands once, before any target receives a request.
     prepared = parse_command(words) if route is None else None
     action = prepared[0] if prepared else (words[0].casefold() if words else "status")
+    if action == "favorites_profile" and prepared[1]["op"] == "collect":
+        # Collection is one all-target snapshot/plan/CAS operation, never one
+        # separate profile write per member of the existing group dispatcher.
+        return favorites_host_command(client, config, args, targets, prepared[1])
     if action == "provider" and not prepared[1]["query"].strip():
         raise Error("provider requires a provider ID, index or name")
     if route == "android" and len(words) > 1 and words[1].casefold() == "bind" and len(targets) > 1:
@@ -5961,8 +6134,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         return 0
     action, params = copy.deepcopy(prepared) if prepared is not None else parse_command(words)
     if action == "favorites_profile":
-        # Never let an unwired internal coordination action reach Client.call.
-        raise Error(FAVORITES_PROFILE_UNAVAILABLE)
+        return favorites_host_command(client, config, args, [(args.words[0], device)], params)
     status_overview = action == "status" and command_verb(words) != "v"
     status_deadline = time.monotonic() + args.timeout if status_overview else None
     catalog_play = None
@@ -6311,9 +6483,8 @@ def main(argv=None):
                 return 1 if result["status"] == "blocked" else 0
             return 0
         if len(args.words) > 1 and command_verb(args.words[1:]) == "favorites":
-            action, _ = parse_command(args.words[1:])
-            if action == "favorites_profile":
-                raise Error(FAVORITES_PROFILE_UNAVAILABLE)
+            # Validate grammar before constructing the authoritative Client.
+            parse_command(args.words[1:])
         if (len(args.words) > 1 and args.words[1].casefold() == "load"
                 and args.words[0].casefold() not in TOP_LEVEL_COMMANDS and "," not in args.words[0]):
             return preset_command(config, args.words, args.timeout, args.json,

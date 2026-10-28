@@ -1,4 +1,4 @@
-"""Unwired current-Plex host orchestration; never initializes or guesses bindings.
+"""Current-Plex host orchestration with explicit, revision-bound pairing.
 
 The caller supplies the already loaded config, authenticated Client and resolved
 device IDs. This module returns structured outcomes, performs no UI work and has
@@ -185,7 +185,9 @@ class _Target:
             receipt_retention_seconds=self.capability["receipt_retention_seconds"],
             scope_validator=lambda value: _admit(value, self.target, limits), save_context=self.durable.save,
             timeout=self.remaining(), monotonic=self.clock, sleep=self.sleep, uuid_factory=self.uuid_factory,
-            max_metadata_bytes=limits["max_metadata_bytes"], deadline=self.deadline)
+            max_metadata_bytes=limits["max_metadata_bytes"], deadline=self.deadline,
+            admission_ttl_ms=self.capability["admission"]["admission_ttl_ms"],
+            max_budget_ms=self.capability["admission"]["max_budget_ms"])
         self.catalog = self.peer.catalog()
         self.target = self.catalog.data["targets"][0]
 
@@ -216,6 +218,85 @@ def _saved_scope(saved, scope):
     if len(selected) != 1:
         raise CommandError("saved_scope_not_uniquely_bound")
     return selected[0]
+
+
+def _source_servers(value):
+    references = list(value["mediaFavorites"])
+    for row in value["channelLists"]["lists"]:
+        references.extend(row["entries"])
+        references.extend(row.get("shuffleBefore", []))
+    return {row["locator"]["serverId"] for row in references
+            if row["state"] == "located" and row["locator"]["kind"] == "plex-media"}
+
+
+def _bind(target, saved, params):
+    catalog = target.catalog.data
+    target_id = target.target["target_id"]
+    if params.get("target_id", target_id) != target_id:
+        raise CommandError("target_not_current")
+    bindings = catalog["bindings"]
+    if len(bindings) > 1 and (params.get("new") or params.get("scope", "current") == "current"):
+        raise CommandError("scope_not_uniquely_bound")
+    prior = bindings[0]["scope"] if len(bindings) == 1 else None
+    scope = None
+    if params.get("new"):
+        if params.get("replace_current"):
+            raise CommandError("invalid_arguments")
+        if prior is not None:
+            return {"op": "bind", "status": "unchanged", "scope": prior, "target_id": target_id}
+        mode = "create"
+    else:
+        candidates = [value for value in saved["scopes"] if value["scope"]["provider"] == "plex"]
+        selector = params.get("scope", "current")
+        if selector != "current":
+            candidates = [value for value in candidates if value["scope"] == selector]
+        elif prior is not None and any(value["scope"] == prior for value in candidates):
+            candidates = [value for value in candidates if value["scope"] == prior]
+        else:
+            candidates = [value for value in candidates if _source_servers(value) == {target.target["serverId"]}]
+        if len(candidates) != 1:
+            raise CommandError("saved_scope_not_uniquely_bound")
+        incoming = _admit(candidates[0], target.target, target.capability["limits"])
+        scope = incoming["scope"]
+        if any(row["scope"] == scope for row in bindings):
+            return {"op": "bind", "status": "unchanged", "scope": scope, "target_id": target_id}
+        if len(bindings) > 1:
+            raise CommandError("scope_not_uniquely_bound")
+        if _source_servers(incoming) != {target.target["serverId"]}:
+            raise CommandError("saved_source_identity_unavailable")
+        if prior is not None and not params.get("replace_current"):
+            raise CommandError("different_pair_requires_replace_current")
+        mode = "replace-current" if prior is not None else "import"
+    request = {"op": "provision", "runtime": target.peer.runtime, "mode": mode,
+               "target_id": target_id, "codecVersion": 1,
+               "expected_binding_revision": catalog["binding_revision"]}
+    if scope is not None:
+        request["scope"] = scope
+    if mode == "replace-current":
+        request["prior_scope"] = prior
+    protocol.validate_request(request)
+    if params.get("dry_run", False):
+        return {"op": "bind", "status": "planned", "mode": mode, "scope": scope, "target_id": target_id}
+    try:
+        response = target.peer.provision(target.catalog, mode, target_id, scope=scope,
+                                         prior_scope=prior if mode == "replace-current" else None)
+        return {"op": "bind", "status": "paired", "scope": response.data["scope"],
+                "pairing": response.data, "replay_allowed": False}
+    except remote.RemoteError as error:
+        # A fresh observation cannot prove which request caused the pairing.
+        # Never replay create/import/rebind after a missing acknowledgement.
+        result = {"op": "bind", "status": "unknown", "scope": scope,
+                  "request_id": error.request_id, "replay_allowed": False}
+        try:
+            observed = target.peer.catalog().data
+            rows = observed["bindings"]
+            if (observed["targets"][0] == target.target and len(rows) == 1
+                    and (scope is None or rows[0]["scope"] == scope)):
+                result["observed_pair"] = {"scope": rows[0]["scope"], "target_id": target_id,
+                                           "binding_revision": observed["binding_revision"]}
+        except remote.RemoteError:
+            pass
+        return result
 
 
 def _completion(target, outcome):
@@ -254,7 +335,7 @@ def _completion(target, outcome):
 
 def run(api, client, config, config_path, targets, params, timeout, *, monotonic=time.monotonic,
         sleep=time.sleep, uuid_factory=uuid.uuid4):
-    """Return structured results using one supplied authority; main is unwired.
+    """Return structured results using one supplied authority.
 
     The config snapshot supplied by main remains authoritative for Client and
     target resolution. The favorites Store independently rereads its bytes for
@@ -293,10 +374,8 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
         protocol.validate_request({"op": "status", "runtime": "validation", "operation_id": params.get("operation_id")})
     if params.get("scope", "current") != "current":
         protocol.validate_request({"op": "snapshot", "runtime": "validation", "scope": params["scope"]})
-    if op == "bind" and params.get("new"):
-        raise CommandError("initial_pairing_not_supported")
     saved = None
-    if op in ("load", "diff", "bind"):
+    if op in ("load", "diff") or op == "bind" and not params.get("new"):
         local = _store(api, config_path).snapshot(params["preset"])
         saved = local["document"]
         if saved is None or not saved["scopes"]:
@@ -333,6 +412,8 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
     target.discover()
     if op == "bindings":
         return {"op": op, "status": "available", "catalog": target.catalog.data}
+    if op == "bind":
+        return _bind(target, saved, params)
     if op == "status":
         try:
             target.select(record["begin_request"]["scope"])
@@ -344,14 +425,6 @@ def _run(api, client, config, config_path, targets, params, timeout, clock, slee
     scope = target.select(params.get("scope", "current"), params.get("target_id"))
     if saved is not None:
         incoming = _admit(_saved_scope(saved, scope), target.target, target.capability["limits"])
-    if op == "bind":
-        if params.get("dry_run", False):
-            return {"op": op, "status": "planned", "scope": scope, "target_id": target.target["target_id"]}
-        try:
-            response = target.peer.confirm_binding(target.catalog, scope, target.target["target_id"])
-        except remote.RemoteError:
-            return {"op": op, "status": "unknown", "scope": scope, "replay_allowed": False}
-        return {"op": op, "status": "paired", "pairing": response.data}
     snapshot = target.snapshot(scope)
     current = json.loads(snapshot.document_bytes)
     if op == "clear":

@@ -1,4 +1,4 @@
-"""Inactive favorites transport: one deadline, paced HTTP, no POST replay.
+"""Favorites transport: one deadline, paced HTTP, no POST replay.
 
 The host supplies verified runtime/limits, scope codec and durable storage
 bound to controller/device. No discovery, CLI wiring or filesystem I/O here.
@@ -88,7 +88,7 @@ class BindingCatalog:
 
 @dataclass(frozen=True)
 class Outcome:
-    operation_id: str
+    operation_id: str | None
     outcome: str
     verified: bool
     reason: str
@@ -97,14 +97,15 @@ class Outcome:
     result: protocol.ValidatedResult | None = field(default=None, repr=False)
 
     def summary(self):
-        return {"operation_id": self.operation_id, "outcome": self.outcome, "verified": self.verified,
+        return {**({"operation_id": self.operation_id} if self.operation_id is not None else {}),
+                "outcome": self.outcome, "verified": self.verified,
                 "reason": self.reason, "request_id": self.request_id, "cleanup": self.cleanup}
 
 
 @dataclass(frozen=True)
 class PreviewOutcome:
     """Validated dry-run evidence, never a committed or persisted receipt."""
-    operation_id: str
+    operation_id: str | None
     reason: str
     request_id: str | None = None
     cleanup: str = "unconfirmed"
@@ -120,7 +121,8 @@ class PreviewOutcome:
         return self.data["ready"] if self._result is not None else None
 
     def summary(self):
-        return {"operation_id": self.operation_id, "outcome": self.outcome, "ready": self.ready, "reason": self.reason,
+        return {**({"operation_id": self.operation_id} if self.operation_id is not None else {}),
+                "outcome": self.outcome, "ready": self.ready, "reason": self.reason,
                 "request_id": self.request_id, "cleanup": self.cleanup}
 
 
@@ -173,7 +175,8 @@ def recovery_record(begin, preview, commit_request):
 class RemoteFavorites:
     def __init__(self, client, device, *, runtime, limits, receipt_retention_seconds, scope_validator,
                  save_context, timeout=45, monotonic=time.monotonic, sleep=time.sleep, uuid_factory=uuid.uuid4,
-                 max_metadata_bytes=protocol.MAX_METADATA_BYTES, deadline=None):
+                 max_metadata_bytes=protocol.MAX_METADATA_BYTES, deadline=None,
+                 admission_ttl_ms=10000, max_budget_ms=300000):
         if (not callable(getattr(client, "api", None)) or not callable(getattr(client, "api_raw", None)) or type(device) is not str
                 or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", device) is None
                 or type(runtime) is not str or protocol.RUNTIME.fullmatch(runtime) is None
@@ -183,6 +186,8 @@ class RemoteFavorites:
                 or not callable(uuid_factory) or type(timeout) not in (int, float)
                 or not math.isfinite(timeout) or not 0 < timeout <= 300
                 or type(max_metadata_bytes) is not int or not 1 <= max_metadata_bytes <= protocol.MAX_METADATA_BYTES
+                or type(admission_ttl_ms) is not int or not 1 <= admission_ttl_ms <= 10000
+                or type(max_budget_ms) is not int or not 1 <= max_budget_ms <= 300000
                 or deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline))):
             raise RemoteError("invalid_configuration")
         server = getattr(client, "server", None)
@@ -192,6 +197,7 @@ class RemoteFavorites:
         self.limits = limits.validate()
         self.receipt_retention_seconds = receipt_retention_seconds
         self.max_metadata_bytes = max_metadata_bytes
+        self.admission_ttl_ms, self.max_budget_ms = admission_ttl_ms, max_budget_ms
         self.scope_validator, self.save_context = scope_validator, save_context
         self.clock, self.sleep, self.uuid_factory = monotonic, sleep, uuid_factory
         self._clock_last = None
@@ -338,6 +344,32 @@ class RemoteFavorites:
         result = self._rpc({"op": "bindingcatalog", "runtime": self.runtime}, deadline=self._deadline)
         return BindingCatalog(self._target, result)
 
+    def provision(self, catalog, mode, target_id, *, scope=None, prior_scope=None):
+        """Submit one explicit pairing change, retaining time for a catalog read.
+
+        This is not a transfer receipt and never retries an uncertain write.
+        Only the player can generate UUIDs or map the public target to grants.
+        """
+        if type(catalog) is not BindingCatalog or catalog._target != self._target:
+            raise RemoteError("invalid_configuration")
+        try:
+            checked = protocol.validate_result(catalog._result.request, catalog.data,
+                request_id=catalog._result.request_id, response_id=catalog._result.request_id,
+                status="ok", max_metadata_bytes=self.max_metadata_bytes)
+            if (checked.request != {"op": "bindingcatalog", "runtime": self.runtime}
+                    or len([row for row in checked.data["targets"] if row["target_id"] == target_id]) != 1):
+                raise RemoteError("invalid_configuration")
+            params = {"op": "provision", "runtime": self.runtime, "mode": mode,
+                      "target_id": target_id, "codecVersion": 1,
+                      "expected_binding_revision": checked.data["binding_revision"]}
+            if scope is not None:
+                params["scope"] = copy.deepcopy(scope)
+            if prior_scope is not None:
+                params["prior_scope"] = copy.deepcopy(prior_scope)
+            return self._rpc(params, deadline=self._deadline - 4)
+        except protocol.ProtocolError:
+            raise RemoteError("invalid_response") from None
+
     def confirm_binding(self, catalog, scope, target_id):
         """Confirm an existing exact pairing only; no bootstrap or rebinding."""
         if type(catalog) is not BindingCatalog or catalog._target != self._target:
@@ -397,7 +429,7 @@ class RemoteFavorites:
                 self._params({"op": "commit", "runtime": self.runtime, "transaction_id": PLACEHOLDER_TRANSACTION,
                               "operation_id": operation, "expected_revision": baseline["revision"], "plan_digest": "0" * 64})
                 self._params({"op": "status", "runtime": self.runtime, "operation_id": operation})
-            controls = 5 if commit_planned else 3  # Dry run has only begin/preview/abort.
+            controls = 6 if commit_planned else 4  # Includes one player-minted prepare grant.
             commands = len(packed.chunks) + controls
             budget = transfer.estimate_budget(len(packed.chunks), control_commands=controls,
                                               controller_requests=commands * 3, device_requests=commands * 3,
@@ -405,7 +437,8 @@ class RemoteFavorites:
             transfer.require_budget(budget, deadline=self._deadline, now=self._now())
             if (budget.minimum_seconds > self.limits.absolute_ttl_seconds
                     or self.limits.idle_ttl_seconds < POST_INTERVAL + HTTP_INTERVAL
-                    or commit_planned and self.receipt_retention_seconds < budget.minimum_seconds):
+                    or budget.minimum_seconds * 1000 > self.max_budget_ms
+                    or self.admission_ttl_ms <= (POST_INTERVAL + HTTP_INTERVAL) * 1000):
                 raise RemoteError("deadline_insufficient")
             return begin, packed, params
         except transfer.TransferError as error:
@@ -486,11 +519,25 @@ class RemoteFavorites:
         if self._staging_started:
             raise RemoteError("already_started")
         begin_params, packed, append_params = self._preflight(snapshot, document, commit_planned=commit_planned)
-        operation, transaction = begin_params["operation_id"], None
+        operation, transaction = None, None
         self._staging_started = True
         remaining_commit = int(commit_planned)
         try:
-            begin = self._rpc(begin_params, deadline=self._cutoff(len(packed.chunks) + 2 + remaining_commit))
+            prepare_started = self._now()
+            budget_ms = min(self.max_budget_ms, int((self._deadline - prepare_started) * 1000))
+            self._deadline = min(self._deadline, prepare_started + budget_ms / 1000)
+            prepared = self._rpc({"op": "prepare", "runtime": self.runtime,
+                **{key: begin_params[key] for key in ("scope", "expected_revision", "binding_revision",
+                                                      "document_sha256", "size_bytes")},
+                "budget_ms": budget_ms}, deadline=self._cutoff(len(packed.chunks) + 3 + remaining_commit))
+            if prepared.data["admission_ttl_ms"] > self.admission_ttl_ms:
+                raise RemoteError("invalid_response", request_id=prepared.request_id, phase="receipt")
+            operation = prepared.data["operation_id"]
+            begin_params["operation_id"] = operation
+            # Budget and grant lifetimes never restart on a later HTTP request.
+            begin_deadline = min(self._cutoff(len(packed.chunks) + 2 + remaining_commit),
+                                 prepare_started + prepared.data["admission_ttl_ms"] / 1000)
+            begin = self._rpc(begin_params, deadline=begin_deadline)
             transaction = begin.data["transaction_id"]
             if begin.data["next_seq"] != 0 or begin.data["received_bytes"] != 0:
                 raise RemoteError("invalid_response", request_id=begin.request_id, phase="receipt")

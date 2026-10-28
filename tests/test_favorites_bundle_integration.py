@@ -87,11 +87,26 @@ class FavoritesBundleIntegrationTests(unittest.TestCase):
         self.assertEqual(changed["status"], "imported")
         exported = self.directory / "export-cli.json"
         self.assertEqual(run("export", str(exported))["status"], "exported")
-        self.assertEqual(json.loads(exported.read_text()), bundle(scope(rating="987")))
-        self.assertNotIn("fixture-private", exported.read_text())
+        self.assertEqual(json.loads(exported.read_text(encoding="utf-8")), bundle(scope(rating="987")))
+        self.assertNotIn("fixture-private", exported.read_text(encoding="utf-8"))
         self.assertEqual(run("diff", str(exported))["status"], "matched")
         self.assertEqual(run("restore", changed["backup_path"])["status"], "restored")
-        self.assertEqual(json.loads(self.path.read_text())["preset_favorites"], self.original["preset_favorites"])
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["preset_favorites"], self.original["preset_favorites"])
+
+    def test_config_json_uses_utf8_independent_of_windows_locale(self):
+        incoming = bundle(scope(rating="987"))
+        incoming["scopes"][0]["mediaFavorites"][0]["title"] = "é"
+        path = self.directory / "unicode-incoming.json"
+        self.write(path, incoming)
+        self.assertEqual(self.command("import", path=str(path), mode="replace")["status"], "imported")
+        raw = self.path.read_bytes()
+        # Storage writes literal UTF-8. A locale-default Windows read can still
+        # parse JSON but silently changes every repeated title in a dense file.
+        def title(value):
+            return value["preset_favorites"]["presets"]["Home"]["scopes"][0]["mediaFavorites"][0]["title"]
+        self.assertEqual(title(json.loads(self.path.read_text(encoding="utf-8"))), "é")
+        self.assertEqual(title(json.loads(raw.decode("cp1252"))), "Ã©")
+        self.assertNotEqual(title(json.loads(raw.decode("cp1252"))), "é")
 
     def test_scope_validation_does_not_mutate_input_or_require_bundle(self):
         document = scope()
@@ -148,7 +163,7 @@ class FavoritesBundleIntegrationTests(unittest.TestCase):
         self.write(small, bundle(scope(rating="987")))
         self.assertEqual(run("import", str(small), "replace")["status"], "imported")
         self.assertEqual(run("import", str(exported), "replace")["status"], "imported")
-        self.assertEqual(json.loads(self.path.read_text())["preset_favorites"]["presets"]["Home"], dense)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["preset_favorites"]["presets"]["Home"], dense)
 
         oversized = copy.deepcopy(dense)
         oversized["scopes"][0]["mediaFavorites"][-1]["title"] += "x"
@@ -169,21 +184,21 @@ class FavoritesBundleIntegrationTests(unittest.TestCase):
         self.write(incoming, bundle(scope(rating="456")))
         result = self.command("import", path=str(incoming), mode="replace")
         self.assertEqual(result["status"], "imported")
-        current = json.loads(self.path.read_text())
+        current = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(current["token"], self.original["token"])
         current["token"] = "fixture-private-rotated"
         current["aliases"]["new"] = "fixture-other-device"
         self.write(self.path, current)
         restored = self.command("restore", path=result["backup_path"])
         self.assertEqual(restored["status"], "restored")
-        current = json.loads(self.path.read_text())
+        current = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(current["token"], "fixture-private-rotated")
         self.assertEqual(current["aliases"]["new"], "fixture-other-device")
         self.assertEqual(current["preset_favorites"], self.original["preset_favorites"])
         exported = self.directory / "export.json"
         self.command("export", path=str(exported))
         self.assertEqual(self.command("diff", path=str(exported))["status"], "matched")
-        self.assertNotIn("fixture-private", exported.read_text())
+        self.assertNotIn("fixture-private", exported.read_text(encoding="utf-8"))
 
     def test_conflicting_merge_preview_and_apply_never_write(self):
         incoming = self.directory / "incoming.json"
@@ -214,7 +229,7 @@ class FavoritesBundleIntegrationTests(unittest.TestCase):
         self.assertEqual(result["players"], 2)
         self.assertEqual(result["summary"]["after"], 3)
         self.assertEqual(len(list(self.directory.glob("cli.json.favorites-backup-*.json"))), 1)
-        saved = json.loads(self.path.read_text())["preset_favorites"]["presets"]["Home"]
+        saved = json.loads(self.path.read_text(encoding="utf-8"))["preset_favorites"]["presets"]["Home"]
         self.assertEqual(len(saved["scopes"]), 3)
 
     def test_external_config_edit_during_collection_is_not_overwritten(self):
@@ -227,7 +242,7 @@ class FavoritesBundleIntegrationTests(unittest.TestCase):
         with self.assertRaises(ott.Error):
             ott.collect_favorites_profile(self.path, "Home", [("a", "two")], 45,
                 export_snapshot=export, **self.dependencies)
-        self.assertEqual(json.loads(self.path.read_text()), updated)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), updated)
         self.assertEqual(list(self.directory.glob("cli.json.favorites-backup-*.json")), [])
 
 
