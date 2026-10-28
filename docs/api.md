@@ -747,6 +747,45 @@ Only play is journaled as `action:"plex_library"`; list/preview are read-only.
 Handler completion alone does not prove an observed playback effect. See the
 shared [contract fixtures](../contracts/plex-library-v1.json).
 
+### Scoped favorites transfer relay
+
+The additive `favorites_transfer` RPC relays bounded, runtime-bound scope
+documents. Its controller implementation alone does **not** advertise a player
+capability or make synchronization available. Binding discovery, provider codecs,
+persistent adapters and CLI reconciliation must be qualified together before use.
+The legacy `favorites` action below is unchanged.
+
+The implemented relay operations are `snapshot`, `begin`, `append`, `preview`,
+`commit`, `status` and `abort`. Command operators need each exact
+`favorites_transfer.OPERATION` permission; existing `favorites.*` permissions do
+not grant these operations, and family-wide wildcards are not accepted. Device
+credentials cannot enqueue them. `bindingcatalog` and `bind` remain unadmitted
+until their complete runtime integration is available.
+
+Every request carries `op` and the expected `runtime`. The actual queued
+`{id,action,params,expires_at}` envelope must fit 16 KiB after JSON escaping, before
+journal admission or enqueue. Documents are at most 1 MiB; append chunks are at
+most 8 KiB, with at most 256 chunks. SHA256 covers original bytes. Snapshot results
+must fit the existing 2 MiB response limit; other results and negative replies
+have a 128 KiB metadata limit. Shared queue, rate and retained-result limits are
+unchanged.
+
+Both successful and negative replies are checked against the pending request;
+completed receipts retain that expectation so a later duplicate cannot substitute
+another runtime or operation. A verified commit repeats the persisted receipt's
+identity, scope, revision, document digest, plan digest, counts and persistence
+claim exactly. The controller is a stateless relay: the CLI must additionally
+compare scope, digest, plan, counts and covered stores with its retained
+begin/preview context. An RPC response or controller journal record does not prove
+a durable favorites write. Unknown/partial outcomes require reconciliation;
+neither a timeout nor missing receipt permits blind replay.
+
+See the [wire fixtures](../contracts/favorites-transfer-v1.json) and
+[synchronization design](design/favorites-sync-proposal.md) for current limits and
+remaining activation gates. Rollback requires a controller baseline that retains
+future journal actions as audit metadata, plus an operator configuration accepted
+by that baseline.
+
 ### Current-item favorites across profiles
 
 `favorites` is an optional administrator-authenticated RPC; stored entries live

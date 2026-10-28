@@ -30,6 +30,7 @@ type requestResult struct {
 	plexLibrary          *plexLibraryRequest
 	localMedia           *localMediaRequest
 	favorites            *favoritesRequest
+	favoritesTransfer    *favoritesTransferRequest
 	handoff              *handoffRequest
 	offlineProfile       *offlineProfileRequest
 }
@@ -122,6 +123,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		failure(w, 400, "params must be an object")
 		return
 	}
+	var favoritesTransferBound *favoritesTransferRequest
 	switch action {
 	case "kiosk":
 		var mode string
@@ -171,6 +173,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parsePlexLibraryRequest(params) != nil
 	case "favorites":
 		ok = parseFavoritesRequest(params) != nil
+	case "favorites_transfer":
+		favoritesTransferBound = parseFavoritesTransferRequest(params)
+		ok = favoritesTransferBound != nil
 	case "app_update":
 		ok = validAppUpdateRequest(params)
 	case "maintenance":
@@ -270,6 +275,12 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	m["id"], _ = json.Marshal(id)
 	m["expires_at"], _ = json.Marshal(float64(expires.UnixNano()) / 1e9)
 	data, _ := json.Marshal(m)
+	if action == "favorites_transfer" && !validFavoritesTransferEnvelope(data) {
+		// Check the actual queued bytes after transport IDs/expiry are added,
+		// before the idempotency journal or queue can be changed.
+		failure(w, 413, "favorites transfer envelope is too large or invalid")
+		return
+	}
 	s.mu.Lock()
 	s.expire(now)
 	if (len(d.queue) >= s.maxPending || s.bytes+len(data) > MaxQueueBytes || len(d.results) >= 50) && !s.hasOperation(r, key, now) {
@@ -329,6 +340,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "favorites" {
 		e.favorites = parseFavoritesRequest(params)
+	}
+	if action == "favorites_transfer" {
+		e.favoritesTransfer = favoritesTransferBound
 	}
 	if action == "profile_save" || action == "profile_export" || action == "profile_import" {
 		var number int
@@ -440,6 +454,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var plexLibrary *plexLibraryRequest
 	var localMedia *localMediaRequest
 	var favorites *favoritesRequest
+	var favoritesTransfer *favoritesTransferRequest
 	var handoff *handoffRequest
 	var offlineProfile *offlineProfileRequest
 	var inspect *inspectRequest
@@ -461,6 +476,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			plexLibrary = pending.plexLibrary
 			localMedia = pending.localMedia
 			favorites = pending.favorites
+			favoritesTransfer = pending.favoritesTransfer
 			handoff = pending.handoff
 			offlineProfile = pending.offlineProfile
 			playbackOperation = pending.playbackOperation
@@ -516,6 +532,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if favorites == nil {
 		favorites = d.results[id].favorites
+	}
+	if favoritesTransfer == nil {
+		favoritesTransfer = d.results[id].favoritesTransfer
 	}
 	if offlineProfile == nil {
 		offlineProfile = d.results[id].offlineProfile
@@ -621,6 +640,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid favorites result")
 		return
 	}
+	if favoritesTransfer != nil && !validFavoritesTransferResult(m["data"], status, favoritesTransfer) {
+		failure(w, 400, "invalid favorites transfer result")
+		return
+	}
 	if offlineProfile != nil && !validOfflineProfileResult(m["data"], status, offlineProfile) {
 		failure(w, 400, "invalid Local videos profile result")
 		return
@@ -658,7 +681,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, handoff: e.handoff, offlineProfile: e.offlineProfile}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

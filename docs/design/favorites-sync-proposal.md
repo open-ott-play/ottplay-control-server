@@ -214,6 +214,12 @@ through full validation.
 Favorites must not inherit generic settings `safe_after` expiry/retry. Keep an
 uncertain commit pending for read-only reconciliation even after timeout. Report
 completed provider steps if favorites later fails; never claim whole-preset rollback.
+The local context store writes immutable, private operation evidence and verifies
+fsync/readback before commit submission. It binds each record to the controller
+endpoint and exact device, keeps at most 32 records/256 KiB total, and never evicts
+unknown outcomes automatically. Missing local evidence is unknown, not permission
+to retry. These files contain bounded begin/preview metadata, not a copy of the
+favorites payload or credentials; remote orchestration still has separate gates.
 Numbered Local import/export remains separate. A server update alone does not
 install CLI modules: package/install the complete reviewed helper set atomically,
 preserving private config, before advertising these commands as usable.
