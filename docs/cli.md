@@ -828,6 +828,7 @@ ott t1,t2,t3,t4 settings
 ott t1,t2,t3,t4 setting bufSize 3
 ott t1,t2,t3,t4 load Home plan    # inspect a configured private preset
 ott t1,t2,t3,t4 load Home apply   # separate default checkpoint per player
+ott t1,t2,t3,t4 load Home apply --settings-only # explicitly skip saved favorites
 ```
 
 Keep the list in one shell argument: `t1,t2,t3,t4`, or quote it when adding
@@ -1831,9 +1832,34 @@ are implemented in the pinned source; compatibility requirements are described
 below. Automatic favorites delivery through ordinary `ott PLAYER load PRESET`
 is not yet integrated. A preset with its own saved favorites document stops that
 ordinary load before any preset settings are sent. For example, after
-`ott t1 fav collect Home replace`, `ott t1 load Home` refuses to perform a
-settings-only load; `ott t1 fav load Home replace` is the separate favorites-only
-operation for an already paired current source. Presets without their own
+`ott t1 fav collect Home replace`, `ott t1 load Home` refuses to silently perform
+a settings-only load. Explicitly choose the subset when needed:
+
+```sh
+ott t1 load Home --settings-only
+ott t1 load Home plan --settings-only
+ott t1 load Home apply --settings-only --checkpoint /private/home-settings.json
+ott t1 load Home resume --settings-only --checkpoint /private/home-settings.json
+ott t1 load Home verify --settings-only
+```
+
+`--settings-only` keeps the saved favorites document intact and sends no favorites
+commands. It applies the normal preset settings, including configured Local
+folders and provider/profile selection; playback follows those existing settings.
+JSON results include `settings_only: true` and `favorites: "skipped"`, and the
+plain load result explicitly says "favorites skipped". This is not verification
+or delivery of the saved favorites. The flag deliberately does not validate the
+favorites companion, including malformed companion metadata. Use `ott presets
+Home fav validate` separately to validate that document.
+
+Use the same flag when resuming: settings-only checkpoints bind this intent and
+cannot be resumed as complete preset loads, or vice versa. Default checkpoint
+paths are separate for these modes. Existing unflagged checkpoint formats and
+preset revisions remain unchanged. Groups support the same flag and retain
+separate checkpoints for each player; there is no cross-player atomic apply.
+
+`ott t1 fav load Home replace` remains the separate favorites-only operation for
+an already paired current source. Presets without their own
 companion retain their existing behavior when the favorites extension is absent
 or its top-level value and `presets` mapping are dictionaries. A malformed
 top-level extension or `presets` mapping stops the load before preset settings

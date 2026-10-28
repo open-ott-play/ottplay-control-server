@@ -63,12 +63,14 @@ def verify(api, client, device, preset):
 
 
 class Session:
-    def __init__(self, api, client, device, name, preset, path, resume):
+    def __init__(self, api, client, device, name, preset, path, resume, *, settings_only=False):
         self.api, self.client, self.device = api, client, device
         self.path = Path(path).expanduser()
         self.lock = None
         self.state = {"version": 1, "device": device, "preset": name, "revision": digest(preset),
                       "server": digest(client.server), "completed": [], "pending": None}
+        if settings_only:
+            self.state["settings_only"] = True
         try:
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             if os.name != "nt" and stat.S_IMODE(self.path.parent.stat().st_mode) & 0o077:
@@ -92,10 +94,11 @@ class Session:
                     raise api.Error("Checkpoint is too large")
                 saved = api.read_json(self.path)
                 if (not isinstance(saved, dict) or set(saved) != set(self.state)
-                        or any(saved.get(k) != self.state[k] for k in ("version", "device", "preset", "revision", "server"))
+                        or any(saved.get(k) != self.state[k] for k in self.state if k not in ("completed", "pending"))
+                        or settings_only and saved.get("settings_only") is not True
                         or not isinstance(saved["completed"], list) or len(saved["completed"]) > 100
                         or any(not isinstance(x, str) or len(x) > 64 for x in saved["completed"])):
-                    raise api.Error("Checkpoint does not match this server, player and preset revision")
+                    raise api.Error("Checkpoint does not match this server, player, preset revision and settings-only mode")
                 self.state = saved
             elif self.path.exists():
                 raise api.Error("Checkpoint exists; use resume or a new checkpoint path")
@@ -198,11 +201,12 @@ class Session:
 
 
 def run(api, config, words, timeout, json_output, on_receipt, *, client=None, device=None):
-    if len(words) not in (4, 6) or words[3] not in ("plan", "apply", "resume", "verify") or (len(words) == 6 and words[4] != "--checkpoint"):
-        raise api.Error("Use PLAYER load PRESET plan|apply|resume|verify [--checkpoint FILE]")
-    name, preset = api.validate_preset(config, words[2])
-    api.require_preset_favorites_support(config, name)
-    mode = words[3]
+    parsed = api.parse_preset_load(words[1:])
+    mode, settings_only = parsed["mode"], parsed["settings_only"]
+    if mode is None:
+        raise api.Error("Use PLAYER load PRESET plan|apply|resume|verify [--settings-only] [--checkpoint FILE]")
+    name, preset = api.validate_preset(config, parsed["preset"])
+    api.require_preset_favorites_support(config, name, settings_only=settings_only)
     client = client if client is not None else api.Client(config, timeout)
     client.on_receipt = on_receipt
     device = device if device is not None else client.device(words[0])
@@ -212,8 +216,9 @@ def run(api, config, words, timeout, json_output, on_receipt, *, client=None, de
     elif mode == "verify":
         result = {"preset": name, "device": device, **verify(api, client, device, preset)}
     else:
-        path = words[5] if len(words) == 6 else (Path.home() / ".config/ottplay-control/checkpoints" / (digest([client.server, device, name]) + ".json"))
-        session = Session(api, client, device, name, preset, path, mode == "resume")
+        identity = [client.server, device, name] + (["settings-only"] if settings_only else [])
+        path = parsed["checkpoint"] or (Path.home() / ".config/ottplay-control/checkpoints" / (digest(identity) + ".json"))
+        session = Session(api, client, device, name, preset, path, mode == "resume", settings_only=settings_only)
         try:
             # Preflight compares every provider before the first mutation, so an
             # old player cannot receive only half of a resumable application.
@@ -224,5 +229,7 @@ def run(api, config, words, timeout, json_output, on_receipt, *, client=None, de
                 result = {**result, **verify(api, client, device, preset)}
         finally:
             session.close()
+    if settings_only:
+        result.update(settings_only=True, favorites="skipped")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["status"] in ("planned", "verified") else 130 if result["status"] == "interrupted" else 1
