@@ -374,6 +374,34 @@ class AcknowledgementStore:
             raise OperationStoreError("capacity")
         return raw
 
+    def _resync_existing(self, parent, name, expected):
+        # Complete a possible prior crash between write and fsync before this
+        # immutable intent may authorize a newly confirmed conditional ACK.
+        parent.assert_current()
+        fd = parent.open(name, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb", buffering=0) as stream:
+            before = os.fstat(stream.fileno())
+            fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns", "st_uid", "st_mode", "st_nlink")
+            identity = tuple(getattr(before, key) for key in fields)
+            if (not private_files._private_regular(before) or before.st_size > 8192
+                    or stream.read(8193) != expected):
+                raise OperationStoreError("retention_uncertain")
+            os.fsync(stream.fileno())
+            parent.sync()
+            stream.seek(0)
+            readback = stream.read(8193)
+            after = os.fstat(stream.fileno())
+            if readback != expected or tuple(getattr(after, key) for key in fields) != identity:
+                raise OperationStoreError("retention_uncertain")
+            current = parent.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+            try:
+                named = os.fstat(current)
+                if not private_files._private_regular(named) or tuple(getattr(named, key) for key in fields) != identity:
+                    raise OperationStoreError("retention_uncertain")
+                parent.assert_current()
+            finally:
+                os.close(current)
+
     def _write(self, name, value):
         raw = _encoded(value)
         if len(raw) > 8192:
@@ -398,6 +426,7 @@ class AcknowledgementStore:
                             current = self._comparison(current)
                         if previous != current:
                             raise OperationStoreError("conflict")
+                    self._resync_existing(parent, name, existing)
                     return False
                 count, size, intents, proofs = 0, 0, set(), set()
                 with os.scandir(self.directory) as entries:

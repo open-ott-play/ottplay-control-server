@@ -397,6 +397,103 @@ class RecoveryHostTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual(self.path.read_bytes(), json.dumps(self.config).encode())
 
+    def test_crash_before_first_file_fsync_reuse_syncs_intent_before_ack(self):
+        durable = commands._DurableContext(self.path, self.client, "one")
+        durable._ensure()
+        class SimulatedCrash(BaseException):
+            pass
+        def crash_before_sync(parent, name, raw):
+            fd = parent.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                # The complete bytes remain readable in cache, but no fsync
+                # or parent sync was completed before the simulated death.
+                raise SimulatedCrash
+        with mock.patch.object(operations.private_files._Parent, "write_new", crash_before_sync), self.assertRaises(SimulatedCrash):
+            durable.admin.save_intent(checked(), FIX["acknowledge"]["request"])
+        path = next(durable.admin.directory.glob("*.intent.json"))
+        raw = path.read_bytes()
+        metadata = path.stat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        events, sync, parent_sync, data = [], os.fsync, operations.private_files._Parent.sync, self.client.data
+        def observed_sync(fd):
+            opened = os.fstat(fd)
+            result = sync(fd)
+            if (opened.st_dev, opened.st_ino) == identity:
+                events.append("file_fsynced")
+            return result
+        def observed_parent(parent):
+            result = parent_sync(parent)
+            if parent.path == durable.admin.directory and "file_fsynced" in events:
+                events.append("parent_synced")
+            return result
+        def require_durable(params):
+            if params.get("mode") == "acknowledge":
+                self.assertEqual(events[:2], ["file_fsynced", "parent_synced"])
+                self.assertEqual(path.read_bytes(), raw)
+                events.append("ack")
+            return data(params)
+        self.client.data = require_durable
+        with mock.patch.object(operations.os, "fsync", observed_sync), \
+                mock.patch.object(operations.private_files._Parent, "sync", observed_parent):
+            result = self.call(["ack", OPERATION, "--confirm", PLAN])
+        self.assertEqual(result["status"], "acknowledgement_confirmed")
+        self.assertEqual(events[:3], ["file_fsynced", "parent_synced", "ack"])
+        self.assertEqual(self.modes(), ["inspect", "acknowledge"])
+        self.assertEqual(path.read_bytes(), raw)
+
+    def test_existing_intent_file_fsync_failure_blocks_ack_and_preserves_bytes(self):
+        durable = commands._DurableContext(self.path, self.client, "one")
+        durable.save_acknowledgement(checked(), FIX["acknowledge"]["request"])
+        path = next(durable.admin.directory.glob("*.intent.json"))
+        raw, metadata = path.read_bytes(), path.stat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        sync, attempted = os.fsync, []
+        def fail_intent_sync(fd):
+            opened = os.fstat(fd)
+            if (opened.st_dev, opened.st_ino) == identity:
+                attempted.append(True)
+                raise OSError("private fsync failure must not escape")
+            return sync(fd)
+        with mock.patch.object(operations.os, "fsync", fail_intent_sync):
+            result = self.call(["ack", OPERATION, "--confirm", PLAN])
+        self.assertEqual((result["status"], result["reason"]), ("blocked", "context_not_saved"))
+        self.assertEqual(attempted, [True])
+        self.assertEqual((self.modes(), self.client.effects), (["inspect"], 0))
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertNotIn("private", json.dumps(result))
+
+    def test_existing_intent_replaced_after_fsync_is_not_reusable(self):
+        durable = commands._DurableContext(self.path, self.client, "one")
+        durable.save_acknowledgement(checked(), FIX["acknowledge"]["request"])
+        path = next(durable.admin.directory.glob("*.intent.json"))
+        raw, metadata = path.read_bytes(), path.stat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        sync, parent_sync, synced = os.fsync, operations.private_files._Parent.sync, []
+        def observed_sync(fd):
+            opened = os.fstat(fd)
+            result = sync(fd)
+            if (opened.st_dev, opened.st_ino) == identity:
+                synced.append(True)
+            return result
+        def replace_after_sync(parent):
+            result = parent_sync(parent)
+            if parent.path == durable.admin.directory and synced:
+                replacement = path.with_suffix(".replacement")
+                fd = os.open(replacement, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(raw)
+                os.replace(replacement, path)
+            return result
+        with mock.patch.object(operations.os, "fsync", observed_sync), \
+                mock.patch.object(operations.private_files._Parent, "sync", replace_after_sync):
+            result = self.call(["ack", OPERATION, "--confirm", PLAN])
+        self.assertEqual((result["status"], result["reason"]), ("blocked", "context_not_saved"))
+        self.assertEqual((self.modes(), self.client.effects), (["inspect"], 0))
+        self.assertTrue(synced)
+        self.assertEqual(path.read_bytes(), raw)
+
     def test_fresh_confirmation_after_lost_effect_observes_saved_audit_without_ack(self):
         self.client.lose_ack = True
         def missing(data):
