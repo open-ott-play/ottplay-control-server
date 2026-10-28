@@ -152,8 +152,11 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`2334b565191b7dfc2936f2504c18ec2ebc89bed0`](https://github.com/open-ott-play/ottplay-control-server/commit/2334b565191b7dfc2936f2504c18ec2ebc89bed0).
+[`7185de57559e89438bc7d6a6d436fffd8d6c91ff`](https://github.com/open-ott-play/ottplay-control-server/commit/7185de57559e89438bc7d6a6d436fffd8d6c91ff).
 This is an exact source pin, not a claim about the latest published release.
+Its tree matches merge commit `66b87a3ff3e8edd50dabce67b2017170c09bb058`,
+the source used for controller beta27. The examples retain the reviewed signed
+source commit above; a server release does not install the Python CLI or player.
 It contains the complete CLI module set, including group RPC failure diagnostics, finite group `watch`,
 performance-export verification, negotiated debug bundles and the local `resolve` command,
 [workbench](workbench.md#quick-start), offline `report verify`, Plex library commands and the verified-release Android
@@ -178,6 +181,13 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
+This source also contains all 20 CLI Python modules for
+[saved favorites documents](#saved-favorites-documents) and explicit current-Plex
+binding, collect, load, diff, clear and status commands. Their coordinated
+player/controller/CLI deployment is pending; the source pin does not assert that
+your running components support them. Automatic favorites delivery through an
+ordinary `load PRESET` is still gated as described below.
+
 The full source hash is verified before and after checkout. Record
 `git rev-parse HEAD` with diagnostic results. Older CLI revisions, including
 `v0.1.6-beta.13`, lack the new `local` source commands and preset bindings; other
@@ -199,8 +209,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=2334b565191b7dfc2936f2504c18ec2ebc89bed0
-  ott_source="$HOME/.local/share/ottplay-control-server-local-2334b565191b"
+  ott_ref=7185de57559e89438bc7d6a6d436fffd8d6c91ff
+  ott_source="$HOME/.local/share/ottplay-control-server-local-7185de57559e"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -222,7 +232,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-2334b565191b/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-7185de57559e/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -236,7 +246,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-2334b565191b/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-7185de57559e/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -258,8 +268,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '2334b565191b7dfc2936f2504c18ec2ebc89bed0'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-2334b565191b'
+$ottRef = '7185de57559e89438bc7d6a6d436fffd8d6c91ff'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-7185de57559e'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -305,12 +315,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-2334b565191b/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-7185de57559e/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-2334b565191b\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-7185de57559e\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -339,7 +349,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-2334b565191b`, stages the replacement beside it, then switches atomically.
+`ott.before-local-7185de57559e`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -351,9 +361,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-2334b565191b")
-staged = launcher.with_name("ott.switch-local-2334b565191b")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-2334b565191b/cli/ott.py"
+backup = launcher.with_name("ott.before-local-7185de57559e")
+staged = launcher.with_name("ott.switch-local-7185de57559e")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-7185de57559e/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -1809,12 +1819,20 @@ configuration and preview again. If replacement has an uncertain outcome, inspec
 the current file and retained backup before another write. Do not run older CLI
 versions or editors that ignore the configuration lock concurrently.
 
-Player collect/load/diff/clear and automatic favorites delivery with preset load
-are still under development. While this integration is unavailable, loading a
-preset with its own saved favorites document stops before sending preset settings;
-it cannot report a complete load after copying settings alone. Presets without
-their own companion retain their existing behavior. Document validation does not establish a player
-binding, native folder grant or provider support. See the
+Standalone `fav bindings`, `bind`, `collect`, `load`, `diff`, `clear` and `status`
+are implemented in the pinned source; their coordinated deployment is described
+below. Automatic favorites delivery through ordinary `ott PLAYER load PRESET`
+is not yet integrated. A preset with its own saved favorites document stops that
+ordinary load before any preset settings are sent. For example, after
+`ott t1 fav collect Home replace`, `ott t1 load Home` refuses to perform a
+settings-only load; `ott t1 fav load Home replace` is the separate favorites-only
+operation for an already paired current source. Presets without their own
+companion retain their existing behavior when the favorites extension is absent
+or its top-level value and `presets` mapping are dictionaries. A malformed
+top-level extension or `presets` mapping stops the load before preset settings
+are sent; this guard does not validate unrelated saved documents. Document
+validation does not establish a player binding, native folder grant or provider
+support. See the
 [synchronization design](design/favorites-sync-proposal.md) for the exact coverage
 and current implementation limits. Existing remote bookmarks below are unchanged.
 
@@ -1854,6 +1872,14 @@ Use `--scope plex:PROFILE_UUID:SOURCE_UUID` when a saved bundle or target has
 several possible scopes; copy the public UUIDs from `fav bindings`. Display names
 and profile numbers do not establish identity. `fav bind current --new` leaves
 an existing unique pair unchanged. A dry-run never creates a pairing.
+
+`collect` and `load` also default to conservative **whole-scope merge**. Different
+scopes combine and identical scopes deduplicate, but different content, order or
+list metadata within the same scope blocks the operation; individual entries
+are not silently combined. Explicit `collect ... replace` replaces the saved
+bundle with the collected scopes. Explicit `load ... replace` replaces the
+selected player's current scope with the saved scope after validation. Preview
+either replacement with `--dry-run` first.
 
 `ott t1,t2 fav collect Home replace` collects every complete snapshot before one
 local update. A failed or conflicting source leaves the local companion intact.

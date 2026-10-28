@@ -4,6 +4,21 @@
 
 ### Added
 
+- Store portable favorites companions in existing named CLI presets. Validate,
+  export, import, diff and restore bounded documents with private backups and
+  guarded local replacement. Whole-scope merge combines distinct scopes,
+  deduplicates identical scopes and blocks conflicting content; replacement is
+  explicit. Group collection reads every complete snapshot before one local write.
+- Add explicit current-Plex favorites binding, collect, load, diff, clear and
+  status commands in source. The first adapter covers the currently verified,
+  paired Plex source; coordinated player/controller/CLI deployment is pending.
+  Ordinary preset loading with a favorites companion remains gated until complete
+  settings-plus-favorites delivery is integrated.
+- Retain target-bound favorites operation evidence and reconcile uncertain
+  outcomes without replaying writes. When full storage qualification is unavailable,
+  status can make a bounded read using fresh runtime metadata; incomplete scope
+  or binding proof remains unknown and exits unsuccessfully, even if the player
+  claims completion.
 - Require negotiated session-only Local play/shuffle in the CLI, including the
   `offline` alias and groups. Remote playback stays in memory without replacing
   saved provider/profile/startup state, order, seed, cursor, resume or exports;
@@ -90,6 +105,15 @@
   intact; register another alias for the same device UUID to control it normally.
 - Guide unbound Local videos profile imports through loading the profile before
   connecting and binding sources, then reloading it after scanning completes.
+
+### Upgrade
+
+- The current CLI contains 20 Python modules. Install the complete `cli/`
+  directory from one reviewed revision; keep the existing private configuration
+  and recovery evidence. The source installation examples pin reviewed signed
+  commit `7185de57559e89438bc7d6a6d436fffd8d6c91ff`, whose tree matches merge
+  `66b87a3ff3e8edd50dabce67b2017170c09bb058` used for controller beta27. This does
+  not claim that matching CLI, controller and player components are installed.
 
 ## [0.1.6] - 2026-10-24
 
