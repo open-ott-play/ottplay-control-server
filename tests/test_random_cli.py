@@ -79,7 +79,7 @@ class RandomSelectionTest(unittest.TestCase):
                 self.assertEqual((code, err), (0, ''))
                 self.assertEqual(self.calls[-1][1]['random'], selector)
                 choice.assert_not_called()
-        self.assertNotIn('RR', ott.HELP)
+        self.assertNotRegex(ott.HELP, r'\bRR\b')
         help_output = io.StringIO()
         with contextlib.redirect_stdout(help_output):
             ott.print_player_help({'capabilities': self.controls}, 't1')

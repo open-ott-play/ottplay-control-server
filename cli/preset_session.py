@@ -201,6 +201,7 @@ def run(api, config, words, timeout, json_output, on_receipt, *, client=None, de
     if len(words) not in (4, 6) or words[3] not in ("plan", "apply", "resume", "verify") or (len(words) == 6 and words[4] != "--checkpoint"):
         raise api.Error("Use PLAYER load PRESET plan|apply|resume|verify [--checkpoint FILE]")
     name, preset = api.validate_preset(config, words[2])
+    api.require_preset_favorites_support(config, name)
     mode = words[3]
     client = client if client is not None else api.Client(config, timeout)
     client.on_receipt = on_receipt

@@ -1,0 +1,250 @@
+{
+  "schema": 1,
+  "status": "FROZEN_WIRE_CONTRACT_RUNTIME_IMPLEMENTATION_IN_PROGRESS_NOT_DEPLOYED",
+  "source_checkpoint": "52d75d561b1c86dba092f0399d3d829b6049bbbb",
+  "scope": "current verified explicitly bound Plex source only",
+  "seven_transfer_operations": "UNCHANGED",
+  "seven_operations_fixture_sha256": "cbaeda0d8038a0153fc8611c882b056aaeeeede81ee3fc70fc7449076b2436b4",
+  "capability": {
+    "favorites_transfer": {
+      "version": 1,
+      "persistence": [
+        "persistent"
+      ],
+      "codecs": [
+        {
+          "provider": "plex",
+          "codecVersion": 1,
+          "locatorKinds": [
+            "plex-media"
+          ],
+          "targetScope": "current-verified-source",
+          "coverage": [
+            "channelLists",
+            "mediaFavorites"
+          ]
+        }
+      ],
+      "limits": {
+        "max_document_bytes": 1048576,
+        "max_chunk_bytes": 8192,
+        "max_chunks": 256,
+        "max_envelope_bytes": 16384,
+        "max_snapshot_response_bytes": 2097152,
+        "max_active_stages": 1,
+        "idle_ttl_seconds": 120,
+        "absolute_ttl_seconds": 600,
+        "max_plan_bytes": 65536,
+        "max_metadata_bytes": 131072,
+        "max_json_depth": 20,
+        "max_json_nodes": 32768,
+        "max_channel_lists": 256,
+        "max_entries_per_list": 10000,
+        "max_media_favorites": 1000,
+        "max_receipt_entries": 32,
+        "max_receipt_ledger_bytes": 65536,
+        "max_retained_admissions_per_adapter_instance": 16,
+        "max_unstarted_drafts": 1
+      },
+      "receipt_retention_seconds": 86400,
+      "receipt_retention_origin": "logical-reservation-plan",
+      "receipt_retention_policy": "up-to-count-and-byte-bounded",
+      "admission": {
+        "op": "prepare",
+        "max_unconsumed_grants": 1,
+        "admission_ttl_ms": 10000,
+        "max_budget_ms": 300000,
+        "operation_id": "player-generated-uuidv4"
+      }
+    }
+  },
+  "common_runtime": {
+    "type": "string",
+    "pattern": "^[a-z0-9-]{1,64}$",
+    "minLength": 1,
+    "maxLength": 64,
+    "no_other_characters": true
+  },
+  "common_error": {
+    "exact_fields": [
+      "version",
+      "runtime",
+      "op",
+      "error"
+    ],
+    "error_type": "string",
+    "provision_only_additional_code": "outcome_unknown"
+  },
+  "bindingcatalog": {
+    "version": 1,
+    "runtime": "synthetic-runtime-1",
+    "op": "bindingcatalog",
+    "binding_revision": "2",
+    "targets": [
+      {
+        "target_id": "plex-current-target-synthetic-1",
+        "display": "Synthetic current Plex profile / source",
+        "provider": "plex",
+        "codecVersion": 1,
+        "serverId": "server-one"
+      }
+    ],
+    "bindings": [
+      {
+        "scope": {
+          "profileBindingId": "11111111-1111-4111-8111-111111111111",
+          "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+          "provider": "plex"
+        },
+        "target_id": "plex-current-target-synthetic-1",
+        "codecVersion": 1
+      }
+    ]
+  },
+  "bind_request": {
+    "op": "bind",
+    "runtime": "synthetic-runtime-1",
+    "scope": {
+      "profileBindingId": "11111111-1111-4111-8111-111111111111",
+      "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+      "provider": "plex"
+    },
+    "target_id": "plex-current-target-synthetic-1",
+    "expected_binding_revision": "2",
+    "codecVersion": 1
+  },
+  "bind_response": {
+    "version": 1,
+    "op": "bind",
+    "runtime": "synthetic-runtime-1",
+    "binding_revision": "2",
+    "scope": {
+      "profileBindingId": "11111111-1111-4111-8111-111111111111",
+      "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+      "provider": "plex"
+    },
+    "target_id": "plex-current-target-synthetic-1",
+    "paired": true
+  },
+  "provision": {
+    "file": "favorites-provisioning-v1.json",
+    "sha256": "bb3cd3ac0b6533af342ce27e4754d5e0dfa5322ebccfe478b4d30193b45d1af1",
+    "modes": [
+      "create",
+      "import",
+      "pair",
+      "replace-current"
+    ]
+  },
+  "prepare": {
+    "exact_request_fields": [
+      "op",
+      "runtime",
+      "scope",
+      "expected_revision",
+      "binding_revision",
+      "document_sha256",
+      "size_bytes",
+      "budget_ms"
+    ],
+    "exact_response_fields": [
+      "version",
+      "op",
+      "runtime",
+      "scope",
+      "expected_revision",
+      "binding_revision",
+      "document_sha256",
+      "size_bytes",
+      "budget_ms",
+      "operation_id",
+      "admission_ttl_ms"
+    ],
+    "request_example": {
+      "op": "prepare",
+      "runtime": "synthetic-runtime-1",
+      "scope": {
+        "profileBindingId": "11111111-1111-4111-8111-111111111111",
+        "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+        "provider": "plex"
+      },
+      "expected_revision": "revision-1",
+      "binding_revision": "2",
+      "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 650,
+      "budget_ms": 300000
+    },
+    "response_example": {
+      "version": 1,
+      "op": "prepare",
+      "runtime": "synthetic-runtime-1",
+      "scope": {
+        "profileBindingId": "11111111-1111-4111-8111-111111111111",
+        "sourceBindingId": "22222222-2222-4222-8222-222222222222",
+        "provider": "plex"
+      },
+      "expected_revision": "revision-1",
+      "binding_revision": "2",
+      "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 650,
+      "budget_ms": 300000,
+      "operation_id": "55555555-5555-4555-8555-555555555555",
+      "admission_ttl_ms": 10000
+    },
+    "bounds": {
+      "size_bytes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1048576
+      },
+      "budget_ms": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 300000
+      },
+      "admission_ttl_ms": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000
+      },
+      "operation_id": "canonical lowercase cryptographically generated UUIDv4",
+      "scope": "exact profileBindingId/sourceBindingId/provider:plex; canonical lowercase UUIDv4 IDs",
+      "revision_fields": "nonempty opaque equality tokens of at most256characters, no control characters; actual current registry binding revisions are canonical decimal safe integer strings",
+      "document_sha256": "exact64lowercase hex characters"
+    },
+    "semantics": [
+      "Prepare is additive; existing begin/append/preview/commit/status/abort/snapshot request and result shapes remain unchanged.",
+      "Capture prepareStart once and validate the authenticated envelope has not expired at actual dispatch, including after lazy load. wholeDeadline=prepareStart+budget_ms; queue expiry controls dispatch, not the separately explicit bounded operation budget. Later RPCs each require an unexpired dispatch envelope and never renew the whole deadline. TTL=min(10000,remainingWholeBudget); response repeats requested budget_ms and actual admission_ttl_ms.",
+      "Require actual current source/profile/runtime/binding/base revision, healthy physical store qualification and crypto randomness; prepare creates no persistent data.",
+      "At most one unconsumed grant and one active stage. Busy refuses without replacing an existing live grant or stage. A lost prepare ACK is not replayed automatically; unconsumed grant expires within10seconds.",
+      "Begin consumes exactly the minted operation_id plus scope/base/binding/document digest/size and captured trusted context. Internal commit reinspection may reuse ONLY the same transaction/runtime context. No receipt absence or eviction ever means fresh.",
+      "Grant expires on TTL, whole deadline or source/profile/runtime/binding drift. Abort/expiry/rejection before commit have no persistent writes.",
+      "After consumption the original whole deadline follows the stage through append/preview/commit. No per-request deadline extension.",
+      "Unknown/partial commit is reconciled by fresh same-scope read-only status and actual persisted target readback; no new prepare or mutation replay for that old operation."
+    ],
+    "error_example": {
+      "version": 1,
+      "runtime": "synthetic-runtime-1",
+      "op": "prepare",
+      "error": "busy"
+    }
+  },
+  "retention": {
+    "maximum_seconds": 86400,
+    "origin": "logical reservation-plan time",
+    "maximum_receipts": 32,
+    "maximum_ledger_bytes": 65536,
+    "completed_eviction": "Oldest proved verified/not_applied completion may be removed before24h under count or byte pressure.",
+    "protected": "Pending/partial/unknown are never evicted to admit another transfer.",
+    "missing_or_expired_receipt": "unknown; never freshness or mutation replay permission",
+    "precommit": "Planning, preview, abort, expiry and rejected begin have no durable receipt writes. Pending receipt is committed by exact prepared CAS immediately before first favorites write."
+  },
+  "actual_runtime_requirements": [
+    "Reachable authenticated executeRemoteRequest dispatch and asynchronous capability query load only a fixed internal optional asset.",
+    "Capability is reported only after read-only qualification of actual current verified PMS, complete TV/media/registry/receipt owners, physical compression codec and conditional writer; code loading is not storage initialization.",
+    "Preserve exact physical bytes for CAS/hash and decode existing provider compression for logical cache comparisons/adoption.",
+    "Private local selectors, owner tokens, credentials, URLs, grants and raw store documents never enter wire responses.",
+    "PIN/kiosk/parental policy and actual envelope deadline remain enforced; late asset load/cancellation cannot dispatch writes."
+  ],
+  "limits_note": "Limits intersect. Persistent readback is not cross-tab, filesystem-fsync or cross-store atomicity. No deployed capability/route is claimed until actual runtime integration and tests pass."
+}

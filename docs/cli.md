@@ -3,7 +3,10 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py` and `fleet.py`. Python 3.12 is the version used by CI. Commands take a short
+`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`,
+`favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
+`favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py` and `preset_favorites.py`.
+Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
@@ -45,7 +48,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles), [Local videos profiles](#local-videos-profiles) and [named setups](#named-setups)
-- [Favorites across profiles](#favorites-across-profiles)
+- [Saved favorites documents](#saved-favorites-documents) and [favorites across profiles](#favorites-across-profiles)
 - [Plex libraries by name](#plex-libraries-by-name) and [explicit Plex queues](#ordered-plex-queues)
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
@@ -1770,6 +1773,117 @@ does not prove that playback never started.
   an uncertain `play`, `next` or `prev` automatically.
 - Parental access, kiosk policy, network restrictions and decoder availability
   can still reject playback. A successful preview never unlocks those controls.
+
+## Saved favorites documents
+
+Local presets can hold a portable favorites document independently of the
+player's remote bookmark index. These commands use only local files:
+
+```sh
+ott presets Home fav validate
+ott presets Home fav export favorites.json
+ott presets Home fav diff favorites.json
+ott presets Home fav import favorites.json replace --dry-run
+ott presets Home fav import favorites.json replace
+ott presets Home fav restore /path/to/cli.json.favorites-backup-HASH-NONCE.json --dry-run
+```
+
+Use the actual backup path printed by a successful import; remove `--dry-run`
+to restore that preset's saved favorites. Restore preserves the current
+credentials, aliases, settings and every other preset. Backups contain the full
+private CLI configuration: keep them private and do not attach them to reports.
+Exports contain the favorites document only and never overwrite an existing file.
+They use compact UTF-8 JSON, so the 1 MiB document limit includes the exact
+exported bytes rather than added formatting.
+
+`merge` is the default import mode: distinct scopes combine, identical scopes
+deduplicate, and differing contents for the same scope block the import. Explicit
+`replace` uses the supplied document instead. A preview reports changes without
+writing; `diff` exits successfully for valid differences, while a blocked import
+preview exits nonzero. A missing favorites companion means no synchronization;
+an empty document does not clear a player's favorites.
+
+The configuration directory and files must be private (POSIX modes 0700/0600).
+Concurrent changes detected before replacement abort the write; reload the latest
+configuration and preview again. If replacement has an uncertain outcome, inspect
+the current file and retained backup before another write. Do not run older CLI
+versions or editors that ignore the configuration lock concurrently.
+
+Player collect/load/diff/clear and automatic favorites delivery with preset load
+are still under development. While this integration is unavailable, loading a
+preset with its own saved favorites document stops before sending preset settings;
+it cannot report a complete load after copying settings alone. Presets without
+their own companion retain their existing behavior. Document validation does not establish a player
+binding, native folder grant or provider support. See the
+[synchronization design](design/favorites-sync-proposal.md) for the exact coverage
+and current implementation limits. Existing remote bookmarks below are unchanged.
+
+### Scoped synchronization rollout and recovery
+
+The coordinated player/controller/CLI release is still being qualified. The
+first adapter covers the **current verified Plex source**, including its TV
+favorite lists and media favorites. It does not export all configured providers
+or inactive profiles. Merely installing a new controller does not enable this
+adapter on an older player.
+
+Once both ends advertise support, the explicit workflow is:
+
+```sh
+ott t1 fav bindings
+ott t1 fav bind current --new --dry-run
+ott t1 fav bind current --new
+ott t1 fav collect Home replace --dry-run
+ott t1 fav collect Home replace
+ott presets Home fav export home-favorites.json
+ott t2 fav bind Home --dry-run
+ott t2 fav bind Home
+ott t2 fav diff Home
+ott t2 fav load Home replace --dry-run
+ott t2 fav load Home replace
+```
+
+Both players must already use the same verified Plex server. Pairing does not
+switch providers, copy credentials, start playback or replace favorites. A
+destination already paired to different portable identities requires the
+explicit `fav bind Home --replace-current` option; preview it first. The player
+checks the exact prior pair and keeps the old public identities. An empty or
+entirely unresolved saved scope cannot prove which Plex server to pair with;
+collect a supported located favorite first, or use an existing exact pairing.
+
+Use `--scope plex:PROFILE_UUID:SOURCE_UUID` when a saved bundle or target has
+several possible scopes; copy the public UUIDs from `fav bindings`. Display names
+and profile numbers do not establish identity. `fav bind current --new` leaves
+an existing unique pair unchanged. A dry-run never creates a pairing.
+
+`ott t1,t2 fav collect Home replace` collects every complete snapshot before one
+local update. A failed or conflicting source leaves the local companion intact.
+`ott t1,t2 fav load Home replace` reports each player's result separately; it is
+not a transaction across devices. `fav clear --dry-run` previews clearing current
+memberships while retaining list structure and shuffle history. Removing
+`--dry-run` is an explicit clear of that scope.
+
+If a write has an unknown or partial result, retain the printed operation UUID
+and use `ott t1 fav status OPERATION_UUID`. This reads player evidence and may
+save a verified completion locally; it never resubmits the write. Keep the private
+`.favorites-operations-*` directory beside the CLI configuration. A missing or
+expired receipt is **unknown**, not proof that the write failed. A pairing whose
+acknowledgement was lost is instead inspected with `fav bindings`; an observed
+pair is reported separately from an acknowledged provisioning request.
+
+If partial storage or a stale cache removes the full favorites capability or
+binding catalog, `fav status` can still make one read-only status request using
+fresh player metadata and the exact controller/device recovery record. Without
+current scope and binding evidence, it reports `unknown` with a nonzero exit
+status, even if the player claims completion; it does not update local completion
+proof. After a player restart, a complete snapshot with the unchanged binding is
+still required for a verified result. Missing local evidence or invalid fresh
+runtime metadata never causes a write replay or a guess at another target.
+
+If a preview exceeds `--timeout`, no commit is sent. Choose a sufficient bounded
+budget, for example `ott -t 180 t1 fav load Home replace --dry-run`, inspect that
+preview, then explicitly apply. A `local_retention_unconfirmed` warning means
+local completion bookkeeping failed; it does not undo verified player storage.
+Do not delete pending recovery files to make room or replay uncertain operations.
 
 ## Favorites across profiles
 

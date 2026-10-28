@@ -35,6 +35,7 @@ type entry struct {
 	plexLibrary          *plexLibraryRequest
 	localMedia           *localMediaRequest
 	favorites            *favoritesRequest
+	favoritesTransfer    *favoritesTransferRequest
 	handoff              *handoffRequest
 	offlineProfile       *offlineProfileRequest
 	owner, permission    string

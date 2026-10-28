@@ -58,6 +58,12 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott diagnostics --help             scoped runtime diagnostics and session control
   ott report verify DIRECTORY [-j]   verify and re-evaluate saved evidence offline
   ott presets                        list locally configured preset names
+  ott presets NAME fav validate      validate a saved favorites document
+  ott presets NAME fav export FILE   export a private favorites document
+  ott presets NAME fav import FILE [merge|replace] [--dry-run]
+  ott presets NAME fav diff FILE     compare a document without writing
+  ott presets NAME fav restore BACKUP [--dry-run]
+                                     restore only this preset's saved favorites
   ott devices                        list devices and their last connection
   ott t1,t2,t3,t4 R                  any player command accepts a list; results per player
   ott t1,t2 watch --duration 30       observe players and decoder progress (read-only)
@@ -137,6 +143,18 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME fav add [NAME]            save the currently playing item and its profile
   ott NAME fav play ID_OR_NAME       load the saved profile and play that exact item
   ott NAME fav remove ID_OR_NAME     remove one saved favorite
+  ott NAME fav load PRESET [merge|replace] [--dry-run]
+  ott NAME fav collect PRESET [merge|replace] [--dry-run]
+  ott NAME fav diff PRESET            preview differences without changes
+  ott NAME fav clear [--dry-run]      clear visible favorites or preview the change
+  ott NAME fav bindings              list exact bindings for the current verified Plex source
+  ott NAME fav bind PRESET [--scope SCOPE] [--target TARGET_ID] [--replace-current] [--dry-run]
+                                     explicitly pair a saved scope; replacing requires its flag
+  ott NAME fav bind current --new [--dry-run]
+                                     explicitly create a new current-source binding
+  ott NAME fav status OPERATION_UUID  inspect a retained operation; never replay it
+                                     remote profile sync: CURRENT VERIFIED PLEX ONLY
+                                     requires compatible controller/player; other sources refused
   ott NAME profiles                  list the active provider’s 15 profiles without URLs
   ott NAME profile N                 select M3U, VPortal or Local videos profile 1–15
   ott NAME profile save N [NAME]     save the active Local videos source and selection
@@ -351,6 +369,13 @@ CATEGORY_ERRORS = {
 
 
 FAVORITES_OPERATIONS = frozenset(("list", "add", "play", "remove"))
+FAVORITES_PROFILE_OPERATIONS = frozenset(("load", "collect", "diff", "clear", "bindings", "bind", "status"))
+FAVORITES_UUID_V4 = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}")
+MAX_FAVORITES_PROFILE_FILE_BYTES = 1024 * 1024
+FAVORITES_PROFILE_UNAVAILABLE = (
+    "Favorites profile synchronization is not available in this CLI build; "
+    "no player request or configuration change was made"
+)
 MAX_FAVORITES = 100
 FAVORITE_ID_PATTERN = r"fav-[a-z0-9-]{1,60}"
 FAVORITES_ERRORS = {
@@ -681,14 +706,21 @@ def read_json(path):
         raise Error(f"Could not read JSON file {path}") from exc
 
 
-def write_private(path, data, exclusive=False):
+def _compact_json_text(data):
+    return json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+def write_private(path, data, exclusive=False, *, compact=False):
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".ott-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
+            if compact:
+                stream.write(_compact_json_text(data))
+            else:
+                json.dump(data, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
         if exclusive:
             # Reserve a provisioning journal without replacing another operation.
             os.link(temporary, path)
@@ -744,7 +776,7 @@ class Client:
                 return None
         self.opener = urllib.request.build_opener(NoRedirect(), https_handler())
 
-    def api(self, path, payload=None, timeout=None):
+    def api(self, path, payload=None, timeout=None, *, raw=False):
         budget = min(10, self.timeout if timeout is None else timeout)
         deadline = time.monotonic() + budget
         cancelled = threading.Event()
@@ -752,7 +784,11 @@ class Client:
 
         def perform():
             try:
-                outcome.put((True, self._api(path, payload, budget, deadline, cancelled)))
+                if raw:
+                    result = self._api(path, payload, budget, deadline, cancelled, return_raw=True)
+                else:
+                    result = self._api(path, payload, budget, deadline, cancelled)
+                outcome.put((True, result))
             except Exception as exc:
                 outcome.put((False, exc))
 
@@ -771,7 +807,15 @@ class Client:
             raise value
         return value
 
-    def _api(self, path, payload, budget, deadline, cancelled):
+    def api_raw(self, path, payload=None, timeout=None):
+        """Retain original response bytes for protocol-specific byte validation.
+
+        Authentication, redirect policy, total deadline and 2 MiB read bounds
+        are identical to api(). The caller must validate the returned bytes.
+        """
+        return self.api(path, payload, timeout, raw=True)
+
+    def _api(self, path, payload, budget, deadline, cancelled, *, return_raw=False):
         headers = {"Authorization": "Bearer " + self.token, "User-Agent": "ottplay-cli/1.0"}
         body = None
         if payload is not None:
@@ -795,7 +839,7 @@ class Client:
                         remaining = getattr(response, "length", None)
                         if isinstance(remaining, int) and remaining > 0:
                             raise TransportError("The server closed the connection before sending the complete response", "truncated")
-                        return response.status, decode_response_json(body)
+                        return response.status, bytes(body) if return_raw else decode_response_json(body)
                     body.extend(chunk)
                     if len(body) > 2 * 1024 * 1024:
                         raise Error("The server response exceeds the size limit")
@@ -1133,7 +1177,8 @@ def parse_command(words):
         offset = int(digits) * (-1 if verb[0] == "-" else 1)
         return "playback", {"operation": "step_channel", "offset": offset}
     if verb == "favorites":
-        return "favorites", parse_favorites(tail)
+        params = parse_favorites(tail)
+        return ("favorites_profile" if params["op"] in FAVORITES_PROFILE_OPERATIONS else "favorites"), params
     if verb == "notifications":
         if not tail or (len(tail) == 1 and tail[0].casefold() in ("status", "get")):
             return "notifications", {"operation": "get"}
@@ -1767,6 +1812,17 @@ def preset_names(config):
     return sorted(presets, key=str.casefold)
 
 
+def resolve_preset_name(config, requested):
+    """Resolve only a saved name; never load provider or companion helpers."""
+    names = preset_names(config)
+    if not preset_name(requested):
+        raise Error("Invalid preset name")
+    matches = [name for name in names if name.casefold() == requested.casefold()]
+    if len(matches) != 1:
+        raise Error("Unknown preset; use ott presets to list local names")
+    return matches[0]
+
+
 def preset_url(value):
     try:
         parsed = urllib.parse.urlsplit(value)
@@ -1875,13 +1931,7 @@ def local_preset_connected(client, device, selector):
 
 
 def validate_preset(config, requested):
-    names = preset_names(config)
-    if not preset_name(requested):
-        raise Error("Invalid preset name")
-    matches = [name for name in names if name.casefold() == requested.casefold()]
-    if len(matches) != 1:
-        raise Error("Unknown preset; use ott presets to list local names")
-    name = matches[0]
+    name = resolve_preset_name(config, requested)
     value = config["presets"][name]
     if (not isinstance(value, dict) or not {"m3u", "plex", "active_profile"} <= set(value)
             or set(value) - {"m3u", "plex", "active_profile", "stalker", "vportal", "local"}):
@@ -1964,6 +2014,22 @@ def validate_preset(config, requested):
     if "local" in value:
         result["local"] = validate_local_preset(value["local"])
     return name, result
+
+
+def require_preset_favorites_support(config, name):
+    """Never report a settings-only load as a complete favorites-bearing preset.
+
+    Keep unrelated/absent companions on the legacy path without importing new
+    helpers. The remote integration must replace this gate with full preflight
+    before it can deliver the selected companion and bind it to a checkpoint.
+    """
+    if "preset_favorites" not in config:
+        return
+    extension = config["preset_favorites"]
+    if not isinstance(extension, dict) or not isinstance(extension.get("presets"), dict):
+        raise Error("Invalid saved favorites metadata; no preset settings were sent")
+    if any(isinstance(key, str) and key.casefold() == name.casefold() for key in extension["presets"]):
+        raise Error("This preset contains saved favorites, but complete preset favorites delivery is not available yet; no preset settings were sent")
 
 
 def load_preset(client, device, name, preset, session=None):
@@ -2145,6 +2211,7 @@ def preset_command(config, words, timeout, json_output, on_receipt=None, *, clie
     try:
         _, params = parse_command(words[1:])
         name, preset = validate_preset(config, params["preset"])
+        require_preset_favorites_support(config, name)
         receipt["preset"] = name
         receipt["stage"] = "connect"
         receipt["error"] = "Could not prepare the player connection."
@@ -2459,15 +2526,538 @@ def screenshot_command(client, device, name, output, timeout):
             os.close(parent_fd)
 
 
+def _favorites_scope_selector(value):
+    if value.casefold() == "current":
+        return "current"
+    parts = value.split(":")
+    if (len(parts) != 3 or parts[0] not in ("m3u", "vportal", "plex", "offline")
+            or not all(FAVORITES_UUID_V4.fullmatch(part) for part in parts[1:])):
+        raise Error("Favorites scope requires current or provider:PROFILE_UUID:SOURCE_UUID with canonical UUIDv4 values")
+    return {"provider": parts[0], "profileBindingId": parts[1], "sourceBindingId": parts[2]}
+
+
+def _favorites_target_selector(value):
+    # This is parser admission only. The frozen adapter contract and fresh
+    # catalogue must validate ownership, provider support and exact identity.
+    try:
+        valid = (1 <= len(value.encode("utf-8")) <= 256
+                 and not any(char.isspace() or unicodedata.category(char).startswith("C") for char in value))
+    except UnicodeError:
+        valid = False
+    if not valid:
+        raise Error("Favorites target requires 1–256 UTF-8 bytes without whitespace or control characters")
+    return value
+
+
+def parse_favorites_profile(words):
+    """Host coordination grammar; never send these names as player RPCs.
+
+    Binding/capability negotiation remains a host activation gate. Parsed scope
+    and target selectors cannot authorize label matching or implicit pairing.
+    """
+    usage = ("Use fav load|collect PRESET [merge|replace] [--scope SCOPE] [--dry-run], "
+             "fav diff PRESET [--scope SCOPE], fav clear [--scope SCOPE] [--dry-run], "
+             "fav bindings, fav status UUIDv4, fav bind current --new [--dry-run] or "
+             "fav bind PRESET [--scope SCOPE] [--target TARGET_ID] [--replace-current] [--dry-run]")
+    if not words or words[0].casefold() not in FAVORITES_PROFILE_OPERATIONS:
+        raise Error(usage)
+    operation = words[0].casefold()
+    if operation == "bindings":
+        if len(words) != 1:
+            raise Error(usage)
+        return {"op": operation}
+    if operation == "status":
+        if len(words) != 2 or not FAVORITES_UUID_V4.fullmatch(words[1]):
+            raise Error("Use fav status with exactly one canonical UUIDv4 operation ID")
+        return {"op": operation, "operation_id": words[1]}
+    values, options = [], {}
+    index = 1
+    while index < len(words):
+        word = words[index]
+        if word.startswith("-"):
+            allowed = {"--scope", "--dry-run"} | ({"--target", "--new", "--replace-current"} if operation == "bind" else set())
+            if word not in allowed or word in options:
+                raise Error(usage)
+            if word in ("--scope", "--target"):
+                index += 1
+                if index >= len(words) or words[index].startswith("--"):
+                    raise Error(usage)
+                options[word] = (_favorites_scope_selector(words[index]) if word == "--scope"
+                                 else _favorites_target_selector(words[index]))
+            else:
+                options[word] = True
+        else:
+            values.append(word)
+        index += 1
+    dry_run = options.get("--dry-run", False)
+    selected = {"scope": options["--scope"]} if "--scope" in options else {}
+    if operation == "bind":
+        if len(values) != 1 or not preset_name(values[0]):
+            raise Error(usage)
+        if options.get("--new"):
+            if values[0].casefold() != "current" or set(options) - {"--new", "--dry-run"}:
+                raise Error(usage)
+            return {"op": operation, "preset": "current", "new": True, "dry_run": dry_run}
+        if "--target" in options:
+            selected["target_id"] = options["--target"]
+        if "--replace-current" in options:
+            selected["replace_current"] = True
+        return {"op": operation, "preset": values[0], "dry_run": dry_run, **selected}
+    if operation == "clear":
+        if values:
+            raise Error(usage)
+        return {"op": operation, "dry_run": dry_run, **selected}
+    if not values or not preset_name(values[0]):
+        raise Error(usage)
+    name, modes = values[0], values[1:]
+    if operation == "diff":
+        if modes or dry_run:
+            raise Error(usage)
+        return {"op": operation, "preset": name, "dry_run": True, **selected}
+    if len(modes) > 1 or (modes and modes[0].casefold() not in ("merge", "replace")):
+        raise Error(usage)
+    return {"op": operation, "preset": name, "mode": modes[0].casefold() if modes else "merge",
+            "dry_run": dry_run, **selected}
+
+
+def parse_presets_command(words):
+    """Keep bare preset listing and reserve offline favorites subcommands."""
+    if not words:
+        return {"op": "list"}
+    usage = "Use presets NAME fav validate, export FILE, import FILE [merge|replace] [--dry-run], diff FILE or restore BACKUP [--dry-run]"
+    if len(words) < 3 or not preset_name(words[0]) or command_verb(words[1:2]) != "favorites":
+        raise Error(usage)
+    operation, values = words[2].casefold(), words[3:]
+    result = {"op": operation, "preset": words[0]}
+    if operation == "validate" and not values:
+        return result
+    if operation not in ("export", "import", "diff", "restore") or not values:
+        raise Error(usage)
+    path = values[0]
+    if (not isinstance(path, str) or not path.strip() or path.startswith("-")
+            or any(ord(char) < 32 or ord(char) == 127 for char in path)
+            or Path(path).name in ("", ".", "..") or path.endswith(("/", "\\"))):
+        raise Error("Favorites documents require a file path; prefix a filename beginning with '-' with './'")
+    result["path"] = path
+    modes = values[1:]
+    if operation in ("import", "restore"):
+        dry_run = bool(modes and modes[-1] == "--dry-run")
+        if dry_run:
+            modes = modes[:-1]
+        if (operation == "restore" and modes) or len(modes) > 1 or (modes and modes[0].casefold() not in ("merge", "replace")):
+            raise Error(usage)
+        if operation == "import":
+            result["mode"] = modes[0].casefold() if modes else "merge"
+        result["dry_run"] = dry_run
+    elif modes:
+        raise Error(usage)
+    return result
+
+
+def _favorites_store_call(callback, errors, *args, **kwargs):
+    try:
+        return callback(*args, **kwargs)
+    except errors as exc:
+        if exc.replacement_occurred:
+            raise Error("Favorites configuration replacement has an uncertain outcome; inspect the configuration and retained backup before another change") from None
+        raise Error(str(exc)) from None
+
+
+def _favorites_profile_store(path, validate_document, store_factory, storage_errors=()):
+    if not callable(validate_document) or not callable(store_factory):
+        raise Error(FAVORITES_PROFILE_UNAVAILABLE)
+    return _favorites_store_call(store_factory, storage_errors, path, preset_names=preset_names,
+                                 resolve_preset=resolve_preset_name,
+                                 validate_document=validate_document)
+
+
+def favorites_profile_dependencies():
+    """Load the local document tools from the same installed CLI revision."""
+    modules = []
+    for name in ("favorites_document", "preset_favorites"):
+        path = Path(__file__).resolve().with_name(name + ".py")
+        if not path.is_file():
+            raise Error("Install all CLI Python files from the same revision to manage saved favorites")
+        spec = importlib.util.spec_from_file_location("ott_" + name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        modules.append(module)
+    codec, storage = modules
+    return {"validate_document": codec.validate_document, "planner": codec.plan_documents,
+            "store_factory": storage.Store, "storage_errors": (storage.StorageError,)}
+
+
+def favorites_module(name):
+    """Load actual sibling module names from this CLI revision, in dependency order.
+
+    Protocol result classes must be shared by the host, transport and private
+    ContextStore. Never substitute similarly named modules from another path.
+    """
+    names = ("favorites_document", "preset_favorites", "favorites_transfer", "favorites_protocol",
+             "favorites_remote", "favorites_operations", "favorites_commands")
+    if name not in names:
+        raise Error("Invalid favorites module")
+    for current in names[:names.index(name) + 1]:
+        path = Path(__file__).resolve().with_name(current + ".py")
+        if not path.is_file():
+            raise Error("Install all CLI Python files from the same revision to synchronize favorites")
+        module = sys.modules.get(current)
+        if module is not None:
+            if Path(getattr(module, "__file__", "")).resolve() != path:
+                raise Error("Favorites modules must come from the same CLI revision")
+            continue
+        spec = importlib.util.spec_from_file_location(current, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[current] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:  # noqa: BLE001 - installation failures must not expose private environment values
+            if sys.modules.get(current) is module:
+                del sys.modules[current]
+            raise Error("Could not load favorites modules; install all CLI files from the same revision") from None
+    return sys.modules[name]
+
+
+def print_favorites_command(data):
+    """Print validated public metadata and local backup paths, never documents."""
+    operation, status = data["op"], data["status"]
+    invalid = "Invalid favorites synchronization result"
+    labels = {"available": "current verified Plex bindings", "paired": "pairing confirmed",
+              "planned": "preview only", "matched": "matches", "different": "differences found",
+              "unchanged": "unchanged", "collected": "collected", "verified": "persisted and verified",
+              "failed": "failed", "blocked": "blocked", "unknown": "outcome unknown",
+              "partial": "partially applied", "not_applied": "not applied"}
+    lines = ["Favorites " + operation + ": " + labels[status] + "."]
+    def scope_text(scope):
+        if (not isinstance(scope, dict) or set(scope) != {"provider", "profileBindingId", "sourceBindingId"}
+                or scope["provider"] != "plex" or any(not isinstance(scope[key], str) or
+                FAVORITES_UUID_V4.fullmatch(scope[key]) is None for key in ("profileBindingId", "sourceBindingId"))):
+            raise Error(invalid)
+        return "plex:" + scope["profileBindingId"] + ":" + scope["sourceBindingId"]
+    if data.get("scope") is not None:
+        lines.append("Scope: " + scope_text(data["scope"]))
+    catalog = data.get("catalog")
+    if catalog is not None:
+        if (not isinstance(catalog, dict) or not isinstance(catalog.get("targets"), list)
+                or len(catalog["targets"]) != 1 or not isinstance(catalog.get("bindings"), list)
+                or len(catalog["bindings"]) > 256):
+            raise Error(invalid)
+        targets = set()
+        for target in catalog["targets"]:
+            if (not isinstance(target, dict) or target.get("provider") != "plex"
+                    or not isinstance(target.get("target_id"), str)
+                    or not plex_library_text(target.get("display"), 256)
+                    or any(unicodedata.category(char).startswith("C") for char in target["display"])
+                    or not isinstance(target.get("serverId"), str)
+                    or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", target["serverId"]) is None):
+                raise Error(invalid)
+            target_id = _favorites_target_selector(target.get("target_id"))
+            targets.add(target_id)
+            lines.extend(("Target: " + target_id, "  Display: " + target["display"], "  PMS: " + target["serverId"]))
+        lines.append("Current-source bindings: " + str(len(catalog["bindings"])) + ".")
+        for row in catalog["bindings"]:
+            if (not isinstance(row, dict) or not isinstance(row.get("target_id"), str)
+                    or row["target_id"] not in targets):
+                raise Error(invalid)
+            lines.extend(("Scope: " + scope_text(row.get("scope")), "  Target: " + row["target_id"]))
+    if operation == "collect" and "sources" in data:
+        sources = data["sources"]
+        if not isinstance(sources, list) or not 1 <= len(sources) <= 64:
+            raise Error(invalid)
+        for source in sources:
+            if not isinstance(source, dict) or set(source) != {"scope", "coverage"} or source["coverage"] != "current-source":
+                raise Error(invalid)
+            lines.append("Collected scope (current-source): " + scope_text(source["scope"]))
+    if "operation_id" in data:
+        identifier = data["operation_id"]
+        if not isinstance(identifier, str) or FAVORITES_UUID_V4.fullmatch(identifier) is None:
+            raise Error(invalid)
+        lines.append("Operation: " + identifier)
+    if "summary" in data:
+        summary = favorites_summary_metadata(data["summary"])
+        for title, row in (("Items", summary), ("Memberships", summary["memberships"])):
+            lines.append(f"{title}: {row['before']} -> {row['after']}; added {row['added']}, removed {row['removed']}, retained {row['retained']}.")
+        lines.append(f"Duplicates skipped: {summary['skipped_duplicates']}; unresolved conflicts: {summary['conflicts']['unresolved']}.")
+    if "players" in data:
+        if type(data["players"]) is not int or not 1 <= data["players"] <= 64:
+            raise Error(invalid)
+        lines.append(f"Players collected: {data['players']}.")
+    if operation == "collect" and status in ("collected", "unchanged") and data.get("backup_path") is not None:
+        # The same private local-path validation used by print_favorites_profile.
+        if not plex_library_text(data["backup_path"], 4096):
+            raise Error(invalid)
+        lines.append("Backup: " + data["backup_path"])
+    if "local_retention_unconfirmed" in data.get("warnings", []):
+        lines.append("Local completion evidence was not confirmed; the verified player outcome is unchanged.")
+    if status == "unknown" and data.get("observed_pair") is not None:
+        lines.append("A current pairing was observed; it does not acknowledge this provisioning request.")
+    if status in ("failed", "blocked", "unknown", "partial", "not_applied"):
+        reasons = {
+            "local_context_unavailable": "The retained local operation context is unavailable; the player outcome cannot be verified.",
+            "scope_not_bound": "The operation's saved scope is not bound to the current verified Plex source.",
+            "invalid_context": "The retained operation context cannot authorize this status verification.",
+            "incomplete_evidence": "Status was read, but current scope and storage evidence are insufficient to verify the outcome.",
+            "invalid_response": "The response could not be validated against this operation.",
+            "transport": "Communication failed before a verified result was obtained.",
+            "deadline": "The command deadline expired before a verified result was obtained.",
+            "pending_timeout": "The request remained pending until the command deadline.",
+            "deadline_insufficient": "The remaining deadline was too short to complete the transfer safely.",
+            "context_not_saved": "Durable local recovery evidence could not be confirmed before commit.",
+            "player_rejected": "The player rejected the request.",
+            "player_unsupported": "The player does not support this request.",
+            "not_ready": "The player preview was not ready to commit.",
+            "blocked": "The preview contains unresolved items or conflicts.",
+            "observed_unknown": "The player reported an unknown operation outcome.",
+            "observed_partial": "The player reported that only part of the operation was applied.",
+            "observed_not_applied": "The player reported that the operation was not applied.",
+        }
+        reason = data.get("reason")
+        if isinstance(reason, str) and reason in reasons:
+            lines.append("Reason: " + reasons[reason])
+        lines.append("No automatic replay was attempted; inspect the result before another change.")
+    print("\n".join(lines))
+
+
+def favorites_host_command(client, config, args, targets, params):
+    result = favorites_module("favorites_commands").run(SimpleNamespace(**globals()), client, config,
+        args.config, targets, copy.deepcopy(params), args.timeout)
+    successful = {"available", "paired", "planned", "matched", "different", "unchanged", "collected", "verified"}
+    failed = {"failed", "blocked", "unknown", "partial", "not_applied"}
+    if (not isinstance(result, dict) or result.get("op") != params["op"]
+            or result.get("status") not in successful | failed
+            or result.get("status") == "verified" and result.get("verified") is not True):
+        raise Error("Invalid favorites synchronization result; inspect before another change")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+    else:
+        print_favorites_command(result)
+    return 0 if result["status"] in successful else 1
+
+
+def _validated_favorites_document(document, validate_document):
+    try:
+        return validate_document(copy.deepcopy(document))
+    except Exception:  # noqa: BLE001 - schema failures must not reveal private input
+        raise Error("Invalid portable favorites document; no favorite change was applied") from None
+
+
+def favorites_summary_metadata(summary, mode=None):
+    """Validate a public count-only summary without touching portable payloads."""
+    invalid = "Favorites planner returned an invalid change summary; no changes were applied"
+    counts = {"before", "after", "added", "removed", "retained"}
+    if not isinstance(summary, dict) or set(summary) != counts | {"skipped_duplicates", "memberships", "conflicts"}:
+        raise Error(invalid)
+    memberships, conflicts = summary["memberships"], summary["conflicts"]
+    if (not isinstance(memberships, dict) or set(memberships) != counts
+            or not isinstance(conflicts, dict) or set(conflicts) != {"resolved", "unresolved"}):
+        raise Error(invalid)
+    values = [summary[key] for key in counts | {"skipped_duplicates"}] + list(memberships.values()) + list(conflicts.values())
+    if any(type(value) is not int or not 0 <= value <= 9007199254740991 for value in values):
+        raise Error(invalid)
+    for row in (summary, memberships):
+        if (row["before"] != row["removed"] + row["retained"]
+                or row["after"] != row["added"] + row["retained"]
+                or (mode == "merge" and row["removed"] != 0)):
+            raise Error(invalid)
+    return copy.deepcopy(summary)
+
+
+def _plan_favorites_documents(current, incoming, mode, validate_document, planner):
+    """Plan once against the original document, with schema-owned identities.
+
+    planner(current_or_none, incoming_documents, mode) returns {document, summary}.
+    Summary top-level before/after/added/removed/retained/skipped_duplicates count
+    stable favorite items. Memberships have separate before/after/added/removed/
+    retained counts: one item in two lists is one item and two memberships.
+    Conflicts contain resolved/unresolved counts. The codec defines duplicate
+    and conflict resolution; no private identifiers or free text enter summary.
+    """
+    if mode not in ("merge", "replace"):
+        raise Error("Invalid favorites planning mode; no changes were applied")
+    try:
+        planned = planner(copy.deepcopy(current), copy.deepcopy(incoming), mode)
+    except Exception:  # noqa: BLE001 - planner failures can contain private input
+        raise Error("Favorites planning failed; no changes were applied") from None
+    if not isinstance(planned, dict) or set(planned) != {"document", "summary"}:
+        raise Error("Favorites planner returned an invalid change summary; no changes were applied")
+    summary = favorites_summary_metadata(planned["summary"], mode)
+    document = _validated_favorites_document(planned["document"], validate_document)
+    return document, summary
+
+
+def _favorites_change_summary(plan, summary):
+    if not plan.changed and any(row[key] for row in (summary, summary["memberships"]) for key in ("added", "removed")):
+        raise Error("Favorites change summary does not match the saved document; no changes were applied")
+    return {**plan.summary(), "summary": summary}
+
+
+def _favorites_apply_plan(store, plan, summary, storage_errors):
+    if summary["conflicts"]["unresolved"]:
+        raise Error("Favorites have unresolved conflicts; inspect a dry-run before applying changes")
+    return _favorites_store_call(store.apply, storage_errors, plan)
+
+
+def _read_favorites_document(path):
+    """Bound a regular file read; never open a FIFO or follow a final symlink."""
+    fd = None
+    try:
+        path = Path(path).expanduser()
+        before = path.lstat()
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if (not stat.S_ISREG(before.st_mode)
+                or getattr(before, "st_file_attributes", 0) & reparse
+                or before.st_size > MAX_FAVORITES_PROFILE_FILE_BYTES):
+            raise ValueError("unsupported input file")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+        if os.name != "nt":
+            if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
+                raise ValueError("bounded no-follow input unavailable")
+            flags |= os.O_NOFOLLOW | os.O_NONBLOCK
+        fd = os.open(path, flags)
+        opened = os.fstat(fd)
+        if (not stat.S_ISREG(opened.st_mode)
+                or getattr(opened, "st_file_attributes", 0) & reparse
+                or (os.name == "nt" and (not before.st_ino or not opened.st_ino))
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                or opened.st_size > MAX_FAVORITES_PROFILE_FILE_BYTES):
+            raise ValueError("input changed")
+        with os.fdopen(fd, "rb") as stream:
+            fd = None
+            raw = stream.read(MAX_FAVORITES_PROFILE_FILE_BYTES + 1)
+        if len(raw) > MAX_FAVORITES_PROFILE_FILE_BYTES:
+            raise ValueError("input too large")
+        return decode_response_json(raw.decode("utf-8"))
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        raise Error("Could not read a bounded, unambiguous regular favorites JSON file") from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def presets_favorites_command(config_path, params, *, validate_document=None, planner=None,
+                              store_factory=None, storage_errors=()):
+    """Offline adapter with an injected schema; never guess a portable format."""
+    if params["op"] in ("import", "diff", "restore") and not callable(planner):
+        raise Error(FAVORITES_PROFILE_UNAVAILABLE)
+    store = _favorites_profile_store(config_path, validate_document, store_factory, storage_errors)
+    snapshot = _favorites_store_call(store.snapshot, storage_errors, params["preset"])
+    saved = snapshot["document"]
+    operation = params["op"]
+    if operation in ("validate", "export"):
+        if saved is None:
+            raise Error("This preset has no saved favorites document")
+        saved = _validated_favorites_document(saved, validate_document)
+        result = {"op": operation, "preset": snapshot["preset"], "config_revision": snapshot["config_revision"]}
+        if operation == "validate":
+            return dict(result, status="valid")
+        try:
+            encoded = _compact_json_text(saved).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError):
+            raise Error("Invalid portable favorites document; no export was written") from None
+        if len(encoded) > MAX_FAVORITES_PROFILE_FILE_BYTES:
+            raise Error("Favorites export exceeds the local document size limit; no export was written")
+        try:
+            write_private(params["path"], saved, exclusive=True, compact=True)
+        except FileExistsError:
+            raise Error("Export file already exists; choose a new path. The existing file was not changed") from None
+        except OSError:
+            raise Error("Could not create the favorites export file") from None
+        return dict(result, status="exported", path=str(Path(params["path"]).expanduser()))
+    if operation not in ("import", "diff", "restore"):
+        raise Error("Unsupported offline favorites profile operation")
+    evidence = {}
+    if operation == "restore":
+        backup = _favorites_store_call(store.backup_document, storage_errors, snapshot["preset"], params["path"])
+        if (not isinstance(backup, dict) or set(backup) != {"preset", "document", "backup_revision"}
+                or backup["preset"] != snapshot["preset"] or not isinstance(backup["backup_revision"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", backup["backup_revision"])):
+            raise Error("Invalid favorites backup result; no changes were applied")
+        incoming = backup["document"]
+        evidence["backup_revision"] = backup["backup_revision"]
+    else:
+        incoming = _read_favorites_document(params["path"])
+    incoming = _validated_favorites_document(incoming, validate_document)
+    # The agreed schema owns identity, deduplication and membership semantics.
+    mode = "replace" if operation == "restore" else params.get("mode", "replace")
+    document, summary = _plan_favorites_documents(saved, [incoming], mode, validate_document, planner)
+    plan = _favorites_store_call(store.plan, storage_errors, snapshot["preset"], document,
+                                 expected_revision=snapshot["config_revision"])
+    change = _favorites_change_summary(plan, summary)
+    if operation == "diff":
+        status = "blocked" if summary["conflicts"]["unresolved"] else "different" if plan.changed else "matched"
+        return {"op": operation, "status": status, **evidence, **change}
+    if params.get("dry_run", False):
+        status = "blocked" if summary["conflicts"]["unresolved"] else "planned"
+        return {"op": operation, "status": status, **evidence, **change}
+    outcome = _favorites_apply_plan(store, plan, summary, storage_errors)
+    status = ("restored" if operation == "restore" else "imported") if outcome["changed"] else "unchanged"
+    return {"op": operation, "status": status, "summary": summary, **evidence, **outcome}
+
+
+def collect_favorites_profile(config_path, name, targets, timeout, *, mode="merge", dry_run=False,
+                              validate_document=None, planner=None, store_factory=None, export_snapshot=None,
+                              storage_errors=()):
+    """Read complete snapshots first, then plan and commit one local config update."""
+    if not callable(planner) or not callable(export_snapshot):
+        raise Error(FAVORITES_PROFILE_UNAVAILABLE)
+    if mode not in ("merge", "replace") or type(dry_run) is not bool or not 1 <= timeout <= 300:
+        raise Error("Invalid favorites collection mode or deadline")
+    unique = []
+    seen = set()
+    for label, device in targets:
+        if not isinstance(device, str) or not device:
+            raise Error("Resolve every player before collecting favorites")
+        if device not in seen:
+            seen.add(device)
+            unique.append((label, device))
+    if not 1 <= len(unique) <= 64:
+        raise Error("Favorites collection requires 1–64 distinct players")
+    store = _favorites_profile_store(config_path, validate_document, store_factory, storage_errors)
+    local = _favorites_store_call(store.snapshot, storage_errors, name)
+    documents = []
+    for _, device in unique:
+        deadline = time.monotonic() + timeout
+        try:
+            exported = export_snapshot(device, timeout)
+        except RequestError as exc:
+            failure = RequestError(exc.reason, exc.stage,
+                                   "Favorites snapshot could not be collected; the local preset was not changed",
+                                   exc.request_id, transport_category=exc.transport_category)
+            failure.action = exc.action
+            raise failure from None
+        except Exception:  # noqa: BLE001 - remote snapshot failures can contain private input
+            raise Error("Favorites snapshot could not be collected; the local preset was not changed") from None
+        if time.monotonic() >= deadline:
+            raise Error("Favorites collection exceeded the player deadline; the local preset was not changed")
+        if not isinstance(exported, dict) or exported.get("complete") is not True or "document" not in exported:
+            raise Error("Favorites collection requires complete player snapshots; the local preset was not changed")
+        documents.append(_validated_favorites_document(exported["document"], validate_document))
+    document, summary = _plan_favorites_documents(local["document"], documents, mode, validate_document, planner)
+    plan = _favorites_store_call(store.plan, storage_errors, local["preset"], document,
+                                 expected_revision=local["config_revision"])
+    change = _favorites_change_summary(plan, summary)
+    if dry_run:
+        status = "blocked" if summary["conflicts"]["unresolved"] else "planned"
+        return {"op": "collect", "status": status, "players": len(unique), **change}
+    outcome = _favorites_apply_plan(store, plan, summary, storage_errors)
+    return {"op": "collect", "status": "collected" if outcome["changed"] else "unchanged",
+            "players": len(unique), "summary": summary, **outcome}
+
+
 def parse_favorites(words):
     """Keep selection on the target player; never snapshot its current URL here."""
     if not words:
         return {"op": "list"}
     verb = words[0].casefold()
+    if verb in FAVORITES_PROFILE_OPERATIONS:
+        return parse_favorites_profile(words)
     operation = {"current": "add", "rm": "remove"}.get(verb, verb)
     if operation in FAVORITES_OPERATIONS:
         values = words[1:]
     else:
+        if words[0] != "--" and any(word.startswith("--") for word in words):
+            raise Error("Unknown favorites option; use fav play -- NAME for a literal bookmark name")
         operation, values = "play", words
     if values and values[0] == "--":
         values = values[1:]
@@ -2582,6 +3172,55 @@ def favorites_command(client, device, params, timeout):
         raise
     finally:
         client.timeout = previous_timeout
+
+
+def print_favorites_profile(data):
+    """Render validated local coordination outcomes without portable payloads."""
+    invalid = "Invalid favorites profile result"
+    statuses = {
+        "validate": {"valid"}, "export": {"exported"},
+        "import": {"imported", "unchanged", "planned", "blocked"},
+        "restore": {"restored", "unchanged", "planned", "blocked"},
+        "collect": {"collected", "unchanged", "planned", "blocked"},
+        "diff": {"different", "matched", "blocked"},
+        "load": {"loaded", "unchanged", "planned", "blocked"},
+        "clear": {"cleared", "unchanged", "planned", "blocked"},
+    }
+    if not isinstance(data, dict):
+        raise Error(invalid)
+    operation, status, name = data.get("op"), data.get("status"), data.get("preset")
+    if (not isinstance(operation, str) or operation not in statuses
+            or not isinstance(status, str) or status not in statuses[operation]
+            or (name is not None and not preset_name(name)) or (operation != "clear" and name is None)):
+        raise Error(invalid)
+    labels = {"valid": "valid", "exported": "exported", "imported": "imported", "collected": "collected",
+              "different": "differences found", "matched": "matches", "unchanged": "unchanged",
+              "planned": "preview only; nothing changed", "blocked": "unresolved conflicts; nothing changed",
+              "loaded": "loaded", "cleared": "cleared", "restored": "restored"}
+    subject = "Favorites profile " + name if name is not None else "Visible favorites"
+    lines = [subject + ": " + labels[status] + "."]
+    if operation not in ("validate", "export"):
+        summary = favorites_summary_metadata(data.get("summary"))
+        if summary["conflicts"]["unresolved"] and status != "blocked":
+            raise Error(invalid)
+        for title, row in (("Items", summary), ("List memberships", summary["memberships"])):
+            lines.append(f"{title}: {row['before']} -> {row['after']}; added {row['added']}, removed {row['removed']}, retained {row['retained']}.")
+        lines.append(f"Duplicate items skipped: {summary['skipped_duplicates']}.")
+        conflicts = summary["conflicts"]
+        if conflicts["resolved"] or conflicts["unresolved"]:
+            lines.append(f"Conflicts: {conflicts['resolved']} resolved, {conflicts['unresolved']} unresolved.")
+    if "players" in data:
+        if type(data["players"]) is not int or not 1 <= data["players"] <= 64:
+            raise Error(invalid)
+        lines.append(f"Players: {data['players']}.")
+    local_paths = [("File", data.get("path"))] if operation == "export" else []
+    if operation in ("import", "collect", "restore") and data.get("backup_path") is not None:
+        local_paths.append(("Backup", data["backup_path"]))
+    for title, path in local_paths:
+        if not plex_library_text(path, 4096):
+            raise Error(invalid)
+        lines.append(title + ": " + path)
+    print("\n".join(lines))
 
 
 def print_favorites(data):
@@ -3493,6 +4132,13 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "favorites_transfer" in data:
+        try:
+            result["favorites_transfer"] = favorites_module("favorites_protocol").validate_capability(data["favorites_transfer"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - rejected capability values must not appear in diagnostics
+            raise Error(invalid) from None
     if "standby" in player:
         if type(player["standby"]) is not bool:
             raise Error(invalid)
@@ -3898,6 +4544,13 @@ def print_player_help(data, name):
             ("remove", "fav remove ID_OR_NAME", "remove one saved favorite")):
         if operation in favorites:
             print(f"  {prefix} {command}  — {description}")
+    if "favorites_transfer" in controls:
+        print("  Favorites profile sync: CURRENT VERIFIED PLEX ONLY; explicit bindings required.")
+        print(f"  {prefix} fav bindings  — show exact current-source scope IDs")
+        print(f"  {prefix} fav collect Home / fav diff Home  — save or compare this current scope")
+        print(f"  {prefix} fav load Home replace --dry-run  — validate and preview without applying")
+        print(f"  {prefix} fav load Home replace / fav clear  — persist changes after a validated preview")
+        print(f"  {prefix} fav bind Home --dry-run / fav status OPERATION_UUID  — check pairing or retained evidence")
     aspect = controls.get("aspect", {})
     if "get" in aspect.get("operations", []):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
@@ -5328,6 +5981,10 @@ def player_group_command(client, config, targets, args, argv):
     # validates ordinary commands once, before any target receives a request.
     prepared = parse_command(words) if route is None else None
     action = prepared[0] if prepared else (words[0].casefold() if words else "status")
+    if action == "favorites_profile" and prepared[1]["op"] == "collect":
+        # Collection is one all-target snapshot/plan/CAS operation, never one
+        # separate profile write per member of the existing group dispatcher.
+        return favorites_host_command(client, config, args, targets, prepared[1])
     if action == "provider" and not prepared[1]["query"].strip():
         raise Error("provider requires a provider ID, index or name")
     if route == "android" and len(words) > 1 and words[1].casefold() == "bind" and len(targets) > 1:
@@ -5335,7 +5992,8 @@ def player_group_command(client, config, targets, args, argv):
     if route == "preset":
         if len(words) not in (2, 3, 5) or (len(words) > 2 and words[2] not in ("plan", "apply", "resume", "verify")):
             raise Error("Use PLAYER load PRESET [plan|apply|resume|verify [--checkpoint FILE]]")
-        validate_preset(config, words[1])
+        name, _ = validate_preset(config, words[1])
+        require_preset_favorites_support(config, name)
     plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
     group_output_preflight(plans)
     json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))
@@ -5476,6 +6134,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
     action, params = copy.deepcopy(prepared) if prepared is not None else parse_command(words)
+    if action == "favorites_profile":
+        return favorites_host_command(client, config, args, [(args.words[0], device)], params)
     status_overview = action == "status" and command_verb(words) != "v"
     status_deadline = time.monotonic() + args.timeout if status_overview else None
     catalog_play = None
@@ -5811,11 +6471,21 @@ def main(argv=None):
             registry_management(None, args.config, args.words, args.json)
             return 0
         if args.words[0].casefold() == "presets":
-            if len(args.words) != 1:
-                raise Error("Use presets without arguments")
-            names = preset_names(config)
-            print(json.dumps({"presets": names}, indent=2) if args.json else "\n".join(names))
+            params = parse_presets_command(args.words[1:])
+            if params["op"] == "list":
+                names = preset_names(config)
+                print(json.dumps({"presets": names}, indent=2) if args.json else "\n".join(names))
+            else:
+                result = presets_favorites_command(args.config, params, **favorites_profile_dependencies())
+                if args.json:
+                    print(json.dumps(result, ensure_ascii=True, indent=2))
+                else:
+                    print_favorites_profile(result)
+                return 1 if result["status"] == "blocked" else 0
             return 0
+        if len(args.words) > 1 and command_verb(args.words[1:]) == "favorites":
+            # Validate grammar before constructing the authoritative Client.
+            parse_command(args.words[1:])
         if (len(args.words) > 1 and args.words[1].casefold() == "load"
                 and args.words[0].casefold() not in TOP_LEVEL_COMMANDS and "," not in args.words[0]):
             return preset_command(config, args.words, args.timeout, args.json,

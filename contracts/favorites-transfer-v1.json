@@ -1,0 +1,607 @@
+{
+  "status": "PROPOSED - current agreed op/runtime/persistent-only wire fixtures; no runtime implementation or capability claim",
+  "scope": {
+    "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+    "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+    "provider": "plex"
+  },
+  "documentEncoding": "compact UTF-8 JSON; digest and chunk hash cover exact decoded bytes",
+  "document_sha256": "857f6023b7c908186754788054e4690bb7234a5c7c9a1a5cb080746653f00b8e",
+  "size_bytes": 650,
+  "fixtures": {
+    "bindingcatalog": {
+      "request": {
+        "op": "bindingcatalog",
+        "runtime": "synthetic-runtime-v1"
+      },
+      "response": {
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "bindingcatalog",
+        "binding_revision": "bindings-7",
+        "targets": [
+          {
+            "target_id": "plex-target-local-1",
+            "display": "Synthetic Plex profile / source",
+            "provider": "plex",
+            "codecVersion": 1,
+            "serverId": "synthetic-verified-pms-id"
+          }
+        ],
+        "bindings": []
+      }
+    },
+    "bind": {
+      "request": {
+        "op": "bind",
+        "runtime": "synthetic-runtime-v1",
+        "target_id": "plex-target-local-1",
+        "scope": {
+          "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+          "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+          "provider": "plex"
+        },
+        "expected_binding_revision": "bindings-7",
+        "codecVersion": 1
+      },
+      "response": {
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "bind",
+        "paired": true,
+        "binding_revision": "bindings-8",
+        "target_id": "plex-target-local-1",
+        "scope": {
+          "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+          "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+          "provider": "plex"
+        }
+      }
+    },
+    "snapshot": {
+      "request": {
+        "scope": {
+          "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+          "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+          "provider": "plex"
+        },
+        "op": "snapshot",
+        "runtime": "synthetic-runtime-v1"
+      },
+      "response": {
+        "scope": {
+          "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+          "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+          "provider": "plex"
+        },
+        "revision": "favorites-12",
+        "binding_revision": "bindings-8",
+        "document_sha256": "857f6023b7c908186754788054e4690bb7234a5c7c9a1a5cb080746653f00b8e",
+        "size_bytes": 650,
+        "document_base64": "eyJzY2hlbWEiOjEsInNjb3BlIjp7InByb2ZpbGVCaW5kaW5nSWQiOiI5YWM0ODNhOC0wODNlLTRjZTEtOWRjYS1mMzFhMzUxNGU5MGYiLCJzb3VyY2VCaW5kaW5nSWQiOiI4OGRiY2YxMi0xZDhjLTQxN2UtYjZjNS1mODgxMGUzYTMyODUiLCJwcm92aWRlciI6InBsZXgifSwiY292ZXJhZ2UiOnsiY2hhbm5lbExpc3RzIjoiY29tcGxldGUtZm9yLXNjb3BlIiwibWVkaWFGYXZvcml0ZXMiOiJjb21wbGV0ZS1mb3Itc2NvcGUiLCJyZW1vdGVBbGlhc2VzIjoiZXhjbHVkZWQtcHJlc2VydmVkIiwiaGlzdG9yeSI6ImV4Y2x1ZGVkLXByZXNlcnZlZCJ9LCJjaGFubmVsTGlzdHMiOnsiYWN0aXZlIjoiRmF2b3JpdGVzIiwib3JkZXIiOlsiRmF2b3JpdGVzIiwiV2F0Y2ggbGF0ZXIiXSwiZGVmYXVsdCI6eyJwcmVzZW50IjpmYWxzZX0sImxpc3RzIjpbeyJuYW1lIjoiRmF2b3JpdGVzIiwiZW50cmllcyI6W119LHsibmFtZSI6IldhdGNoIGxhdGVyIiwiZW50cmllcyI6W119XX0sIm1lZGlhRmF2b3JpdGVzIjpbeyJzdGF0ZSI6ImxvY2F0ZWQiLCJsb2NhdG9yIjp7ImtpbmQiOiJwbGV4LW1lZGlhIiwic2VydmVySWQiOiJzeW50aGV0aWMtdmVyaWZpZWQtcG1zLWlkIiwicmF0aW5nS2V5IjoiMTIzNDUifSwidGl0bGUiOiJTeW50aGV0aWMgZXhhbXBsZSJ9XX0=",
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "snapshot"
+      }
+    },
+    "begin": {
+      "request": {
+        "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+        "scope": {
+          "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+          "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+          "provider": "plex"
+        },
+        "expected_revision": "favorites-20",
+        "binding_revision": "bindings-8",
+        "document_sha256": "857f6023b7c908186754788054e4690bb7234a5c7c9a1a5cb080746653f00b8e",
+        "size_bytes": 650,
+        "chunk_count": 1,
+        "op": "begin",
+        "runtime": "synthetic-runtime-v1",
+        "persistence": "persistent"
+      },
+      "response": {
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+        "next_seq": 0,
+        "received_bytes": 0,
+        "idle_expires_at": "2026-10-27T23:02:00Z",
+        "absolute_expires_at": "2026-10-27T23:10:00Z",
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "begin",
+        "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770"
+      }
+    },
+    "append": {
+      "request": {
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+        "seq": 0,
+        "offset": 0,
+        "chunk_sha256": "857f6023b7c908186754788054e4690bb7234a5c7c9a1a5cb080746653f00b8e",
+        "data_base64": "eyJzY2hlbWEiOjEsInNjb3BlIjp7InByb2ZpbGVCaW5kaW5nSWQiOiI5YWM0ODNhOC0wODNlLTRjZTEtOWRjYS1mMzFhMzUxNGU5MGYiLCJzb3VyY2VCaW5kaW5nSWQiOiI4OGRiY2YxMi0xZDhjLTQxN2UtYjZjNS1mODgxMGUzYTMyODUiLCJwcm92aWRlciI6InBsZXgifSwiY292ZXJhZ2UiOnsiY2hhbm5lbExpc3RzIjoiY29tcGxldGUtZm9yLXNjb3BlIiwibWVkaWFGYXZvcml0ZXMiOiJjb21wbGV0ZS1mb3Itc2NvcGUiLCJyZW1vdGVBbGlhc2VzIjoiZXhjbHVkZWQtcHJlc2VydmVkIiwiaGlzdG9yeSI6ImV4Y2x1ZGVkLXByZXNlcnZlZCJ9LCJjaGFubmVsTGlzdHMiOnsiYWN0aXZlIjoiRmF2b3JpdGVzIiwib3JkZXIiOlsiRmF2b3JpdGVzIiwiV2F0Y2ggbGF0ZXIiXSwiZGVmYXVsdCI6eyJwcmVzZW50IjpmYWxzZX0sImxpc3RzIjpbeyJuYW1lIjoiRmF2b3JpdGVzIiwiZW50cmllcyI6W119LHsibmFtZSI6IldhdGNoIGxhdGVyIiwiZW50cmllcyI6W119XX0sIm1lZGlhRmF2b3JpdGVzIjpbeyJzdGF0ZSI6ImxvY2F0ZWQiLCJsb2NhdG9yIjp7ImtpbmQiOiJwbGV4LW1lZGlhIiwic2VydmVySWQiOiJzeW50aGV0aWMtdmVyaWZpZWQtcG1zLWlkIiwicmF0aW5nS2V5IjoiMTIzNDUifSwidGl0bGUiOiJTeW50aGV0aWMgZXhhbXBsZSJ9XX0=",
+        "op": "append",
+        "runtime": "synthetic-runtime-v1"
+      },
+      "response": {
+        "next_seq": 1,
+        "received_bytes": 650,
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "append",
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116"
+      }
+    },
+    "preview": {
+      "request": {
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+        "op": "preview",
+        "runtime": "synthetic-runtime-v1"
+      },
+      "response": {
+        "plan_digest": "8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f",
+        "base_revision": "favorites-20",
+        "binding_revision": "bindings-8",
+        "coverage": {
+          "channelLists": "complete-for-scope",
+          "mediaFavorites": "complete-for-scope",
+          "remoteAliases": "excluded-preserved",
+          "history": "excluded-preserved"
+        },
+        "counts": {
+          "channelLists": 2,
+          "channelMemberships": 0,
+          "mediaFavorites": 1,
+          "unresolved": 0
+        },
+        "unresolved": [],
+        "ready": true,
+        "persistence": "persistent",
+        "stores": [
+          {
+            "id": "scoped-channel-lists",
+            "expected_revision": "channels-4"
+          },
+          {
+            "id": "media-journal",
+            "expected_revision": "journal-9"
+          }
+        ],
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "preview",
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116"
+      }
+    },
+    "commit": {
+      "request": {
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+        "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+        "expected_revision": "favorites-20",
+        "plan_digest": "8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f",
+        "op": "commit",
+        "runtime": "synthetic-runtime-v1"
+      },
+      "response": {
+        "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+        "scope": {
+          "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+          "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+          "provider": "plex"
+        },
+        "new_revision": "favorites-21",
+        "document_sha256": "857f6023b7c908186754788054e4690bb7234a5c7c9a1a5cb080746653f00b8e",
+        "plan_digest": "8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f",
+        "counts": {
+          "channelLists": 2,
+          "channelMemberships": 0,
+          "mediaFavorites": 1,
+          "unresolved": 0
+        },
+        "outcome": "verified",
+        "persistence": "persistent",
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "commit",
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+        "per_store": [
+          {
+            "id": "scoped-channel-lists",
+            "outcome": "verified"
+          },
+          {
+            "id": "media-journal",
+            "outcome": "verified"
+          }
+        ],
+        "receipt": {
+          "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+          "scope": {
+            "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+            "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+            "provider": "plex"
+          },
+          "new_revision": "favorites-21",
+          "document_sha256": "857f6023b7c908186754788054e4690bb7234a5c7c9a1a5cb080746653f00b8e",
+          "plan_digest": "8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f",
+          "counts": {
+            "channelLists": 2,
+            "channelMemberships": 0,
+            "mediaFavorites": 1,
+            "unresolved": 0
+          },
+          "outcome": "verified",
+          "persistence": "persistent"
+        }
+      }
+    },
+    "status": {
+      "request": {
+        "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+        "op": "status",
+        "runtime": "synthetic-runtime-v1"
+      },
+      "response": {
+        "state": "committed",
+        "outcome": "verified",
+        "receipt": {
+          "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+          "scope": {
+            "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+            "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+            "provider": "plex"
+          },
+          "new_revision": "favorites-21",
+          "document_sha256": "857f6023b7c908186754788054e4690bb7234a5c7c9a1a5cb080746653f00b8e",
+          "plan_digest": "8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f",
+          "counts": {
+            "channelLists": 2,
+            "channelMemberships": 0,
+            "mediaFavorites": 1,
+            "unresolved": 0
+          },
+          "outcome": "verified",
+          "persistence": "persistent"
+        },
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "status",
+        "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+        "persistence": "persistent",
+        "per_store": [
+          {
+            "id": "scoped-channel-lists",
+            "outcome": "verified"
+          },
+          {
+            "id": "media-journal",
+            "outcome": "verified"
+          }
+        ]
+      }
+    },
+    "abort": {
+      "request": {
+        "op": "abort",
+        "runtime": "synthetic-runtime-v1",
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116"
+      },
+      "response": {
+        "version": 1,
+        "runtime": "synthetic-runtime-v1",
+        "op": "abort",
+        "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+        "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+        "state": "aborted",
+        "outcome": "not_applied",
+        "persistence": "persistent",
+        "per_store": []
+      }
+    }
+  },
+  "plexServerIdGrammar": {
+    "ascii": "[A-Za-z0-9][A-Za-z0-9._-]{0,255}",
+    "maximumCharacters": 256,
+    "strictEndOfString": true
+  },
+  "negativeLocatorFixtures": [
+    {
+      "name": "URL is not a PMS identifier",
+      "locator": {
+        "kind": "plex-media",
+        "serverId": "https://pms.invalid",
+        "ratingKey": "12345"
+      },
+      "expected": "invalid_locator"
+    },
+    {
+      "name": "leading punctuation forbidden",
+      "locator": {
+        "kind": "plex-media",
+        "serverId": "-pms",
+        "ratingKey": "12345"
+      },
+      "expected": "invalid_locator"
+    },
+    {
+      "name": "257 characters forbidden",
+      "locator": {
+        "kind": "plex-media",
+        "serverId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "ratingKey": "12345"
+      },
+      "expected": "invalid_locator"
+    },
+    {
+      "name": "trailing newline forbidden",
+      "locator": {
+        "kind": "plex-media",
+        "serverId": "pms\n",
+        "ratingKey": "12345"
+      },
+      "expected": "invalid_locator"
+    }
+  ],
+  "error_allowlist": [
+    "invalid_request",
+    "envelope_too_large",
+    "runtime_changed",
+    "busy",
+    "expired",
+    "operation_conflict",
+    "transaction_not_found",
+    "out_of_order",
+    "chunk_conflict",
+    "incomplete",
+    "hash_mismatch",
+    "revision_conflict",
+    "binding_changed",
+    "policy_denied",
+    "unsupported_persistence",
+    "codec_error",
+    "not_ready",
+    "reconciliation_required",
+    "storage_unavailable",
+    "limits_exceeded"
+  ],
+  "error_fixture": {
+    "request": {
+      "op": "preview",
+      "runtime": "synthetic-runtime-v1",
+      "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116"
+    },
+    "response": {
+      "version": 1,
+      "runtime": "synthetic-runtime-v1",
+      "op": "preview",
+      "error": "incomplete"
+    }
+  },
+  "outcome_fixtures": {
+    "partial": {
+      "version": 1,
+      "runtime": "synthetic-runtime-v1",
+      "op": "commit",
+      "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+      "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+      "scope": {
+        "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+        "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+        "provider": "plex"
+      },
+      "outcome": "partial",
+      "persistence": "persistent",
+      "per_store": [
+        {
+          "id": "scoped-channel-lists",
+          "outcome": "verified"
+        },
+        {
+          "id": "media-journal",
+          "outcome": "not_applied"
+        }
+      ]
+    },
+    "unknown": {
+      "version": 1,
+      "runtime": "synthetic-runtime-v1",
+      "op": "status",
+      "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+      "state": "committed",
+      "outcome": "unknown",
+      "persistence": "persistent",
+      "per_store": [
+        {
+          "id": "scoped-channel-lists",
+          "outcome": "unknown"
+        },
+        {
+          "id": "media-journal",
+          "outcome": "unknown"
+        }
+      ]
+    }
+  },
+  "capability_contract": {
+    "status": "PROPOSED protocol ceilings, not a runtime capability advertisement; actual adapter must supply supported codecs, any tighter limits, and receipt retention before registration.",
+    "version": 1,
+    "required_actual_adapter_fields": [
+      "codecs",
+      "limits",
+      "receipt_retention_seconds"
+    ],
+    "protocol_ceiling_limits": {
+      "max_document_bytes": 1048576,
+      "max_chunk_bytes": 8192,
+      "max_chunks": 256,
+      "max_envelope_bytes": 16384,
+      "max_snapshot_response_bytes": 2097152,
+      "max_active_stages": 1,
+      "idle_ttl_seconds": 120,
+      "absolute_ttl_seconds": 600
+    },
+    "persistence": [
+      "persistent"
+    ],
+    "receipt_retention_seconds": null,
+    "receipt_retention_note": "No duration is invented. Unspecified/unavailable verified receipt retention cannot enable usable persistent transfer."
+  },
+  "status_fixtures": {
+    "receiving": {
+      "version": 1,
+      "runtime": "synthetic-runtime-v1",
+      "op": "status",
+      "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+      "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+      "persistence": "persistent",
+      "state": "receiving",
+      "next_seq": 0,
+      "received_bytes": 0,
+      "idle_expires_at": "2026-10-27T23:02:00Z",
+      "absolute_expires_at": "2026-10-27T23:10:00Z"
+    },
+    "ready": {
+      "version": 1,
+      "runtime": "synthetic-runtime-v1",
+      "op": "status",
+      "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+      "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+      "persistence": "persistent",
+      "state": "ready",
+      "next_seq": 1,
+      "received_bytes": 650,
+      "idle_expires_at": "2026-10-27T23:02:00Z",
+      "absolute_expires_at": "2026-10-27T23:10:00Z",
+      "ready": true,
+      "plan_digest": "8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f",
+      "base_revision": "favorites-20",
+      "binding_revision": "bindings-8"
+    },
+    "expired": {
+      "version": 1,
+      "runtime": "synthetic-runtime-v1",
+      "op": "status",
+      "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+      "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+      "persistence": "persistent",
+      "scope": {
+        "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+        "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+        "provider": "plex"
+      },
+      "outcome": "not_applied",
+      "per_store": [],
+      "state": "expired"
+    },
+    "aborted": {
+      "version": 1,
+      "runtime": "synthetic-runtime-v1",
+      "op": "status",
+      "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+      "transaction_id": "be3a9ac5-e4f0-4b52-a899-a287f167c116",
+      "persistence": "persistent",
+      "scope": {
+        "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+        "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+        "provider": "plex"
+      },
+      "outcome": "not_applied",
+      "per_store": [],
+      "state": "aborted"
+    }
+  },
+  "identifier_contract": {
+    "grammar": "canonical lowercase UUIDv4 for profileBindingId/sourceBindingId/operation_id/transaction_id",
+    "transaction_generator": "host-supplied cryptographically random UUIDv4; no Math.random or time fallback",
+    "local_target": "opaque device-local target_id; never substitute a portable UUID scope"
+  },
+  "preview_unresolved_row_contract": {
+    "max_rows": 128,
+    "additionalProperties": false,
+    "required": [
+      "collection",
+      "entry_index",
+      "reason"
+    ],
+    "optional": [
+      "list_index"
+    ],
+    "collection": [
+      "channelLists",
+      "mediaFavorites"
+    ],
+    "index_limits": {
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "reason": [
+      "missing",
+      "ambiguous",
+      "legacy-unportable",
+      "codec-unavailable"
+    ],
+    "constraints": [
+      "channelLists requires list_index; mediaFavorites forbids list_index",
+      "rows.length <= counts.unresolved; counts reports all unresolved memberships even if diagnostics are bounded",
+      "No title, path, locator, request, URL, token, credential or raw provenance fields"
+    ]
+  },
+  "preview_unresolved_example": [
+    {
+      "collection": "channelLists",
+      "list_index": 0,
+      "entry_index": 2,
+      "reason": "legacy-unportable"
+    },
+    {
+      "collection": "mediaFavorites",
+      "entry_index": 4,
+      "reason": "missing"
+    }
+  ],
+  "counts_contract": {
+    "required": [
+      "channelLists",
+      "channelMemberships",
+      "mediaFavorites",
+      "unresolved"
+    ],
+    "additionalProperties": false,
+    "integer_minimum": 0,
+    "integer_maximum": 1000000
+  },
+  "internal_receipt_template": {
+    "operation_id": "95e21aca-76b0-4db1-b3ce-bd9a4bd64770",
+    "scope": {
+      "profileBindingId": "9ac483a8-083e-4ce1-9dca-f31a3514e90f",
+      "sourceBindingId": "88dbcf12-1d8c-417e-b6c5-f8810e3a3285",
+      "provider": "plex"
+    },
+    "new_revision": "favorites-21",
+    "document_sha256": "857f6023b7c908186754788054e4690bb7234a5c7c9a1a5cb080746653f00b8e",
+    "plan_digest": {
+      "computed": "plan_digest",
+      "width": 64
+    },
+    "counts": {
+      "channelLists": 2,
+      "channelMemberships": 0,
+      "mediaFavorites": 1,
+      "unresolved": 0
+    },
+    "outcome": "verified",
+    "persistence": "persistent"
+  },
+  "internal_receipt_template_note": "INTERNAL plan descriptor only: computed marker is never persisted. Materialize only the plan_digest field to actual 64 lowercase hex; hash binds canonical template+algorithm, not the self-referential final receipt raw hash. CAS uses the same captured physical beforeRaw; read back exact materialized whole afterRaw.",
+  "actual_envelope_contract": {
+    "fields": [
+      "id",
+      "action",
+      "params",
+      "expires_at"
+    ],
+    "byte_limit": 16384,
+    "trusted_transport_argument": true,
+    "note": "No queue-added ts assumption; serialize the actual authenticated queued envelope including escaping and expires_at."
+  }
+}

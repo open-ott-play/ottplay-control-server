@@ -747,6 +747,80 @@ Only play is journaled as `action:"plex_library"`; list/preview are read-only.
 Handler completion alone does not prove an observed playback effect. See the
 shared [contract fixtures](../contracts/plex-library-v1.json).
 
+### Scoped favorites transfer relay
+
+The additive `favorites_transfer` RPC relays bounded, runtime-bound scope
+documents. Its controller implementation alone does **not** advertise a player
+capability or make synchronization available. Binding discovery, provider codecs,
+persistent adapters and CLI reconciliation must be qualified together before use.
+The legacy `favorites` action below is unchanged.
+
+The transfer operations are `snapshot`, `begin`, `append`, `preview`,
+`commit`, `status` and `abort`. The relay also validates `bindingcatalog`,
+idempotent confirmation through `bind`, explicit `provision`, and one-shot
+admission through `prepare`. Command operators need each exact
+`favorites_transfer.OPERATION` permission; existing `favorites.*` permissions do
+not grant these operations, and family-wide wildcards are not accepted. Device
+credentials cannot enqueue them. A binding catalog describes one current verified
+Plex target and its public profile/source UUID pairs; it does not expose private
+selectors or grants. Source UUIDs have one parent, and UUID roles cannot overlap.
+The current `bind` contract only confirms an existing exact pair at the captured
+binding revision. It cannot create, import or move a binding. Implementing
+provisioning in the relay does not advertise support on a player.
+
+`provision` accepts `create`, `import`, `pair` or `replace-current`, an exact
+current target and its captured registry revision. Create lets the player mint
+the public UUID pair; import/pair require an explicit saved scope. Replacement
+also requires the exact previous scope, with all four UUIDs distinct. Target IDs
+are bounded ASCII identifiers; provisioning revisions are canonical decimal safe
+integers encoded as strings. The player changes only its registry in one guarded
+update and reports `paired:true`, `persistence:"persistent"`, `outcome:"verified"`
+only after readback. This is a registry acknowledgement, not a verified favorites
+transfer receipt. A lost reply is reconciled through a fresh catalog, never an
+automatic second provisioning request. See the
+[provisioning packet](../contracts/favorites-provisioning-v1.json).
+
+An optional `favorites_transfer` capability marker is checked against the frozen
+current-Plex codec and bounded limit schema. An absent marker remains compatible
+with older players. Controller acceptance does not advertise support on a player;
+the CLI must require fresh runtime capabilities and an exact compatible binding.
+
+`prepare` binds a player-generated operation UUID to the scope, base and binding
+revisions, digest, byte count and explicit whole budget (1–300000 ms). It creates
+one RAM grant, with at most 10000 ms to consume it through begin, and no persistent
+write. Its response echoes every request field and adds `version`, `operation_id`
+and `admission_ttl_ms`. Request expiry still gates dispatch; the explicit budget
+anchors the operation deadline once and later chunks cannot extend it. The CLI
+never retries a lost prepare acknowledgement. Retained receipts last up to 24
+hours and may be evicted earlier under count/byte pressure when completion was
+proved. Missing evidence never authorizes replay. The
+[current Plex contract](../contracts/favorites-current-plex-protocol-v1.json)
+defines the exact advertisement and admission fields.
+
+Every request carries `op` and the expected `runtime`. The actual queued
+`{id,action,params,expires_at}` envelope must fit 16 KiB after JSON escaping, before
+journal admission or enqueue. Documents are at most 1 MiB; append chunks are at
+most 8 KiB, with at most 256 chunks. SHA256 covers original bytes. Snapshot results
+must fit the existing 2 MiB response limit; other results and negative replies
+have a 128 KiB metadata limit. Shared queue, rate and retained-result limits are
+unchanged.
+
+Both successful and negative replies are checked against the pending request;
+completed receipts retain that expectation so a later duplicate cannot substitute
+another runtime or operation. A verified commit repeats the persisted receipt's
+identity, scope, revision, document digest, plan digest, counts and persistence
+claim exactly. The controller is a stateless relay: the CLI must additionally
+compare scope, digest, plan, counts and covered stores with its retained
+begin/preview context. An RPC response or controller journal record does not prove
+a durable favorites write. Unknown/partial outcomes require reconciliation;
+neither a timeout nor missing receipt permits blind replay.
+
+See the [wire fixtures](../contracts/favorites-transfer-v1.json) and
+[synchronization design](design/favorites-sync-proposal.md) for current limits and
+remaining activation gates. Rollback requires a controller baseline that retains
+future journal actions as audit metadata, plus an operator configuration accepted
+by that baseline.
+
 ### Current-item favorites across profiles
 
 `favorites` is an optional administrator-authenticated RPC; stored entries live
