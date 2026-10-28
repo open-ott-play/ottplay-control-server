@@ -102,6 +102,68 @@ class FavoritesBundleIntegrationTests(unittest.TestCase):
         with self.assertRaises(codec.DocumentError):
             codec.validate_scope_document(bundle(document))
 
+    def test_exact_byte_limit_bundle_exports_and_reimports_through_real_cli(self):
+        def encoded(value):
+            return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+        def run(*words, expected=0):
+            with mock.patch.object(ott, "Client") as client, \
+                    contextlib.redirect_stdout(io.StringIO()) as output, \
+                    contextlib.redirect_stderr(io.StringIO()) as error:
+                code = ott.main(["-c", str(self.path), "-j", "presets", "home", "fav", *words])
+                self.assertEqual(code, expected, error.getvalue())
+                client.assert_not_called()
+                return json.loads(output.getvalue()) if code == 0 else error.getvalue()
+
+        dense = bundle(scope())
+        entries = dense["scopes"][0]["mediaFavorites"]
+        reference = entries.pop()
+        reference["title"] = "é"
+        # Repeated memberships are valid and must survive the portable round trip.
+        count = (codec.MAX_BYTES - len(encoded(dense)) + 1) // (len(encoded(reference)) + 1)
+        entries.extend(copy.deepcopy(reference) for _ in range(count))
+        entries[-1]["title"] += "x" * (codec.MAX_BYTES - len(encoded(dense)))
+        self.assertLessEqual(len(entries[-1]["title"].encode("utf-8")), 512)
+        self.assertGreater(len(entries), 1)
+        raw = encoded(dense)
+        self.assertEqual(len(raw), 1024 * 1024)
+        self.assertEqual(codec.validate_document(dense), dense)
+        self.assertGreater(len(json.dumps(dense, ensure_ascii=False, indent=2).encode("utf-8")), codec.MAX_BYTES)
+
+        incoming = self.directory / "dense-incoming.json"
+        incoming.write_bytes(raw)
+        self.assertEqual(run("import", str(incoming), "replace")["status"], "imported")
+        exported = self.directory / "dense-export.json"
+        config_before_export = self.path.read_bytes()
+        self.assertEqual(run("export", str(exported))["status"], "exported")
+        self.assertEqual(self.path.read_bytes(), config_before_export)
+        self.assertEqual(exported.read_bytes(), raw)
+        self.assertFalse(exported.read_bytes().endswith(b"\n"))
+        if os.name != "nt":
+            self.assertEqual(exported.stat().st_mode & 0o777, 0o600)
+        self.assertIn("Export file already exists", run("export", str(exported), expected=1))
+        self.assertEqual(exported.read_bytes(), raw)
+
+        small = self.directory / "small-incoming.json"
+        self.write(small, bundle(scope(rating="987")))
+        self.assertEqual(run("import", str(small), "replace")["status"], "imported")
+        self.assertEqual(run("import", str(exported), "replace")["status"], "imported")
+        self.assertEqual(json.loads(self.path.read_text())["preset_favorites"]["presets"]["Home"], dense)
+
+        oversized = copy.deepcopy(dense)
+        oversized["scopes"][0]["mediaFavorites"][-1]["title"] += "x"
+        self.assertEqual(len(encoded(oversized)), codec.MAX_BYTES + 1)
+        with self.assertRaises(codec.DocumentError):
+            codec.validate_document(oversized)
+        incoming.write_bytes(encoded(oversized))
+        before = self.path.read_bytes()
+        files = set(self.directory.iterdir())
+        self.assertIn("bounded, unambiguous regular favorites JSON file",
+                      run("import", str(incoming), "replace", expected=1))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(set(self.directory.iterdir()), files)
+        self.assertEqual(exported.read_bytes(), raw)
+
     def test_replace_restore_only_selected_document_and_export_roundtrip(self):
         incoming = self.directory / "incoming.json"
         self.write(incoming, bundle(scope(rating="456")))

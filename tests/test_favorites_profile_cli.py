@@ -309,8 +309,21 @@ class FavoritesProfileAdapterTests(unittest.TestCase):
             with mock.patch.object(ott, "write_private", side_effect=failure) as write, self.assertRaises(ott.Error) as error:
                 ott.presets_favorites_command("config.json", params, **self.dependencies(store))
             self.assertEqual(str(error.exception), "Could not create the favorites export file")
-            write.assert_called_once_with("fixture-export.json", store.current, exclusive=True)
+            write.assert_called_once_with("fixture-export.json", store.current, exclusive=True, compact=True)
             self.assertEqual((store.plans, store.applies), ([], []))
+
+    def test_private_writer_default_format_is_unchanged_and_compact_is_opt_in(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value = {"title": "é", "members": ["one", "two"]}
+            pretty = Path(directory) / "pretty.json"
+            compact = Path(directory) / "compact.json"
+            ott.write_private(pretty, value)
+            ott.write_private(compact, value, exclusive=True, compact=True)
+            self.assertEqual(pretty.read_text(encoding="utf-8"), json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+            self.assertEqual(compact.read_bytes(), json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            with self.assertRaises(FileExistsError):
+                ott.write_private(compact, {"changed": True}, exclusive=True, compact=True)
+            self.assertEqual(json.loads(compact.read_text(encoding="utf-8")), value)
 
     def test_bad_import_never_plans_writes_or_echoes_private_content(self):
         with tempfile.TemporaryDirectory() as directory:

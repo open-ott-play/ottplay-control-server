@@ -698,14 +698,21 @@ def read_json(path):
         raise Error(f"Could not read JSON file {path}") from exc
 
 
-def write_private(path, data, exclusive=False):
+def _compact_json_text(data):
+    return json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+def write_private(path, data, exclusive=False, *, compact=False):
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".ott-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
+            if compact:
+                stream.write(_compact_json_text(data))
+            else:
+                json.dump(data, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
         if exclusive:
             # Reserve a provisioning journal without replacing another operation.
             os.link(temporary, path)
@@ -2705,13 +2712,13 @@ def presets_favorites_command(config_path, params, *, validate_document=None, pl
         if operation == "validate":
             return dict(result, status="valid")
         try:
-            encoded = (json.dumps(saved, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode("utf-8")
+            encoded = _compact_json_text(saved).encode("utf-8")
         except (TypeError, ValueError, UnicodeError):
             raise Error("Invalid portable favorites document; no export was written") from None
         if len(encoded) > MAX_FAVORITES_PROFILE_FILE_BYTES:
             raise Error("Favorites export exceeds the local document size limit; no export was written")
         try:
-            write_private(params["path"], saved, exclusive=True)
+            write_private(params["path"], saved, exclusive=True, compact=True)
         except FileExistsError:
             raise Error("Export file already exists; choose a new path. The existing file was not changed") from None
         except OSError:
