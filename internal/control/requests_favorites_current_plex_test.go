@@ -286,7 +286,7 @@ func TestFavoritesCurrentPlexHTTPBindingsRetainDescriptorsPermissionsAndResults(
 	packet := currentPlexContract(t)
 	for _, op := range []string{"bindingcatalog", "bind"} {
 		t.Run(op, func(t *testing.T) {
-			c := testConfig()
+			c := journalConfig(t)
 			legacyToken, ownerToken := strings.Repeat("l", 32), strings.Repeat("o", 32)
 			operator := func(id, token string, actions []string) config.CommandOperator {
 				hash := sha256.Sum256([]byte(token))
