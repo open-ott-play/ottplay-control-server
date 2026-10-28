@@ -317,20 +317,64 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("superseded", result["message"])
 
     def test_public_metadata_obeys_overall_deadline_even_if_read_stalls(self):
-        import time
+        import queue
+        import threading
+        read_started, release_read, read_finished = (threading.Event() for _ in range(3))
+        response_closed = threading.Event()
+        workers, open_budgets, wait_budgets = [], [], []
+        case = self
+
+        class FinishedQueue(queue.Queue):
+            def get(self, block=True, timeout=None):
+                wait_budgets.append(timeout)
+                case.assertAlmostEqual(timeout, 0.02)
+                case.assertTrue(read_started.wait(5), "metadata worker did not enter its read")
+                return super().get(block=block, timeout=timeout)
+
         class Response:
             def __enter__(self):
                 return self
             def __exit__(self, *args):
-                pass
+                response_closed.set()
             def read1(self, size):
-                time.sleep(0.2)
+                read_started.set()
+                if not release_read.wait(5):
+                    raise RuntimeError("test did not release its metadata reader")
+                read_finished.set()
                 return b"{}"
-        fake = SimpleNamespace(open=lambda *args, **kwargs: Response())
-        started = time.monotonic()
-        with patch.object(ota.urllib.request, "build_opener", return_value=fake), self.assertRaises(ott.Error):
-            ota.request_json(ota.API, ott.Error, deadline=time.monotonic() + 0.02)
-        self.assertLess(time.monotonic() - started, 0.15)
+
+        def open_response(*args, **kwargs):
+            open_budgets.append(kwargs["timeout"])
+            return Response()
+
+        def thread(*args, **kwargs):
+            worker = threading.Thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
+        # The clock fixes the budget; events establish ordering independently of
+        # runner scheduling. The real Queue still expires while read1 is blocked.
+        with patch.object(ota.urllib.request, "build_opener", return_value=SimpleNamespace(open=open_response)), \
+                patch.object(ota, "time", SimpleNamespace(monotonic=lambda: 100.0)), \
+                patch.object(ota, "queue", SimpleNamespace(Queue=FinishedQueue, Empty=queue.Empty)), \
+                patch.object(ota, "threading", SimpleNamespace(Thread=thread, Event=threading.Event)):
+            try:
+                with self.assertRaisesRegex(ott.Error, "Official release metadata timed out"):
+                    ota.request_json(ota.API, ott.Error, deadline=100.02)
+                self.assertTrue(read_started.is_set())
+                self.assertFalse(read_finished.is_set(), "caller waited for the blocked read")
+                self.assertEqual(len(workers), 1)
+                self.assertTrue(workers[0].is_alive())
+            finally:
+                release_read.set()
+                for worker in workers:
+                    worker.join(5)
+                    self.assertFalse(worker.is_alive(), "metadata worker leaked after cleanup")
+        self.assertTrue(read_finished.is_set())
+        self.assertTrue(response_closed.is_set())
+        self.assertEqual(len(open_budgets), 1)
+        self.assertEqual(len(wait_budgets), 1)
+        self.assertAlmostEqual(open_budgets[0], 0.02)
 
     def test_permission_continuation_and_replacement_rejected(self):
         blocked = state("awaiting_permission", sha=SHA)
