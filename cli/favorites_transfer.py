@@ -43,6 +43,7 @@ _MESSAGES = {
     "too_many_chunks": "Favorites transfer exceeds the chunk count limit.",
     "invalid_budget": "Invalid favorites transfer deadline or request budget.",
     "deadline_insufficient": "Favorites transfer cannot fit the remaining deadline; nothing was staged.",
+    "deadline_exhausted": "Favorites transfer cannot continue within the remaining deadline; reconcile any uncertain request before another change.",
 }
 
 
@@ -96,6 +97,13 @@ class Budget:
     http_seconds: float
     final_receipt_reserve: float
     minimum_seconds: float
+
+
+@dataclass(frozen=True)
+class DispatchWindow:
+    start_at: float
+    wait_seconds: float
+    request_timeout: float
 
 
 def _limit(value, maximum):
@@ -179,6 +187,46 @@ def decode_document(data_base64, *, size_bytes, sha256, max_bytes=MAX_DOCUMENT_B
     raw = decode_bytes(data_base64, size_bytes=size_bytes, sha256=sha256, max_bytes=max_bytes)
     validate_document_bytes(raw, max_bytes=max_bytes)
     return raw
+
+
+def request_envelopes(action, params, *, idempotency_key=None):
+    """Build the existing /api/requests envelopes, without admitting an action.
+
+    Client.call_receipt inserts action, params, then optional idempotency_key;
+    Client._api uses default JSON separators and ensure_ascii=False. The Go
+    requests handler removes the key and stores a sorted map of RawMessages,
+    adding a 32-hex ID and float64 expires_at. Unlike legacy command enqueue it
+    does not add ts. RawMessage compaction preserves parameter order and number
+    spelling, while Go's default JSON encoder escapes HTML and line separators.
+
+    The numeric placeholder is deliberately 32 bytes: a conservative upper
+    bound on Go JSON's finite float64 encoding, not a future expiry timestamp.
+    Neither this formatter nor pack_document validates an RPC action/schema.
+    """
+    if (not isinstance(action, str) or not action or not isinstance(params, dict)
+            or (idempotency_key is not None and (not isinstance(idempotency_key, str)
+                or re.fullmatch(r"[a-zA-Z0-9_-]{16,80}", idempotency_key) is None))):
+        raise TransferError("invalid_envelope")
+    payload = {"action": action, "params": params}
+    if idempotency_key is not None:
+        payload["idempotency_key"] = idempotency_key
+    try:
+        client = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        validate_document_bytes(client)
+
+        def go_raw(value):
+            raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            for character, escaped in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"),
+                                       ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+                raw = raw.replace(character, escaped)
+            return raw.encode("utf-8")
+
+        queued = (b'{"action":' + go_raw(action) + b',"expires_at":-' + b'9' * 31
+                  + b',"id":"' + b'f' * 32 + b'","params":' + go_raw(params) + b'}')
+        validate_document_bytes(queued)
+    except (TypeError, ValueError, UnicodeError, RecursionError, TransferError):
+        raise TransferError("invalid_envelope") from None
+    return EnvelopeBytes(client, queued)
 
 
 def pack_document(raw, build_envelopes, *, chunk_bytes=MAX_CHUNK_BYTES,
@@ -278,3 +326,37 @@ def require_budget(budget, *, deadline, now):
     if remaining < minimum:
         raise TransferError("deadline_insufficient")
     return remaining
+
+
+def dispatch_window(*, deadline, now, final_receipt_reserve, remaining_commands=1,
+                    previous_start=None, not_before=None, command_interval=MIN_COMMAND_INTERVAL):
+    """Return a pure pacing/timeout decision against one existing deadline.
+
+    previous_start is the actual preceding POST start, even when its outcome is
+    unknown; do not pass an old nominal schedule. not_before may include server
+    backpressure. After waiting, recompute with a fresh now before dispatch; a
+    stale window must not become a fresh timeout. This function neither sleeps
+    nor sends/replays requests. Uncertain outcomes still require reconciliation.
+
+    The current call's timeout preserves spacing for the remaining commands and
+    an explicit end reserve for final receipt/reconciliation. These are lower
+    bounds, not reserved capacity or promises about network/player latency.
+    """
+    deadline, now = _seconds(deadline), _seconds(now)
+    reserve = _seconds(final_receipt_reserve)
+    interval = _seconds(command_interval, minimum=MIN_COMMAND_INTERVAL)
+    remaining = _count(remaining_commands, minimum=1, maximum=2 * MAX_CHUNKS)
+    if reserve <= 0:
+        raise TransferError("invalid_budget")
+    start = now
+    if previous_start is not None:
+        previous_start = _seconds(previous_start)
+        if previous_start > now:
+            raise TransferError("invalid_budget")
+        start = max(start, previous_start + interval)
+    if not_before is not None:
+        start = max(start, _seconds(not_before))
+    timeout = deadline - start - reserve - (remaining - 1) * interval
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise TransferError("deadline_exhausted")
+    return DispatchWindow(start, start - now, timeout)

@@ -2,10 +2,14 @@
 
 import hashlib
 import importlib.util
+import io
 import json
+import re
 import sys
+import threading
 import unittest
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path
 from unittest import mock
 
@@ -14,6 +18,9 @@ SPEC = importlib.util.spec_from_file_location("ott_favorites_transfer_tested", R
 transfer = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = transfer
 SPEC.loader.exec_module(transfer)
+CLI_SPEC = importlib.util.spec_from_file_location("ott_favorites_transfer_client", ROOT / "cli/ott.py")
+ott = importlib.util.module_from_spec(CLI_SPEC)
+CLI_SPEC.loader.exec_module(ott)
 PRIVATE = "fixture-private-payload"
 
 
@@ -201,6 +208,194 @@ class FavoritesTransferBudgetTests(TransferAssertions, unittest.TestCase):
         for deadline, now in ((True, 0), (float('inf'), 0), (100, float('nan')), (10 ** 400, 0)):
             self.assert_error("invalid_budget", transfer.require_budget, self.budget(), deadline=deadline, now=now)
         self.assert_error("invalid_budget", transfer.require_budget, replace(self.budget(), minimum_seconds=0), deadline=400, now=0)
+
+
+class FixtureResponse:
+    def __init__(self, status, body):
+        self.status = status
+        self.stream = io.BytesIO(encode_json(body))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.stream.close()
+
+    def read1(self, limit):
+        return self.stream.read(limit)
+
+
+class FavoritesTransferRequestIntegrationTests(TransferAssertions, unittest.TestCase):
+    def setUp(self):
+        self.now = 100.0
+        self.posts, self.http_timeouts = [], []
+        self.pending = False
+        self.client = object.__new__(ott.Client)
+        self.client.server = 'https://fixture.invalid'
+        self.client.token = 'synthetic-test-token'
+        self.client.timeout = 30
+        self.client.on_receipt = None
+        self.client.opener = mock.Mock()
+        self.client.opener.open.side_effect = self.open_fixture
+        # Exercise call_receipt and the real _api JSON serializer synchronously.
+        # The in-memory opener replaces all networking; no credentials/config
+        # are read, and this does not retest the separate worker-thread wrapper.
+        self.client.api = self.api_fixture
+        clock = mock.patch.object(ott.time, 'monotonic', side_effect=lambda: self.now)
+        sleeper = mock.patch.object(ott.time, 'sleep', side_effect=self.advance)
+        clock.start()
+        sleeper.start()
+        self.addCleanup(clock.stop)
+        self.addCleanup(sleeper.stop)
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def api_fixture(self, path, payload=None, timeout=None):
+        budget = min(10, self.client.timeout if timeout is None else timeout)
+        self.http_timeouts.append(budget)
+        return self.client._api(path, payload, budget, self.now + budget, threading.Event())
+
+    def open_fixture(self, request, timeout):
+        if request.get_method() == 'POST':
+            self.posts.append((self.now, request.data))
+            return FixtureResponse(202, {'id': f'{len(self.posts):032x}'})
+        if self.pending:
+            return FixtureResponse(202, {'status': 'pending'})
+        return FixtureResponse(200, {'id': f'{len(self.posts):032x}', 'status': 'ok', 'data': {}})
+
+    def test_envelope_matches_actual_client_bytes_with_optional_operation_key(self):
+        params = {'provider': 'xtream', 'settings': {'title': 'Коты🙂<&>\u2028\u2029',
+                                                   'z': 1e-5, 'a': -0.0, 'integer': 9007199254740991}}
+        for key in (None, 'a' * 16, 'Z_' * 40):
+            planned = transfer.request_envelopes('provider_settings', params, idempotency_key=key)
+            self.client.call_receipt('fixture-device', 'provider_settings', params, idempotency_key=key)
+            self.assertEqual(planned.client, self.posts[-1][1])
+            expected_order = ['action', 'params'] + (['idempotency_key'] if key is not None else [])
+            self.assertEqual(list(json.loads(planned.client)), expected_order)
+            self.assertIn(b'": ', planned.client)
+            self.assertIn('🙂'.encode(), planned.client)
+            self.assertIn(b'1e-05', planned.queued_upper_bound)
+            self.assertIn(b'-0.0', planned.queued_upper_bound)
+            self.assertNotIn(b'idempotency_key', planned.queued_upper_bound)
+            self.assertEqual(list(json.loads(planned.queued_upper_bound)), ['action', 'expires_at', 'id', 'params'])
+            self.assertEqual(json.loads(planned.queued_upper_bound)['params'], params)
+        self.assertEqual(len(self.posts), 3)
+
+    def test_go_rawmessage_escaping_and_number_spelling_have_fixed_fixture(self):
+        params = {'z': '<&>\u2028\u2029🙂', 'a': {'second': 1e-5, 'first': -0.0}}
+        result = transfer.request_envelopes('provider_settings', params)
+        expected = (b'{"action":"provider_settings","expires_at":-' + b'9' * 31
+                    + b',"id":"' + b'f' * 32
+                    + b'","params":{"z":"\\u003c\\u0026\\u003e\\u2028\\u2029'
+                    + '🙂'.encode() + b'","a":{"second":1e-05,"first":-0.0}}}')
+        self.assertEqual(result.queued_upper_bound, expected)
+        self.assertLess(len(result.client), len(result.queued_upper_bound))
+        # This is the existing Go source contract, not an invented favorites RPC.
+        requests = (ROOT / 'internal/control/requests.go').read_text()
+        decoding = (ROOT / 'internal/control/command.go').read_text()
+        self.assertIn('func decodeObject(body []byte) (map[string]json.RawMessage, error)', decoding)
+        self.assertIn('delete(m, "idempotency_key")', requests)
+        self.assertIn('var random [16]byte', requests)
+        self.assertIn('id := hex.EncodeToString(random[:])', requests)
+        queue = requests.split('canonical, _ := json.Marshal(m)', 1)[1].split('s.mu.Lock()', 1)[0]
+        self.assertEqual(re.findall(r'm\["([^"]+)"\], _ = json.Marshal', queue), ['id', 'expires_at'])
+        self.assertIn('json.Marshal(float64(expires.UnixNano()) / 1e9)', queue)
+        self.assertIn('data, _ := json.Marshal(m)', queue)
+        self.assertIn('const MaxBodyBytes = 16 * 1024', (ROOT / 'internal/control/server.go').read_text())
+
+    def test_current_client_spaces_and_go_escape_expansion_can_each_reject_packing(self):
+        raw = b'{}'
+
+        def client_limited(_):
+            return transfer.request_envelopes('provider_settings', {'settings': {'title': 'x' * 300}}, idempotency_key='k' * 80)
+
+        pair = client_limited(None)
+        self.assertGreater(len(pair.client), len(pair.queued_upper_bound))
+        self.assert_error('envelope_too_large', transfer.pack_document, raw, client_limited, rpc_bytes=len(pair.client) - 1)
+
+        def queue_limited(_):
+            return transfer.request_envelopes('provider_settings', {'settings': {'title': '<&>' * 2800}})
+
+        pair = queue_limited(None)
+        self.assertLess(len(pair.client), transfer.MAX_RPC_BYTES)
+        self.assertGreater(len(pair.queued_upper_bound), transfer.MAX_RPC_BYTES)
+        self.assert_error('envelope_too_large', transfer.pack_document, raw, queue_limited)
+
+    def test_full_raw_chunk_packs_existing_envelope_without_network(self):
+        raw = b'"' + b'x' * 8190 + b'"'
+
+        def builder(chunk):
+            # Synthetic settings value exercises the existing RPC envelope;
+            # it is not a proposed favorites operation or a submitted command.
+            return transfer.request_envelopes('provider_settings', {'provider': 'xtream', 'settings': {
+                'payload': chunk.payload.data_base64, 'sha256': chunk.payload.sha256}}, idempotency_key='k' * 80)
+
+        packed = transfer.pack_document(raw, builder)
+        self.assertEqual(len(packed.chunks), 1)
+        self.assertEqual(self.posts, [])
+        self.client.opener.open.assert_not_called()
+        self.assertLessEqual(len(packed.chunks[0].envelopes.client), 16384)
+        self.assertLessEqual(len(packed.chunks[0].envelopes.queued_upper_bound), 16384)
+
+    def test_invalid_envelope_values_are_fixed_errors(self):
+        for action, params, key in ((None, {}, None), ('status', [], None), ('status', {}, 'short'),
+                                    ('status', {}, True), ('status', {}, 'k' * 81),
+                                    ('status', {'number': float('nan')}, None), ('status', {1: 'a', '1': 'b'}, None),
+                                    ('status', {'unicode': '\ud800'}, None)):
+            self.assert_error('invalid_envelope', transfer.request_envelopes, action, params, idempotency_key=key)
+        self.assertEqual(self.posts, [])
+
+    def test_paced_real_client_calls_share_absolute_deadline_and_do_not_catch_up(self):
+        deadline, reserve, previous = 120, 5, None
+        starts, timeouts = [], []
+        for index in range(3):
+            window = transfer.dispatch_window(deadline=deadline, now=self.now, previous_start=previous,
+                                              remaining_commands=3 - index, final_receipt_reserve=reserve)
+            self.advance(window.wait_seconds)
+            # Any wait uses the same deadline and is followed by a fresh check.
+            window = transfer.dispatch_window(deadline=deadline, now=self.now, previous_start=previous,
+                                              remaining_commands=3 - index, final_receipt_reserve=reserve)
+            previous = self.now
+            starts.append(previous)
+            timeouts.append(window.request_timeout)
+            self.client.timeout = window.request_timeout
+            self.client.call_receipt('fixture-device', 'status', {})
+            if index == 1:
+                self.advance(4)  # unrelated work does not authorize a catch-up burst
+        self.assertEqual([round(value, 2) for value in starts], [100, 101.5, 106.3])
+        self.assertEqual(len(self.posts), 3)
+        self.assertTrue(all(later - earlier >= 1.5 for earlier, later in pairwise(starts)))
+        self.assertLess(timeouts[-1], timeouts[0])
+        self.assertLess(self.now, deadline - reserve)
+
+    def test_pending_request_consumes_only_remaining_timeout_and_is_never_replayed(self):
+        self.pending = True
+        deadline, reserve = 110, 3
+        window = transfer.dispatch_window(deadline=deadline, now=self.now, final_receipt_reserve=reserve)
+        self.client.timeout = window.request_timeout
+        with self.assertRaises(ott.RequestError) as error:
+            self.client.call_receipt('fixture-device', 'status', {})
+        self.assertEqual(error.exception.reason, 'request_pending_timeout')
+        self.assertEqual(error.exception.action, 'status')
+        self.assertEqual(error.exception.request_id, '0' * 31 + '1')
+        self.assertEqual(len(self.posts), 1)
+        self.assertAlmostEqual(self.now, deadline - reserve)
+        self.assert_error('deadline_exhausted', transfer.dispatch_window,
+                          deadline=deadline, now=self.now, previous_start=100, final_receipt_reserve=reserve)
+        self.assertEqual(len(self.posts), 1)
+
+    def test_backpressure_and_delayed_wakeup_cannot_reset_deadline(self):
+        planned = transfer.dispatch_window(deadline=110, now=100, previous_start=100,
+                                           not_before=104, final_receipt_reserve=5)
+        self.assertEqual((planned.start_at, planned.wait_seconds, planned.request_timeout), (104, 4, 1))
+        self.assert_error('deadline_exhausted', transfer.dispatch_window, deadline=110, now=105,
+                          previous_start=100, not_before=104, final_receipt_reserve=5)
+        for changes in ({'previous_start': 101}, {'command_interval': 1.4}, {'remaining_commands': True},
+                        {'remaining_commands': 0}, {'final_receipt_reserve': 0}, {'not_before': float('nan')}):
+            args = {'deadline': 120, 'now': 100, 'final_receipt_reserve': 5, **changes}
+            self.assert_error('invalid_budget', transfer.dispatch_window, **args)
+        self.assertEqual(self.posts, [])
 
 
 if __name__ == '__main__':
