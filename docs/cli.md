@@ -1793,6 +1793,67 @@ does not prove that playback never started.
 - Parental access, kiosk policy, network restrictions and decoder availability
   can still reject playback. A successful preview never unlocks those controls.
 
+## Global favorites transfer
+
+`fav global` moves an ordered list spanning providers, profiles and sources.
+Install every `cli/*.py` module from the same revision and use a compatible
+controller and player. `ott PLAYER` lists global controls only when advertised.
+The document contains source aliases and item locators, never provider tokens,
+playback URLs or the sender's absolute Local paths. The receiving player uses
+its own configured sources; missing or ambiguous items remain explicit.
+
+```sh
+ott t1 fav global describe
+ott t1,t2 fav global collect Home
+ott presets Home fav global validate
+ott presets Home fav global export family-favorites.json
+ott presets Home fav global diff family-favorites.json
+ott presets Home fav global import family-favorites.json merge --dry-run
+ott t2 fav global import family-favorites.json merge --dry-run
+ott t2 fav global diff Home
+ott t2 fav global load Home replace --dry-run
+ott -t 300 t2 fav global load Home replace
+ott t1,t2 fav global export backup.json
+ott t2 fav global clear --dry-run
+```
+
+Remove `--dry-run` to apply an import, load or clear. `merge` preserves existing
+order and appends new identities; conflicting titles block it. `replace` uses
+the incoming order and titles. A clear is an explicit empty replacement, not a
+playback stop. Group export writes `backup.t1.json` and `backup.t2.json`; it
+refuses existing or overlapping outputs. Group collect reads all selected
+players before one local config update. Remote group writes report each
+player's result and are not an atomic transaction across devices.
+
+Global documents use `preset_global_favorites`, separately from the older scoped
+`preset_favorites` format below. `ott presets Home fav global restore BACKUP
+--dry-run` previews restoring only that document from a private backup. Use the
+actual backup path printed by a successful update. The backup contains the full
+private configuration; keep it private. Ordinary `load Home` refuses to omit
+either saved favorites companion silently. Use `load Home --settings-only` for
+settings and then `fav global load Home` explicitly for this list.
+
+For an interrupted operation, use its printed UUID:
+
+```sh
+ott t2 fav global status OPERATION_UUID
+ott t2 fav global recovery
+ott t2 fav global recovery inspect OPERATION_UUID
+ott t2 fav global acknowledge OPERATION_UUID --dry-run
+ott t2 fav global acknowledge OPERATION_UUID --confirm PLAN_SHA256
+```
+
+Status validates the original private context against a fresh response and can
+remain usable when the player withholds its write capability. Missing context
+does not permit replay; use the separately advertised recovery inspection.
+Acknowledgement requires exactly one player and the fresh plan hash. It adds an
+administrative audit without declaring the original write successful. A changed
+plan requires a new inspection. No command wakes the player or automatically
+repeats an uncertain write. For unsupported capabilities, update the matching
+components; for insufficient time, choose a longer `-t` before a new attempt.
+The [protocol design](design/global-favorites.md) describes limits, persistence
+and explicit per-operation controller permissions.
+
 ## Saved favorites documents
 
 Local presets can hold a portable favorites document independently of the

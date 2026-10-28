@@ -64,6 +64,11 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott presets NAME fav diff FILE     compare a document without writing
   ott presets NAME fav restore BACKUP [--dry-run]
                                      restore only this preset's saved favorites
+  ott presets NAME fav global validate|export FILE|diff FILE
+                                     inspect a saved mixed-provider document offline
+  ott presets NAME fav global import FILE [merge|replace] [--dry-run]
+  ott presets NAME fav global restore BACKUP [--dry-run]
+                                     restore only the global favorites companion
   ott devices                        list devices and their last connection
   ott t1,t2,t3,t4 R                  any player command accepts a list; results per player
   ott t1,t2 watch --duration 30       observe players and decoder progress (read-only)
@@ -1180,6 +1185,8 @@ def parse_command(words):
         offset = int(digits) * (-1 if verb[0] == "-" else 1)
         return "playback", {"operation": "step_channel", "offset": offset}
     if verb == "favorites":
+        if tail and tail[0].casefold() == "global":
+            return "favorites_global", favorites_module("global_favorites_commands").parse(SimpleNamespace(**globals()), tail[1:])
         params = parse_favorites(tail)
         return ("favorites_profile" if params["op"] in FAVORITES_PROFILE_OPERATIONS else "favorites"), params
     if verb == "notifications":
@@ -2051,13 +2058,16 @@ def require_preset_favorites_support(config, name, *, settings_only=False):
     helpers. The remote integration must replace this gate with full preflight
     before it can deliver the selected companion and bind it to a checkpoint.
     """
-    if settings_only or "preset_favorites" not in config:
+    if settings_only:
         return
-    extension = config["preset_favorites"]
-    if not isinstance(extension, dict) or not isinstance(extension.get("presets"), dict):
-        raise Error("Invalid saved favorites metadata; no preset settings were sent")
-    if any(isinstance(key, str) and key.casefold() == name.casefold() for key in extension["presets"]):
-        raise Error("This preset contains saved favorites, but complete preset favorites delivery is not available yet; no preset settings were sent. Use --settings-only to explicitly skip favorites")
+    for key in ("preset_favorites", "preset_global_favorites"):
+        if key not in config:
+            continue
+        extension = config[key]
+        if not isinstance(extension, dict) or not isinstance(extension.get("presets"), dict):
+            raise Error("Invalid saved favorites metadata; no preset settings were sent")
+        if any(isinstance(name_key, str) and name_key.casefold() == name.casefold() for name_key in extension["presets"]):
+            raise Error("This preset contains saved favorites, but complete preset favorites delivery is not available yet; no preset settings were sent. Use --settings-only to explicitly skip favorites")
 
 
 def load_preset(client, device, name, preset, session=None):
@@ -2679,6 +2689,11 @@ def parse_presets_command(words):
     usage = "Use presets NAME fav validate, export FILE, import FILE [merge|replace] [--dry-run], diff FILE or restore BACKUP [--dry-run]"
     if len(words) < 3 or not preset_name(words[0]) or command_verb(words[1:2]) != "favorites":
         raise Error(usage)
+    if words[2].casefold() == "global":
+        # Reuse the strict offline grammar without changing legacy parameters.
+        if len(words) < 4 or words[3].casefold() == "global":
+            raise Error(usage.replace("fav ", "fav global "))
+        return {**parse_presets_command([*words[:2], *words[3:]]), "global": True}
     operation, values = words[2].casefold(), words[3:]
     result = {"op": operation, "preset": words[0]}
     if operation == "validate" and not values:
@@ -2725,17 +2740,7 @@ def _favorites_profile_store(path, validate_document, store_factory, storage_err
 
 def favorites_profile_dependencies():
     """Load the local document tools from the same installed CLI revision."""
-    modules = []
-    for name in ("favorites_document", "preset_favorites"):
-        path = Path(__file__).resolve().with_name(name + ".py")
-        if not path.is_file():
-            raise Error("Install all CLI Python files from the same revision to manage saved favorites")
-        spec = importlib.util.spec_from_file_location("ott_" + name, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        modules.append(module)
-    codec, storage = modules
+    codec, storage = favorites_module("favorites_document"), favorites_module("preset_favorites")
     return {"validate_document": codec.validate_document, "planner": codec.plan_documents,
             "store_factory": storage.Store, "storage_errors": (storage.StorageError,)}
 
@@ -2747,7 +2752,9 @@ def favorites_module(name):
     ContextStore. Never substitute similarly named modules from another path.
     """
     names = ("favorites_document", "preset_favorites", "favorites_transfer", "favorites_protocol",
-             "favorites_remote", "favorites_operations", "favorites_commands")
+             "favorites_remote", "favorites_operations", "favorites_commands", "global_favorites_document",
+             "preset_global_favorites", "global_favorites_protocol", "global_favorites_remote", "global_favorites_recovery",
+             "global_favorites_operations", "global_favorites_commands")
     if name not in names:
         raise Error("Invalid favorites module")
     for current in names[:names.index(name) + 1]:
@@ -2930,6 +2937,24 @@ def favorites_host_command(client, config, args, targets, params):
         print(json.dumps(result, ensure_ascii=True, indent=2))
     else:
         print_favorites_command(result)
+    return 0 if result["status"] in successful else 1
+
+
+def global_favorites_host_command(client, config, args, targets, params):
+    module = favorites_module("global_favorites_commands")
+    result = module.run(SimpleNamespace(**globals()), client, config, args.config,
+                        targets, copy.deepcopy(params), args.timeout)
+    successful = {"available", "exported", "planned", "matched", "different", "unchanged", "collected", "verified",
+                  "recovery_list", "recovery_inspected", "acknowledgement_confirmed", "acknowledgement_observed"}
+    failed = {"failed", "blocked", "unknown", "partial", "not_applied"}
+    if (not isinstance(result, dict) or result.get("op") != params["op"]
+            or result.get("status") not in successful | failed
+            or result.get("status") == "verified" and result.get("verified") is not True):
+        raise Error("Invalid global favorites result; inspect status before another change")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+    else:
+        module.print_result(result)
     return 0 if result["status"] in successful else 1
 
 
@@ -4230,6 +4255,20 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "favorites_global_recovery" in data:
+        try:
+            result["favorites_global_recovery"] = favorites_module("global_favorites_recovery").validate_recovery_capability(data["favorites_global_recovery"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - capability values must not enter diagnostics
+            raise Error(invalid) from None
+    if "favorites_global" in data:
+        try:
+            result["favorites_global"] = favorites_module("global_favorites_protocol").validate_capability(data["favorites_global"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - capability values must not enter diagnostics
+            raise Error(invalid) from None
     if "favorites_transfer_recovery" in data:
         try:
             result["favorites_transfer_recovery"] = favorites_module("favorites_protocol").validate_recovery_capability(data["favorites_transfer_recovery"])
@@ -4660,6 +4699,16 @@ def print_player_help(data, name):
         print(f"  {prefix} fav load Home replace --dry-run  — validate and preview without applying")
         print(f"  {prefix} fav load Home replace / fav clear  — persist changes after a validated preview")
         print(f"  {prefix} fav bind Home --dry-run / fav status OPERATION_UUID  — check pairing or retained evidence")
+    if "favorites_global" in controls:
+        print(f"  {prefix} fav global describe / fav global export favorites.json  — inspect or export mixed favorites")
+        print(f"  {prefix} fav global collect Home / fav global diff Home  — save or compare a global document")
+        print(f"  {prefix} fav global load Home replace --dry-run  — preview exact receiver resolution without applying")
+        print(f"  {prefix} fav global import favorites.json merge --dry-run / fav global clear --dry-run")
+        print(f"  {prefix} fav global status OPERATION_UUID  — reconcile retained evidence; never replay")
+        print("    Remove --dry-run to apply; unresolved source mappings remain visible. Ordinary load requires --settings-only.")
+    if "favorites_global_recovery" in controls:
+        print(f"  {prefix} fav global recovery / fav global recovery inspect OPERATION_UUID  — inspect global transfer uncertainty")
+        print(f"  {prefix} fav global ack OPERATION_UUID --dry-run / --confirm PLAN_SHA256  — accept uncertainty; never replay")
     aspect = controls.get("aspect", {})
     if "get" in aspect.get("operations", []):
         print(f"  {prefix} aspect  — show current and saved aspect modes")
@@ -4689,7 +4738,8 @@ def print_player_help(data, name):
         print(f"  {prefix} update install SHA256  — request installation of the staged APK")
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls):
+            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
+            and not any(key in controls for key in ("favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:
@@ -6018,6 +6068,9 @@ def group_output_arguments(words, route, prepared, suffix):
         value = expand(prepared[1]["output"])
         prepared[1]["output"] = value
         words[-1] = value
+    elif prepared is not None and prepared[0] == "favorites_global" and prepared[1]["op"] == "export":
+        prepared[1]["path"] = expand(prepared[1]["path"])
+        words[-1] = prepared[1]["path"]
     elif route == "android" and len(words) == 4 and words[1].casefold() == "screenshot" and words[2] in ("-o", "--output"):
         words[3] = expand(words[3])
     elif route == "preset":
@@ -6093,12 +6146,14 @@ def player_group_command(client, config, targets, args, argv):
     # validates ordinary commands once, before any target receives a request.
     prepared = parse_command(words) if route is None else None
     action = prepared[0] if prepared else (words[0].casefold() if words else "status")
-    if action == "favorites_profile" and prepared[1]["op"] == "acknowledge" and len(targets) != 1:
+    if action in ("favorites_profile", "favorites_global") and prepared[1]["op"] == "acknowledge" and len(targets) != 1:
         raise Error("Favorites acknowledgement requires exactly one player")
     if action == "favorites_profile" and prepared[1]["op"] == "collect":
         # Collection is one all-target snapshot/plan/CAS operation, never one
         # separate profile write per member of the existing group dispatcher.
         return favorites_host_command(client, config, args, targets, prepared[1])
+    if action == "favorites_global" and prepared[1]["op"] == "collect":
+        return global_favorites_host_command(client, config, args, targets, prepared[1])
     if action == "provider" and not prepared[1]["query"].strip():
         raise Error("provider requires a provider ID, index or name")
     if route == "android" and len(words) > 1 and words[1].casefold() == "bind" and len(targets) > 1:
@@ -6249,6 +6304,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     action, params = copy.deepcopy(prepared) if prepared is not None else parse_command(words)
     if action == "favorites_profile":
         return favorites_host_command(client, config, args, [(args.words[0], device)], params)
+    if action == "favorites_global":
+        return global_favorites_host_command(client, config, args, [(args.words[0], device)], params)
     status_overview = action == "status" and command_verb(words) != "v"
     status_deadline = time.monotonic() + args.timeout if status_overview else None
     catalog_play = None
@@ -6589,9 +6646,15 @@ def main(argv=None):
                 names = preset_names(config)
                 print(json.dumps({"presets": names}, indent=2) if args.json else "\n".join(names))
             else:
-                result = presets_favorites_command(args.config, params, **favorites_profile_dependencies())
+                if params.get("global"):
+                    module = favorites_module("global_favorites_commands")
+                    result = module.offline(SimpleNamespace(**globals()), args.config, params)
+                else:
+                    result = presets_favorites_command(args.config, params, **favorites_profile_dependencies())
                 if args.json:
                     print(json.dumps(result, ensure_ascii=True, indent=2))
+                elif params.get("global"):
+                    module.print_result(result)
                 else:
                     print_favorites_profile(result)
                 return 1 if result["status"] == "blocked" else 0

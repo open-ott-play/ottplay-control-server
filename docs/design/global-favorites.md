@@ -1,7 +1,9 @@
-# Portable global favorites foundation
+# Portable global favorites
 
-This change supplies data validation and local storage. It does not activate
-remote commands, capabilities, player migrations, or playback.
+This revision supplies the CLI, controller protocol and local storage for global
+Favorites. It requires a matching player implementation. The controller never
+invents a player capability or migrates its data; the player must qualify its
+physical store, cooperating writers and recovery before advertising support.
 
 The public document is `{version:1,entries:[{title,origin,locator}]}`. Origin
 contains provider/profile/subprofile/sourceAlias. These descriptors identify
@@ -31,11 +33,39 @@ replacement implementation. Plans are bound to their storage key; unrelated
 configuration and the old `preset_favorites` companion are preserved. The
 whole-config 4 MiB limit remains. There is no automatic format migration.
 Older CLI versions retain the unknown key but do not transfer global favorites
-with ordinary preset load. Updated command integration must handle both
-companions explicitly and retain clear `--settings-only` semantics.
+with ordinary preset load. This revision refuses an ordinary settings load that
+would silently omit either selected favorites companion. `--settings-only`
+explicitly skips both; `fav global load` transfers the global document separately.
 
-Before remote activation, the separate `favorites_global` action and `fav global`
-commands require negotiated locator kinds, bounded staged transfer, immutable
-previews, receiver-context and whole-store revisions, a compatible legacy
-facade, shared writer guards, and durable uncertain-outcome recovery without
-replay. None of those runtime guarantees follows from this foundation alone.
+The separate `favorites_global` action has eight operations: describe, export,
+begin, append, preview, commit, status and abort. The [wire schema](global-favorites-v1.schema.json)
+and [fresh admission rules](global-favorites-admission.md) define their bounds.
+The CLI validates a complete export, computes the expected result locally and
+refreshes describe before uploading. The fresh one-use operation ID, whole-store
+revision, context and negotiated kinds must match. A changed snapshot stops the
+transfer before begin. Every preview page must describe the same immutable plan.
+
+The original command deadline covers discovery, every page/chunk, preview and
+reconciliation. A necessary lower-bound budget rejects oversized transfers before
+begin; it is not a latency guarantee. `-t 300` is available for larger documents.
+The CLI does not silently raise the deadline or truncate the favorites list.
+
+Before commit, the CLI retains exact begin/preview evidence in a private,
+controller/device-bound `.favorites-global-operations-<digest>` directory next
+to its configuration. The request is sent once. A lost reply triggers read-only
+status reconciliation, including after restart, against that retained context.
+Missing evidence remains unknown and never grants replay permission.
+
+[Global recovery](global-favorites-recovery-v1.md) uses a separate action and
+marker. Inspection reads bounded protected records; acknowledgement requires a
+fresh explicit plan hash and attaches audit evidence without changing the
+original outcome. It never repeats an import. The new physical receipt family
+is separate from the scoped Plex receipt family; both cooperating physical
+writers use the shared player lock. The existing scoped wire remains unchanged.
+
+Controller permissions are explicit per operation, for example
+`favorites_global.export`, `favorites_global.commit`,
+`favorites_global_recovery.inspect` and `favorites_global_recovery.acknowledge`.
+Existing ordinary or scoped favorites grants do not imply the new permissions.
+Install all CLI Python modules from the same revision, update the controller,
+and verify the player's advertised capability before using the commands.
