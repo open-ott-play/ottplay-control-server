@@ -189,7 +189,7 @@ The current CLI contains 29 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
-`fav recovery` inspection and explicit `fav acknowledge` confirmation without
+`fav global recovery` inspection and explicit `fav global acknowledge` confirmation without
 replaying an uncertain write. These commands require compatible controller and
 player capabilities; the source pin does not assert that your running components
 support them. Explicit `load PRESET --settings-only` preserves the saved companion and
