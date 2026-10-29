@@ -4729,8 +4729,13 @@ def print_player_help(data, name):
     if global_items:
         print(f"  {prefix} fav global list / fav global current / fav global play UUID_OR_NAME")
         print("    fav uses the complete global list; current only reads the playing item. R and numbers are literal names.")
-    if controls.get("favorites", {}).get("operations"):
-        print(f"  {prefix} fav legacy list / add / play ID_OR_NAME / remove ID_OR_NAME  — explicit legacy bookmarks")
+    legacy_commands = [
+        command for operation, command in (
+            ("list", "list"), ("add", "add"),
+            ("play", "play ID_OR_NAME"), ("remove", "remove ID_OR_NAME"))
+        if operation in controls.get("favorites", {}).get("operations", [])]
+    if legacy_commands:
+        print(f"  {prefix} fav legacy {' / '.join(legacy_commands)}  — explicit legacy bookmarks")
     if "favorites_transfer_recovery" in controls:
         print(f"  {prefix} fav recovery / fav recovery inspect OPERATION_UUID  — inspect global uncertainty records")
         print(f"  {prefix} fav ack OPERATION_UUID --dry-run / --confirm PLAN_SHA256  — explicit acknowledgement; never replay")
