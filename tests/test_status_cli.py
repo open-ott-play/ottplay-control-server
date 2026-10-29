@@ -328,7 +328,7 @@ class StatusCliTest(unittest.TestCase):
         caps.update(lifecycle=['restart_stream', 'restart_app', 'exit_app', 'reboot_device'],
                     playback=['pause', 'resume', 'seek', 'previous_channel', 'next_channel', 'step_channel'])
         code, out, _, _ = self.run_cli([], {'ready': True}, caps, alias='Living room')
-        for command in ('restart stream', 'restart app', 'exit', 'reboot', 'pause', 'resume', 'seek SECONDS', 'prev', 'next', '+N', '-N'):
+        for command in ('restart stream', 'restart app', 'exit', 'reboot', 'pause', 'resume', 'seek TIME', 'prev', 'next', '+N', '-N'):
             self.assertIn("ott 'Living room' " + command, out)
         self.assertNotIn('previous_channel', out)
         self.assertNotIn('next_channel', out)
