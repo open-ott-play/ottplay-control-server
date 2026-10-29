@@ -10,7 +10,6 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLKIT = "victron-venus/venus-os-ci-toolkit/.github/workflows/"
-PIN = "cd07a77d4a069dd14fff57d07e47dafbda082ab6"
 APPROVAL_AUTHORS = {"4alvit", "dependabot[bot]", "renovate[bot]"}
 MERGE_AUTHORS = APPROVAL_AUTHORS | {"californiantiramisu"}
 
@@ -136,6 +135,7 @@ class ReviewAutomationTests(unittest.TestCase):
 
     def test_callers_delegate_only_metadata_with_minimum_permissions(self):
         events = {"opened", "synchronize", "reopened", "ready_for_review", "labeled", "unlabeled", "edited", "converted_to_draft"}
+        revisions = set()
         for name, workflow in self.workflows.items():
             self.assertEqual(set(workflow["on"]), {"pull_request", "pull_request_target"})
             for trigger in workflow["on"].values():
@@ -146,11 +146,14 @@ class ReviewAutomationTests(unittest.TestCase):
             self.assertEqual(set(job), {"permissions", "if", "uses", "with", "secrets"})
             self.assertEqual(job["permissions"], {"contents": "read", "pull-requests": "write"})
             shared = "auto-approve-reusable" if name == "auto-approve" else name
-            self.assertEqual(job["uses"], f"{TOOLKIT}{shared}.yml@{PIN}")
+            reference = re.fullmatch(re.escape(f"{TOOLKIT}{shared}.yml@") + r"([0-9a-f]{40})", job["uses"])
+            self.assertIsNotNone(reference, "Automation must use the expected workflow at a full commit SHA")
+            revisions.add(reference.group(1))
             expected_secrets = {"BOT_PAT": "${{ secrets.BOT_PAT }}"}
             if name == "auto-approve":
                 expected_secrets["APPROVAL_PAT"] = "${{ secrets.APPROVAL_PAT }}"
             self.assertEqual(job["secrets"], expected_secrets)
+        self.assertEqual(len(revisions), 1, "Approval and merge callers must use the same toolkit revision")
 
     def test_merge_requires_review_successful_gate_and_only_dependabot_actions_review(self):
         options = self.workflows["auto-merge"]["jobs"]["auto-merge"]["with"]
