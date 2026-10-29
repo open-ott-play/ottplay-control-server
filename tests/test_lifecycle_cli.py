@@ -276,7 +276,7 @@ class LifecycleCliTest(unittest.TestCase):
         invalid = [['caps', 'extra'], ['reboot', 'player'], ['reboot', 'device', 'now'], ['reload', 'device'],
                    ['exit', 'now'], ['quit', 'now'], ['close', 'now'], ['standby', 'on'], ['wake', 'now'],
                    ['restart', 'device'], ['restart', 'app', 'now'], ['pause', '1'], ['resume', '1'], ['seek'],
-                   ['seek', '1', '2'], ['seek', '-1'], ['seek', '+1'], ['seek', 'NaN'], ['seek', 'inf'], ['seek', '1e999'],
+                   ['seek', '1', '2'], ['seek', 'NaN'], ['seek', 'inf'], ['seek', '1e999'],
                    ['seek', '9007199254740992'], ['seek', '9' * 500]]
         for words in invalid:
             code, out, _, calls = self.run_cli(words, {})

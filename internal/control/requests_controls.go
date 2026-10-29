@@ -42,6 +42,8 @@ func validControlRequest(action string, params map[string]json.RawMessage) bool 
 			var offset *int64
 			return len(params) == 2 && json.Unmarshal(params["offset"], &offset) == nil && offset != nil &&
 				*offset != 0 && *offset >= -9007199254740991 && *offset <= 9007199254740991
+		case "seek_relative":
+			return parseRelativeSeekRequest(params) != nil
 		case "seek":
 			return len(params) == 2 && numberValue(params["position"], 0, 9007199254740991, false)
 		}

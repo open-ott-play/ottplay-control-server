@@ -43,6 +43,7 @@ type entry struct {
 	offlineProfile          *offlineProfileRequest
 	owner, permission       string
 	playbackOperation       string
+	relativeSeek            *relativeSeekRequest
 	inspect                 *inspectRequest
 	aspect                  *aspectRequest
 	notificationSettings    *notificationsRequest
