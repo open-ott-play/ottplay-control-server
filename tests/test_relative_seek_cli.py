@@ -100,10 +100,21 @@ class RelativeSeekTest(unittest.TestCase):
                            dict(caps(), playback_seek_relative={'version': 2}),
                            dict(caps(), playback_seek_relative={'version': 1, 'secret': 'hidden'})]:
             code, out, err, client = self.run_cli(['seek', '+10'], [capability])
-            self.assertEqual((code, out, client.call.call_count), (1, '', 1))
+            self.assertEqual((code, out), (1, ''))
+            self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {})])
             self.assertNotIn('hidden', err)
         self.assertNotIn('seek_relative', ott.PLAYBACK_OPERATIONS)
         self.assertEqual(ott.capabilities_metadata(caps())['playback'], ['seek'])
+
+    def test_capability_rejection_reports_no_seek_sent(self):
+        for response in [ott.PlayerRejected('private-token', {'error': 'private-token'}),
+                         ott.PlayerUnsupported('private-token')]:
+            code, out, err, client = self.run_cli(['seek', '+10'], [response])
+            self.assertEqual((code, out), (1, ''))
+            self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {})])
+            self.assertIn('No seek was sent', err)
+            self.assertNotIn('The request was not repeated', err)
+            self.assertNotIn('private-token', err)
 
     def test_rejection_timeout_and_bad_receipt_never_replay(self):
         for response in [ott.PlayerRejected('private-token', {'error': 'private-token'}), ott.PlayerUnsupported('private-token'),
@@ -112,17 +123,27 @@ class RelativeSeekTest(unittest.TestCase):
                          dict(receipt(), clamped=1), dict(receipt(), **{'from': float('nan')}),
                          dict(receipt(), **{'from': 10**400}), dict(receipt(), position=float('inf'))]:
             code, out, err, client = self.run_cli(['seek', '+10'], [caps(), response])
-            self.assertEqual((code, out, client.call.call_count), (1, '', 2))
+            self.assertEqual((code, out), (1, ''))
+            self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}),
+                mock.call('dev_tv', 'playback', {'operation': 'seek_relative', 'offset': 10})])
             self.assertNotIn('private-token', err)
+            if isinstance(response, (ott.PlayerRejected, ott.PlayerUnsupported)):
+                self.assertIn('The request was not repeated', err)
+                self.assertNotIn('No seek was sent', err)
 
     def test_clamp_receipts_checked_without_inventing_duration(self):
-        for ack in [receipt(-40, 30, 0, True), receipt(10, 95, 99.999, True)]:
+        # At exact duration a tiny negative offset can still hit the end guard.
+        # Duration is not in this dispatch receipt; it is not decoder-position proof.
+        for ack in [receipt(-40, 30, 0, True), receipt(10, 95, 99.999, True),
+                    receipt(-.0001, 90, 89.999, True)]:
             code, out, err, _ = self.run_cli(['seek', str(ack['offset']) if ack['offset'] < 0 else '+10'], [caps(), ack])
             self.assertEqual((code, err), (0, ''))
             self.assertEqual(json.loads(out), ack)
         for ack in [receipt(10, 30, 40, True), receipt(-40, 30, 1, True), receipt(10, 30, -1, True)]:
-            code, _, _, client = self.run_cli(['seek', '+10'], [caps(), ack])
+            code, _, _, client = self.run_cli(['seek', f"{ack['offset']:+g}"], [caps(), ack])
             self.assertEqual((code, client.call.call_count), (1, 2))
+            self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}),
+                mock.call('dev_tv', 'playback', {'operation': 'seek_relative', 'offset': ack['offset']})])
 
     def test_whole_deadline_no_second_request_when_discovery_expires(self):
         client = mock.Mock(timeout=45)

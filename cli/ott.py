@@ -4925,6 +4925,7 @@ def deferred_control_metadata(data, action, params):
 def relative_seek_command(client, device, params, timeout):
     previous = client.timeout
     deadline = time.monotonic() + timeout
+    sent = False
     try:
         client.timeout = timeout
         controls = capabilities_metadata(client.call(device, "capabilities", {}))
@@ -4934,10 +4935,12 @@ def relative_seek_command(client, device, params, timeout):
         if remaining <= 0:
             raise Error("Relative seek capability check exceeded --timeout; no seek was sent")
         client.timeout = remaining
+        sent = True
         return client.call(device, "playback", params)
     except (PlayerRejected, PlayerUnsupported) as exc:
         reason = "unsupported" if isinstance(exc, PlayerUnsupported) else "rejected"
-        raise Error("Relative seek was " + reason + "; check player readiness and local restrictions. The request was not repeated") from None
+        outcome = "The request was not repeated" if sent else "No seek was sent"
+        raise Error("Relative seek was " + reason + "; check player readiness and local restrictions. " + outcome) from None
     finally:
         client.timeout = previous
 
