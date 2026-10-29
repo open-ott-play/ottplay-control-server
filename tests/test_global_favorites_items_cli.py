@@ -126,6 +126,29 @@ class GlobalItemsCLITests(unittest.TestCase):
         self.assertNotIn("No controls", out.getvalue())
         self.assertNotIn("fav add", out.getvalue())
 
+    def test_legacy_help_respects_read_only_capability_with_or_without_global_writes(self):
+        for global_writes in (False, True):
+            with self.subTest(global_writes=global_writes):
+                data = caps(global_writes)
+                data["favorites"]["operations"] = ["list", "play"]
+                if global_writes:
+                    data["favorites_global"] = {"version": 1}
+                    data["favorites_global_recovery"] = {"version": 1}
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    ott.print_player_help({"capabilities": ott.capabilities_metadata(data)}, "t1")
+                lines = out.getvalue().splitlines()
+                self.assertEqual([line for line in lines if "fav legacy" in line], [
+                    "  ott t1 fav legacy list / play ID_OR_NAME  — explicit legacy bookmarks"])
+                self.assertEqual("ott t1 fav add [NAME]" in out.getvalue(), global_writes)
+
+    def test_legacy_help_preserves_full_capability_commands(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ott.print_player_help({"capabilities": ott.capabilities_metadata(caps(False))}, "t1")
+        self.assertEqual([line for line in out.getvalue().splitlines() if "fav legacy" in line], [
+            "  ott t1 fav legacy list / add / play ID_OR_NAME / remove ID_OR_NAME  — explicit legacy bookmarks"])
+
     def test_mixed_group_targets_route_independently(self):
         config = {"players": {"t1": "one", "t2": "two"}}
         client = ott.Client.__new__(ott.Client)
