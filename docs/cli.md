@@ -2139,8 +2139,25 @@ acknowledgement hashes, capacity reservation and rollback limits.
 When the player advertises `favorites_global_items`, ordinary `fav` commands use
 its complete global list across providers, profiles and sources. The marker is
 checked on every invocation. If it is absent, the CLI announces legacy mode and
-uses the existing `favorites` protocol. An error or malformed response after a
-present global marker never causes a legacy fallback.
+uses only the operations advertised for the existing `favorites` protocol. An
+error or malformed response after a present global marker never causes a legacy
+fallback.
+
+A matching player build must also qualify its physical storage and Web Locks
+shared by all participating writers. A missing global marker can mean that the
+host lacks these facilities; updating and reloading do not guarantee support.
+On hosts without shared Web Locks, the existing per-source UI remains the
+fallback. Legacy CLI support can be limited to list/play, or no operations when
+the stored format cannot be read safely. Add/remove can remain unsupported.
+
+Existing administrator credentials need no grant migration. Restricted command
+operators need `capabilities` and each exact operation used by the command, such
+as `favorites_global_items.list`, `favorites_global.export` or
+`favorites_global_recovery.inspect`. Ordinary/scoped favorites grants do not
+imply global grants, and family wildcards are not supported. Acknowledgement
+requires the separate `favorites_global_recovery.acknowledge` permission. See
+the [permission contract](design/global-favorites.md) and
+[scoped operator configuration](security-design.md#scoped-command-operators).
 
 ```sh
 ott l fav                              # complete global list, with receiver UUIDs
@@ -2219,11 +2236,13 @@ parental, standby and source restrictions remain enforced by the player. No
 command wakes it automatically. Missing/changed sources fail without substituting
 another item, copying credentials or persisting a temporary media URL.
 
-Legacy mode retains its original protocol and limit of 100 bookmarks. It stores
+Legacy mode retains its original protocol and limit of 100 bookmarks, subject
+to the player's advertised operations. Where writes are supported, it stores
 the current provider/profile reference on the player; add can rename an existing
 bookmark, and remove deletes that bookmark rather than provider membership.
 Legacy names use the player's existing exact/unique-substring matching and
-1–160 UTF-8 byte input limit. Explicit `fav legacy` also works on updated players.
+1–160 UTF-8 byte input limit. Explicit `fav legacy` uses the same advertised subset
+on updated players.
 Favorites survive normal restarts, but clearing app/site data removes that
 installation's state. Use the separate global export/collect commands to back up
 portable entries; ordinary `fav` does not save a CLI preset automatically.
@@ -2234,8 +2253,17 @@ Troubleshooting:
   `fav global current`. The CLI does not guess from a highlighted menu row.
 - **Several titles match:** list `fav` and use the exact receiver UUID.
 - **List changed:** obtain a fresh list; the rejected selection is not replayed.
-- **Missing global marker:** update the actual hosted/installed player and reload
-  that instance; `fav global list` refuses legacy fallback.
+- **Missing global marker:** inspect `ott PLAYER caps`. Update the actual
+  hosted/installed player and reload that instance if its build is outdated.
+  A current build can still lack qualified storage or shared Web Locks;
+  `fav global list` refuses legacy fallback.
+- **403 / command scope is not allowed:** a restricted operator needs the exact
+  global operation permissions described above for that device. Have the
+  administrator review those grants; existing ordinary favorites permissions
+  are not inherited by global commands.
+- **Unsupported add/remove:** check the advertised operations. Legacy list/play
+  or working per-source UI does not establish CLI write support. Use only the
+  operations supported by that host; repeated calls cannot qualify its backend.
 - **Blocked or uncertain write:** inspect `fav global recovery` and retained
   `fav global status OPERATION_UUID`; do not repeat add/remove blindly.
 - **Legacy-only entry:** use `fav legacy list` and its `fav-…` ID explicitly.

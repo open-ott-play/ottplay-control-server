@@ -304,6 +304,14 @@ explicitly, including the legacy-only count shown below the global list. See
 [favorites across profiles](docs/cli.md#favorites-across-profiles) for aliases,
 limits, acknowledgement semantics and troubleshooting.
 
+Global support also requires qualified physical storage and shared Web Locks;
+updating or reloading alone cannot provide those facilities on every host.
+Without them, the existing per-source UI remains available, but legacy CLI
+commands are limited to the advertised subset: list/play, or none when the
+stored format cannot be read safely. Add/remove can remain unsupported.
+Restricted command operators need explicit permissions for the new global
+operations; existing administrator credentials need no grant migration.
+
 ### Transfer a mixed favorites document
 
 On players advertising `favorites_global`, global documents preserve ordered
