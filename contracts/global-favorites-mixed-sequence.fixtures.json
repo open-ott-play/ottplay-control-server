@@ -1,0 +1,351 @@
+{
+  "expected": {
+    "document_count": 5,
+    "receiver_lookup": "exact configured origin and locator context; never slot, display-only or fuzzy fallback",
+    "second_merge_added": 0,
+    "second_merge_moved": 0,
+    "second_merge_retained": 5,
+    "second_merge_skipped_duplicates": 5,
+    "unresolved_document_policy": "preserve all five original entries and their order; player reports missing/ambiguous outcomes separately"
+  },
+  "fixture_version": 1,
+  "hosts": {
+    "origin": {
+      "targets": [
+        {
+          "configured_locator": {
+            "kind": "local-media",
+            "relativePath": "Features/clip.mp4",
+            "rootAlias": "Movies"
+          },
+          "configured_origin": {
+            "profile": "Local Library",
+            "provider": "local",
+            "sourceAlias": "Local Videos",
+            "subprofile": null
+          },
+          "configured_root_alias": "Movies",
+          "entry_index": 0,
+          "private_profile_id": "origin-profile-11",
+          "private_root_id": "origin-root-71",
+          "private_source_id": "origin-source-31",
+          "profile_slot": 0
+        },
+        {
+          "configured_locator": {
+            "channelId": "m3u-epg:station-one",
+            "kind": "channel"
+          },
+          "configured_origin": {
+            "profile": "profileOne",
+            "provider": "m3u",
+            "sourceAlias": "Playlist One",
+            "subprofile": null
+          },
+          "entry_index": 1,
+          "private_profile_id": "origin-profile-12",
+          "private_source_id": "origin-source-32",
+          "profile_slot": 0
+        },
+        {
+          "configured_locator": {
+            "id": "episode-17",
+            "idField": "id",
+            "kind": "vportal-media"
+          },
+          "configured_origin": {
+            "profile": "Portal Library",
+            "provider": "vportal",
+            "sourceAlias": "Portal Videos",
+            "subprofile": "Series"
+          },
+          "entry_index": 2,
+          "private_profile_id": "origin-profile-13",
+          "private_source_id": "origin-source-33",
+          "profile_slot": 0
+        },
+        {
+          "configured_locator": {
+            "kind": "plex-media",
+            "ratingKey": "42",
+            "serverId": "fixture-pms"
+          },
+          "configured_origin": {
+            "profile": "Plex Library",
+            "provider": "plex",
+            "sourceAlias": "Plex Videos",
+            "subprofile": null
+          },
+          "configured_server_id": "fixture-pms",
+          "entry_index": 3,
+          "private_profile_id": "origin-profile-14",
+          "private_source_id": "origin-source-34",
+          "profile_slot": 0
+        },
+        {
+          "configured_locator": {
+            "channelId": "m3u-epg:station-two",
+            "kind": "channel"
+          },
+          "configured_origin": {
+            "profile": "profileTwo",
+            "provider": "m3u",
+            "sourceAlias": "Playlist Two",
+            "subprofile": null
+          },
+          "entry_index": 4,
+          "private_profile_id": "origin-profile-15",
+          "private_source_id": "origin-source-35",
+          "profile_slot": 1
+        }
+      ]
+    },
+    "receiver": {
+      "targets": [
+        {
+          "configured_locator": {
+            "kind": "local-media",
+            "relativePath": "Features/clip.mp4",
+            "rootAlias": "Movies"
+          },
+          "configured_origin": {
+            "profile": "Local Library",
+            "provider": "local",
+            "sourceAlias": "Local Videos",
+            "subprofile": null
+          },
+          "configured_root_alias": "Movies",
+          "entry_index": 0,
+          "private_profile_id": "receiver-profile-11",
+          "private_root_id": "receiver-root-71",
+          "private_source_id": "receiver-source-31",
+          "profile_slot": 3
+        },
+        {
+          "configured_locator": {
+            "channelId": "m3u-epg:station-one",
+            "kind": "channel"
+          },
+          "configured_origin": {
+            "profile": "profileOne",
+            "provider": "m3u",
+            "sourceAlias": "Playlist One",
+            "subprofile": null
+          },
+          "entry_index": 1,
+          "private_profile_id": "receiver-profile-12",
+          "private_source_id": "receiver-source-32",
+          "profile_slot": 4
+        },
+        {
+          "configured_locator": {
+            "id": "episode-17",
+            "idField": "id",
+            "kind": "vportal-media"
+          },
+          "configured_origin": {
+            "profile": "Portal Library",
+            "provider": "vportal",
+            "sourceAlias": "Portal Videos",
+            "subprofile": "Series"
+          },
+          "entry_index": 2,
+          "private_profile_id": "receiver-profile-13",
+          "private_source_id": "receiver-source-33",
+          "profile_slot": 2
+        },
+        {
+          "configured_locator": {
+            "kind": "plex-media",
+            "ratingKey": "42",
+            "serverId": "fixture-pms"
+          },
+          "configured_origin": {
+            "profile": "Plex Library",
+            "provider": "plex",
+            "sourceAlias": "Plex Videos",
+            "subprofile": null
+          },
+          "configured_server_id": "fixture-pms",
+          "entry_index": 3,
+          "private_profile_id": "receiver-profile-14",
+          "private_source_id": "receiver-source-34",
+          "profile_slot": 1
+        },
+        {
+          "configured_locator": {
+            "channelId": "m3u-epg:station-two",
+            "kind": "channel"
+          },
+          "configured_origin": {
+            "profile": "profileTwo",
+            "provider": "m3u",
+            "sourceAlias": "Playlist Two",
+            "subprofile": null
+          },
+          "entry_index": 4,
+          "private_profile_id": "receiver-profile-15",
+          "private_source_id": "receiver-source-35",
+          "profile_slot": 0
+        }
+      ]
+    }
+  },
+  "portable_document": {
+    "entries": [
+      {
+        "locator": {
+          "kind": "local-media",
+          "relativePath": "Features/clip.mp4",
+          "rootAlias": "Movies"
+        },
+        "origin": {
+          "profile": "Local Library",
+          "provider": "local",
+          "sourceAlias": "Local Videos",
+          "subprofile": null
+        },
+        "title": "Local clip"
+      },
+      {
+        "locator": {
+          "channelId": "m3u-epg:station-one",
+          "kind": "channel"
+        },
+        "origin": {
+          "profile": "profileOne",
+          "provider": "m3u",
+          "sourceAlias": "Playlist One",
+          "subprofile": null
+        },
+        "title": "One channel"
+      },
+      {
+        "locator": {
+          "id": "episode-17",
+          "idField": "id",
+          "kind": "vportal-media"
+        },
+        "origin": {
+          "profile": "Portal Library",
+          "provider": "vportal",
+          "sourceAlias": "Portal Videos",
+          "subprofile": "Series"
+        },
+        "title": "Portal episode"
+      },
+      {
+        "locator": {
+          "kind": "plex-media",
+          "ratingKey": "42",
+          "serverId": "fixture-pms"
+        },
+        "origin": {
+          "profile": "Plex Library",
+          "provider": "plex",
+          "sourceAlias": "Plex Videos",
+          "subprofile": null
+        },
+        "title": "Plex film"
+      },
+      {
+        "locator": {
+          "channelId": "m3u-epg:station-two",
+          "kind": "channel"
+        },
+        "origin": {
+          "profile": "profileTwo",
+          "provider": "m3u",
+          "sourceAlias": "Playlist Two",
+          "subprofile": null
+        },
+        "title": "Two channel"
+      }
+    ],
+    "version": 1
+  },
+  "receiver_scenarios": [
+    {
+      "duplicate_target_entries": [],
+      "expected": [
+        "resolved",
+        "resolved",
+        "resolved",
+        "resolved",
+        "resolved"
+      ],
+      "name": "complete-reordered",
+      "omit_target_entries": []
+    },
+    {
+      "duplicate_target_entries": [],
+      "expected": [
+        "resolved",
+        "missing",
+        "resolved",
+        "resolved",
+        "resolved"
+      ],
+      "name": "missing-profile",
+      "omit_target_entries": [
+        1
+      ]
+    },
+    {
+      "duplicate_target_entries": [
+        4
+      ],
+      "expected": [
+        "resolved",
+        "resolved",
+        "resolved",
+        "resolved",
+        "ambiguous"
+      ],
+      "name": "ambiguous-profile",
+      "omit_target_entries": []
+    },
+    {
+      "duplicate_target_entries": [],
+      "expected": [
+        "missing",
+        "resolved",
+        "resolved",
+        "resolved",
+        "resolved"
+      ],
+      "name": "missing-local-root",
+      "omit_target_entries": [
+        0
+      ]
+    },
+    {
+      "duplicate_target_entries": [
+        0
+      ],
+      "expected": [
+        "ambiguous",
+        "resolved",
+        "resolved",
+        "resolved",
+        "resolved"
+      ],
+      "name": "ambiguous-local-root",
+      "omit_target_entries": []
+    }
+  ],
+  "scope": "test metadata only; host targets and expectations are not portable document fields or a wire schema",
+  "sequence": [
+    "Local",
+    "M3U profileOne",
+    "VPortal",
+    "Plex",
+    "M3U profileTwo"
+  ],
+  "title_conflict": {
+    "entry_index": 1,
+    "expected": "blocked",
+    "incoming_title": "Alternate One title",
+    "preserve_existing_title": true
+  }
+}
