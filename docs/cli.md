@@ -1058,7 +1058,13 @@ ott tv key enter            # one named OK/select input
 ott tv input channel_up     # supported input, subject to local UI restrictions
 ott tv pause                # pause supported archive/VOD playback
 ott tv resume
-ott tv seek 90.5            # absolute position in seconds; supported VOD only
+ott tv seek 90.5             # absolute position in seconds; supported VOD only
+ott tv seek 1m30s            # absolute position, also written 01:30
+ott tv seek +10              # forward 10 seconds from the current position
+ott tv seek -10s             # back 10 seconds
+ott tv seek +1h30m           # forward 90 minutes; +1:30 means 90 seconds
+ott tv +10s                  # relative seek shorthand; bare +10 changes channels
+ott tv -1m                   # back one minute; bare -1 changes channels
 ott tv aspect               # current Fit/Fill mode and saved-setting readback
 ott tv aspect fit           # show the complete picture, with bars if needed
 ott tv aspect fill          # proportional crop to fill the screen
@@ -1078,6 +1084,22 @@ ott tv reboot device        # reboot the device OS only if advertised/supported
 ott --json tv s             # machine-readable output
 ott --timeout 60 tv p
 ```
+
+An unsigned `seek` time is absolute; an explicit `+` or `-` makes it relative.
+Times accept decimal seconds, ordered nonrepeated `h`/`m`/`s` units, or
+`MM:SS` / `HH:MM:SS` with fractional final seconds. Clock minutes and seconds
+after a colon must be below 60. Relative offsets must be nonzero; all times
+must fit 9,007,199,254,740,991 seconds. Exponents and nonfinite values are rejected.
+
+Relative seeking requires the separate `playback_seek_relative` capability on
+an updated player and controller. The player samples and seeks its current
+decoder atomically, clamping to the start or just before the media end. It
+rejects unready playback, unknown duration and local policy restrictions.
+Restricted operator credentials need `capabilities` and the exact
+`playback.seek_relative` permission; `playback.seek` alone is insufficient.
+The CLI never substitutes an absolute seek or retries an uncertain request.
+For a group such as `ott t1,t2 seek -10s`, each player uses its own current
+position and reports its own result; the group is not a synchronized seek.
 
 Short and full command names share the same dispatch and output behavior:
 
@@ -3264,13 +3286,20 @@ never resubmits it after a lost or invalid receipt. Use `ott l play prev` or
 ### Pause, resume and seek
 
 `pause` and `resume` use the typed playback API for an owned, active archive/VOD
-decoder. `seek SECONDS` is available only for VOD, because archive seeking uses
+decoder. `seek TIME` is available only for page-owned VOD, because archive seeking uses
 its separate programme timeline. Live streams do not advertise these operations.
-Seek is an absolute, finite position from 0 to 9007199254740991 seconds; `+5`
-is not a relative seek. The CLI validates the returned operation and, for seek, the
-requested position before reporting dispatch. A valid receipt does not prove
-that the decoder reached that position or recovered. An unsupported player or
-changed playback state fails explicitly, without a keypress fallback or retry.
+Unsigned times such as `seek 90`, `seek 1m30s` and `seek 01:30` are absolute.
+An explicit sign makes the time relative: `seek +5`, `seek +1m` or `seek -1:30`.
+Signed unit shorthand such as `+5s` also seeks, while bare `+5` still changes
+channels. Relative seeking uses the separate `playback_seek_relative` capability
+and one atomic player operation; it never reads status and calculates an absolute
+seek in the CLI. The separate `android seek SECONDS` API remains absolute.
+
+The CLI validates the returned operation and target before reporting dispatch.
+A relative receipt also reports the sampled `from`, echoed `offset` and whether
+the target was `clamped`. It does not prove that the decoder reached that
+position or recovered. An unsupported player or changed playback state fails
+explicitly, without a keypress fallback or retry.
 
 ## Acknowledgements and limitations
 
@@ -3365,12 +3394,17 @@ ott f10 kiosk off           # release the lock before replacing the queue
 
 The seek gesture is cancelled if the episode, source, player or kiosk policy
 changes, or if the gesture becomes a vertical swipe or uses multiple fingers.
-Seeking stops at least one second before the end; normal playback can still
-advance to the next episode afterwards. Local pause, keyboard/remote seeking,
+This local seek gesture stops at least one second before the end; normal playback
+can still advance to the next episode afterwards. Local pause, keyboard/physical-remote seeking,
 volume/mute, menus and player exit remain blocked. Swipes and long presses outside
 the timeline are blocked, and repeated taps do not expand details. Stopping the
 current diagnostic capture remains available locally; it does not disconnect
 the remote controller. Remote volume/mute and recovery are unchanged.
+
+On updated players, authenticated CLI absolute and relative VOD seeking remain
+available with kiosk enabled or locked, including strict mode. They operate only
+on the current owned VOD and do not replace the queue or unlock the kiosk.
+Standby, PIN prompts, settings and other protected screens still block the request.
 
 With an existing lock, `kiosk on --strict` upgrades it without changing the target;
 with no TV lock it waits for the first UI selection. `kiosk set CHANNEL` preserves

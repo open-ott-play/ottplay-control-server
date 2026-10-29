@@ -36,6 +36,7 @@ type requestResult struct {
 	favoritesGlobalItems    *favoritesGlobalItemsRequest
 	handoff                 *handoffRequest
 	offlineProfile          *offlineProfileRequest
+	relativeSeek            *relativeSeekRequest
 }
 
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
@@ -377,6 +378,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	if action == "playback" {
 		var operation string
 		_ = json.Unmarshal(params["operation"], &operation)
+		if operation == "seek_relative" {
+			e.relativeSeek = parseRelativeSeekRequest(params)
+		}
 		if operation == "previous_channel" || operation == "next_channel" {
 			e.playbackOperation = operation
 		}
@@ -493,6 +497,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var vportalSettings *vportalSettingsRequest
 	var category *categoryRequest
 	var randomPlay *randomPlayRequest
+	var relativeSeek *relativeSeekRequest
 	playbackOperation := ""
 	for _, pending := range d.queue {
 		if pending.rpc && pending.id == id {
@@ -508,6 +513,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			handoff = pending.handoff
 			offlineProfile = pending.offlineProfile
 			playbackOperation = pending.playbackOperation
+			relativeSeek = pending.relativeSeek
 			inspect = pending.inspect
 			aspect = pending.aspect
 			notificationSettings = pending.notificationSettings
@@ -521,6 +527,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			randomPlay = pending.randomPlay
 			break
 		}
+	}
+	if relativeSeek == nil {
+		relativeSeek = d.results[id].relativeSeek
 	}
 	if inspect == nil {
 		inspect = d.results[id].inspect
@@ -715,6 +724,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid handoff result")
 		return
 	}
+	if relativeSeek != nil && !validRelativeSeekResult(m["data"], status, relativeSeek) {
+		failure(w, 400, "invalid relative seek result")
+		return
+	}
 	if playbackOperation != "" && status == "ok" && !validPlexPlaybackResult(m["data"], playbackOperation) {
 		failure(w, 400, "invalid Plex playback result")
 		return
@@ -744,7 +757,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, handoff: e.handoff, offlineProfile: e.offlineProfile}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])
