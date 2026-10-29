@@ -1,0 +1,109 @@
+{
+  "status": "ACCEPTED_SOURCE_ONLY_NOT_ACTIVATED",
+  "action": "favorites_global_items",
+  "capability": {
+    "version": 1
+  },
+  "list_request": {
+    "op": "list",
+    "runtime": "page-items-proposal",
+    "subject": "global",
+    "cursor": null,
+    "max_entries": 100
+  },
+  "list_result": {
+    "version": 1,
+    "runtime": "page-items-proposal",
+    "op": "list",
+    "subject": "global",
+    "revision": "1111111111111111111111111111111111111111111111111111111111111111",
+    "context_revision": "2222222222222222222222222222222222222222222222222222222222222222",
+    "cursor": null,
+    "page_offset": 0,
+    "total": 1,
+    "entries": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "entry": {
+          "title": "Example item",
+          "origin": {
+            "provider": "plex",
+            "profile": "Example profile",
+            "subprofile": null,
+            "sourceAlias": "example-server"
+          },
+          "locator": {
+            "kind": "plex-media",
+            "serverId": "example-server",
+            "ratingKey": "7"
+          }
+        }
+      }
+    ],
+    "next_cursor": null,
+    "unresolved_legacy_count": 0
+  },
+  "current_request": {
+    "op": "current",
+    "runtime": "page-items-proposal",
+    "subject": "global"
+  },
+  "current_result": {
+    "version": 1,
+    "runtime": "page-items-proposal",
+    "op": "current",
+    "subject": "global",
+    "revision": "1111111111111111111111111111111111111111111111111111111111111111",
+    "context_revision": "2222222222222222222222222222222222222222222222222222222222222222",
+    "entry": {
+      "title": "Example item",
+      "origin": {
+        "provider": "plex",
+        "profile": "Example profile",
+        "subprofile": null,
+        "sourceAlias": "example-server"
+      },
+      "locator": {
+        "kind": "plex-media",
+        "serverId": "example-server",
+        "ratingKey": "7"
+      }
+    },
+    "unavailable_reason": null
+  },
+  "current_unavailable": {
+    "version": 1,
+    "runtime": "page-items-proposal",
+    "op": "current",
+    "subject": "global",
+    "revision": "1111111111111111111111111111111111111111111111111111111111111111",
+    "context_revision": "2222222222222222222222222222222222222222222222222222222222222222",
+    "entry": null,
+    "unavailable_reason": "standby"
+  },
+  "play_request": {
+    "op": "play",
+    "runtime": "page-items-proposal",
+    "subject": "global",
+    "id": "00000000-0000-4000-8000-000000000001",
+    "expected_revision": "1111111111111111111111111111111111111111111111111111111111111111",
+    "expected_context_revision": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "play_result": {
+    "version": 1,
+    "runtime": "page-items-proposal",
+    "op": "play",
+    "subject": "global",
+    "revision": "1111111111111111111111111111111111111111111111111111111111111111",
+    "context_revision": "2222222222222222222222222222222222222222222222222222222222222222",
+    "id": "00000000-0000-4000-8000-000000000001",
+    "dispatched": true
+  },
+  "error": {
+    "version": 1,
+    "runtime": "page-items-proposal",
+    "op": "play",
+    "subject": "global",
+    "error": "context_changed"
+  }
+}

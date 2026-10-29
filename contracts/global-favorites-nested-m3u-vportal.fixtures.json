@@ -1,0 +1,96 @@
+{
+  "contract": "joint-unactivated-portable-v1-v4",
+  "cases": [
+    {
+      "id": "root",
+      "entry": {
+        "title": "Movie",
+        "origin": {
+          "provider": "m3u",
+          "profile": "Main playlist",
+          "subprofile": null,
+          "sourceAlias": "Main playlist"
+        },
+        "locator": {
+          "kind": "vportal-media",
+          "idField": "id",
+          "id": "42"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "folder",
+      "entry": {
+        "title": "Movie",
+        "origin": {
+          "provider": "m3u",
+          "profile": "Main playlist",
+          "subprofile": "Movies/Comedy",
+          "sourceAlias": "Main playlist"
+        },
+        "locator": {
+          "kind": "vportal-media",
+          "idField": "episode_id",
+          "id": "s18-e1"
+        }
+      },
+      "valid": true
+    },
+    {
+      "id": "unsafe-id",
+      "entry": {
+        "title": "Movie",
+        "origin": {
+          "provider": "m3u",
+          "profile": "Main playlist",
+          "subprofile": null,
+          "sourceAlias": "Main playlist"
+        },
+        "locator": {
+          "kind": "vportal-media",
+          "idField": "id",
+          "id": "http://secret"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "raw-command",
+      "entry": {
+        "title": "Movie",
+        "origin": {
+          "provider": "m3u",
+          "profile": "Main playlist",
+          "subprofile": null,
+          "sourceAlias": "Main playlist"
+        },
+        "locator": {
+          "kind": "vportal-media",
+          "idField": "id",
+          "id": "42",
+          "cmd": "secret"
+        }
+      },
+      "valid": false
+    },
+    {
+      "id": "invented-url-folder",
+      "entry": {
+        "title": "Movie",
+        "origin": {
+          "provider": "m3u",
+          "profile": "Main playlist",
+          "subprofile": "http://portal/secret",
+          "sourceAlias": "Main playlist"
+        },
+        "locator": {
+          "kind": "vportal-media",
+          "idField": "id",
+          "id": "42"
+        }
+      },
+      "valid": false
+    }
+  ]
+}

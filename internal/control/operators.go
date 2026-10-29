@@ -75,7 +75,7 @@ func commandAction(action string, p map[string]json.RawMessage) string {
 		field = "mode"
 	case "aspect", "playback", "lifecycle", "vportal_queue", "maintenance", "app_update", "notifications":
 		field = "operation"
-	case "local_media", "plex_queue", "plex_library", "favorites", "favorites_transfer", "categories", "player_settings", "plex_folders", "player_settings_patch", "perf_capture":
+	case "local_media", "plex_queue", "plex_library", "favorites", "favorites_transfer", "favorites_global", "favorites_global_recovery", "favorites_global_items", "categories", "player_settings", "plex_folders", "player_settings_patch", "perf_capture":
 		field = "op"
 	}
 	if field != "" {

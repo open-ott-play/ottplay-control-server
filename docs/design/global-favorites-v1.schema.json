@@ -1,0 +1,1393 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Global favorites staged wire v1 — proposal revision 3",
+  "$comment": "Source contract for an unactivated action; all semantic correlation and persistence requirements in the design remain mandatory.",
+  "$defs": {
+    "runtime": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before",
+        "after",
+        "added",
+        "removed",
+        "retained",
+        "updated",
+        "moved",
+        "duplicates_skipped"
+      ],
+      "properties": {
+        "before": {
+          "$ref": "#/$defs/count"
+        },
+        "after": {
+          "$ref": "#/$defs/count"
+        },
+        "added": {
+          "$ref": "#/$defs/count"
+        },
+        "removed": {
+          "$ref": "#/$defs/count"
+        },
+        "retained": {
+          "$ref": "#/$defs/count"
+        },
+        "updated": {
+          "$ref": "#/$defs/count"
+        },
+        "moved": {
+          "$ref": "#/$defs/count"
+        },
+        "duplicates_skipped": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "resolution_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolved",
+        "missing",
+        "ambiguous",
+        "unsupported"
+      ],
+      "properties": {
+        "resolved": {
+          "$ref": "#/$defs/count"
+        },
+        "missing": {
+          "$ref": "#/$defs/count"
+        },
+        "ambiguous": {
+          "$ref": "#/$defs/count"
+        },
+        "unsupported": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_document_bytes",
+        "max_entries",
+        "max_append_bytes",
+        "max_chunks",
+        "max_export_bytes",
+        "max_preview_rows",
+        "max_envelope_bytes",
+        "max_metadata_bytes",
+        "max_active_transactions",
+        "idle_ttl_seconds",
+        "absolute_ttl_seconds",
+        "max_receipts",
+        "max_receipt_ledger_bytes"
+      ],
+      "properties": {
+        "max_document_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_entries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "max_append_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "max_chunks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "max_export_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "max_preview_rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "max_envelope_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "max_metadata_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 131072
+        },
+        "max_active_transactions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "idle_ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120
+        },
+        "absolute_ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600
+        },
+        "max_receipts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "max_receipt_ledger_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        }
+      }
+    },
+    "export_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_id",
+        "document_sha256",
+        "size_bytes",
+        "entries",
+        "expires_at"
+      ],
+      "properties": {
+        "snapshot_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "entries": {
+          "$ref": "#/$defs/count"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "resolution_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry_index",
+        "state"
+      ],
+      "properties": {
+        "entry_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999
+        },
+        "state": {
+          "enum": [
+            "resolved",
+            "missing",
+            "ambiguous",
+            "unsupported"
+          ]
+        },
+        "metadata_conflict": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reason",
+            "incoming_entry_index"
+          ],
+          "properties": {
+            "reason": {
+              "const": "title_mismatch"
+            },
+            "incoming_entry_index": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "error"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "enum": [
+            "describe",
+            "export",
+            "begin",
+            "append",
+            "preview",
+            "commit",
+            "status",
+            "abort"
+          ]
+        },
+        "subject": {
+          "const": "global"
+        },
+        "error": {
+          "enum": [
+            "invalid_request",
+            "envelope_too_large",
+            "unsupported",
+            "runtime_changed",
+            "busy",
+            "expired",
+            "operation_conflict",
+            "transaction_not_found",
+            "snapshot_not_found",
+            "out_of_order",
+            "chunk_conflict",
+            "incomplete",
+            "hash_mismatch",
+            "revision_conflict",
+            "context_changed",
+            "invalid_document",
+            "unportable_export",
+            "not_ready",
+            "policy_denied",
+            "unsupported_persistence",
+            "storage_unavailable",
+            "limits_exceeded",
+            "reconciliation_required"
+          ]
+        }
+      }
+    },
+    "describe_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime"
+      ],
+      "properties": {
+        "op": {
+          "const": "describe"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        }
+      }
+    },
+    "export_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "snapshot_id",
+        "offset",
+        "max_bytes"
+      ],
+      "properties": {
+        "op": {
+          "const": "export"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048575
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        }
+      }
+    },
+    "begin_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "operation_id",
+        "mode",
+        "expected_revision",
+        "expected_context_revision",
+        "document_sha256",
+        "size_bytes",
+        "chunk_count",
+        "budget_ms",
+        "required_kinds"
+      ],
+      "properties": {
+        "op": {
+          "const": "begin"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "mode": {
+          "enum": [
+            "merge",
+            "replace"
+          ]
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expected_context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "chunk_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "budget_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600000
+        },
+        "required_kinds": {
+          "$ref": "#/$defs/locator_kinds"
+        }
+      }
+    },
+    "append_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "transaction_id",
+        "seq",
+        "offset",
+        "chunk_sha256",
+        "data_base64"
+      ],
+      "properties": {
+        "op": {
+          "const": "append"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048575
+        },
+        "chunk_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "data_base64": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 10924
+        }
+      }
+    },
+    "preview_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "transaction_id",
+        "page_offset",
+        "max_entries"
+      ],
+      "properties": {
+        "op": {
+          "const": "preview"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "page_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "max_entries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      }
+    },
+    "commit_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "transaction_id",
+        "operation_id",
+        "plan_digest"
+      ],
+      "properties": {
+        "op": {
+          "const": "commit"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "status_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "operation_id"
+      ],
+      "properties": {
+        "op": {
+          "const": "status"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "abort_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "runtime",
+        "transaction_id",
+        "operation_id"
+      ],
+      "properties": {
+        "op": {
+          "const": "abort"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "verified_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "subject",
+        "operation_id",
+        "operation_runtime",
+        "transaction_id",
+        "input_document_sha256",
+        "result_document_sha256",
+        "expected_revision",
+        "new_revision",
+        "context_revision",
+        "plan_digest",
+        "counts",
+        "changed",
+        "outcome",
+        "persistence",
+        "required_kinds"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "input_document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "result_document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "new_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "counts": {
+          "$ref": "#/$defs/counts"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "const": "verified"
+        },
+        "persistence": {
+          "const": "persistent"
+        },
+        "required_kinds": {
+          "$ref": "#/$defs/locator_kinds"
+        }
+      }
+    },
+    "describe_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "revision",
+        "context_revision",
+        "write_ready",
+        "write_blocker",
+        "export",
+        "export_error",
+        "limits",
+        "locator_kinds",
+        "admission"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "describe"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "write_ready": {
+          "type": "boolean"
+        },
+        "write_blocker": {
+          "anyOf": [
+            {
+              "enum": [
+                "busy",
+                "policy_denied",
+                "unsupported_persistence",
+                "storage_unavailable",
+                "limits_exceeded",
+                "reconciliation_required"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "export": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/export_descriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "export_error": {
+          "anyOf": [
+            {
+              "enum": [
+                "unportable_export",
+                "limits_exceeded",
+                "storage_unavailable"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "locator_kinds": {
+          "$ref": "#/$defs/locator_kinds"
+        },
+        "admission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/admission"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "export_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "snapshot_id",
+        "revision",
+        "document_sha256",
+        "size_bytes",
+        "offset",
+        "chunk_sha256",
+        "data_base64",
+        "next_offset",
+        "eof"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "export"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048575
+        },
+        "chunk_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "data_base64": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 87384
+        },
+        "next_offset": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "eof": {
+          "type": "boolean"
+        }
+      }
+    },
+    "begin_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "transaction_id",
+        "expected_revision",
+        "context_revision",
+        "document_sha256",
+        "size_bytes",
+        "chunk_count",
+        "next_seq",
+        "received_bytes",
+        "idle_expires_at",
+        "absolute_expires_at",
+        "required_kinds"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "begin"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "chunk_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "next_seq": {
+          "const": 0
+        },
+        "received_bytes": {
+          "const": 0
+        },
+        "idle_expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "absolute_expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "required_kinds": {
+          "$ref": "#/$defs/locator_kinds"
+        }
+      }
+    },
+    "append_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "transaction_id",
+        "seq",
+        "offset",
+        "chunk_sha256",
+        "next_seq",
+        "received_bytes",
+        "duplicate"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "append"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048575
+        },
+        "chunk_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "next_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "received_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "duplicate": {
+          "type": "boolean"
+        }
+      }
+    },
+    "preview_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "transaction_id",
+        "expected_revision",
+        "context_revision",
+        "input_document_sha256",
+        "result_document_sha256",
+        "plan_digest",
+        "counts",
+        "resolution_counts",
+        "ready",
+        "blocker",
+        "page_offset",
+        "rows",
+        "next_offset",
+        "required_kinds",
+        "legacy_effects"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "preview"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "context_revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "input_document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "result_document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "counts": {
+          "$ref": "#/$defs/counts"
+        },
+        "resolution_counts": {
+          "$ref": "#/$defs/resolution_counts"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "blocker": {
+          "anyOf": [
+            {
+              "enum": [
+                "revision_conflict",
+                "context_changed",
+                "invalid_document",
+                "policy_denied",
+                "unsupported_persistence",
+                "storage_unavailable",
+                "limits_exceeded",
+                "reconciliation_required",
+                "metadata_conflict"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "rows": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/resolution_row"
+          }
+        },
+        "next_offset": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required_kinds": {
+          "$ref": "#/$defs/locator_kinds"
+        },
+        "legacy_effects": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "linked_removed",
+            "unmapped_retained"
+          ],
+          "properties": {
+            "linked_removed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "unmapped_retained": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          }
+        }
+      }
+    },
+    "commit_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "transaction_id",
+        "receipt"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "commit"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "receipt": {
+          "$ref": "#/$defs/verified_receipt"
+        }
+      }
+    },
+    "status_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "operation_runtime",
+        "transaction_id",
+        "state",
+        "outcome",
+        "receipt"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "status"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/runtime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transaction_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "not_found",
+            "receiving",
+            "ready",
+            "applying",
+            "committed",
+            "expired",
+            "aborted",
+            "unknown"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "verified",
+            "not_applied",
+            "unknown"
+          ]
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/verified_receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "abort_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "runtime",
+        "op",
+        "subject",
+        "operation_id",
+        "transaction_id",
+        "state",
+        "outcome"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "op": {
+          "const": "abort"
+        },
+        "subject": {
+          "const": "global"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "transaction_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "state": {
+          "const": "aborted"
+        },
+        "outcome": {
+          "const": "not_applied"
+        }
+      }
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/describe_request"
+        },
+        {
+          "$ref": "#/$defs/export_request"
+        },
+        {
+          "$ref": "#/$defs/begin_request"
+        },
+        {
+          "$ref": "#/$defs/append_request"
+        },
+        {
+          "$ref": "#/$defs/preview_request"
+        },
+        {
+          "$ref": "#/$defs/commit_request"
+        },
+        {
+          "$ref": "#/$defs/status_request"
+        },
+        {
+          "$ref": "#/$defs/abort_request"
+        }
+      ]
+    },
+    "response": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/error"
+        },
+        {
+          "$ref": "#/$defs/describe_response"
+        },
+        {
+          "$ref": "#/$defs/export_response"
+        },
+        {
+          "$ref": "#/$defs/begin_response"
+        },
+        {
+          "$ref": "#/$defs/append_response"
+        },
+        {
+          "$ref": "#/$defs/preview_response"
+        },
+        {
+          "$ref": "#/$defs/commit_response"
+        },
+        {
+          "$ref": "#/$defs/status_response"
+        },
+        {
+          "$ref": "#/$defs/abort_response"
+        }
+      ]
+    },
+    "client_envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "params"
+      ],
+      "properties": {
+        "action": {
+          "const": "favorites_global"
+        },
+        "params": {
+          "$ref": "#/$defs/request"
+        }
+      }
+    },
+    "queued_envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "action",
+        "params",
+        "expires_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "action": {
+          "const": "favorites_global"
+        },
+        "params": {
+          "$ref": "#/$defs/request"
+        },
+        "expires_at": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "locator_kinds": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 5,
+      "items": {
+        "enum": [
+          "channel",
+          "channel-name",
+          "local-media",
+          "plex-media",
+          "vportal-media"
+        ]
+      },
+      "$comment": "Strict lexicographic ascending order; empty is permitted. Codec/storage acceptance, not proof of a resolved or playable receiver entry."
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "ttl_ms"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "ttl_ms": {
+          "const": 10000
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
+  "$id": "https://github.com/open-ott-play/ottplay-control-server/blob/main/docs/design/global-favorites-v1.schema.json"
+}

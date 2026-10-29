@@ -160,7 +160,7 @@ class FavoritesDispatchTests(unittest.TestCase):
         client.call.side_effect = [capabilities, contract["list_result"]]
         host = SimpleNamespace(run=mock.Mock())
         code, out, err, _, _ = self.run_cli(["-j", "t1", "fav", "list"], host, client)
-        self.assertEqual((code, err), (0, ""))
+        self.assertEqual((code, err), (0, "Legacy favorites: this player does not advertise global favorites items.\n"))
         self.assertEqual(json.loads(out), contract["list_result"])
         self.assertEqual(client.call.call_args_list, [mock.call("one", "capabilities", {}),
             mock.call("one", "favorites", {"op": "list", "runtime": "page-123"})])

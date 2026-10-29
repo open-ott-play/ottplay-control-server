@@ -13,6 +13,7 @@ ott = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ott)
 CONTRACT = json.loads((ROOT / 'contracts/favorites-v1.json').read_text())
 SECRET = 'private-url-token-must-not-appear'
+LEGACY_NOTICE = 'Legacy favorites: this player does not advertise global favorites items.\n'
 
 
 def caps():
@@ -54,7 +55,7 @@ class FavoritesTest(unittest.TestCase):
                                   ([alias, 'add', '  Мой канал  '], {'op': 'add', 'name': 'Мой канал'}),
                                   ([alias], {'op': 'list'})]:
                 code, out, err, calls = self.run_cli(words, [caps(), result(params['op'])], True)
-                self.assertEqual((code, err), (0, ''))
+                self.assertEqual((code, err), (0, LEGACY_NOTICE))
                 self.assertEqual(json.loads(out), result(params['op']))
                 self.assertEqual(calls, [mock.call('dev_tv', 'capabilities', {}),
                                         mock.call('dev_tv', 'favorites', dict(params, runtime='page-123'))])
@@ -71,7 +72,7 @@ class FavoritesTest(unittest.TestCase):
         for words, params in cases:
             self.assertEqual(ott.parse_command(words), ('favorites', params))
             code, out, err, calls = self.run_cli(words, [caps(), result(params['op'])], True)
-            self.assertEqual((code, err), (0, ''))
+            self.assertEqual((code, err), (0, LEGACY_NOTICE))
             self.assertEqual(calls[-1], mock.call('dev_tv', 'favorites', dict(params, runtime='page-123')))
             self.assertEqual(len(calls), 2)
         self.assertEqual(ott.parse_command(['play', 'favorites']), ('play', {'query': 'favorites'}))
@@ -177,7 +178,7 @@ class FavoritesTest(unittest.TestCase):
 
     def test_discoverability_and_truthful_playback_message(self):
         code, out, err, _ = self.run_cli(['fav', 'play', 'fav-abc123'], [caps(), result('play')])
-        self.assertEqual((code, err), (0, ''))
+        self.assertEqual((code, err), (0, LEGACY_NOTICE))
         self.assertIn('visible playback has not been confirmed', out)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

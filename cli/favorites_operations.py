@@ -63,6 +63,9 @@ class ContextStore:
     The target is separately bound to the controller endpoint and exact device ID.
     """
 
+    _protocol = protocol
+    _restore_context = staticmethod(remote.restore_context)
+
     def __init__(self, directory, *, server, device, validate_context):
         if (type(server) is not str or not server or len(server) > 2048
                 or type(device) is not str or not device or len(device) > 256
@@ -111,8 +114,8 @@ class ContextStore:
                     or type(completion["version"]) is not int or completion["version"] != 1
                     or type(completion["recorded_ns"]) is not int or not 0 <= completion["recorded_ns"] < 2**63):
                 raise ValueError
-            retained = remote.restore_context(context)
-            result = protocol.validate_response(completion["request"], completion["response"],
+            retained = self._restore_context(context)
+            result = self._protocol.validate_response(completion["request"], completion["response"],
                                                 request_id=completion["response"]["id"], context=retained)
             if (not result.verified or result.request["op"] not in ("commit", "status")
                     or result.data["operation_id"] != context["operation_id"]):
@@ -259,9 +262,9 @@ class ContextStore:
         """
         name = self._name(operation_id)
         try:
-            if (type(result) is not protocol.ValidatedResult or type(result._request) is not bytes
+            if (type(result) is not self._protocol.ValidatedResult or type(result._request) is not bytes
                     or type(result._data) is not bytes or len(result._request) > 16384
-                    or len(result._data) > protocol.MAX_METADATA_BYTES):
+                    or len(result._data) > self._protocol.MAX_METADATA_BYTES):
                 raise ValueError
             completion = {"version": 1, "recorded_ns": time.time_ns(), "request": result.request,
                           "response": {"id": result.request_id, "status": result.status, "data": result.data}}
