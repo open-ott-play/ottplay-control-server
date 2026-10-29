@@ -1,5 +1,6 @@
 """Real CLI routing and private offline storage; no live requests."""
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -16,6 +17,7 @@ ott = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ott)
 commands = ott.favorites_module("global_favorites_commands")
 OPERATION = "10000000-0000-4000-8000-000000000001"
+MIXED_SEQUENCE = json.loads((ROOT / "contracts/global-favorites-mixed-sequence.fixtures.json").read_bytes())
 
 
 def entry(identifier="1", title="First"):
@@ -217,10 +219,11 @@ class GlobalFavoritesCLITests(unittest.TestCase):
         self.assertIn("already exists", err)
         incoming = self.directory / "incoming.json"
         incoming.write_text(json.dumps(document(entry("2", "Second"))), encoding="utf-8")
+        entries_before = sorted(path.name for path in self.directory.iterdir())
         code, out, _ = self.offline("import", str(incoming), "replace", "--dry-run")
         self.assertEqual((code, json.loads(out)["status"]), (0, "planned"))
         self.assertEqual(self.path.read_bytes(), before)
-        self.assertEqual(len(list(self.directory.glob("cli.json.backup-*"))), 0)
+        self.assertEqual(sorted(path.name for path in self.directory.iterdir()), entries_before)
         code, out, _ = self.offline("diff", str(incoming))
         self.assertEqual((code, json.loads(out)["status"]), (0, "different"))
         code, out, err = self.offline("import", str(incoming), "replace")
@@ -244,6 +247,82 @@ class GlobalFavoritesCLITests(unittest.TestCase):
         code, out, _ = self.offline("import", str(incoming), "merge")
         self.assertEqual((code, json.loads(out)["status"]), (1, "blocked"))
         self.assertEqual(self.path.read_bytes(), current)
+
+    def test_mixed_sequence_roundtrip_keeps_order_and_receiver_metadata(self):
+        value = copy.deepcopy(MIXED_SEQUENCE["portable_document"])
+        self.config["preset_global_favorites"]["presets"]["Home"] = value
+        self.config["fixture_host"] = copy.deepcopy(MIXED_SEQUENCE["hosts"]["origin"])
+        self.save()
+        exported = self.directory / "mixed.json"
+        self.assertEqual(self.offline("export", str(exported))[0], 0)
+        self.assertEqual(json.loads(exported.read_bytes()), value)
+        self.assertEqual([row["origin"]["provider"] for row in value["entries"]],
+                         ["local", "m3u", "vportal", "plex", "m3u"])
+        receiver = copy.deepcopy(MIXED_SEQUENCE["hosts"]["receiver"])
+        self.assertNotEqual(receiver, self.config["fixture_host"])
+        self.config["fixture_host"] = receiver
+        self.config["preset_global_favorites"]["presets"]["Home"] = document()
+        self.save()
+        code, out, err = self.offline("import", str(exported), "replace")
+        self.assertEqual((code, err, json.loads(out)["status"]), (0, "", "imported"))
+        saved = json.loads(self.path.read_bytes())
+        self.assertEqual(saved["preset_global_favorites"]["presets"]["Home"], value)
+        self.assertEqual(saved["fixture_host"], receiver)
+        again = self.directory / "mixed-again.json"
+        self.assertEqual(self.offline("export", str(again))[0], 0)
+        self.assertEqual(again.read_bytes(), exported.read_bytes())
+
+    def test_mixed_sequence_repeat_merge_and_title_conflict(self):
+        value = copy.deepcopy(MIXED_SEQUENCE["portable_document"])
+        incoming = self.directory / "mixed.json"
+        incoming.write_text(json.dumps(value), encoding="utf-8")
+        self.config["preset_global_favorites"]["presets"]["Home"] = document()
+        self.save()
+        self.assertEqual(self.offline("import", str(incoming), "merge")[0], 0)
+        before = self.path.read_bytes()
+        code, out, err = self.offline("import", str(incoming), "merge")
+        result = json.loads(out)
+        self.assertEqual((code, err, result["status"]), (0, "", "unchanged"))
+        for key, expected in (("added", 0), ("retained", 5), ("skipped_duplicates", 5), ("moved", 0)):
+            self.assertEqual(result["summary"][key], expected)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(json.loads(before)["preset_global_favorites"]["presets"]["Home"], value)
+        value["entries"][1]["title"] = MIXED_SEQUENCE["title_conflict"]["incoming_title"]
+        incoming.write_text(json.dumps(value), encoding="utf-8")
+        for flags in (("--dry-run",), ()):
+            code, out, err = self.offline("import", str(incoming), "merge", *flags)
+            self.assertEqual((code, err, json.loads(out)["status"]), (1, "", "blocked"))
+            self.assertEqual(json.loads(out)["summary"]["title_conflicts"], 1)
+            self.assertEqual(self.path.read_bytes(), before)
+
+    def test_mixed_sequence_unresolved_receiver_setup_preserves_portable_data(self):
+        # This tests offline preservation, not player resolution or playback.
+        value = copy.deepcopy(MIXED_SEQUENCE["portable_document"])
+        incoming = self.directory / "mixed.json"
+        incoming.write_text(json.dumps(value), encoding="utf-8")
+        for scenario in MIXED_SEQUENCE["receiver_scenarios"][1:]:
+            with self.subTest(scenario=scenario["name"]):
+                targets = copy.deepcopy(MIXED_SEQUENCE["hosts"]["receiver"]["targets"])
+                targets = [row for row in targets if row["entry_index"] not in scenario["omit_target_entries"]]
+                for row in list(targets):
+                    if row["entry_index"] in scenario["duplicate_target_entries"]:
+                        duplicate = dict(row, private_profile_id="duplicate-profile", private_source_id="duplicate-source")
+                        if "private_root_id" in duplicate:
+                            duplicate["private_root_id"] = "duplicate-root"
+                        targets.append(duplicate)
+                self.config["fixture_host"] = {"targets": targets}
+                self.config["preset_global_favorites"]["presets"]["Home"] = document()
+                self.save()
+                before = self.path.read_bytes()
+                entries_before = sorted(path.name for path in self.directory.iterdir())
+                code, out, err = self.offline("import", str(incoming), "replace", "--dry-run")
+                self.assertEqual((code, err, json.loads(out)["status"]), (0, "", "planned"))
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertEqual(sorted(path.name for path in self.directory.iterdir()), entries_before)
+                self.assertEqual(self.offline("import", str(incoming), "replace")[0], 0)
+                saved = json.loads(self.path.read_bytes())
+                self.assertEqual(saved["preset_global_favorites"]["presets"]["Home"], value)
+                self.assertEqual(saved["fixture_host"], {"targets": targets})
 
     def test_offline_invalid_input_and_missing_companion_do_not_write(self):
         bad = self.directory / "bad.json"
