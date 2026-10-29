@@ -5,6 +5,12 @@ Favorites. It requires a matching player implementation. The controller never
 invents a player capability or migrates its data; the player must qualify its
 physical store, cooperating writers and recovery before advertising support.
 
+An updated player can remain unqualified when physical storage or shared Web
+Locks are unavailable. In that case the existing per-source UI is the fallback;
+legacy CLI capabilities advertise only list/play, or no operations when the
+stored format cannot be read safely. Legacy CLI add/remove require a qualified
+writer. Update/reload alone is not a universal remedy for a missing marker.
+
 The public document is `{version:1,entries:[{title,origin,locator}]}`. Origin
 contains provider/profile/subprofile/sourceAlias. These descriptors identify
 candidates, not authority. Locators cover channel IDs, explicit channel names
@@ -81,7 +87,7 @@ global list and current portable item and dispatches playback by receiver UUID.
 UUIDs are local selectors, not portable identities. Ordinary add/remove reuse
 the same staged transfer above, after matching items and export revisions. This
 keeps one mutation and recovery path. The legacy wire stays available explicitly
-for unresolved old memberships.
+for unresolved old memberships, limited to the operations the host advertises.
 
 The original command deadline covers discovery, every page/chunk, preview and
 reconciliation. A necessary lower-bound budget rejects oversized transfers before
@@ -102,8 +108,14 @@ is separate from the scoped Plex receipt family; both cooperating physical
 writers use the shared player lock. The existing scoped wire remains unchanged.
 
 Controller permissions are explicit per operation, for example
+`favorites_global_items.list`, `favorites_global_items.play`,
 `favorites_global.export`, `favorites_global.commit`,
 `favorites_global_recovery.inspect` and `favorites_global_recovery.acknowledge`.
 Existing ordinary or scoped favorites grants do not imply the new permissions.
+Restricted operators also need `capabilities` for CLI discovery and the exact
+device scope. Neither `*` nor family wildcards grant access. Existing
+administrator credentials retain their authorization; no grant migration is
+required for them. A 403 from a global operation requires review of the explicit
+operator grants, not automatic fallback to a legacy operation.
 Install all CLI Python modules from the same revision, update the controller,
 and verify the player's advertised capability before using the commands.
