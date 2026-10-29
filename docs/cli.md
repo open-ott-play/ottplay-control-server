@@ -3,7 +3,7 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`,
+`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`, `player_groups.py`,
 `favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
 `favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py`, `preset_favorites.py`,
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
@@ -187,7 +187,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 29 Python modules, including
+The current CLI contains 30 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -808,6 +808,68 @@ To uninstall the symlink installation, remove only the `~/.local/bin/ott` link y
 created and, when no longer needed, its source checkout. Keep private configuration
 until any required deregistration is complete. Uninstalling the CLI does not
 stop the controller or revoke player/operator credentials.
+
+## Saved player groups
+
+Save frequently used player lists in the local CLI configuration:
+
+```sh
+ott group add tt t1,t2,t3,t4
+ott group add oo o1,o2,o3,o4
+ott groups                         # list all groups and their members
+ott group show tt                  # inspect one group
+ott group set tt t1 t2 t3 t4        # create or replace; spaces or commas work
+ott group remove oo                # remove only this group, not its players
+ott group --help
+```
+
+Members must be existing player aliases or their configured device IDs.
+`add` refuses to overwrite an existing group; `set` explicitly replaces it.
+Groups are local to `~/.config/ottplay-control/cli.json`, or the file selected by
+`OTT_CONFIG` / `-c`. These management commands work offline and do not require
+controller credentials. They preserve the other configuration fields and save
+the file atomically with private permissions. `-j` / `--json` is supported.
+
+Use the group wherever a player list is supported:
+
+```sh
+ott tt                             # controls and status for each member
+ott tt R                           # each player chooses its own random channel
+ott oo provider m3u
+ott tt provider m3u 1
+ott tt +10s                        # relative seek on each player's current VOD
+ott tt standby
+ott tt go
+ott tt restart stream
+ott tt load Home
+ott tt watch --duration 30
+ott tt,oo v 25                     # combine groups
+ott tt,t1 v 25                     # t1 receives the command only once
+```
+
+The configuration stores a flat list of names, for example:
+
+```json
+"groups": {
+  "tt": ["t1", "t2", "t3", "t4"],
+  "oo": ["o1", "o2", "o3", "o4"]
+}
+```
+
+Group names are case-insensitive, up to 32 letters/digits/underscores/hyphens,
+and cannot collide with player aliases, device IDs or top-level CLI commands.
+Nested groups are not supported. Each command may expand up to 64 member names;
+duplicate device identities are executed once in first-occurrence order.
+Every name is resolved before any player request. If a saved member is removed
+or renamed, update the group with `group set`; an unknown member prevents the
+entire command from being sent. A malformed hand-edited group can be deleted
+with `group remove` and recreated.
+
+Saved groups use the same per-player timeouts, output, partial-failure behavior
+and single-player restrictions as comma lists below. They do not make operations
+atomic across devices or bypass player permissions. Do not repeat a whole group
+after a partial failure; inspect the individual results first. No controller or
+player upgrade is required for group expansion itself.
 
 ## Run a command on several players
 
