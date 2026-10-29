@@ -2239,7 +2239,11 @@ another item, copying credentials or persisting a temporary media URL.
 Legacy mode retains its original protocol and limit of 100 bookmarks, subject
 to the player's advertised operations. Where writes are supported, it stores
 the current provider/profile reference on the player; add can rename an existing
-bookmark, and remove deletes that bookmark rather than provider membership.
+bookmark. On older players, or for an unmapped legacy bookmark, remove deletes
+only its shortcut and leaves provider-local favorites unchanged. With the shared
+Global Favorites store, removing a legacy alias mapped to a global entry also
+removes that global entry and all legacy aliases linked to it. Neither path
+deletes the underlying channel or media file.
 Legacy names use the player's existing exact/unique-substring matching and
 1–160 UTF-8 byte input limit. Explicit `fav legacy` uses the same advertised subset
 on updated players.
