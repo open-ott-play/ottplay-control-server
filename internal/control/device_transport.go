@@ -34,7 +34,7 @@ func deviceTransportRoute(method string, target *url.URL) bool {
 	switch target.Path {
 	case wire.CommandPath, wire.LegacyPollPath, "/api/notifications", "/api/notifications/media", "/api/discovery":
 		return method == http.MethodGet
-	case wire.AckPath, "/api/responses", diagnosticsPrefix + "/runtimes", diagnosticsPrefix + "/poll", diagnosticsPrefix + "/results", diagnosticsPrefix + "/events", diagnosticsPrefix + "/repairs/poll", diagnosticsPrefix + "/repairs/results":
+	case wire.AckPath, "/api/responses", playerStatePath, diagnosticsPrefix + "/runtimes", diagnosticsPrefix + "/poll", diagnosticsPrefix + "/results", diagnosticsPrefix + "/events", diagnosticsPrefix + "/repairs/poll", diagnosticsPrefix + "/repairs/results":
 		return method == http.MethodPost
 	case "/api/pairings":
 		if method == http.MethodPost {

@@ -71,6 +71,12 @@ The player stores this connection only on the current installation and excludes 
 
 ## Terminal remote
 
+Updated players automatically report their current media and playback state.
+`ott l` shows live status; `ott l state` reads the controller's last report and
+`ott l history` reads recent changes, including when the player is offline.
+See [retained playback state](docs/player-state.md) for freshness, persistence,
+operator access and troubleshooting.
+
 Save reusable player groups with `ott group add tt t1,t2,t3,t4` and
 `ott group add oo o1,o2,o3,o4`. Then use `ott tt R`, `ott oo provider m3u`,
 or `ott tt,oo standby`. `ott groups` lists them; `ott group set` updates a

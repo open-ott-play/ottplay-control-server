@@ -82,7 +82,7 @@ func TestPollDeliveryContract(t *testing.T) {
 				t.Fatalf("ack=%v expiry failed code=%d bytes=%d queue=%d body=%s", ack, body.code, s.bytes, len(s.devices[0].queue), body.body)
 			}
 			if ack {
-				assertAckShape(t, body.body, 0, 0, float64(pollClock.Add(61*time.Second).UnixNano())/1e9, nil)
+				assertAckShape(t, body.body, 0, 0, float64(pollClock.Add(61*time.Second).UnixNano())/1e9, s.playerStateEpoch, nil)
 			} else if strings.TrimSpace(body.body) != "[]" {
 				t.Fatalf("legacy expiry body %s", body.body)
 			}
@@ -119,7 +119,7 @@ func assertPoll(t *testing.T, commands, rpcs int, ack bool) {
 				t.Fatalf("ack reordered or rewrote slot %d", i)
 			}
 		}
-		assertAckShape(t, body.body, commands, rpcs, float64(pollClock.UnixNano())/1e9, before)
+		assertAckShape(t, body.body, commands, rpcs, float64(pollClock.UnixNano())/1e9, s.playerStateEpoch, before)
 		return
 	}
 	var got []map[string]any
@@ -164,19 +164,38 @@ func assertPoll(t *testing.T, commands, rpcs int, ack bool) {
 	}
 }
 
-func assertAckShape(t *testing.T, body string, commands, rpcs int, serverTime float64, expected []entry) {
+func assertAckShape(t *testing.T, body string, commands, rpcs int, serverTime float64, epoch string, expected []entry) {
 	t.Helper()
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(body), &raw); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"commands", "requests", "request_protocol", "server_time"} {
+	for _, key := range []string{"commands", "requests", "request_protocol", "server_time", "player_state"} {
 		if _, ok := raw[key]; !ok {
 			t.Fatalf("missing %s in %s", key, body)
 		}
 	}
-	if len(raw) != 4 {
+	if len(raw) != 5 {
 		t.Fatalf("unexpected ack keys %s", body)
+	}
+	// The additive advertisement is part of the ACK contract only. Check its
+	// independent wire constants and bind the epoch to this server instance.
+	if len(epoch) != 32 || strings.Trim(epoch, "0123456789abcdef") != "" {
+		t.Fatalf("invalid controller epoch %q", epoch)
+	}
+	var advertisement map[string]json.RawMessage
+	wantAdvertisement := map[string]string{
+		"version": "1", "controller_epoch": `"` + epoch + `"`,
+		"report_path": `"/api/player-state"`, "heartbeat_ms": "15000",
+		"stale_after_ms": "45000", "max_body_bytes": "4096",
+	}
+	if json.Unmarshal(raw["player_state"], &advertisement) != nil || len(advertisement) != len(wantAdvertisement) {
+		t.Fatalf("player_state shape %s", raw["player_state"])
+	}
+	for key, want := range wantAdvertisement {
+		if string(advertisement[key]) != want {
+			t.Fatalf("player_state %s=%s want %s", key, advertisement[key], want)
+		}
 	}
 	var commandsOut []map[string]any
 	var requestsOut []map[string]any

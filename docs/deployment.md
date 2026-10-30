@@ -1,5 +1,13 @@
 # Deployment
 
+[Playback reporting](player-state.md) stores bounded current-media reports and
+history in memory by default. For restart-safe retention, configure
+`player_state.path` under a private writable persistent directory. It may use
+the existing `journalExistingClaim` PVC mount, but must use a different file
+from the command journal or device registry. The store is single-writer and
+restored reports remain stale until new player reports arrive. No separate
+player opt-in is required after remote control is connected.
+
 The optional [device registry](device-registry.md) needs a separately initialized
 private persistent file. Its path may share the existing journal PVC mount, but
 must differ from the journal and lock files. Serve never initializes a missing

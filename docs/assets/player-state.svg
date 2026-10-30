@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="230" viewBox="0 0 960 230" role="img" aria-labelledby="title desc">
+  <title id="title">Playback reporting and retained state</title>
+  <desc id="desc">The playback session sends safe state to the controller. The controller retains timestamped records, and the CLI reads live or retained reports.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#78baff" stroke-width="1.5"/></marker></defs>
+  <rect width="960" height="230" rx="20" fill="#101827"/>
+  <g font-family="system-ui, sans-serif" fill="#edf4ff">
+    <text x="30" y="38" font-size="19" font-weight="600">Current media, with explicit freshness</text>
+    <g fill="#19283c" stroke="#405872" stroke-width="1">
+      <rect x="30" y="66" width="260" height="118" rx="12"/>
+      <rect x="350" y="66" width="260" height="118" rx="12"/>
+      <rect x="670" y="66" width="260" height="118" rx="12"/>
+    </g>
+    <g font-size="17" font-weight="600"><text x="48" y="97">Player session</text><text x="368" y="97">Control server</text><text x="688" y="97">Terminal / API</text></g>
+    <g font-size="14" fill="#c2d1e3">
+      <text x="48" y="124">Confirmed media and state</text><text x="48" y="149">Changes + 15-second heartbeat</text><text x="48" y="171">No stream URLs or credentials</text>
+      <text x="368" y="124">Latest reports + bounded history</text><text x="368" y="149">Server timestamps and epoch</text><text x="368" y="171">Optional private persistent file</text>
+      <text x="688" y="124">ott l — live status</text><text x="688" y="149">ott l state — last report</text><text x="688" y="171">ott l history — changes</text>
+    </g>
+    <text x="30" y="211" fill="#9cb0c8" font-size="13">Stale, restored or ambiguous records remain distinct from a fresh observation of the screen.</text>
+  </g>
+  <g stroke="#78baff" stroke-width="2" marker-end="url(#arrow)"><path d="M298 125H337"/><path d="M618 125H657"/></g>
+</svg>

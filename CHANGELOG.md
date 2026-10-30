@@ -4,6 +4,10 @@
 
 ### Added
 
+- Report current playback automatically when a player connects or changes media.
+  Show reported media in live CLI status and add `state` / `history` reads from
+  the controller, with explicit age, stale and ambiguous-runtime indicators.
+  Keep bounded history in memory by default or in a private persistent store.
 - Add explicit `load PRESET --settings-only` for ordinary and grouped loads,
   including plan/apply/resume/verify. It preserves saved favorites, reports that
   they were skipped and binds resumable checkpoints to settings-only intent.

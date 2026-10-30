@@ -38,6 +38,13 @@ The current player polls about once per second, with timeouts and bounded backof
 
 Plain GET without `delivery=ack` retains the legacy array response and removes delivered commands immediately. Do not mix legacy and acknowledgement clients against the same device queue. The server timestamps commands for compatibility, but new clients deduplicate by ID rather than timestamps.
 
+Updated controllers also advertise `player_state` in the ACK-poll envelope.
+This supplies a controller epoch and the fixed `/api/player-state` report path.
+Connected updated players send bounded playback reports on changes and a
+15-second heartbeat. Device-authenticated POSTs publish the report;
+administrator or scoped-operator GETs read retained state and history without
+enqueuing a player command. See the [player-state API and retention contract](player-state.md#api).
+
 ## Status and health
 
 `GET /api/devices` requires the administrator token and returns device IDs, pending queue counts and last device activity. Tokens and command payloads are omitted. Last activity is not proof of successful playback.

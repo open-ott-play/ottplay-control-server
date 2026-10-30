@@ -763,7 +763,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		copy(d.queue[i:], d.queue[i+1:])
 		d.queue[len(d.queue)-1] = entry{}
 		d.queue = d.queue[:len(d.queue)-1]
-		d.lastSeen = now
+		if now.After(d.lastSeen) {
+			d.lastSeen = now
+		}
 		s.mu.Unlock()
 		reply(w, 200, map[string]string{"status": "ok"})
 		return

@@ -72,6 +72,7 @@ func (s *Server) publishRegistry(rows map[string]registryIdentity) {
 			s.notificationStats.Dropped += uint64(len(d.notifications.queue))
 			d.notifications = notificationPresence{}
 		}
+		s.forgetPlayerState(id)
 		s.notificationMedia.revokeDevice(id)
 		for key, p := range s.pairings {
 			if p.device == id {
