@@ -28,6 +28,21 @@ def result(op):
     return copy.deepcopy(FIXTURE["responses"][op])
 
 
+def interface_result(op):
+    data = result(op)
+    data["context"].update(provider=None, profile=None)
+    data["setting"].update(id="interfaceMode", value=1 if op == "set" else 0,
+                           persisted_value=1 if op == "set" else 0, effective_value=0)
+    if op == "get":
+        data["descriptor"].update(id="interfaceMode", apply="immediate", constraints={"values": [0, 1]},
+            choices=[{"value": 0, "label": "Classic", "aliases": ["classic"]},
+                     {"value": 1, "label": "Modern", "aliases": ["modern"]}])
+        data["descriptor"].pop("unit")
+    else:
+        data["application"] = {"state": "deferred", "reason": "view_loading"}
+    return data
+
+
 class PlayerSettingsCliTests(unittest.TestCase):
     def run_cli(self, words, responses):
         client = ott.Client.__new__(ott.Client)
@@ -114,6 +129,78 @@ class PlayerSettingsCliTests(unittest.TestCase):
         self.assertEqual((code, err, client.call.call_count), (1, "", 3))
         self.assertIn("saved 3", out); self.assertIn("failed after saving", out)
 
+    def test_interface_loading_reports_saved_choice_and_active_layout_without_retry(self):
+        get, write = interface_result("get"), interface_result("set")
+        code, out, err, client = self.run_cli(["f", "setting", "interfaceMode", "modern"], [caps(), get, write])
+        self.assertEqual((code, err, client.call.call_count), (0, "", 3))
+        self.assertIn("saved 1 (Modern) (application; stored)", out)
+        self.assertIn("Effective value: 0 (Classic)", out)
+        self.assertIn("Application: deferred (interface is loading).", out)
+        self.assertIn("Read this setting again to check its effective value.", out)
+        self.assertNotIn("Application: applied", out)
+        self.assertEqual(client.call.call_args, mock.call("device-f", "player_settings", {
+            "op": "set", "runtime": "page-123", "id": "interfaceMode", "value": 1,
+            "context": "context-1", "revision": "revision-1"}))
+
+    def test_interface_loading_json_preserves_application_and_effective_value(self):
+        write = interface_result("set")
+        code, out, err, client = self.run_cli(["-j", "f", "setting", "interfaceMode", "1"],
+                                            [caps(), interface_result("get"), write])
+        self.assertEqual((code, err, client.call.call_count), (0, "", 3))
+        self.assertEqual(json.loads(out), write)
+
+    def test_interface_failure_and_later_reads_distinguish_saved_and_effective(self):
+        write = interface_result("set")
+        write["application"] = {"state": "failed", "reason": "effect_failed"}
+        code, out, err, client = self.run_cli(["f", "setting", "interfaceMode", "modern"],
+                                            [caps(), interface_result("get"), write])
+        self.assertEqual((code, err, client.call.call_count), (1, "", 3))
+        self.assertIn("saved 1 (Modern)", out)
+        self.assertIn("Effective value: 0 (Classic)", out)
+        self.assertIn("failed after saving", out)
+        for effective in [0, 1]:
+            with self.subTest(effective=effective):
+                get = interface_result("get")
+                get["setting"].update(value=1, persisted_value=1, effective_value=effective)
+                code, out, err, client = self.run_cli(["-j", "f", "setting", "interfaceMode"], [caps(), get])
+                self.assertEqual((code, err, client.call.call_count), (0, "", 2))
+                self.assertEqual(json.loads(out), get)
+
+    def test_view_loading_remains_only_a_deferred_result_reason(self):
+        for application in [
+            {"state": "completed", "reason": "view_loading"},
+            {"state": "failed", "reason": "view_loading"},
+            {"state": "deferred", "reason": "view_ready"},
+            {"state": "deferred", "reason": "VIEW_LOADING"},
+            {"state": "deferred", "reason": []},
+            {"state": "deferred", "reason": "view_loading", "extra": True},
+        ]:
+            with self.subTest(application=application):
+                write = interface_result("set"); write["application"] = application
+                code, out, err, client = self.run_cli(["f", "setting", "interfaceMode", "modern"],
+                                                    [caps(), interface_result("get"), write])
+                self.assertEqual((code, out, client.call.call_count), (1, "", 3))
+                self.assertIn("invalid settings metadata", err)
+        descriptor = interface_result("get")["descriptor"]
+        for apply in ["immediate", "next_stream", "manual", "after_ack"]:
+            descriptor["apply"] = apply
+            self.assertTrue(settings.descriptor_valid(descriptor), apply)
+        descriptor["apply"] = "view_loading"
+        self.assertFalse(settings.descriptor_valid(descriptor))
+
+    def test_view_loading_does_not_relax_runtime_persistence_or_value_checks(self):
+        for field, value in [("runtime", "other-page"), ("persisted", False), ("effective_value", True)]:
+            with self.subTest(field=field):
+                write = interface_result("set")
+                if field == "effective_value":
+                    write["setting"][field] = value
+                else:
+                    write[field] = value
+                code, out, err, client = self.run_cli(["f", "setting", "interfaceMode", "1"],
+                                                    [caps(), interface_result("get"), write])
+                self.assertEqual((code, out, client.call.call_count), (1, "", 3))
+                self.assertIn("invalid settings metadata", err)
+
     def test_rejection_uses_local_reason_and_never_replays(self):
         error = result("error"); error["error"] = SECRET
         code, out, err, client = self.run_cli(["f", "setting", "bufSize", "3"],
@@ -156,6 +243,17 @@ class PlayerSettingsCliTests(unittest.TestCase):
             write = result('set'); write['application'] = application
             with self.assertRaises(ott.Error):
                 settings.metadata(ott,write,FIXTURE['requests']['set'],FIXTURE['descriptor'])
+
+    def test_shared_application_matrix(self):
+        for state, reasons in FIXTURE['application_matrix'].items():
+            for reason in reasons:
+                with self.subTest(state=state, reason=reason):
+                    write = result('set')
+                    write['application'] = {'state': state}
+                    if reason is not None:
+                        write['application']['reason'] = reason
+                    self.assertEqual(settings.metadata(ott, write, FIXTURE['requests']['set'],
+                                                       FIXTURE['descriptor']), write)
 
     def test_registered_provider_context_ids_use_shared_corpus(self):
         for valid, key in [(True, 'valid_provider_ids'), (False, 'invalid_provider_ids')]:

@@ -51,6 +51,50 @@ func TestPlayerSettingsFixtureBoundResults(t *testing.T) {
 	}
 }
 
+func TestPlayerSettingsViewLoadingResult(t *testing.T) {
+	s := newTestServer(t)
+	_, data := playerSettingsParts(t, "set")
+	const payload = `{"action":"player_settings","params":{"op":"set","runtime":"page-123","id":"interfaceMode","context":"context-1","revision":"revision-1","value":1}}`
+	id := rpcID(t, s, payload)
+	data["context"] = map[string]any{"token": "context-1", "provider": nil, "profile": nil}
+	data["setting"] = map[string]any{"id": "interfaceMode", "revision": "revision-2", "storage": "stored", "value": 1, "persisted_value": 1, "effective_value": 0}
+	data["application"] = map[string]any{"state": "deferred", "reason": "view_loading"}
+	expect(t, request(s, "POST", "/api/responses", firstToken, screenshotEnvelope(id, "ok", data), nil), 200)
+	result := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+	expect(t, result, 200)
+	for _, field := range []string{`"reason":"view_loading"`, `"persisted_value":1`, `"effective_value":0`} {
+		if !strings.Contains(result.Body.String(), field) {
+			t.Fatal("saved and effective layout result was not preserved", field)
+		}
+	}
+}
+
+func TestPlayerSettingsSharedApplicationMatrix(t *testing.T) {
+	fixture := playerSettingsFixture(t)
+	var matrix map[string][]*string
+	if err := json.Unmarshal(fixture["application_matrix"], &matrix); err != nil {
+		t.Fatal(err)
+	}
+	var requests map[string]json.RawMessage
+	_ = json.Unmarshal(fixture["requests"], &requests)
+	params, _ := decodeObject(requests["set"])
+	bound := parsePlayerSettingsRequest(params)
+	for state, reasons := range matrix {
+		for _, reason := range reasons {
+			_, data := playerSettingsParts(t, "set")
+			application := map[string]any{"state": state}
+			if reason != nil {
+				application["reason"] = *reason
+			}
+			data["application"] = application
+			body, _ := json.Marshal(data)
+			if !validPlayerSettingsResult(body, "ok", bound) {
+				t.Fatal("documented application state rejected", application)
+			}
+		}
+	}
+}
+
 func TestPlayerSettingsRegisteredProviderContextIDs(t *testing.T) {
 	fixture := playerSettingsFixture(t)
 	for key, valid := range map[string]bool{"valid_provider_ids": true, "invalid_provider_ids": false} {
