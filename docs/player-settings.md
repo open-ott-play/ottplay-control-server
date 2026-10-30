@@ -62,6 +62,30 @@ bind to the current provider/profile storage source. They never silently fall
 back to another provider. When `uiFontScale` is listed, use its advertised range
 and application behavior.
 
+When `interfaceMode` is listed, it selects this installation's layout:
+integer `0` / `classic` for Classic, `1` / `modern` for Modern. It is an
+application preference, independent of the provider and colour theme.
+Both the CLI and the remote command server must support the `view_loading`
+save-result reason; updating only the CLI cannot make an older server accept it.
+
+```sh
+ott t1 setting interfaceMode
+ott t1 setting interfaceMode modern
+ott t1 setting interfaceMode                 # read the actual effective layout
+ott t1 setting interfaceMode classic
+ott -j t1 setting interfaceMode
+```
+
+Its descriptor uses the ordinary `apply: "immediate"` value. Modern's optional
+renderer may still be loading when the save completes. In that case the CLI
+prints `Application: deferred (interface is loading).` and exits successfully
+because the preference was saved; this does not confirm that Modern is active.
+Read the setting again: `persisted_value` is the saved choice and
+`effective_value` is the currently active layout. Plain output shows both when
+they differ. For example, saved `1 (Modern)` with effective `0 (Classic)` means
+Classic is still active while loading or after fallback. A later read can show
+Modern without another write. The CLI does not poll or repeat the save.
+
 ## Conditional saves and recovery
 
 Capability `player_settings` version 1 advertises `schema/get/set`. Discovery
@@ -81,11 +105,18 @@ discovery, reading and saving. The CLI never refreshes a revision and retries a
 failed write automatically.
 
 Success requires verified persistence. Application is separate: `completed`
-has no reason; `deferred` names `next_stream`, `manual`, or `after_ack`; `failed` names
+has no reason; `deferred` names `next_stream`, `manual`, `after_ack`, or
+`view_loading`; `failed` names
 `effect_failed`. A saved value whose application failed is printed as saved
 with a failure and exits nonzero. After an uncertain response, read `setting KEY`
 before deciding whether another change is needed. A queued/accepted transport
 receipt is not proof of a save.
+
+`view_loading` is a save-result reason, not a new descriptor `apply` value.
+If loading has already failed when the save response is produced, the result
+is `failed/effect_failed`; the saved preference and actual effective layout
+remain separately readable. A deferred response does not predict whether
+loading will eventually succeed.
 
 `after_ack` means the desired value is saved and its runtime transition is
 scheduled after the response reaches the controller. It does not claim that a

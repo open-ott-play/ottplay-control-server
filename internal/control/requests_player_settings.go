@@ -340,7 +340,7 @@ func validPlayerSettingsResult(raw json.RawMessage, status string, expected *pla
 			return false
 		}
 		return (settingString(a["state"]) == "completed" && a["reason"] == nil) ||
-			(settingString(a["state"]) == "deferred" && settingEnum(a["reason"], "next_stream", "manual", "after_ack")) ||
+			(settingString(a["state"]) == "deferred" && settingEnum(a["reason"], "next_stream", "manual", "after_ack", "view_loading")) ||
 			(settingString(a["state"]) == "failed" && settingEnum(a["reason"], "effect_failed"))
 	}
 	return false

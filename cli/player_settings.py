@@ -178,7 +178,7 @@ def _metadata(api, data, request, descriptor=None, rejected=False):
                 or not keys(application, ("state",), ("reason",))
                 or application["state"] not in ("completed", "deferred", "failed")
                 or not ((application["state"] == "completed" and "reason" not in application)
-                        or (application["state"] == "deferred" and application.get("reason") in ("next_stream", "manual", "after_ack"))
+                        or (application["state"] == "deferred" and application.get("reason") in ("next_stream", "manual", "after_ack", "view_loading"))
                         or (application["state"] == "failed" and application.get("reason") == "effect_failed"))):
             raise api.Error(invalid)
     return data
@@ -272,7 +272,11 @@ def print_result(data, descriptor=None):
     if data["op"] == "set":
         application = data["application"]
         note = {"completed": "applied", "deferred": "deferred", "failed": "failed after saving"}[application["state"]]
-        print("Application: " + note + (" (" + application["reason"].replace("_", " ") + ")" if application.get("reason") else "") + ".")
+        reason = application.get("reason", "")
+        detail = "interface is loading" if reason == "view_loading" else reason.replace("_", " ")
+        print("Application: " + note + (" (" + detail + ")" if detail else "") + ".")
+        if reason == "view_loading":
+            print("Read this setting again to check its effective value.")
     elif descriptor["apply"] != "immediate":
         print("Changes apply: " + descriptor["apply"].replace("_", " ") + ".")
     if descriptor.get("description"):
