@@ -194,6 +194,9 @@ func (s *Server) Close() error {
 	if s.registry != nil {
 		err = s.registry.lock.Close()
 	}
+	if s.playerState != nil && s.playerState.lock != nil {
+		err = errors.Join(err, s.playerState.lock.Close())
+	}
 	if s.journal != nil {
 		return errors.Join(err, s.journal.lock.Close())
 	}

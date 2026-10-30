@@ -3,7 +3,7 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`, `player_groups.py`,
+`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`, `player_groups.py`, `playback_status.py`,
 `favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
 `favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py`, `preset_favorites.py`,
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
@@ -189,7 +189,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 30 Python modules, including
+The current CLI contains 31 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -723,10 +723,25 @@ Player summary:
   Kiosk:        Off
 ```
 
-`Awake` means standby is off; `Now playing: Not reported` means this response
-does not confirm current content. On older players,
+`Awake` means standby is off. Updated players report the title and playback
+state of their current media; the CLI uses this confirmed playback projection,
+not the selected catalogue row or kiosk target. `Now playing: Not reported`
+means this response does not report usable current-content metadata. On older players,
 `Connected (standby not reported)` leaves standby unknown. The provider label `Local videos`
 names the local-file provider; it does not mean the player is disconnected.
+
+For retained reports, including when a player is offline:
+
+```sh
+ott l state
+ott l history --limit 20
+ott -j tt state
+```
+
+These commands read the controller without contacting the player. They report
+server receipt time, age and stale/ambiguous state; they do not treat retained
+metadata as current physical playback. See [automatic playback reporting](player-state.md)
+for the 15-second heartbeat, bounded history, durable storage and troubleshooting.
 
 Options for the ordinary CLI must precede `PLAYER` or the management verb:
 

@@ -72,6 +72,7 @@ func (b *bucket) allow(now time.Time, limit int) bool {
 }
 
 type device struct {
+	stateRate     bucket
 	id            string
 	token         [32]byte
 	queue         []entry
@@ -82,6 +83,9 @@ type device struct {
 }
 
 type Server struct {
+	playerState            *playerStateStore
+	playerStateEpoch       string
+	playerStateRate        bucket
 	registry               *deviceRegistry
 	registryGate           sync.RWMutex
 	registryView           atomic.Pointer[registrySnapshot]
@@ -174,6 +178,18 @@ func New(c config.Config) (*Server, error) {
 		if registry != nil {
 			registry.lock.Close()
 		}
+		return nil, err
+	}
+	s.playerStateEpoch, err = registryRandom(16, false)
+	if err == nil {
+		s.playerState, err = openPlayerState(c.PlayerState)
+	}
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	if err := s.restorePlayerState(); err != nil {
+		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
@@ -320,7 +336,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveDeviceRegistry(w, r, path)
 		return
 	}
-	if s.registry != nil && path != "/api/pairings" && path != "/api/pairings/approve" {
+	if s.registry != nil && path != "/api/pairings" && path != "/api/pairings/approve" && !(path == playerStatePath && r.Method == http.MethodPost) {
 		s.registryGate.RLock()
 		defer s.registryGate.RUnlock()
 	}
@@ -349,6 +365,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		methods = "GET"
 	case wire.CommandPath:
 		methods = "GET,POST"
+	case playerStatePath:
+		methods = "GET,POST"
 	case "/api/requests":
 		methods = "GET,POST"
 	case "/api/responses":
@@ -363,7 +381,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if intendedMethod == http.MethodOptions {
 		intendedMethod = r.Header.Get("Access-Control-Request-Method")
 	}
-	deviceRoute := path == "/api/notifications" || path == "/api/notifications/media" || path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
+	deviceRoute := (path == playerStatePath && intendedMethod == http.MethodPost) || path == "/api/notifications" || path == "/api/notifications/media" || path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
 	if path == "/api/discovery" || (path == "/api/pairings" && (intendedMethod == "POST" || r.URL.Query().Has("id"))) {
 		deviceRoute = true
 	}
@@ -387,7 +405,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	// Each configured player can use its full allowance without exhausting a
 	// smaller shared budget; unauthenticated traffic still has a fixed bound.
-	if !s.globalRate.allow(now, len(s.currentDevices())*120+240) {
+	rateAllowed := false
+	if path == playerStatePath && r.Method == http.MethodPost {
+		rateAllowed = s.playerStateRate.allow(now, len(s.currentDevices())*60+120)
+	} else {
+		rateAllowed = s.globalRate.allow(now, len(s.currentDevices())*120+240)
+	}
+	if !rateAllowed {
 		s.mu.Unlock()
 		w.Header().Set("Retry-After", "60")
 		failure(w, 429, "request rate exceeded")
@@ -408,8 +432,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses")
-	operatorRoute := operator != nil && (path == "/api/home-assistant/status" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
+	requiresAdmin := (path == playerStatePath && r.Method == http.MethodGet) || path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses" && path != playerStatePath)
+	operatorRoute := operator != nil && ((path == playerStatePath && r.Method == http.MethodGet) || path == "/api/home-assistant/status" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
 	if (!operatorRoute && requiresAdmin != admin) || (operator != nil && !operatorRoute) {
 		failure(w, 403, "credential role is not allowed")
 		return
@@ -420,6 +444,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		allowed = operator.rate.allow(now, 240)
 	} else if admin {
 		allowed = s.adminRate.allow(now, 240)
+	} else if path == playerStatePath && r.Method == http.MethodPost {
+		allowed = d.stateRate.allow(now, 60)
 	} else {
 		allowed = d.rate.allow(now, 120)
 	}
@@ -427,6 +453,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		w.Header().Set("Retry-After", "60")
 		failure(w, 429, "credential rate exceeded")
+		return
+	}
+	if path == playerStatePath {
+		s.servePlayerState(w, r, d)
 		return
 	}
 	if path == "/api/operations" {
@@ -553,7 +583,9 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, d *device, now 
 func (s *Server) poll(w http.ResponseWriter, d *device, now time.Time, ack bool) {
 	s.mu.Lock()
 	s.expire(now)
-	d.lastSeen = now
+	if now.After(d.lastSeen) {
+		d.lastSeen = now
+	}
 	commands := make([]json.RawMessage, 0, len(d.queue))
 	// kept retains RPC entries only for legacy delivery. Ack delivery does not
 	// drain the queue, so that slice would be discarded. requests is part of the
@@ -585,7 +617,7 @@ func (s *Server) poll(w http.ResponseWriter, d *device, now time.Time, ack bool)
 	}
 	s.mu.Unlock()
 	if ack {
-		reply(w, 200, map[string]any{"commands": commands, "requests": requests, "request_protocol": 1, "server_time": float64(now.UnixNano()) / 1e9})
+		reply(w, 200, map[string]any{"commands": commands, "requests": requests, "request_protocol": 1, "server_time": float64(now.UnixNano()) / 1e9, "player_state": s.playerStateAdvertisement()})
 	} else {
 		reply(w, 200, commands)
 	}
@@ -614,7 +646,9 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request, d *device, now time
 	}
 	s.mu.Lock()
 	s.expire(now)
-	d.lastSeen = now
+	if now.After(d.lastSeen) {
+		d.lastSeen = now
+	}
 	acknowledged := map[string]bool{}
 	for _, e := range d.queue {
 		if set[e.id] && !e.rpc {

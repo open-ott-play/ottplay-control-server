@@ -186,6 +186,51 @@ class StatusHttpCliTest(unittest.TestCase):
                     expected.append(('GET', ['b' * 32]))
                 self.assertEqual([(event[0], event[2].get('id')) for event in events], expected)
 
+    def test_retained_history_is_one_authenticated_get_with_no_rpc_or_redirect(self):
+        value = {'version': 1, 'controller_epoch': 'a' * 32, 'device_id': DEVICE,
+                 'server_time': '2026-10-29T12:00:00Z', 'storage': 'memory',
+                 'stale_after_ms': 45000, 'retention_seconds': 86400,
+                 'connection': {'state': 'unknown', 'last_seen_at': None}, 'ambiguous': False,
+                 'current': None, 'latest': None, 'runtimes': [], 'history': [], 'history_truncated': False}
+        for redirect in (False, True):
+            requests = []
+
+            class Controller(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *args):
+                    pass
+
+                def do_GET(self):
+                    requests.append((self.command, self.path, self.headers.get('Authorization')))
+                    body = json.dumps(value).encode()
+                    self.send_response(302 if redirect else 200)
+                    if redirect:
+                        self.send_header('Location', '/must-not-follow')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def do_POST(self):
+                    requests.append((self.command, self.path, None))
+                    self.send_error(400)
+
+            with tempfile.TemporaryDirectory() as directory, serve(Controller) as address:
+                config, credentials = Path(directory) / 'cli.json', Path(directory) / 'server.json'
+                config.write_text(json.dumps({'server': address + '/mounted', 'server_config': str(credentials),
+                                              'players': {'tv': DEVICE}}))
+                credentials.write_text(json.dumps({'operator_token': TOKEN, 'devices': []}))
+                before = (config.read_bytes(), credentials.read_bytes())
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.dict(os.environ, {'NO_PROXY': '127.0.0.1', 'no_proxy': '127.0.0.1'}), \
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = ott.main(['-c', str(config), '-t', '2', '-j', 'tv', 'history', '--limit', '2'])
+                self.assertEqual((config.read_bytes(), credentials.read_bytes()), before)
+            self.assertEqual(requests, [('GET', '/mounted/api/player-state?device_id=' + DEVICE + '&limit=2',
+                                         'Bearer ' + TOKEN)])
+            self.assertEqual(code, 1 if redirect else 0)
+            self.assertNotIn(TOKEN, out.getvalue() + err.getvalue())
+            if not redirect:
+                self.assertEqual(json.loads(out.getvalue()), value)
+
 
 if __name__ == '__main__':
     unittest.main()

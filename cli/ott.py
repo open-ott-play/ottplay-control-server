@@ -94,6 +94,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show available controls, then a player summary
+  ott NAME state                     read the controller's retained playback report
+  ott NAME history [--limit 1..64]    read retained playback events (default 20)
+                                     no live player request or physical-output proof
   ott NAME load PRESET [--settings-only]  apply preset settings; explicitly skip saved favorites
   ott NAME load PRESET plan|apply|resume|verify [--settings-only] [--checkpoint FILE]
                                      inspect or safely resume exact preset settings
@@ -1215,6 +1218,12 @@ def parse_command(words):
         return "status", {}
     verb, tail = command_verb(words), words[1:]
     text = " ".join(tail)
+    if verb in ("state", "history"):
+        module = playback_status_module()
+        try:
+            return "player_state", dict(module.parse(words), history=verb == "history")
+        except module.InvalidReport as exc:
+            raise Error(str(exc)) from None
     if verb in ("local", "offline"):
         return "local_media", parse_local_media(tail)
     if re.match(r"[+-](?:[0-9]|\.)", verb) and re.search(r"[hms]", verb):
@@ -4596,6 +4605,16 @@ def capabilities_metadata(data):
     return result
 
 
+def playback_status_module():
+    path = Path(__file__).resolve().with_name("playback_status.py")
+    if not path.is_file():
+        raise Error("Install playback_status.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_playback_status", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def status_capabilities(client, device, data, deadline):
     """Enrich a successful status within the original timeout, without mutations."""
     if not isinstance(data, dict):
@@ -4615,6 +4634,10 @@ def status_capabilities(client, device, data, deadline):
                 raise Error("The player returned invalid background activity metadata")
             player["background"] = dict(background)
         result["player"] = player
+    if "playback" in result:
+        result = playback_status_module().live_status(result)
+    else:
+        result.pop("playback_error", None)
     result.pop("capabilities_error", None)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -4649,6 +4672,7 @@ def print_player_help(data, name):
     if controls is None:
         print(data["capabilities_error"])
         print(f"Local diagnostic help: {prefix} test list")
+        print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
         return
     lifecycle = {
         "reload_player": ("restart", "reload the player (alias: restart player)"),
@@ -4855,6 +4879,7 @@ def print_player_help(data, name):
             print(f"  {prefix} operation REQUEST_ID  — inspect a recent operation")
     print(f"Local diagnostic help: {prefix} test list")
     print(f"Request IDs: ott --receipt {quoted_name} COMMAND  — write RPC receipts to stderr")
+    print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
 
 
 def status_text(value, pattern=None):
@@ -4893,10 +4918,16 @@ def print_player_summary(data, name):
     kiosk = data.get("kiosk") if isinstance(data.get("kiosk"), dict) else {}
     enabled = kiosk.get("enabled")
     kiosk_state = ("On (strict)" if kiosk.get("strict") is True else "On") if enabled is True else "Off" if enabled is False else "Not reported"
+    playing = "Nothing (standby)" if standby is True else "Not reported"
+    if "playback" in data:
+        module = playback_status_module()
+        checked = module.live_status(data)
+        if "playback" in checked:
+            playing = module.description(checked["playback"])
     rows = [
         ("Player", status_text(name)),
         ("Status", state),
-        ("Now playing", "Nothing (standby)" if standby is True else "Not reported"),
+        ("Now playing", playing),
         ("Provider", provider),
         ("Volume", volume),
         ("Channels", channels + " (catalog " + catalog + ")"),
@@ -4912,6 +4943,8 @@ def print_player_summary(data, name):
     print("\nPlayer summary:")
     for label, value in rows:
         print(f"  {label + ':':<14}{value}")
+    if "playback_error" in data:
+        print("  Playback details were not valid; current content is not reported.")
 
 
 def print_player_status(data, name):
@@ -6416,6 +6449,14 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
     action, params = copy.deepcopy(prepared) if prepared is not None else parse_command(words)
+    if action == "player_state":
+        module = playback_status_module()
+        data = module.read(SimpleNamespace(**globals()), client, device, params, args.timeout)
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        else:
+            module.print_report(data, args.words[0], history=params["history"])
+        return 0
     if action == "favorites_profile":
         return favorites_host_command(client, config, args, [(args.words[0], device)], params)
     if action == "favorites_global":
