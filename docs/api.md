@@ -38,6 +38,13 @@ The current player polls about once per second, with timeouts and bounded backof
 
 Plain GET without `delivery=ack` retains the legacy array response and removes delivered commands immediately. Do not mix legacy and acknowledgement clients against the same device queue. The server timestamps commands for compatibility, but new clients deduplicate by ID rather than timestamps.
 
+Updated controllers also advertise `player_state` in the ACK-poll envelope.
+This supplies a controller epoch and the fixed `/api/player-state` report path.
+Connected updated players send bounded playback reports on changes and a
+15-second heartbeat. Device-authenticated POSTs publish the report;
+administrator or scoped-operator GETs read retained state and history without
+enqueuing a player command. See the [player-state API and retention contract](player-state.md#api).
+
 ## Status and health
 
 `GET /api/devices` requires the administrator token and returns device IDs, pending queue counts and last device activity. Tokens and command payloads are omitted. Last activity is not proof of successful playback.
@@ -346,6 +353,34 @@ params reports these operations in its `playback` list when available. They
 require an updated controller and player; there is no legacy/input fallback.
 Response retries use the same request ID and do not repeat the step within the
 player session. Do not submit a new request after an uncertain result.
+
+### Relative playback seek
+
+Players advertise relative seeking separately as
+`playback_seek_relative:{version:1}`. The existing `capabilities.playback` list
+is unchanged so older clients can continue to read capabilities.
+Submit exactly `{"action":"playback","params":{"operation":"seek_relative","offset":10}}`.
+`offset` is a nonzero finite JSON number in seconds, with absolute value at most
+9,007,199,254,740,991. The exact operator permission is `playback.seek_relative`;
+an existing `playback.seek` grant does not authorize this operation.
+
+The owning playback backend samples the current position and applies the offset
+in one operation. It requires a ready decoder and a known finite duration, and
+enforces the player's existing standby, parental and protected-screen restrictions.
+Enabled or locked kiosk mode alone does not block authenticated seeking within
+the current page-owned VOD; the queue and kiosk policy remain unchanged. The
+separate native `android seek` API remains absolute.
+The result is clamped to zero or just before the media end. Success data is exactly
+`{dispatched:true,operation:"seek_relative",offset,from,position,clamped}`:
+the echoed offset and sampled `from` explain the requested change; `position` is
+the dispatched target, not proof that decoding has reached it. The controller
+retains the expected offset to validate the response, including duplicate ACKs.
+It checks the lower clamp and the direction of an upper clamp; the exact upper
+boundary remains a player check because duration is not part of this response.
+The CLI performs one capability check and at most one relative request within
+its timeout, without a status-plus-absolute-seek fallback or automatic replay.
+Unsupported players fail explicitly. Unsigned CLI times continue to use the
+existing absolute `seek` operation.
 
 ### Player standby and wake
 

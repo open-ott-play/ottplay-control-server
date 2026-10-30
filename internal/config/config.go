@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ type Device struct {
 }
 
 type Config struct {
+	PlayerState         *PlayerState      `json:"player_state,omitempty"`
 	Listen              string            `json:"listen"`
 	AdminToken          string            `json:"admin_token"`
 	AllowedOrigins      []string          `json:"allowed_origins"`
@@ -68,6 +70,25 @@ func (c *Config) Defaults() {
 }
 
 func (c Config) Validate() error {
+	if c.PlayerState != nil {
+		if err := c.PlayerState.Validate(); err != nil {
+			return err
+		}
+		paths := []string{}
+		if c.Journal != nil {
+			paths = append(paths, c.Journal.Path)
+		}
+		if c.DeviceRegistry != nil {
+			paths = append(paths, c.DeviceRegistry.Path)
+		}
+		for _, path := range paths {
+			path = filepath.Clean(path)
+			if path == c.PlayerState.Path || path+".lock" == c.PlayerState.Path || path == c.PlayerState.Path+".lock" {
+				return errors.New("player_state must use a separate private file")
+			}
+		}
+	}
+
 	if c.DeviceRegistry != nil {
 		if err := c.DeviceRegistry.Validate(); err != nil {
 			return err

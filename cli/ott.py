@@ -15,6 +15,7 @@ import math
 import os
 import ssl
 from pathlib import Path
+from fractions import Fraction
 import queue
 import re
 import secrets
@@ -70,6 +71,11 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott presets NAME fav global restore BACKUP [--dry-run]
                                      restore only the global favorites companion
   ott devices                        list devices and their last connection
+  ott groups                         list saved player groups
+  ott group add NAME t1,t2           create a local group (group set replaces it)
+  ott group show NAME                inspect a local group's members
+  ott group remove NAME              remove a local group
+  ott GROUP COMMAND                 use a saved group in any player command
   ott t1,t2,t3,t4 R                  any player command accepts a list; results per player
   ott t1,t2 watch --duration 30       observe players and decoder progress (read-only)
   ott ha status [-j]                 Home Assistant bridge and active banner recipients
@@ -88,6 +94,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show available controls, then a player summary
+  ott NAME state                     read the controller's retained playback report
+  ott NAME history [--limit 1..64]    read retained playback events (default 20)
+                                     no live player request or physical-output proof
   ott NAME load PRESET [--settings-only]  apply preset settings; explicitly skip saved favorites
   ott NAME load PRESET plan|apply|resume|verify [--settings-only] [--checkpoint FILE]
                                      inspect or safely resume exact preset settings
@@ -191,7 +200,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME shot -o FILE.png           same capture, with an explicit output file
   ott NAME key KEY                   send one supported named input after acknowledgement
   ott NAME pause / resume            pause or resume supported archive/VOD playback
-  ott NAME seek SECONDS              seek supported VOD to an absolute position (0–9007199254740991)
+  ott NAME seek TIME                 absolute seek: 90, 1m30s, or 01:30
+  ott NAME seek +/-TIME              relative seek: +10, -10s, +1h30m, or +1:30
+  ott NAME +10s / -1m                 relative seek shorthand; bare +10/-10 changes channels
   ott NAME restart                   reload the player after acknowledgement
   ott NAME restart player            explicit form of restart
   ott NAME restart stream            restart only the current stream
@@ -258,7 +269,7 @@ Signed channel offsets are nonzero whole numbers from -9007199254740991 to
 # Top-level commands take precedence over player names, including saved aliases.
 TOP_LEVEL_COMMANDS = frozenset((
     "add", "alias", "approve", "devices", "diagnostics", "discover", "handoff",
-    "ha", "help", "pair", "pending", "presets", "registry", "remove", "report", "resolve", "server", "unalias",
+    "group", "groups", "ha", "help", "pair", "pending", "presets", "registry", "remove", "report", "resolve", "server", "unalias",
 ))
 
 
@@ -1169,13 +1180,56 @@ def parse_channel_list(words):
     return dict(options, search=" ".join(words).strip())
 
 
+def parse_seek(value, units_only=False):
+    """Convert bounded user time syntax exactly before the final JSON number."""
+    invalid = "Use seek TIME or seek +/-TIME (seconds, 1h30m, or HH:MM:SS); signed shorthand requires h/m/s"
+    if not isinstance(value, str) or not 1 <= len(value) <= 128 or not value.isascii():
+        raise Error(invalid)
+    relative = value[0] in "+-"
+    sign = -1 if value[0] == "-" else 1
+    body = value[1:] if relative else value
+    decimal = r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)"
+    total = Fraction(0)
+    if not units_only and re.fullmatch(decimal, body):
+        total = Fraction(body)
+    elif not units_only and re.fullmatch(r"[0-9]+:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?|[0-9]+:[0-9]{2}\.[0-9]+", body):
+        parts = body.split(":")
+        if any(Fraction(part) >= 60 for part in parts[1:]):
+            raise Error(invalid)
+        for part in parts:
+            total = total * 60 + Fraction(part)
+    else:
+        tokens = list(re.finditer("(" + decimal + r")([hms])", body.lower()))
+        if not tokens or "".join(token[0] for token in tokens) != body.lower():
+            raise Error(invalid)
+        ranks = [{"h": 0, "m": 1, "s": 2}[token[2]] for token in tokens]
+        if ranks != sorted(set(ranks)):
+            raise Error(invalid)
+        total = sum((Fraction(token[1]) * {"h": 3600, "m": 60, "s": 1}[token[2]] for token in tokens), Fraction(0))
+    if total > 9007199254740991 or (relative and total == 0):
+        raise Error("Seek time must fit 0..9007199254740991 seconds; a relative offset must be nonzero")
+    number = float(total) * sign
+    return "playback", ({"operation": "seek_relative", "offset": number} if relative
+                        else {"operation": "seek", "position": number})
+
+
 def parse_command(words):
     if not words:
         return "status", {}
     verb, tail = command_verb(words), words[1:]
     text = " ".join(tail)
+    if verb in ("state", "history"):
+        module = playback_status_module()
+        try:
+            return "player_state", dict(module.parse(words), history=verb == "history")
+        except module.InvalidReport as exc:
+            raise Error(str(exc)) from None
     if verb in ("local", "offline"):
         return "local_media", parse_local_media(tail)
+    if re.match(r"[+-](?:[0-9]|\.)", verb) and re.search(r"[hms]", verb):
+        if tail:
+            raise Error("Use a signed time such as +10s or -1m alone")
+        return parse_seek(verb, units_only=True)
     # Reserve numeric-looking offsets while preserving names such as +HD.
     signed_head = re.match(r"[+-][+-]*\s*\.?(.)", verb)
     if verb in ("+", "-") or (signed_head and signed_head[1].isnumeric()):
@@ -1329,12 +1383,9 @@ def parse_command(words):
             if tail:
                 raise Error("Use " + verb + " without arguments")
             return "playback", {"operation": verb}
-        if len(tail) != 1 or not re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)", tail[0]):
-            raise Error("Use seek SECONDS with an absolute nonnegative position")
-        position = float(tail[0])
-        if not math.isfinite(position) or not 0 <= position <= 9007199254740991:
-            raise Error("Seek position must be finite and between 0 and 9007199254740991 seconds")
-        return "playback", {"operation": "seek", "position": position}
+        if len(tail) != 1:
+            raise Error("Use seek TIME or seek +/-TIME")
+        return parse_seek(tail[0])
     if verb in ("vp", "vpr"):
         listing = listing_option(words)
         text = " ".join(tail[1:] if listing else tail).strip()
@@ -4281,6 +4332,11 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "playback_seek_relative" in data:
+        marker = data["playback_seek_relative"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+        result["playback_seek_relative"] = {"version": 1}
     if "favorites_global_items" in data:
         try:
             result["favorites_global_items"] = favorites_module("global_favorites_items").validate_capability(data["favorites_global_items"])
@@ -4549,6 +4605,16 @@ def capabilities_metadata(data):
     return result
 
 
+def playback_status_module():
+    path = Path(__file__).resolve().with_name("playback_status.py")
+    if not path.is_file():
+        raise Error("Install playback_status.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_playback_status", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def status_capabilities(client, device, data, deadline):
     """Enrich a successful status within the original timeout, without mutations."""
     if not isinstance(data, dict):
@@ -4568,6 +4634,10 @@ def status_capabilities(client, device, data, deadline):
                 raise Error("The player returned invalid background activity metadata")
             player["background"] = dict(background)
         result["player"] = player
+    if "playback" in result:
+        result = playback_status_module().live_status(result)
+    else:
+        result.pop("playback_error", None)
     result.pop("capabilities_error", None)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -4602,6 +4672,7 @@ def print_player_help(data, name):
     if controls is None:
         print(data["capabilities_error"])
         print(f"Local diagnostic help: {prefix} test list")
+        print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
         return
     lifecycle = {
         "reload_player": ("restart", "reload the player (alias: restart player)"),
@@ -4663,8 +4734,10 @@ def print_player_help(data, name):
             print(f"  {prefix} +N  — move forward N channels in the current category, wrapping")
             print(f"  {prefix} -N  — move back N channels in the current category, wrapping")
             continue
-        command = {"seek": "seek SECONDS", "previous_channel": "prev", "next_channel": "next"}.get(operation, operation)
+        command = {"seek": "seek TIME", "previous_channel": "prev", "next_channel": "next"}.get(operation, operation)
         print(f"  {prefix} {command}")
+    if "playback_seek_relative" in controls:
+        print(f"  {prefix} seek +10s / seek -1m / +10s  — seek relative to the current position")
     if "random" in controls:
         print(f"  {prefix} R / random  — safe random channel from All; prefer numbers 1–1000")
         print(f"  {prefix} random 1 1000  — safe uniform choice within an inclusive range")
@@ -4787,7 +4860,7 @@ def print_player_help(data, name):
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
             and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
-            and not any(key in controls for key in ("favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
+            and not any(key in controls for key in ("playback_seek_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls:
@@ -4806,6 +4879,7 @@ def print_player_help(data, name):
             print(f"  {prefix} operation REQUEST_ID  — inspect a recent operation")
     print(f"Local diagnostic help: {prefix} test list")
     print(f"Request IDs: ott --receipt {quoted_name} COMMAND  — write RPC receipts to stderr")
+    print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
 
 
 def status_text(value, pattern=None):
@@ -4844,10 +4918,16 @@ def print_player_summary(data, name):
     kiosk = data.get("kiosk") if isinstance(data.get("kiosk"), dict) else {}
     enabled = kiosk.get("enabled")
     kiosk_state = ("On (strict)" if kiosk.get("strict") is True else "On") if enabled is True else "Off" if enabled is False else "Not reported"
+    playing = "Nothing (standby)" if standby is True else "Not reported"
+    if "playback" in data:
+        module = playback_status_module()
+        checked = module.live_status(data)
+        if "playback" in checked:
+            playing = module.description(checked["playback"])
     rows = [
         ("Player", status_text(name)),
         ("Status", state),
-        ("Now playing", "Nothing (standby)" if standby is True else "Not reported"),
+        ("Now playing", playing),
         ("Provider", provider),
         ("Volume", volume),
         ("Channels", channels + " (catalog " + catalog + ")"),
@@ -4863,6 +4943,8 @@ def print_player_summary(data, name):
     print("\nPlayer summary:")
     for label, value in rows:
         print(f"  {label + ':':<14}{value}")
+    if "playback_error" in data:
+        print("  Playback details were not valid; current content is not reported.")
 
 
 def print_player_status(data, name):
@@ -4878,11 +4960,47 @@ def deferred_control_metadata(data, action, params):
     return {field: params[field], "accepted": True, "dispatched": False, "effect": action + "-after-ack"}
 
 
+def relative_seek_command(client, device, params, timeout):
+    previous = client.timeout
+    deadline = time.monotonic() + timeout
+    sent = False
+    try:
+        client.timeout = timeout
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        if "playback_seek_relative" not in controls:
+            raise Error("Relative seek is not advertised: older players need an update; updated players need ready seekable VOD and permitted local controls. No seek was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Relative seek capability check exceeded --timeout; no seek was sent")
+        client.timeout = remaining
+        sent = True
+        return client.call(device, "playback", params)
+    except (PlayerRejected, PlayerUnsupported) as exc:
+        reason = "unsupported" if isinstance(exc, PlayerUnsupported) else "rejected"
+        outcome = "The request was not repeated" if sent else "No seek was sent"
+        raise Error("Relative seek was " + reason + "; check player readiness and local restrictions. " + outcome) from None
+    finally:
+        client.timeout = previous
+
+
 def playback_metadata(data, params):
     invalid = "The player did not confirm the playback request. It may have executed; do not repeat the change blindly."
     if not isinstance(data, dict) or data.get("operation") != params["operation"] or data.get("dispatched") is not True:
         raise Error(invalid)
     result = {"operation": params["operation"], "dispatched": True}
+    if params["operation"] == "seek_relative":
+        if (set(data) != {"operation", "dispatched", "offset", "from", "position", "clamped"}
+                or any(type(data[k]) not in (int, float) for k in ("offset", "from", "position"))
+                or data["offset"] != params["offset"] or data["offset"] == 0
+                or not -9007199254740991 <= data["offset"] <= 9007199254740991
+                or any(not 0 <= data[k] <= 9007199254740991 for k in ("from", "position"))
+                or type(data["clamped"]) is not bool):
+            raise Error(invalid)
+        target = data["from"] + data["offset"]
+        if ((not data["clamped"] and data["position"] != target)
+                or (data["clamped"] and (data["position"] != 0 if target < 0 else data["position"] >= target))):
+            raise Error(invalid)
+        return {key: data[key] for key in ("operation", "dispatched", "offset", "from", "position", "clamped")}
     if "plex_queue" in data:
         if params["operation"] not in CHANNEL_STEPS.values() or set(data) != {"operation", "dispatched", "plex_queue"}:
             raise Error(invalid)
@@ -6030,38 +6148,19 @@ def provider_command(client, device, words, project=False):
         client.timeout = previous_timeout
 
 
+def player_groups_module():
+    path = Path(__file__).resolve().with_name("player_groups.py")
+    if not path.is_file():
+        raise Error("Install player_groups.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_player_groups", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def player_group_targets(client, selector):
-    """Resolve an explicit comma list before any per-player request can be sent."""
-    if "," not in selector:
-        return None
-    aliases = client.config.get("players", {})
-    devices = client.credentials.get("devices", [])
-    if (not isinstance(aliases, dict) or any(not isinstance(name, str) for name in aliases)
-            or not isinstance(devices, list) or any(not isinstance(row, dict)
-                or not isinstance(row.get("id"), str) for row in devices)):
-        raise Error("Check the configured player names and device UUIDs")
-    # Hand-edited configurations can contain commas. Preserve their exact
-    # single-player meaning, including ambiguous names rejected by device().
-    if (any(name.casefold() == selector.casefold() for name in aliases)
-            or any(row["id"].casefold() == selector.casefold() for row in devices)):
-        return None
-    names = [name.strip() for name in selector.split(",")]
-    if any(not name for name in names):
-        raise Error("Player lists require a name between every comma; use t1,t2,t3,t4")
-    if len(names) > 64:
-        raise Error("Player lists support at most 64 names")
-    targets = []
-    seen = set()
-    for name in names:
-        device = client.device(name)
-        if not isinstance(device, str) or not device:
-            raise Error("Check the configured player UUIDs")
-        # Device IDs are case-sensitive on the server; device() resolves aliases
-        # and case-insensitive UUID lookups to their configured identity.
-        if device not in seen:
-            seen.add(device)
-            targets.append((name, device))
-    return targets
+    """Resolve saved groups and comma lists before any per-player request."""
+    return player_groups_module().targets(SimpleNamespace(**globals()), client, selector)
 
 
 def player_command_route(words):
@@ -6350,6 +6449,14 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
     action, params = copy.deepcopy(prepared) if prepared is not None else parse_command(words)
+    if action == "player_state":
+        module = playback_status_module()
+        data = module.read(SimpleNamespace(**globals()), client, device, params, args.timeout)
+        if args.json:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        else:
+            module.print_report(data, args.words[0], history=params["history"])
+        return 0
     if action == "favorites_profile":
         return favorites_host_command(client, config, args, [(args.words[0], device)], params)
     if action == "favorites_global":
@@ -6391,6 +6498,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         data = random_command(client, device, params, args.timeout)
     elif action == "programs" and "epg" in config:
         data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
+    elif action == "playback" and params.get("operation") == "seek_relative":
+        data = relative_seek_command(client, device, params, args.timeout)
     elif action == "play":
         data, playback_error = play_channel(client, device, params, args.timeout)
         if data.get("channels") == [] and "epg" in config and data.get("version") != 1:
@@ -6568,7 +6677,10 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "input":
         print(f"Input request accepted: {data['key']}; waiting for the acknowledgement to reach the player.")
     elif action == "playback":
-        if "plex_queue" in data:
+        if data.get("operation") == "seek_relative":
+            suffix = " (clamped to the media boundary)" if data["clamped"] else ""
+            print(f"Seek requested: {data['from']:g}s → {data['position']:g}s ({data['offset']:+g}s){suffix}")
+        elif "plex_queue" in data:
             print_plex_queue(data["plex_queue"])
         elif "channel" in data:
             print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
@@ -6653,6 +6765,8 @@ def main(argv=None):
         print(HELP)
         return 0
     try:
+        if args.words[0].casefold() in ("group", "groups"):
+            return player_groups_module().management(SimpleNamespace(**globals()), args.config, args.words, args.json)
         if args.words[0].casefold() == "registry" and args.words[1:] in (["--help"], ["-h"]):
             registry_management(None, args.config, args.words, args.json)
             return 0
@@ -6715,7 +6829,8 @@ def main(argv=None):
         if (len(args.words) > 1 and args.words[1].casefold() == "load"
                 and args.words[0].casefold() not in TOP_LEVEL_COMMANDS):
             parse_preset_load(args.words[1:])
-            if "," not in args.words[0]:
+            if ("," not in args.words[0] and (not isinstance(config, dict) or "groups" not in config or player_groups_module().group_name(
+                    SimpleNamespace(**globals()), config, args.words[0]) is None)):
                 return preset_command(config, args.words, args.timeout, args.json,
                                       print_request_receipt if args.receipt else None)
         client = Client(config, args.timeout)
@@ -6731,7 +6846,8 @@ def main(argv=None):
             raise Error(f"The name {args.words[0]!r} is reserved for a CLI command. Run ott --help for its syntax; use another player alias or the device UUID")
         if len(args.words) >= 2 and args.words[1].casefold() == "watch":
             return fleet_module().run(SimpleNamespace(**globals()), client, args.words[0], args.words[2:], args.timeout, args.json)
-        targets = player_group_targets(client, args.words[0])
+        targets = (player_group_targets(client, args.words[0])
+                   if "," in args.words[0] or "groups" in config else None)
         if targets is not None:
             return player_group_command(client, config, targets, args, argv)
         device = client.device(args.words[0])

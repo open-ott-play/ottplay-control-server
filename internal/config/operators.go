@@ -19,7 +19,7 @@ type CommandOperator struct {
 var CommandOperations = map[string]string{
 	"command":   "popup_message channel_by_number channel_by_name random_channel change_provider change_provider_settings change_playlist set_volume exit_player",
 	"input":     "up down left right ok back menu settings channels guide info channel_up channel_down volume_up volume_down mute play_pause audio aspect zoom pip fullscreen",
-	"playback":  "pause resume previous_channel next_channel step_channel seek",
+	"playback":  "pause resume previous_channel next_channel step_channel seek seek_relative",
 	"lifecycle": "restart_stream reload_player restart_app standby wake exit_app reboot_device",
 	"restart":   "stream player", "kiosk": "status off on set", "aspect": "get set",
 	"plex_queue": "status preview play next previous stop", "plex_library": "list preview play",

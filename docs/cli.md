@@ -3,7 +3,7 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`,
+`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`, `player_groups.py`, `playback_status.py`,
 `favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
 `favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py`, `preset_favorites.py`,
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
@@ -156,8 +156,12 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`c95664d3f20a21cac64518d8ed1432bc9465c1a5`](https://github.com/open-ott-play/ottplay-control-server/commit/c95664d3f20a21cac64518d8ed1432bc9465c1a5).
+[`8879a5a3a89effeda18899f4610129f2ea3eeb85`](https://github.com/open-ott-play/ottplay-control-server/commit/8879a5a3a89effeda18899f4610129f2ea3eeb85).
 This is an exact source pin, not a claim about the latest published release.
+This source adds [saved player groups](#saved-player-groups), including offline
+`group add/set/show/remove` management and group selectors in player commands.
+It also includes signed seek times and unit shorthand such as `seek -1:30` and
+`+10s`; relative seeking also requires matching controller and player support.
 The examples retain this reviewed signed source commit; a server release does
 not install the Python CLI or player. Matching controller and player support is
 required for each optional operation.
@@ -185,7 +189,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 29 Python modules, including
+The current CLI contains 31 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -217,8 +221,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=c95664d3f20a21cac64518d8ed1432bc9465c1a5
-  ott_source="$HOME/.local/share/ottplay-control-server-local-c95664d3f20a"
+  ott_ref=8879a5a3a89effeda18899f4610129f2ea3eeb85
+  ott_source="$HOME/.local/share/ottplay-control-server-local-8879a5a3a89e"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -240,7 +244,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c95664d3f20a/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-8879a5a3a89e/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -254,7 +258,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-c95664d3f20a/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-8879a5a3a89e/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -276,8 +280,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'c95664d3f20a21cac64518d8ed1432bc9465c1a5'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c95664d3f20a'
+$ottRef = '8879a5a3a89effeda18899f4610129f2ea3eeb85'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-8879a5a3a89e'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -323,12 +327,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c95664d3f20a/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-8879a5a3a89e/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c95664d3f20a\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-8879a5a3a89e\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -357,7 +361,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-c95664d3f20a`, stages the replacement beside it, then switches atomically.
+`ott.before-local-8879a5a3a89e`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -369,9 +373,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-c95664d3f20a")
-staged = launcher.with_name("ott.switch-local-c95664d3f20a")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-c95664d3f20a/cli/ott.py"
+backup = launcher.with_name("ott.before-local-8879a5a3a89e")
+staged = launcher.with_name("ott.switch-local-8879a5a3a89e")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-8879a5a3a89e/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -719,10 +723,25 @@ Player summary:
   Kiosk:        Off
 ```
 
-`Awake` means standby is off; `Now playing: Not reported` means this response
-does not confirm current content. On older players,
+`Awake` means standby is off. Updated players report the title and playback
+state of their current media; the CLI uses this confirmed playback projection,
+not the selected catalogue row or kiosk target. `Now playing: Not reported`
+means this response does not report usable current-content metadata. On older players,
 `Connected (standby not reported)` leaves standby unknown. The provider label `Local videos`
 names the local-file provider; it does not mean the player is disconnected.
+
+For retained reports, including when a player is offline:
+
+```sh
+ott l state
+ott l history --limit 20
+ott -j tt state
+```
+
+These commands read the controller without contacting the player. They report
+server receipt time, age and stale/ambiguous state; they do not treat retained
+metadata as current physical playback. See [automatic playback reporting](player-state.md)
+for the 15-second heartbeat, bounded history, durable storage and troubleshooting.
 
 Options for the ordinary CLI must precede `PLAYER` or the management verb:
 
@@ -806,6 +825,68 @@ To uninstall the symlink installation, remove only the `~/.local/bin/ott` link y
 created and, when no longer needed, its source checkout. Keep private configuration
 until any required deregistration is complete. Uninstalling the CLI does not
 stop the controller or revoke player/operator credentials.
+
+## Saved player groups
+
+Save frequently used player lists in the local CLI configuration:
+
+```sh
+ott group add tt t1,t2,t3,t4
+ott group add oo o1,o2,o3,o4
+ott groups                         # list all groups and their members
+ott group show tt                  # inspect one group
+ott group set tt t1 t2 t3 t4        # create or replace; spaces or commas work
+ott group remove oo                # remove only this group, not its players
+ott group --help
+```
+
+Members must be existing player aliases or their configured device IDs.
+`add` refuses to overwrite an existing group; `set` explicitly replaces it.
+Groups are local to `~/.config/ottplay-control/cli.json`, or the file selected by
+`OTT_CONFIG` / `-c`. These management commands work offline and do not require
+controller credentials. They preserve the other configuration fields and save
+the file atomically with private permissions. `-j` / `--json` is supported.
+
+Use the group wherever a player list is supported:
+
+```sh
+ott tt                             # controls and status for each member
+ott tt R                           # each player chooses its own random channel
+ott oo provider m3u
+ott tt provider m3u 1
+ott tt +10s                        # relative seek on each player's current VOD
+ott tt standby
+ott tt go
+ott tt restart stream
+ott tt load Home
+ott tt watch --duration 30
+ott tt,oo v 25                     # combine groups
+ott tt,t1 v 25                     # t1 receives the command only once
+```
+
+The configuration stores a flat list of names, for example:
+
+```json
+"groups": {
+  "tt": ["t1", "t2", "t3", "t4"],
+  "oo": ["o1", "o2", "o3", "o4"]
+}
+```
+
+Group names are case-insensitive, up to 32 letters/digits/underscores/hyphens,
+and cannot collide with player aliases, device IDs or top-level CLI commands.
+Nested groups are not supported. Each command may expand up to 64 member names;
+duplicate device identities are executed once in first-occurrence order.
+Every name is resolved before any player request. If a saved member is removed
+or renamed, update the group with `group set`; an unknown member prevents the
+entire command from being sent. A group with a malformed member list can be deleted
+with `group remove` and recreated.
+
+Saved groups use the same per-player timeouts, output, partial-failure behavior
+and single-player restrictions as comma lists below. They do not make operations
+atomic across devices or bypass player permissions. Do not repeat a whole group
+after a partial failure; inspect the individual results first. No controller or
+player upgrade is required for group expansion itself.
 
 ## Run a command on several players
 
@@ -1058,7 +1139,13 @@ ott tv key enter            # one named OK/select input
 ott tv input channel_up     # supported input, subject to local UI restrictions
 ott tv pause                # pause supported archive/VOD playback
 ott tv resume
-ott tv seek 90.5            # absolute position in seconds; supported VOD only
+ott tv seek 90.5             # absolute position in seconds; supported VOD only
+ott tv seek 1m30s            # absolute position, also written 01:30
+ott tv seek +10              # forward 10 seconds from the current position
+ott tv seek -10s             # back 10 seconds
+ott tv seek +1h30m           # forward 90 minutes; +1:30 means 90 seconds
+ott tv +10s                  # relative seek shorthand; bare +10 changes channels
+ott tv -1m                   # back one minute; bare -1 changes channels
 ott tv aspect               # current Fit/Fill mode and saved-setting readback
 ott tv aspect fit           # show the complete picture, with bars if needed
 ott tv aspect fill          # proportional crop to fill the screen
@@ -1078,6 +1165,22 @@ ott tv reboot device        # reboot the device OS only if advertised/supported
 ott --json tv s             # machine-readable output
 ott --timeout 60 tv p
 ```
+
+An unsigned `seek` time is absolute; an explicit `+` or `-` makes it relative.
+Times accept decimal seconds, ordered nonrepeated `h`/`m`/`s` units, or
+`MM:SS` / `HH:MM:SS` with fractional final seconds. Clock minutes and seconds
+after a colon must be below 60. Relative offsets must be nonzero; all times
+must fit 9,007,199,254,740,991 seconds. Exponents and nonfinite values are rejected.
+
+Relative seeking requires the separate `playback_seek_relative` capability on
+an updated player and controller. The player samples and seeks its current
+decoder atomically, clamping to the start or just before the media end. It
+rejects unready playback, unknown duration and local policy restrictions.
+Restricted operator credentials need `capabilities` and the exact
+`playback.seek_relative` permission; `playback.seek` alone is insufficient.
+The CLI never substitutes an absolute seek or retries an uncertain request.
+For a group such as `ott t1,t2 seek -10s`, each player uses its own current
+position and reports its own result; the group is not a synchronized seek.
 
 Short and full command names share the same dispatch and output behavior:
 
@@ -3264,13 +3367,20 @@ never resubmits it after a lost or invalid receipt. Use `ott l play prev` or
 ### Pause, resume and seek
 
 `pause` and `resume` use the typed playback API for an owned, active archive/VOD
-decoder. `seek SECONDS` is available only for VOD, because archive seeking uses
+decoder. `seek TIME` is available only for page-owned VOD, because archive seeking uses
 its separate programme timeline. Live streams do not advertise these operations.
-Seek is an absolute, finite position from 0 to 9007199254740991 seconds; `+5`
-is not a relative seek. The CLI validates the returned operation and, for seek, the
-requested position before reporting dispatch. A valid receipt does not prove
-that the decoder reached that position or recovered. An unsupported player or
-changed playback state fails explicitly, without a keypress fallback or retry.
+Unsigned times such as `seek 90`, `seek 1m30s` and `seek 01:30` are absolute.
+An explicit sign makes the time relative: `seek +5`, `seek +1m` or `seek -1:30`.
+Signed unit shorthand such as `+5s` also seeks, while bare `+5` still changes
+channels. Relative seeking uses the separate `playback_seek_relative` capability
+and one atomic player operation; it never reads status and calculates an absolute
+seek in the CLI. The separate `android seek SECONDS` API remains absolute.
+
+The CLI validates the returned operation and target before reporting dispatch.
+A relative receipt also reports the sampled `from`, echoed `offset` and whether
+the target was `clamped`. It does not prove that the decoder reached that
+position or recovered. An unsupported player or changed playback state fails
+explicitly, without a keypress fallback or retry.
 
 ## Acknowledgements and limitations
 
@@ -3365,12 +3475,17 @@ ott f10 kiosk off           # release the lock before replacing the queue
 
 The seek gesture is cancelled if the episode, source, player or kiosk policy
 changes, or if the gesture becomes a vertical swipe or uses multiple fingers.
-Seeking stops at least one second before the end; normal playback can still
-advance to the next episode afterwards. Local pause, keyboard/remote seeking,
+This local seek gesture stops at least one second before the end; normal playback
+can still advance to the next episode afterwards. Local pause, keyboard/physical-remote seeking,
 volume/mute, menus and player exit remain blocked. Swipes and long presses outside
 the timeline are blocked, and repeated taps do not expand details. Stopping the
 current diagnostic capture remains available locally; it does not disconnect
 the remote controller. Remote volume/mute and recovery are unchanged.
+
+On updated players, authenticated CLI absolute and relative VOD seeking remain
+available with kiosk enabled or locked, including strict mode. They operate only
+on the current owned VOD and do not replace the queue or unlock the kiosk.
+Standby, PIN prompts, settings and other protected screens still block the request.
 
 With an existing lock, `kiosk on --strict` upgrades it without changing the target;
 with no TV lock it waits for the first UI selection. `kiosk set CHANNEL` preserves

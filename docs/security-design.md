@@ -1,5 +1,14 @@
 # Security design and verification
 
+Automatic [playback reports](player-state.md) are authorized by the existing
+remote-control connection. Their separate bounded store contains sanitized
+media display metadata and server receipt times, with 24-hour retention; it
+does not contain raw stream URLs, file paths, provider configuration, artwork
+or errors. Reading it requires administrator access or `status` permission
+scoped to the requested device. Optional durable storage uses a private file
+separate from the command journal and registry. Treat that viewing history as
+private data when backing up the controller.
+
 ## Scope and trust boundaries
 
 The optional [durable registry](device-registry.md) separates pending pairing
