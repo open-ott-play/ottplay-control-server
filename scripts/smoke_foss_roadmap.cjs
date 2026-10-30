@@ -106,7 +106,7 @@ function moduleOf(file, dependency, host) {
             } },
         };
         const dependency = name => {
-            if (['./remote-handoff', './remote-profiles', './remote-settings', './remote-restart', './remote-feature'].includes(name))
+            if (['./remote-handoff', './remote-profiles', './remote-settings', './remote-restart', './remote-feature', './player-state'].includes(name))
                 return moduleOf('commands/' + name.slice(2), dependency, host);
             if (name === '../utils/helpers') return { getScriptDOM: loadAsset };
             if (name === '../provider') return { isProviderAllowed: () => true, checkProviderUrl: () => true };
@@ -119,8 +119,13 @@ function moduleOf(file, dependency, host) {
             if (name === './notification-media') return moduleOf('plugins/notification-media', unexpected, host);
             return unexpected();
         };
-        const transport = moduleOf('plugins/command-server', name => name === './remote-notifications'
-            ? moduleOf('plugins/remote-notifications', notificationDependency, host) : wire, host);
+        const transport = moduleOf('plugins/command-server', name => {
+            if (name === '../shared/wire-contracts') return wire;
+            if (name === './remote-notifications')
+                return moduleOf('plugins/remote-notifications', notificationDependency, host);
+            if (name === './player-state') return moduleOf('plugins/player-state', unexpected, host);
+            return unexpected();
+        }, host);
         const send = (request, complete) => {
             const abort = new AbortController();
             fetch(request.url, { method: request.method, headers: request.headers, body: request.body, signal: abort.signal })
