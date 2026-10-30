@@ -30,7 +30,7 @@ jobs:
       !github.event.pull_request.draft
     # Metadata only; the pinned helper never checks out or executes PR code.
     # Exclude californiantiramisu so its own-BOT_PAT Actions fallback cannot run.
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-approve-reusable.yml@e9d505643bc562d6f725a4d3183d9c67ac7e536b # main
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-approve-reusable.yml@368320994ed55ae68935dcadb4062000a4648b92 # main
     with:
       authors: '["4alvit","dependabot[bot]","renovate[bot]"]'
     secrets:
