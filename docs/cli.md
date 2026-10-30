@@ -3,7 +3,7 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`,
+`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`, `player_groups.py`,
 `favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
 `favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py`, `preset_favorites.py`,
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
@@ -156,9 +156,11 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`94a0578f2bd515b88818cbaaa42d795ba669bd32`](https://github.com/open-ott-play/ottplay-control-server/commit/94a0578f2bd515b88818cbaaa42d795ba669bd32).
+[`63380b3dc2389e5fd61bcfb865bf98a009e28dd6`](https://github.com/open-ott-play/ottplay-control-server/commit/63380b3dc2389e5fd61bcfb865bf98a009e28dd6).
 This is an exact source pin, not a claim about the latest published release.
-This source adds signed seek times and unit shorthand such as `seek -1:30` and
+This source adds [saved player groups](#saved-player-groups), including offline
+`group add/set/show/remove` management and group selectors in player commands.
+It also includes signed seek times and unit shorthand such as `seek -1:30` and
 `+10s`; relative seeking also requires matching controller and player support.
 The examples retain this reviewed signed source commit; a server release does
 not install the Python CLI or player. Matching controller and player support is
@@ -187,7 +189,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 29 Python modules, including
+The current CLI contains 30 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -219,8 +221,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=94a0578f2bd515b88818cbaaa42d795ba669bd32
-  ott_source="$HOME/.local/share/ottplay-control-server-local-94a0578f2bd5"
+  ott_ref=63380b3dc2389e5fd61bcfb865bf98a009e28dd6
+  ott_source="$HOME/.local/share/ottplay-control-server-local-63380b3dc238"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -242,7 +244,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-94a0578f2bd5/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-63380b3dc238/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -256,7 +258,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-94a0578f2bd5/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-63380b3dc238/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -278,8 +280,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '94a0578f2bd515b88818cbaaa42d795ba669bd32'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-94a0578f2bd5'
+$ottRef = '63380b3dc2389e5fd61bcfb865bf98a009e28dd6'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-63380b3dc238'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -325,12 +327,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-94a0578f2bd5/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-63380b3dc238/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-94a0578f2bd5\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-63380b3dc238\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -359,7 +361,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-94a0578f2bd5`, stages the replacement beside it, then switches atomically.
+`ott.before-local-63380b3dc238`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -371,9 +373,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-94a0578f2bd5")
-staged = launcher.with_name("ott.switch-local-94a0578f2bd5")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-94a0578f2bd5/cli/ott.py"
+backup = launcher.with_name("ott.before-local-63380b3dc238")
+staged = launcher.with_name("ott.switch-local-63380b3dc238")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-63380b3dc238/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -808,6 +810,68 @@ To uninstall the symlink installation, remove only the `~/.local/bin/ott` link y
 created and, when no longer needed, its source checkout. Keep private configuration
 until any required deregistration is complete. Uninstalling the CLI does not
 stop the controller or revoke player/operator credentials.
+
+## Saved player groups
+
+Save frequently used player lists in the local CLI configuration:
+
+```sh
+ott group add tt t1,t2,t3,t4
+ott group add oo o1,o2,o3,o4
+ott groups                         # list all groups and their members
+ott group show tt                  # inspect one group
+ott group set tt t1 t2 t3 t4        # create or replace; spaces or commas work
+ott group remove oo                # remove only this group, not its players
+ott group --help
+```
+
+Members must be existing player aliases or their configured device IDs.
+`add` refuses to overwrite an existing group; `set` explicitly replaces it.
+Groups are local to `~/.config/ottplay-control/cli.json`, or the file selected by
+`OTT_CONFIG` / `-c`. These management commands work offline and do not require
+controller credentials. They preserve the other configuration fields and save
+the file atomically with private permissions. `-j` / `--json` is supported.
+
+Use the group wherever a player list is supported:
+
+```sh
+ott tt                             # controls and status for each member
+ott tt R                           # each player chooses its own random channel
+ott oo provider m3u
+ott tt provider m3u 1
+ott tt +10s                        # relative seek on each player's current VOD
+ott tt standby
+ott tt go
+ott tt restart stream
+ott tt load Home
+ott tt watch --duration 30
+ott tt,oo v 25                     # combine groups
+ott tt,t1 v 25                     # t1 receives the command only once
+```
+
+The configuration stores a flat list of names, for example:
+
+```json
+"groups": {
+  "tt": ["t1", "t2", "t3", "t4"],
+  "oo": ["o1", "o2", "o3", "o4"]
+}
+```
+
+Group names are case-insensitive, up to 32 letters/digits/underscores/hyphens,
+and cannot collide with player aliases, device IDs or top-level CLI commands.
+Nested groups are not supported. Each command may expand up to 64 member names;
+duplicate device identities are executed once in first-occurrence order.
+Every name is resolved before any player request. If a saved member is removed
+or renamed, update the group with `group set`; an unknown member prevents the
+entire command from being sent. A group with a malformed member list can be deleted
+with `group remove` and recreated.
+
+Saved groups use the same per-player timeouts, output, partial-failure behavior
+and single-player restrictions as comma lists below. They do not make operations
+atomic across devices or bypass player permissions. Do not repeat a whole group
+after a partial failure; inspect the individual results first. No controller or
+player upgrade is required for group expansion itself.
 
 ## Run a command on several players
 

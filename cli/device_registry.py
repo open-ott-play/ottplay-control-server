@@ -186,6 +186,7 @@ def alias_name(api, value):
 
 
 def alias_key(api, config, name, device=None):
+    api.player_groups_module().check_alias(api, config, name)
     aliases = config.get("players", {})
     if not isinstance(aliases, dict) or any(not isinstance(k, str) or not matches(ID, v) for k, v in aliases.items()):
         fail(api, "The local player alias mapping is invalid")

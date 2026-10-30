@@ -71,6 +71,11 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott presets NAME fav global restore BACKUP [--dry-run]
                                      restore only the global favorites companion
   ott devices                        list devices and their last connection
+  ott groups                         list saved player groups
+  ott group add NAME t1,t2           create a local group (group set replaces it)
+  ott group show NAME                inspect a local group's members
+  ott group remove NAME              remove a local group
+  ott GROUP COMMAND                 use a saved group in any player command
   ott t1,t2,t3,t4 R                  any player command accepts a list; results per player
   ott t1,t2 watch --duration 30       observe players and decoder progress (read-only)
   ott ha status [-j]                 Home Assistant bridge and active banner recipients
@@ -261,7 +266,7 @@ Signed channel offsets are nonzero whole numbers from -9007199254740991 to
 # Top-level commands take precedence over player names, including saved aliases.
 TOP_LEVEL_COMMANDS = frozenset((
     "add", "alias", "approve", "devices", "diagnostics", "discover", "handoff",
-    "ha", "help", "pair", "pending", "presets", "registry", "remove", "report", "resolve", "server", "unalias",
+    "group", "groups", "ha", "help", "pair", "pending", "presets", "registry", "remove", "report", "resolve", "server", "unalias",
 ))
 
 
@@ -6110,38 +6115,19 @@ def provider_command(client, device, words, project=False):
         client.timeout = previous_timeout
 
 
+def player_groups_module():
+    path = Path(__file__).resolve().with_name("player_groups.py")
+    if not path.is_file():
+        raise Error("Install player_groups.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_player_groups", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def player_group_targets(client, selector):
-    """Resolve an explicit comma list before any per-player request can be sent."""
-    if "," not in selector:
-        return None
-    aliases = client.config.get("players", {})
-    devices = client.credentials.get("devices", [])
-    if (not isinstance(aliases, dict) or any(not isinstance(name, str) for name in aliases)
-            or not isinstance(devices, list) or any(not isinstance(row, dict)
-                or not isinstance(row.get("id"), str) for row in devices)):
-        raise Error("Check the configured player names and device UUIDs")
-    # Hand-edited configurations can contain commas. Preserve their exact
-    # single-player meaning, including ambiguous names rejected by device().
-    if (any(name.casefold() == selector.casefold() for name in aliases)
-            or any(row["id"].casefold() == selector.casefold() for row in devices)):
-        return None
-    names = [name.strip() for name in selector.split(",")]
-    if any(not name for name in names):
-        raise Error("Player lists require a name between every comma; use t1,t2,t3,t4")
-    if len(names) > 64:
-        raise Error("Player lists support at most 64 names")
-    targets = []
-    seen = set()
-    for name in names:
-        device = client.device(name)
-        if not isinstance(device, str) or not device:
-            raise Error("Check the configured player UUIDs")
-        # Device IDs are case-sensitive on the server; device() resolves aliases
-        # and case-insensitive UUID lookups to their configured identity.
-        if device not in seen:
-            seen.add(device)
-            targets.append((name, device))
-    return targets
+    """Resolve saved groups and comma lists before any per-player request."""
+    return player_groups_module().targets(SimpleNamespace(**globals()), client, selector)
 
 
 def player_command_route(words):
@@ -6738,6 +6724,8 @@ def main(argv=None):
         print(HELP)
         return 0
     try:
+        if args.words[0].casefold() in ("group", "groups"):
+            return player_groups_module().management(SimpleNamespace(**globals()), args.config, args.words, args.json)
         if args.words[0].casefold() == "registry" and args.words[1:] in (["--help"], ["-h"]):
             registry_management(None, args.config, args.words, args.json)
             return 0
@@ -6800,7 +6788,8 @@ def main(argv=None):
         if (len(args.words) > 1 and args.words[1].casefold() == "load"
                 and args.words[0].casefold() not in TOP_LEVEL_COMMANDS):
             parse_preset_load(args.words[1:])
-            if "," not in args.words[0]:
+            if ("," not in args.words[0] and (not isinstance(config, dict) or "groups" not in config or player_groups_module().group_name(
+                    SimpleNamespace(**globals()), config, args.words[0]) is None)):
                 return preset_command(config, args.words, args.timeout, args.json,
                                       print_request_receipt if args.receipt else None)
         client = Client(config, args.timeout)
@@ -6816,7 +6805,8 @@ def main(argv=None):
             raise Error(f"The name {args.words[0]!r} is reserved for a CLI command. Run ott --help for its syntax; use another player alias or the device UUID")
         if len(args.words) >= 2 and args.words[1].casefold() == "watch":
             return fleet_module().run(SimpleNamespace(**globals()), client, args.words[0], args.words[2:], args.timeout, args.json)
-        targets = player_group_targets(client, args.words[0])
+        targets = (player_group_targets(client, args.words[0])
+                   if "," in args.words[0] or "groups" in config else None)
         if targets is not None:
             return player_group_command(client, config, targets, args, argv)
         device = client.device(args.words[0])

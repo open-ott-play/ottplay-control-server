@@ -154,8 +154,10 @@ class PlayerGroupsTest(unittest.TestCase):
 
     def module_cli(self, words, runner, client=None):
         module = SimpleNamespace(run=runner)
+        groups = ott.player_groups_module()
         fake_spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda module: None))
-        with mock.patch.object(ott.importlib.util, 'spec_from_file_location', return_value=fake_spec), \
+        with mock.patch.object(ott, 'player_groups_module', return_value=groups), \
+                mock.patch.object(ott.importlib.util, 'spec_from_file_location', return_value=fake_spec), \
                 mock.patch.object(ott.importlib.util, 'module_from_spec', return_value=module):
             return self.run_cli(words, client)
 

@@ -71,6 +71,12 @@ The player stores this connection only on the current installation and excludes 
 
 ## Terminal remote
 
+Save reusable player groups with `ott group add tt t1,t2,t3,t4` and
+`ott group add oo o1,o2,o3,o4`. Then use `ott tt R`, `ott oo provider m3u`,
+or `ott tt,oo standby`. `ott groups` lists them; `ott group set` updates a
+group and `ott group remove` removes it. See [saved player groups](docs/cli.md#saved-player-groups)
+for configuration, examples and per-player failure behavior.
+
 The [illustrated Android OTA guide](docs/android-ota.md) distinguishes ordinary
 Capacitor Wi-Fi updates (`ott DEVICE update --variant api22|full`, latest beta by
 default; `--version` selects a release) from the separate rooted agent. It explains signed agent
