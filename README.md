@@ -77,6 +77,11 @@ Updated players automatically report their current media and playback state.
 See [retained playback state](docs/player-state.md) for freshness, persistence,
 operator access and troubleshooting.
 
+Players with an owned native Torrent service also expose a typed
+[Torrent catalog](docs/torrent-catalog.md): inspect metadata, add or refresh
+entries, select a file, and export/import the catalog with optional global
+Favorites. Run `ott t1 torrent --help`; support is discovered from the player.
+
 Save reusable player groups with `ott group add tt t1,t2,t3,t4` and
 `ott group add oo o1,o2,o3,o4`. Then use `ott tt R`, `ott oo provider m3u`,
 or `ott tt,oo standby`. `ott groups` lists them; `ott group set` updates a

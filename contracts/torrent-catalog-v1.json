@@ -1,0 +1,1449 @@
+{
+  "schema": 1,
+  "action": "torrent_catalog",
+  "capability": {
+    "torrent_catalog": {
+      "version": 1
+    }
+  },
+  "limits": {
+    "request_bytes": 16384,
+    "result_data_bytes": 65536,
+    "snapshot_bytes": 8388608,
+    "chunk_bytes": 6144
+  },
+  "valid": [
+    {
+      "name": "read",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "snapshot": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "kind": "catalog",
+          "revision": "catalog:1",
+          "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "size_bytes": 4
+        }
+      }
+    },
+    {
+      "name": "read_chunk",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "max_bytes": 6144
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "data_b64": "bnVsbA==",
+        "next_offset": null
+      }
+    },
+    {
+      "name": "metadata",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://example.invalid/media.torrent"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "metadata",
+          "state": "pending",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "status",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "play",
+          "state": "accepted",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null,
+          "target": {
+            "catalog_id": "catalog_1",
+            "entry_id": "entry_1",
+            "file_index": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "cancel",
+      "params": {
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "cancelled",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "write_begin",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 4,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "uploading",
+          "next_offset": 0,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "write_chunk",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVsbA=="
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "uploading",
+          "next_offset": 4,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "write_commit",
+      "params": {
+        "op": "write_commit",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "write_commit",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "committed",
+          "next_offset": null,
+          "snapshot": {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "kind": "catalog",
+            "revision": "catalog:1",
+            "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "size_bytes": 4
+          },
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "play",
+      "params": {
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:1",
+        "entry_id": "entry_1",
+        "file_index": 3
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "accepted": true,
+        "catalog_id": "catalog_1",
+        "entry_id": "entry_1",
+        "file_index": 3
+      }
+    },
+    {
+      "name": "metadata_ready",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://example.invalid/media.torrent"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "metadata",
+          "state": "ready",
+          "next_offset": null,
+          "snapshot": {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "kind": "metadata",
+            "revision": null,
+            "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "size_bytes": 4
+          },
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "metadata_failed",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "metadata",
+          "state": "failed",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": "metadata_timeout"
+        }
+      }
+    },
+    {
+      "name": "write_begin_retained_commit",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 4,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "committed",
+          "next_offset": null,
+          "snapshot": {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "kind": "catalog",
+            "revision": "catalog:1",
+            "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "size_bytes": 4
+          },
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "write_chunk_retained_commit",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVsbA=="
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "committed",
+          "next_offset": null,
+          "snapshot": {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "kind": "catalog",
+            "revision": "catalog:1",
+            "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "size_bytes": 4
+          },
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "status_play_pending",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "play",
+          "state": "pending",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null,
+          "target": {
+            "catalog_id": "catalog_1",
+            "entry_id": "entry_1",
+            "file_index": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "status_play_failed",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "play",
+          "state": "failed",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": "effect_failed",
+          "target": {
+            "catalog_id": "catalog_1",
+            "entry_id": "entry_1",
+            "file_index": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "cancel_retains_accepted_play",
+      "params": {
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "play",
+          "state": "accepted",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null,
+          "target": {
+            "catalog_id": "catalog_1",
+            "entry_id": "entry_1",
+            "file_index": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "cancel_retains_ready_metadata",
+      "params": {
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "metadata",
+          "state": "ready",
+          "next_offset": null,
+          "snapshot": {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "kind": "metadata",
+            "revision": null,
+            "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "size_bytes": 4
+          },
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "read_rejected",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "read_unsupported",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "read_chunk_rejected",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "max_bytes": 6144
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "read_chunk_unsupported",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "max_bytes": 6144
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "metadata_rejected",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://example.invalid/media.torrent"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "metadata_unsupported",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://example.invalid/media.torrent"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "status_rejected",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "status_unsupported",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "cancel_rejected",
+      "params": {
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "cancel_unsupported",
+      "params": {
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "cancel",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "write_begin_rejected",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 4,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "write_begin_unsupported",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 4,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "write_chunk_rejected",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVsbA=="
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "write_chunk_unsupported",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVsbA=="
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "write_commit_rejected",
+      "params": {
+        "op": "write_commit",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "write_commit",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "write_commit_unsupported",
+      "params": {
+        "op": "write_commit",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "write_commit",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "play_rejected",
+      "params": {
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:1",
+        "entry_id": "entry_1",
+        "file_index": 3
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "play_unsupported",
+      "params": {
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:1",
+        "entry_id": "entry_1",
+        "file_index": 3
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "runtime_changed"
+      }
+    }
+  ],
+  "invalid_requests": [
+    {
+      "name": "unknown_field",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "companionEndpoint": "https://example.invalid"
+      }
+    },
+    {
+      "name": "unknown_op",
+      "params": {
+        "op": "delete",
+        "runtime": "torrent-runtime:1"
+      }
+    },
+    {
+      "name": "uuid_not_v4",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-1111-8111-111111111111"
+      }
+    },
+    {
+      "name": "runtime_empty",
+      "params": {
+        "op": "read",
+        "runtime": ""
+      }
+    },
+    {
+      "name": "negative_offset",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": -1,
+        "max_bytes": 6144
+      }
+    },
+    {
+      "name": "offset_at_max",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 8388608,
+        "max_bytes": 6144
+      }
+    },
+    {
+      "name": "fractional_offset",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0.5,
+        "max_bytes": 6144
+      }
+    },
+    {
+      "name": "empty_chunk_limit",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "max_bytes": 0
+      }
+    },
+    {
+      "name": "oversize_chunk_limit",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "max_bytes": 6145
+      }
+    },
+    {
+      "name": "source_credentials",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://u:p@example.invalid/media.torrent"
+      }
+    },
+    {
+      "name": "source_wrong_extension",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://example.invalid/video.mp4"
+      }
+    },
+    {
+      "name": "source_whitespace",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "magnet:?xt=urn: btih:a"
+      }
+    },
+    {
+      "name": "wrong_mode",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "append",
+        "size_bytes": 4,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      }
+    },
+    {
+      "name": "empty_document",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 0,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      }
+    },
+    {
+      "name": "oversize_document",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 8388609,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      }
+    },
+    {
+      "name": "noncanonical_hash",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 4,
+        "sha256": "74234E98AFE7498FB5DAF1F36AC2D78ACC339464F950703B8C019892F982B90B"
+      }
+    },
+    {
+      "name": "base64_without_padding",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVsbA"
+      }
+    },
+    {
+      "name": "base64_nonzero_padding_bits",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVsbB=="
+      }
+    },
+    {
+      "name": "base64_whitespace",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVs\nbA=="
+      }
+    },
+    {
+      "name": "empty_chunk",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": ""
+      }
+    },
+    {
+      "name": "chunk_beyond_max",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 8388607,
+        "data_b64": "bnVsbA=="
+      }
+    },
+    {
+      "name": "invalid_entry_id",
+      "params": {
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:1",
+        "entry_id": "entry/path",
+        "file_index": 3
+      }
+    },
+    {
+      "name": "invalid_file_index",
+      "params": {
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:1",
+        "entry_id": "entry_1",
+        "file_index": 1000000000
+      }
+    }
+  ],
+  "invalid_results": [
+    {
+      "name": "wrong_runtime",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "other-runtime",
+        "snapshot": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "kind": "catalog",
+          "revision": "catalog:1",
+          "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "size_bytes": 4
+        }
+      }
+    },
+    {
+      "name": "unknown_result_field",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "snapshot": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "kind": "catalog",
+          "revision": "catalog:1",
+          "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "size_bytes": 4
+        },
+        "source": "private"
+      }
+    },
+    {
+      "name": "catalog_null_revision",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "snapshot": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "kind": "catalog",
+          "revision": null,
+          "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "size_bytes": 4
+        }
+      }
+    },
+    {
+      "name": "metadata_as_catalog",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "snapshot": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "kind": "metadata",
+          "revision": "catalog:1",
+          "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "size_bytes": 4
+        }
+      }
+    },
+    {
+      "name": "snapshot_too_large",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "snapshot": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "kind": "catalog",
+          "revision": "catalog:1",
+          "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "size_bytes": 8388609
+        }
+      }
+    },
+    {
+      "name": "wrong_snapshot_id",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "max_bytes": 6144
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVsbA==",
+        "next_offset": null
+      }
+    },
+    {
+      "name": "wrong_offset",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "max_bytes": 6144
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 1,
+        "data_b64": "bnVsbA==",
+        "next_offset": null
+      }
+    },
+    {
+      "name": "wrong_next_offset",
+      "params": {
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "max_bytes": 6144
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "read_chunk",
+        "runtime": "torrent-runtime:1",
+        "snapshot_id": "22222222-2222-4222-8222-222222222222",
+        "offset": 0,
+        "data_b64": "bnVsbA==",
+        "next_offset": 3
+      }
+    },
+    {
+      "name": "wrong_operation_id",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://example.invalid/media.torrent"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "kind": "metadata",
+          "state": "pending",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "cross_kind_metadata",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://example.invalid/media.torrent"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "uploading",
+          "next_offset": 0,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "cross_kind_write",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 4,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "metadata",
+          "state": "pending",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "progress_before_accepted_chunk",
+      "params": {
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "offset": 0,
+        "data_b64": "bnVsbA=="
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "write_chunk",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "uploading",
+          "next_offset": 3,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "progress_above_declared_size",
+      "params": {
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:0",
+        "mode": "replace",
+        "size_bytes": 4,
+        "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "write_begin",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "write",
+          "state": "uploading",
+          "next_offset": 5,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "failure_without_reason",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "metadata",
+          "state": "failed",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "reason_on_success",
+      "params": {
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "source": "https://example.invalid/media.torrent"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "metadata",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "metadata",
+          "state": "pending",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": "busy"
+        }
+      }
+    },
+    {
+      "name": "play_missing_target",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "play",
+          "state": "accepted",
+          "next_offset": null,
+          "snapshot": null,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "play_has_snapshot",
+      "params": {
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "status",
+        "runtime": "torrent-runtime:1",
+        "operation": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "kind": "play",
+          "state": "accepted",
+          "next_offset": null,
+          "snapshot": {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "kind": "catalog",
+            "revision": "catalog:1",
+            "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "size_bytes": 4
+          },
+          "reason": null,
+          "target": {
+            "catalog_id": "catalog_1",
+            "entry_id": "entry_1",
+            "file_index": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "play_wrong_file",
+      "params": {
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:1",
+        "entry_id": "entry_1",
+        "file_index": 3
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "accepted": true,
+        "catalog_id": "catalog_1",
+        "entry_id": "entry_1",
+        "file_index": 4
+      }
+    },
+    {
+      "name": "play_not_accepted",
+      "params": {
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "catalog:1",
+        "entry_id": "entry_1",
+        "file_index": 3
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "op": "play",
+        "runtime": "torrent-runtime:1",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "accepted": false,
+        "catalog_id": "catalog_1",
+        "entry_id": "entry_1",
+        "file_index": 3
+      }
+    },
+    {
+      "name": "error_leak",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "error": "https://private.invalid/secret",
+        "reason": "runtime_changed"
+      }
+    },
+    {
+      "name": "unknown_reason",
+      "params": {
+        "op": "read",
+        "runtime": "torrent-runtime:1"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "op": "read",
+        "runtime": "torrent-runtime:1",
+        "error": "Torrent catalog request failed.",
+        "reason": "raw_backend_failure"
+      }
+    }
+  ]
+}

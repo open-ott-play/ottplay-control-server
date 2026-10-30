@@ -133,6 +133,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME provider m3u РЕН          exact channel name first, else random match
   ott t1,t2,t3,t4 provider m3u        switch each listed player (alias: prov)
   ott NAME provider local            select Local videos (legacy alias: offline)
+  ott NAME torrent list              list the owned-native Torrent catalog
+  ott NAME torrent --help            add, inspect, play, edit and transfer Torrent sources
   ott NAME local sources [--path PATH] [--paths]  list sources; native paths are opt-in
   ott NAME local shuffle Movies      shuffle only the connected Movies folder
   ott NAME local shuffle /Volumes/data/Movies/  connect/play a path on a native player
@@ -343,7 +345,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "categories", "favorites", "aspect",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -4332,6 +4334,11 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "torrent_catalog" in data:
+        marker = data["torrent_catalog"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+        result["torrent_catalog"] = {"version": 1}
     if "playback_seek_relative" in data:
         marker = data["playback_seek_relative"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
@@ -4684,6 +4691,11 @@ def print_player_help(data, name):
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("Available controls now:")
+    if "torrent_catalog" in controls:
+        print(f"  {prefix} torrent list / files ENTRY  — read the saved Torrent catalog")
+        print(f"  {prefix} torrent add SOURCE --name TITLE  — inspect and save a Torrent source")
+        print(f"  {prefix} torrent play ENTRY FILE_INDEX  — play one exact saved file")
+        print(f"  {prefix} torrent --help  — catalog editing, transfer and operation recovery")
     if "player_settings" in controls:
         print(f"  {prefix} settings  — list typed preferences for this player and source")
         print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
@@ -6148,6 +6160,24 @@ def provider_command(client, device, words, project=False):
         client.timeout = previous_timeout
 
 
+def torrent_module():
+    path = Path(__file__).resolve().with_name("torrent_catalog.py")
+    if not path.is_file():
+        raise Error("Install all CLI Python files from the same revision to manage Torrent catalogs")
+    spec = importlib.util.spec_from_file_location("ott_torrent_catalog", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def parse_torrent_arguments(words):
+    module = torrent_module()
+    try:
+        return module.parse(words)
+    except (module.CatalogError, module.doc.DocumentError):
+        raise Error(module.USAGE) from None
+
+
 def player_groups_module():
     path = Path(__file__).resolve().with_name("player_groups.py")
     if not path.is_file():
@@ -6166,6 +6196,8 @@ def player_group_targets(client, selector):
 def player_command_route(words):
     """The single dispatch table for built-in and optional player commands."""
     verb = words[0].casefold() if words else ""
+    if verb == "torrent":
+        return "torrent_catalog"
     if verb == "perf":
         return "performance"
     if verb in ("setting", "settings"):
@@ -6218,6 +6250,9 @@ def group_output_arguments(words, route, prepared, suffix):
     elif prepared is not None and prepared[0] == "favorites_global" and prepared[1]["op"] == "export":
         prepared[1]["path"] = expand(prepared[1]["path"])
         words[-1] = prepared[1]["path"]
+    elif route == "torrent_catalog" and len(words) > 2 and words[1].casefold() == "export":
+        parse_torrent_arguments(words[1:])
+        words[2] = expand(words[2])
     elif route == "android" and len(words) == 4 and words[1].casefold() == "screenshot" and words[2] in ("-o", "--output"):
         words[3] = expand(words[3])
     elif route == "preset":
@@ -6409,6 +6444,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     """Run the same resolved-player command for a single target or one group member."""
     words = args.words[1:]
     route = player_command_route(words)
+    if route == "torrent_catalog":
+        return torrent_module().run(SimpleNamespace(**globals()), client, device, words[1:],
+                                    args.timeout, args.json, args.config)
     if route == "preset":
         return preset_command(config, args.words, args.timeout, args.json, client.on_receipt,
                               client=client, device=device)
@@ -6795,8 +6833,16 @@ def main(argv=None):
             except module.Failure:
                 raise Error("Invalid performance arguments; use ott PLAYER perf --help") from None
             return 0
-        if not math.isfinite(args.timeout) or not 1 <= args.timeout <= 300:
-            raise Error("--timeout must be between 1 and 300 seconds")
+        torrent_command = (len(args.words) > 1 and args.words[1].casefold() == "torrent"
+                           and args.words[0].casefold() not in TOP_LEVEL_COMMANDS)
+        if torrent_command and args.words[-1] in ("--help", "-h"):
+            print(torrent_module().USAGE)
+            return 0
+        timeout_limit = 10800 if torrent_command else 300
+        if not math.isfinite(args.timeout) or not 1 <= args.timeout <= timeout_limit:
+            raise Error(f"--timeout must be between 1 and {timeout_limit} seconds")
+        if torrent_command:
+            parse_torrent_arguments(args.words[2:])
         if len(args.words) >= 2 and args.words[1].casefold() == "watch" and args.words[-1] in ("--help", "-h"):
             fleet_module().arguments(args.words[2:], args.json)
             return 0

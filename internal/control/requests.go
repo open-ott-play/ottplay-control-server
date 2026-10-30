@@ -34,6 +34,7 @@ type requestResult struct {
 	favoritesGlobal         *favoritesGlobalRequest
 	favoritesGlobalRecovery *favoritesGlobalRecoveryRequest
 	favoritesGlobalItems    *favoritesGlobalItemsRequest
+	torrentCatalog          *torrentCatalogRequest
 	handoff                 *handoffRequest
 	offlineProfile          *offlineProfileRequest
 	relativeSeek            *relativeSeekRequest
@@ -131,6 +132,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	var favoritesGlobalBound *favoritesGlobalRequest
 	var favoritesGlobalRecoveryBound *favoritesGlobalRecoveryRequest
 	var favoritesGlobalItemsBound *favoritesGlobalItemsRequest
+	var torrentCatalogBound *torrentCatalogRequest
 	switch action {
 	case "kiosk":
 		var mode string
@@ -186,6 +188,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	case "favorites_global":
 		favoritesGlobalBound = parseFavoritesGlobalRequest(m["params"])
 		ok = favoritesGlobalBound != nil && len(b) <= maxFavoritesTransferEnvelopeBytes && validFavoritesTransferJSON(b)
+	case "torrent_catalog":
+		torrentCatalogBound = parseTorrentCatalogRequest(m["params"])
+		ok = torrentCatalogBound != nil && len(b) <= MaxBodyBytes && validFavoritesTransferJSON(b)
 	case "favorites_global_items":
 		favoritesGlobalItemsBound = parseFavoritesGlobalItemsRequest(m["params"])
 		ok = favoritesGlobalItemsBound != nil && len(b) <= maxFavoritesTransferEnvelopeBytes && validFavoritesTransferJSON(b)
@@ -291,6 +296,10 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	m["id"], _ = json.Marshal(id)
 	m["expires_at"], _ = json.Marshal(float64(expires.UnixNano()) / 1e9)
 	data, _ := json.Marshal(m)
+	if action == "torrent_catalog" && !validTorrentCatalogEnvelope(data) {
+		failure(w, 413, "torrent catalog envelope is too large or invalid")
+		return
+	}
 	if action == "favorites_transfer" && !validFavoritesTransferEnvelope(data) {
 		// Check the actual queued bytes after transport IDs/expiry are added,
 		// before the idempotency journal or queue can be changed.
@@ -367,6 +376,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	e.favoritesGlobal = favoritesGlobalBound
 	e.favoritesGlobalRecovery = favoritesGlobalRecoveryBound
 	e.favoritesGlobalItems = favoritesGlobalItemsBound
+	e.torrentCatalog = torrentCatalogBound
 	if action == "profile_save" || action == "profile_export" || action == "profile_import" {
 		var number int
 		_ = json.Unmarshal(params["number"], &number)
@@ -484,6 +494,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var favoritesGlobal *favoritesGlobalRequest
 	var favoritesGlobalRecovery *favoritesGlobalRecoveryRequest
 	var favoritesGlobalItems *favoritesGlobalItemsRequest
+	var torrentCatalog *torrentCatalogRequest
 	var handoff *handoffRequest
 	var offlineProfile *offlineProfileRequest
 	var inspect *inspectRequest
@@ -510,6 +521,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			favoritesGlobal = pending.favoritesGlobal
 			favoritesGlobalRecovery = pending.favoritesGlobalRecovery
 			favoritesGlobalItems = pending.favoritesGlobalItems
+			torrentCatalog = pending.torrentCatalog
 			handoff = pending.handoff
 			offlineProfile = pending.offlineProfile
 			playbackOperation = pending.playbackOperation
@@ -579,6 +591,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	if favoritesGlobalRecovery == nil {
 		favoritesGlobalRecovery = d.results[id].favoritesGlobalRecovery
 	}
+	if torrentCatalog == nil {
+		torrentCatalog = d.results[id].torrentCatalog
+	}
 	if favoritesGlobalItems == nil {
 		favoritesGlobalItems = d.results[id].favoritesGlobalItems
 	}
@@ -601,6 +616,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		capabilities, err := decodeObject(m["data"])
 		if err != nil {
 			failure(w, 400, "invalid capabilities result")
+			return
+		}
+		if marker, exists := capabilities["torrent_catalog"]; exists && !validTorrentCatalogCapability(marker) {
+			failure(w, 400, "invalid torrent catalog capability")
 			return
 		}
 		if marker, exists := capabilities["local_media"]; exists && !validLocalMediaCapability(marker) {
@@ -712,6 +731,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid global favorites recovery result")
 		return
 	}
+	if torrentCatalog != nil && !validTorrentCatalogResultEnvelope(b, id, torrentCatalog) {
+		failure(w, 400, "invalid torrent catalog result")
+		return
+	}
 	if favoritesGlobalItems != nil && !validFavoritesGlobalItemsResultEnvelope(b, id, favoritesGlobalItems) {
 		failure(w, 400, "invalid global favorites items result")
 		return
@@ -757,7 +780,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])
