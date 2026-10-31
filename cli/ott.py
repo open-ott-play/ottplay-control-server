@@ -4342,6 +4342,11 @@ def capabilities_metadata(data):
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
             raise Error(invalid)
         result["provider_diagnostics"] = {"version": 1}
+    marker = data.get("companion_diagnostics")
+    if (type(marker) is dict and set(marker) == {"version"}
+            and type(marker["version"]) is int and marker["version"] == 1):
+        # Optional cached evidence cannot invalidate otherwise usable controls.
+        result["companion_diagnostics"] = {"version": 1}
     if "torrent_catalog" in data:
         marker = data["torrent_catalog"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
