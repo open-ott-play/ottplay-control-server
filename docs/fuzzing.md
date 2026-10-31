@@ -122,4 +122,4 @@ Mutation remains limited to an explicit RC dispatch on the public default
 branch. A report describes one source revision and run, not complete platform
 coverage or device acceptance. Ordinary receipt verification and project
 acceptance remain separate release prerequisites. See the shared
-[evidence contract](rc-fuzzing.md).
+[evidence contract](https://github.com/victron-venus/venus-os-ci-toolkit/blob/main/docs/rc-fuzzing.md).
