@@ -52,5 +52,19 @@
     "lookup": null,
     "requests": [],
     "requestsDropped": 0
+  },
+  "companion": {
+    "active": true,
+    "state": "preparing",
+    "error": "",
+    "downloaded": 1048576,
+    "total": 8388608
+  },
+  "companion_error": {
+    "active": false,
+    "state": "error",
+    "error": "cache_limit",
+    "downloaded": null,
+    "total": null
   }
 }

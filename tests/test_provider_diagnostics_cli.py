@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
-from test_bundle_debug_negotiation import NegotiatingClient
+from test_bundle_debug_negotiation import NegotiatingClient, versioned_debug
 from test_workbench_cli import Clock, RUNTIME, load, ott, wb
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +22,7 @@ class ProviderClient(NegotiatingClient):
         self.provider = copy.deepcopy(FIXTURE['snapshot'])
         self.status_failure = None
         self.first_runtime = None
+        self.debug_elapsed = 0
 
     def call_receipt(self, target, action, params):
         if action == 'status':
@@ -35,6 +36,8 @@ class ProviderClient(NegotiatingClient):
         result = super().call_receipt(target, action, params)
         if action == 'capabilities' and len(self.calls) == 1 and self.first_runtime:
             result['data']['player']['runtime'] = self.first_runtime
+        if action == 'inspect' and params['section'] == 'debug':
+            self.clock.sleep(self.debug_elapsed)
         return result
 
 class ProviderDiagnosticsCliTests(unittest.TestCase):
@@ -165,5 +168,125 @@ class ProviderDiagnosticsCliTests(unittest.TestCase):
             self.client.calls.clear()
             code, report = self.execute(words)
             self.assertEqual((code, report['reason'], self.client.calls), (1, 'invalid_arguments', []))
+
+    def test_companion_progress_and_terminal_failure_are_visible(self):
+        for name in ('companion', 'companion_error'):
+            with self.subTest(name=name):
+                self.client.provider['companion'] = copy.deepcopy(FIXTURE[name])
+                code, report = self.execute(['doctor', '--provider', '--lane', 'web'])
+                self.assertEqual(code, 0)
+                self.assertEqual(report['provider_observations'][0]['data']['companion'], FIXTURE[name])
+                code, text = self.execute(['doctor', '--provider', '--lane', 'web'], False)
+                self.assertEqual(code, 0)
+                self.assertIn('Companion (cached)', text)
+                self.assertIn(FIXTURE[name]['state'], text)
+                if name == 'companion':
+                    self.assertIn('lease active', text)
+                    self.assertIn('1048576', text)
+                    self.assertIn('8388608', text)
+                else:
+                    self.assertIn('lease inactive', text)
+                    self.assertIn('cache_limit', text)
+                    self.assertIn('unknown', text)
+
+    def test_old_and_null_companion_data_remain_distinct_from_real_zero(self):
+        old = wb.provider_metadata(copy.deepcopy(FIXTURE['snapshot']), RUNTIME)
+        self.assertNotIn('companion', old)
+        for base in ('snapshot', 'unavailable'):
+            data = copy.deepcopy(FIXTURE[base])
+            data['companion'] = None
+            self.assertIsNone(wb.provider_metadata(data, RUNTIME)['companion'])
+        data = copy.deepcopy(FIXTURE['snapshot'])
+        data['companion'] = {**FIXTURE['companion'], 'downloaded': 0, 'total': 0}
+        self.assertEqual(wb.provider_metadata(data, RUNTIME)['companion']['downloaded'], 0)
+        data['companion'].update(downloaded=9007199254740991, total=None, state='unknown')
+        self.assertEqual(wb.provider_metadata(data, RUNTIME)['companion'], data['companion'])
+
+    def test_malformed_companion_fails_closed_without_private_output(self):
+        changes = [lambda c: c.update(active=1), lambda c: c.update(state='playing'),
+                   lambda c: c.update(error=PRIVATE_MARKER), lambda c: c.update(error=None),
+                   lambda c: c.update(downloaded=True), lambda c: c.update(downloaded=-1),
+                   lambda c: c.update(total=2**53), lambda c: c.update(total=1.5),
+                   lambda c: c.update(url=PRIVATE_MARKER), lambda c: c.pop('active')]
+        for index, change in enumerate(changes):
+            with self.subTest(index=index):
+                self.client.provider['companion'] = copy.deepcopy(FIXTURE['companion'])
+                change(self.client.provider['companion'])
+                code, report = self.execute(['doctor', '--provider', '--lane', 'web'])
+                row = report['provider_observations'][0]
+                self.assertEqual((code, row['reason']), (3, 'invalid_response'))
+                self.assertNotIn('data', row)
+        for bad in (False, [], '', 1):
+            data = {**FIXTURE['snapshot'], 'companion': bad}
+            with self.subTest(bad=bad), self.assertRaises(wb.InvalidData):
+                wb.provider_metadata(data, RUNTIME)
+        data = {**FIXTURE['unavailable'], 'companion': copy.deepcopy(FIXTURE['companion'])}
+        with self.assertRaises(wb.InvalidData):
+            wb.provider_metadata(data, RUNTIME)
+
+    def test_private_reports_preserve_companion_without_probing_service(self):
+        for command in ('bundle', 'doctor', 'debug'):
+            self.client.calls.clear()
+            self.client.provider['companion'] = copy.deepcopy(FIXTURE['companion_error'])
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory).resolve() / 'companion-case'
+                words = [command, '--lane', 'web', '--out', str(path)]
+                if command != 'bundle':
+                    words.append('--provider')
+                code, report = self.execute(words)
+                self.assertEqual(code, 0)
+                saved = json.loads((path / 'result.json').read_text())
+                self.assertEqual(saved['provider_observations'][0]['data']['companion'], FIXTURE['companion_error'])
+                self.assertEqual(report['provider_observations'], saved['provider_observations'])
+                self.assertNotIn(PRIVATE_MARKER, (path / 'result.json').read_text())
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), \
+                        mock.patch.object(ott, 'Client', side_effect=AssertionError('network forbidden')):
+                    verified = verify.main(['verify', str(path), '--json'], ott, wb)
+                self.assertEqual(verified, 0, output.getvalue())
+                self.assertEqual(json.loads(output.getvalue())['provider_correlation'], 'matched')
+                self.assertEqual(len([call for call in self.client.calls if call[1] == 'status']), 1)
+
+    def test_engine_debug_retains_original_evidence_and_enriches_companion(self):
+        self.client.provider['companion'] = copy.deepcopy(FIXTURE['companion'])
+        code, report = self.execute(['debug', '--engine'])
+        self.assertEqual((code, report['verdict'], report['evaluator']), (0, 'observed', 'workbench-v2'))
+        self.assertEqual(report['observations'][0]['data'], versioned_debug(3))
+        self.assertEqual(report['provider_observations'][0]['data']['companion'], FIXTURE['companion'])
+        with self.assertRaises(verify.InvalidReport):
+            verify.evaluate_report(report, ott, wb)
+        self.assertEqual(self.client.calls[0][3], 20)
+        self.assertEqual(self.client.calls[1][1:3], ('inspect', {'version': 3, 'runtime': RUNTIME, 'section': 'debug'}))
+        self.assertEqual(self.client.calls[1][3], 20)
+        self.assertEqual(len([call for call in self.client.calls if call[1] == 'inspect']), 1)
+        self.assertEqual(len([call for call in self.client.calls if call[1] == 'status']), 1)
+        self.client.calls.clear()
+        self.assertIn('Companion (cached)', self.execute(['debug', '--engine'], False)[1])
+
+    def test_engine_without_provider_capability_keeps_two_existing_reads(self):
+        self.client.capabilities.pop('provider_diagnostics')
+        code, report = self.execute(['debug', '--engine'])
+        self.assertEqual((code, report['observations'][0]['data']), (0, versioned_debug(3)))
+        self.assertNotIn('provider_observations', report)
+        self.assertEqual([call[1] for call in self.client.calls], ['capabilities', 'inspect'])
+
+    def test_provider_failure_cannot_downgrade_engine_debug(self):
+        self.client.status_failure = ott.RequestError('request_pending_timeout', 'poll', PRIVATE_MARKER,
+                                                     request_id='a' * 32)
+        self.client.debug_elapsed = 19.75
+        code, report = self.execute(['debug', '--engine'])
+        self.assertEqual((code, report['verdict'], report['observations'][0]['data']),
+                         (0, 'observed', versioned_debug(3)))
+        self.assertEqual(report['provider_observations'][0]['status'], 'unknown')
+        self.assertEqual(len([call for call in self.client.calls if call[1] == 'status']), 1)
+        self.assertLessEqual(self.client.calls[-1][3], 0.25)
+        self.assertLessEqual(self.clock.value, 1020)
+
+    def test_engine_exhausting_deadline_does_not_restart_provider_budget(self):
+        self.client.debug_elapsed = 20
+        code, report = self.execute(['debug', '--engine'])
+        self.assertEqual((code, report['verdict']), (3, 'unknown'))
+        self.assertEqual([call[1] for call in self.client.calls], ['capabilities', 'inspect'])
+        self.assertEqual(self.clock.value, 1020)
 
 if __name__ == '__main__': unittest.main()

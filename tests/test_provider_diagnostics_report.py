@@ -1,5 +1,6 @@
 """Offline provider reports validate bounded evidence and recompute correlation."""
 import contextlib
+import copy
 import io
 import json
 from pathlib import Path
@@ -13,6 +14,7 @@ from test_bundle_debug_negotiation import versioned_debug
 
 ott, wb = fixtures.ott, fixtures.wb
 PUBLIC_TEST_MARKER = "invalid-report-fixture.example/public-marker"
+COMPANION_FIXTURE = json.loads((Path(__file__).resolve().parents[1] / "contracts/provider-diagnostics-v1.json").read_text())
 
 
 def provider_data(runtime=fixtures.RUNTIME):
@@ -178,6 +180,50 @@ class ProviderDiagnosticsReportTests(unittest.TestCase):
                         value["debug_observations"][0]["data"] = versioned_debug(1)
                 value[field] = content
                 self.assertEqual(self.invoke(value)[0], 1)
+
+    def test_companion_reports_verify_with_progress_failure_and_null(self):
+        for command in ("bundle", "doctor", "debug"):
+            for companion in (COMPANION_FIXTURE["companion"], COMPANION_FIXTURE["companion_error"], None):
+                with self.subTest(command=command, companion=companion):
+                    value = provider_report(command)
+                    value["provider_observations"][0]["data"]["companion"] = copy.deepcopy(companion)
+                    code, result = self.invoke(value)
+                    self.assertEqual((code, result["verdict"], result["provider_correlation"]),
+                                     (0, "observed", "matched"))
+                    self.assertFalse(result["physical_display_verified"])
+
+    def test_companion_exact_fields_and_safe_errors_are_verified_not_just_hashed(self):
+        changes = [lambda c: c.update(active="yes"), lambda c: c.update(state="playing"),
+                   lambda c: c.update(error=PUBLIC_TEST_MARKER), lambda c: c.update(error="companion_new_secret"),
+                   lambda c: c.update(downloaded=True), lambda c: c.update(downloaded=-1),
+                   lambda c: c.update(total=9007199254740992), lambda c: c.update(total=1.5),
+                   lambda c: c.update(source=PUBLIC_TEST_MARKER), lambda c: c.pop("error")]
+        for index, change in enumerate(changes):
+            value = provider_report()
+            companion = copy.deepcopy(COMPANION_FIXTURE["companion"])
+            change(companion)
+            value["provider_observations"][0]["data"]["companion"] = companion
+            with self.subTest(index=index):
+                self.assertEqual(self.invoke(value)[0], 1)
+
+    def test_companion_errors_from_multiple_backend_stages_remain_safe_observations(self):
+        for error in ("companion_no_playable_files", "torznab_reference_missing", "webseed_hash_mismatch",
+                      "plugin_timed_out", "stream_timeout"):
+            value = provider_report("doctor")
+            value["provider_observations"][0]["data"]["companion"] = {
+                **COMPANION_FIXTURE["companion_error"], "error": error}
+            with self.subTest(error=error):
+                self.assertEqual(self.invoke(value)[0], 0)
+
+    def test_unavailable_provider_cannot_smuggle_companion_state(self):
+        value = provider_report("doctor")
+        data = value["provider_observations"][0]["data"]
+        data.update(available=False, provider=None, catalog=None, lookup=None, requests=[], requestsDropped=0,
+                    companion=None)
+        value["verdict"] = "unknown"
+        self.assertEqual(self.invoke(value)[0], 3)
+        data["companion"] = copy.deepcopy(COMPANION_FIXTURE["companion"])
+        self.assertEqual(self.invoke(value)[0], 1)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,14 @@ REASONS = "producer_unavailable producer_failed invalid_sample state_changed_dur
 CAPABILITIES = "screenshot diagnostics input restart_stream reload_player restart_app exit_app reboot_device standby wake".split()
 CAP_REASONS = "ready not_implemented producer_unavailable remote_disconnected source_selection_required busy no_active_media current_state_unsupported policy_restricted".split()
 NATIVE_EVENTS = frozenset("result_ack_failed effect_claim_failed effect_failed operation_history_reset receipt_write_failed journal_write_failed result_write_failed poll_failed invalid_poll watchdog_recover watchdog_restart_app bundle_recovery_failed".split())
+COMPANION_ERROR = re.compile(
+    r"(?:companion_(?:access_denied|endpoint_invalid|transport_unavailable|not_configured|timeout|request_failed|source_invalid|selection_invalid|receipt_invalid|too_many_files|no_playable_files|torrent_unavailable|unavailable)"
+    r"|torznab_(?:invalid_(?:source|link|query|category|xml|page)|local_only|search_unavailable|source_(?:missing|changed|limit)|reference_missing|busy|cancelled|timeout|network_error|http_error|response_limit|xml_limit|api_error|store_(?:unavailable|busy|limit))"
+    r"|busy|cleanup_pending|cache_(?:limit|unavailable)|service_stopped|session_(?:missing|stopped|busy|limit)|stream_(?:limit|timeout)"
+    r"|webseed_(?:unavailable|timeout|invalid_range|hash_mismatch|network_denied)|invalid_(?:request|source|file|metadata|tracker)|tracker_limit|file_(?:selection_required|limit)"
+    r"|engine_unavailable|metadata_(?:failed|timeout|limit)|no_files|torrent_failed|initialization_timeout|range_failed"
+    r"|plugin_(?:invalid_manifest|invalid_script|not_found|invalid_input|invalid_output|busy|cancelled|timed_out|execution_failed|network_denied|network_failed|network_limit))"
+)
 
 
 class InvalidData(Exception):
@@ -234,17 +242,29 @@ def provider_metadata(raw, runtime):
             "httpStatus": nullable(number(100, 599, True)), "ageMs": integer,
             "durationMs": nullable(integer), "responseBytes": nullable(integer),
         }
-        result = exact(raw, {
+        fields = {
             "version": number(1, 1, True), "runtime": token, "capturedAt": integer,
             "available": boolean, "provider": nullable(enum(["torrent"])),
             "catalog": nullable(lambda value: exact(value, catalog)),
             "lookup": nullable(lambda value: exact(value, lookup)),
             "requests": array(lambda value: exact(value, request), 16), "requestsDropped": integer,
-        })
+        }
+        if isinstance(raw, dict) and "companion" in raw:
+            def companion_error(value):
+                check(isinstance(value, str) and (value == "" or COMPANION_ERROR.fullmatch(value)))
+                return value
+            companion = {
+                "active": boolean,
+                "state": enum(["metadata", "select", "preparing", "ready", "error", "unknown"]),
+                "error": companion_error, "downloaded": nullable(integer), "total": nullable(integer),
+            }
+            fields["companion"] = nullable(lambda value: exact(value, companion))
+        result = exact(raw, fields)
         check(result["runtime"] == runtime)
         if not result["available"]:
             check(result["provider"] is None and result["catalog"] is None and result["lookup"] is None
-                  and result["requests"] == [] and result["requestsDropped"] == 0)
+                  and result["requests"] == [] and result["requestsDropped"] == 0
+                  and result.get("companion") is None)
         else:
             check(result["provider"] == "torrent")
         if result["lookup"] is None:
@@ -690,7 +710,7 @@ def arguments(words, json_output):
         parser.add_argument("--provider", action="store_true", help="combine provider lookup evidence, media state and engine diagnostics")
         parser.add_argument("--out", help="save the provider diagnostic report in a new private directory")
     if command == "debug":
-        parser.add_argument("--engine", action="store_true", help="request attached-engine evidence and negotiated v3 attempt counters (requires updated player and controller)")
+        parser.add_argument("--engine", action="store_true", help="request attached-engine evidence, negotiated v3 attempt counters and cached companion evidence when advertised")
     if command == "inspect":
         parser.add_argument("--view", default="ui,media")
     elif command == "operation":
@@ -719,6 +739,20 @@ def arguments(words, json_output):
     return parsed
 
 
+def print_companion_summary(data):
+    companion = data.get("companion")
+    if companion is None:
+        print("Companion: not reported.")
+        return
+    print("Companion (cached): " + companion["state"] + "; lease "
+          + ("active" if companion["active"] else "inactive") + ".")
+    if companion["error"]:
+        print("Companion error: " + companion["error"] + ".")
+    downloaded = "unknown" if companion["downloaded"] is None else str(companion["downloaded"]) + " bytes"
+    total = "unknown" if companion["total"] is None else str(companion["total"]) + " bytes"
+    print("Companion transfer: downloaded " + downloaded + "; total " + total + ".")
+
+
 def print_provider_summary(result):
     rows = result.get("provider_observations", [])
     correlation = provider_correlation(result.get("observations", []), rows, result.get("debug_observations", []))
@@ -733,6 +767,7 @@ def print_provider_summary(result):
             print("Provider evidence: unavailable for the current provider.")
             continue
         print("Provider: " + data["provider"])
+        print_companion_summary(data)
         catalog = data["catalog"]
         if catalog is None:
             print("Catalog: not reported.")
@@ -783,6 +818,7 @@ def run(api, client, device, words, timeout, json_output=False):
     json_output = json_output or any(word in ("-j", "--json") for word in words[1:])
     result = {"version": 1, "command": command, "device_id": device, "started_at": now(),
               "read_only": True, "physical_display_verified": False, "evaluator": "workbench-v2"}
+    provider_mode = False
     try:
         args = arguments([command, *words[1:]], json_output)
         json_output = args.json
@@ -844,6 +880,11 @@ def run(api, client, device, words, timeout, json_output=False):
                         result["provider_observations"] = bench.observe("web", "provider")
                         bench.deadline = final_deadline
                     result["debug_observations"] = bench.observe("web", "debug", debug_version="auto") if args.lane != "native" else []
+                elif command == "debug" and args.engine and any(
+                        "provider_diagnostics" in row.get("capabilities", {}) for row in observations):
+                    # Enrich explicit engine reads only with the remaining budget.
+                    # Keep the engine's negotiation, observations and verdict intact.
+                    result["provider_observations"] = bench.observe("web", "provider")
                 verdict = "observed" if any(row["status"] == "observed" for row in observations) else "unknown"
                 if command == "operation":
                     result["operation_id"] = args.operation_id
@@ -887,8 +928,19 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Reason: " + result["reason"])
         for row in result.get("observations", []):
             print("  " + row["lane"] + ": " + row["status"] + (" (" + row["reason"] + ")" if row.get("reason") else ""))
-        if "provider_observations" in result:
+        if "provider_observations" in result and (provider_mode or command == "bundle"):
             print_provider_summary(result)
+        elif "provider_observations" in result:
+            engine_runtimes = {row["runtime"] for row in result.get("observations", [])
+                               if row.get("status") == "observed"}
+            for row in result["provider_observations"]:
+                if row.get("status") != "observed":
+                    print("Companion evidence: unavailable (" + row.get("reason", "unavailable") + ").")
+                    continue
+                correlation = ("unavailable" if not engine_runtimes else
+                               "matched" if engine_runtimes == {row["runtime"]} else "mixed")
+                print("Companion runtime correlation: " + correlation + "; samples were collected separately.")
+                print_companion_summary(row["data"])
         if result.get("scenarios"):
             for row in result["scenarios"]:
                 print("  " + row["name"] + " — " + row["checks"])
@@ -896,6 +948,6 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Report: " + result["report_directory"])
         if result.get("report_error"):
             print("Report error: " + result["report_error"]["reason"])
-        if command in ("doctor", "inspect", "operation", "debug") and "provider_observations" not in result:
+        if command in ("doctor", "inspect", "operation", "debug") and not provider_mode:
             print(encoded(result).decode("utf-8"), end="")
     return 1 if result.get("report_error") else {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]
