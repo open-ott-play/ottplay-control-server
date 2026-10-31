@@ -188,7 +188,8 @@ class IndexerTests(unittest.TestCase):
         self.assertEqual(self.run_cli(["search", "home"])[0], 1)
         self.client.caps["searchAvailable"] = False
         self.assertEqual(self.run_cli(["search", "home", "query", "--limit", "10"])[0], 1)
-        self.assertEqual(self.operations(), ["caps", "caps", "caps"])
+        self.assertEqual(self.run_cli(["search", "home", "--limit", "10"])[0], 1)
+        self.assertEqual(self.operations(), ["caps", "caps", "caps", "caps"])
 
     def test_mutations_are_not_retried_on_transport_failure(self):
         def fail(action, request):

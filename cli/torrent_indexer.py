@@ -474,7 +474,7 @@ def run(api, client, device, words, timeout, json_output, config_path=None):
         session.discover()
         if args["op"] == "search":
             caps = session.rpc({"op": "caps", "sourceId": args["sourceId"]})
-            require(not args["query"] or caps["searchAvailable"], "search_unavailable")
+            require(caps["searchAvailable"], "search_unavailable")
             require(args["limit"] <= caps["maxLimit"], "limit_unavailable")
             require(set(args["categoryIds"]) <= {row["id"] for row in caps["categories"]}, "category_unavailable")
         value, code = _public(session.rpc(args), secrets), 0
