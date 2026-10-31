@@ -36,6 +36,11 @@ Exact settings verification and handoff also require an updated player. The
 [architecture diagram](docs/assets/reliable-control.svg) shows where settings,
 credentials and operation state remain.
 
+For Torrent/Stremio lookup failures, use `ott t1 doctor --provider` to collect
+safe provider, media and engine evidence in one report. The
+[provider diagnostics guide](docs/provider-diagnostics.md) covers addon HTTP
+outcomes, runtime freshness and saving a private report without starting playback.
+
 The server runs as a single portable Go executable, with a pinned DNS library for optional service discovery. Release packages cover Linux amd64, arm64 and ARMv7; macOS Intel and Apple Silicon; and Windows amd64 and arm64. Container images support Linux amd64 and arm64. Kubernetes and k3s use the included Helm chart.
 
 ## Start a server

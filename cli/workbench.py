@@ -210,6 +210,69 @@ def snapshot_metadata(raw, runtime, section):
     return result
 
 
+def provider_metadata(raw, runtime):
+    """Validate the producer's public DTO, never the enclosing status payload."""
+    try:
+        check(len(json.dumps(raw, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) <= 16384)
+        integer = number(integral=True)
+        catalog = {
+            "view": enum(["channels", "categories", "streams"]), "loadedCount": integer,
+            "nextCursor": nullable(integer), "busy": boolean, "autoPages": boolean,
+            "selectedIndex": nullable(integer),
+        }
+        lookup = {
+            "id": integer, "ageMs": integer,
+            "state": enum(["pending", "ready", "empty", "failed", "unsupported", "cancelled"]),
+            "movieIdKind": enum(["imdb", "tmdb", "custom", "unknown"]),
+            "addonCount": number(0, 8, True), "failedAddons": number(0, 8, True),
+            "skippedAddons": number(0, 8, True), "unsupportedCount": integer, "playableCount": integer,
+        }
+        request = {
+            "id": integer, "lookupId": integer, "addonIndex": number(0, 7, True),
+            "stage": enum(["manifest", "stream"]),
+            "outcome": enum(["pending", "ok", "http_error", "transport_error", "timeout", "invalid_response", "cancelled"]),
+            "httpStatus": nullable(number(100, 599, True)), "ageMs": integer,
+            "durationMs": nullable(integer), "responseBytes": nullable(integer),
+        }
+        result = exact(raw, {
+            "version": number(1, 1, True), "runtime": token, "capturedAt": integer,
+            "available": boolean, "provider": nullable(enum(["torrent"])),
+            "catalog": nullable(lambda value: exact(value, catalog)),
+            "lookup": nullable(lambda value: exact(value, lookup)),
+            "requests": array(lambda value: exact(value, request), 16), "requestsDropped": integer,
+        })
+        check(result["runtime"] == runtime)
+        if not result["available"]:
+            check(result["provider"] is None and result["catalog"] is None and result["lookup"] is None
+                  and result["requests"] == [] and result["requestsDropped"] == 0)
+        else:
+            check(result["provider"] == "torrent")
+        if result["lookup"] is None:
+            check(not result["requests"] and result["requestsDropped"] == 0)
+        else:
+            check(all(row["lookupId"] == result["lookup"]["id"] for row in result["requests"]))
+            check(all(row["addonIndex"] < result["lookup"]["addonCount"] for row in result["requests"]))
+        ids = [row["id"] for row in result["requests"]]
+        check(all(left < right for left, right in zip(ids, ids[1:])))
+        return result
+    except (ValueError, TypeError, KeyError, UnicodeError, OverflowError, RecursionError):
+        raise InvalidData() from None
+
+
+def provider_verdict(observations):
+    return "observed" if any(row.get("status") == "observed" and row["data"]["available"]
+                             for row in observations) else "unknown"
+
+
+def provider_correlation(observations, provider_observations, debug_observations):
+    groups = [observations, provider_observations, debug_observations]
+    runtimes = [[row["runtime"] for row in group if row.get("lane") == "web"
+                 and row.get("status") == "observed"] for group in groups]
+    if not all(runtimes):
+        return "unavailable"
+    return "matched" if len({runtime for group in runtimes for runtime in group}) == 1 else "mixed"
+
+
 def operation_metadata(raw, runtime, operation_id):
     result = project(inspection_data(raw, runtime, "operation"), {
         "operation_id": enum([operation_id]),
@@ -365,7 +428,8 @@ class Workbench:
                 raw = self.request(self.device, "capabilities", {}, deadline, receipts)
                 caps = self.api.capabilities_metadata(raw)
                 observation["capabilities"] = caps
-                supported = "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", [])
+                supported = ("provider_diagnostics" in caps if section == "provider" else
+                             "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", []))
                 if not supported:
                     raise ObservationError("unsupported")
                 if section == "debug" and debug_version == "auto":
@@ -378,13 +442,18 @@ class Workbench:
                     debug_version = 3
                 if section == "debug" and debug_version == 3 and caps.get("debug_attempts") != {"version": 3}:
                     raise ObservationError("unsupported")
-                params = {"version": debug_version if section == "debug" else 1, "runtime": caps["player"]["runtime"], "section": section}
-                if section == "operation":
-                    params["operation_id"] = operation_id
-                raw = self.request(self.device, "inspect", params, deadline, receipts)
-                data = (debug_metadata(raw, caps["player"]["runtime"], debug_version) if section == "debug"
-                        else operation_metadata(raw, caps["player"]["runtime"], operation_id) if section == "operation"
-                        else snapshot_metadata(raw, caps["player"]["runtime"], section))
+                if section == "provider":
+                    raw = self.request(self.device, "status", {}, deadline, receipts)
+                    check(isinstance(raw, dict) and isinstance(raw.get("diagnostics"), dict))
+                    data = provider_metadata(raw["diagnostics"].get("provider"), caps["player"]["runtime"])
+                else:
+                    params = {"version": debug_version if section == "debug" else 1, "runtime": caps["player"]["runtime"], "section": section}
+                    if section == "operation":
+                        params["operation_id"] = operation_id
+                    raw = self.request(self.device, "inspect", params, deadline, receipts)
+                    data = (debug_metadata(raw, caps["player"]["runtime"], debug_version) if section == "debug"
+                            else operation_metadata(raw, caps["player"]["runtime"], operation_id) if section == "operation"
+                            else snapshot_metadata(raw, caps["player"]["runtime"], section))
             observation.update(status="observed", data=data, runtime=data["runtime"] if lane == "native" or section != "operation" else caps["player"]["runtime"])
             if logs and lane == "native":
                 try:
@@ -617,6 +686,9 @@ def arguments(words, json_output):
     parser.add_argument("-j", "--json", action="store_true", default=json_output)
     lanes = {"debug": ("web",), "operation": ("web", "native")}.get(command, ("auto", "web", "native"))
     parser.add_argument("--lane", choices=lanes, default="web" if command in ("debug", "operation") else "auto")
+    if command in ("doctor", "debug"):
+        parser.add_argument("--provider", action="store_true", help="combine provider lookup evidence, media state and engine diagnostics")
+        parser.add_argument("--out", help="save the provider diagnostic report in a new private directory")
     if command == "debug":
         parser.add_argument("--engine", action="store_true", help="request attached-engine evidence and negotiated v3 attempt counters (requires updated player and controller)")
     if command == "inspect":
@@ -631,6 +703,8 @@ def arguments(words, json_output):
         parser.add_argument("--duration", type=float, default=5)
         parser.add_argument("--report")
     parsed = parser.parse_args(words[1:])
+    if command in ("doctor", "debug") and ((parsed.out and not parsed.provider) or (parsed.provider and parsed.lane == "native")):
+        raise ObservationError("invalid_arguments")
     if command == "operation" and not REQUEST.fullmatch(parsed.operation_id):
         raise ObservationError("invalid_arguments")
     if command == "inspect":
@@ -645,6 +719,63 @@ def arguments(words, json_output):
     return parsed
 
 
+def print_provider_summary(result):
+    rows = result.get("provider_observations", [])
+    correlation = provider_correlation(result.get("observations", []), rows, result.get("debug_observations", []))
+    print("Runtime correlation: " + correlation + "; samples were collected separately.")
+    for row in rows:
+        if row.get("status") != "observed":
+            print("Provider evidence: unavailable (" + row.get("reason", "unavailable") + ").")
+            continue
+        data = row["data"]
+        print("Provider runtime: " + data["runtime"] + "; captured at " + str(data["capturedAt"]) + " ms.")
+        if not data["available"]:
+            print("Provider evidence: unavailable for the current provider.")
+            continue
+        print("Provider: " + data["provider"])
+        catalog = data["catalog"]
+        if catalog is None:
+            print("Catalog: not reported.")
+        else:
+            selection = "none" if catalog["selectedIndex"] is None else str(catalog["selectedIndex"])
+            print("Catalog: " + catalog["view"] + "; " + str(catalog["loadedCount"]) + " loaded; "
+                  + ("busy" if catalog["busy"] else "idle") + "; selected index " + selection + ".")
+        lookup = data["lookup"]
+        if lookup is None:
+            print("Source lookup: not reported.")
+        else:
+            print("Source lookup #" + str(lookup["id"]) + ": " + lookup["state"]
+                  + "; movie ID kind " + lookup["movieIdKind"] + "; age " + str(lookup["ageMs"]) + " ms.")
+            print("Addons: " + str(lookup["addonCount"]) + "; failed " + str(lookup["failedAddons"])
+                  + "; skipped " + str(lookup["skippedAddons"]) + ". Sources: "
+                  + str(lookup["playableCount"]) + " playable; " + str(lookup["unsupportedCount"]) + " unsupported.")
+            if lookup["ageMs"] > 60000:
+                print("Lookup age exceeds 60 seconds; confirm whether it belongs to the current screen.")
+        for request in data["requests"]:
+            status = "" if request["httpStatus"] is None else "; HTTP " + str(request["httpStatus"])
+            duration = "" if request["durationMs"] is None else "; duration " + str(request["durationMs"]) + " ms"
+            print("  Addon " + str(request["addonIndex"] + 1) + " / " + request["stage"] + ": "
+                  + request["outcome"] + status + "; age " + str(request["ageMs"]) + " ms" + duration + ".")
+        if data["requestsDropped"]:
+            print("Earlier request records omitted: " + str(data["requestsDropped"]) + ".")
+        failed_request = any(row["outcome"] in ("http_error", "transport_error", "timeout", "invalid_response")
+                             for row in data["requests"])
+        if failed_request or lookup and lookup["failedAddons"]:
+            print("Finding: source requests failed; this is not a confirmed successful empty lookup.")
+        elif lookup and lookup["state"] == "empty":
+            print("Finding: lookup reports no playable sources; no request error was reported.")
+    for row in result.get("observations", []):
+        if row.get("lane") == "web" and row.get("status") == "observed":
+            media = row["data"]["media"]
+            print("Media: " + media["phase"] + "; generation " + str(media["generation"]) + ".")
+    for row in result.get("debug_observations", []):
+        if row.get("status") != "observed":
+            print("Engine evidence: unavailable (" + row.get("reason", "unavailable") + ").")
+        else:
+            for lane in row["data"]["media"]:
+                print("Engine / " + lane["lane"] + ": " + str(lane.get("engine") or "not reported") + ".")
+
+
 def run(api, client, device, words, timeout, json_output=False):
     """CLI entry point with bounded, machine-readable failures and no mutations."""
     command = words[0].casefold()
@@ -655,6 +786,7 @@ def run(api, client, device, words, timeout, json_output=False):
     try:
         args = arguments([command, *words[1:]], json_output)
         json_output = args.json
+        provider_mode = getattr(args, "provider", False)
         result["tooling"] = {"workbench_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                              "cli_sha256": hashlib.sha256(Path(api.__file__).read_bytes()).hexdigest()}
         if command == "test" and args.action == "list":
@@ -666,7 +798,18 @@ def run(api, client, device, words, timeout, json_output=False):
             bench = Workbench(api, client, device, timeout)
             if command == "bundle":
                 result["evaluator"] = "workbench-v4"
-            if command == "test" and args.scenario == "media-progress":
+            if provider_mode:
+                result["evaluator"] = "workbench-v5"
+                final_deadline = bench.deadline
+                bench.deadline = time.monotonic() + max(0, final_deadline - time.monotonic()) * 0.4
+                provider_observations = bench.observe("web", "provider")
+                bench.deadline = time.monotonic() + max(0, final_deadline - time.monotonic()) * 0.6
+                observations = bench.observe(args.lane, "snapshot")
+                bench.deadline = final_deadline
+                debug_observations = bench.observe("web", "debug", debug_version="auto")
+                result.update(verdict=provider_verdict(provider_observations), observations=observations,
+                              provider_observations=provider_observations, debug_observations=debug_observations)
+            elif command == "test" and args.scenario == "media-progress":
                 if timeout <= args.duration + 1:
                     raise ObservationError("insufficient_timeout")
                 # Reserve both sampling windows plus the requested observation gap.
@@ -695,6 +838,11 @@ def run(api, client, device, words, timeout, json_output=False):
                                              debug_version=2 if command == "debug" and args.engine else 1)
                 bench.deadline = final_deadline
                 if command == "bundle":
+                    if any("provider_diagnostics" in row.get("capabilities", {}) for row in observations):
+                        result["evaluator"] = "workbench-v5"
+                        bench.deadline = time.monotonic() + max(0, final_deadline - time.monotonic()) * 0.5
+                        result["provider_observations"] = bench.observe("web", "provider")
+                        bench.deadline = final_deadline
                     result["debug_observations"] = bench.observe("web", "debug", debug_version="auto") if args.lane != "native" else []
                 verdict = "observed" if any(row["status"] == "observed" for row in observations) else "unknown"
                 if command == "operation":
@@ -714,7 +862,7 @@ def run(api, client, device, words, timeout, json_output=False):
                                     row["data"].pop(section, None)
                 result.update(verdict=verdict, observations=observations)
             result["completed_at"] = now()
-            output = args.out if command == "bundle" else args.report if command == "test" else None
+            output = args.out if command == "bundle" or provider_mode else args.report if command == "test" else None
             if output:
                 try:
                     result["report_directory"] = write_report(output, result)
@@ -739,6 +887,8 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Reason: " + result["reason"])
         for row in result.get("observations", []):
             print("  " + row["lane"] + ": " + row["status"] + (" (" + row["reason"] + ")" if row.get("reason") else ""))
+        if "provider_observations" in result:
+            print_provider_summary(result)
         if result.get("scenarios"):
             for row in result["scenarios"]:
                 print("  " + row["name"] + " — " + row["checks"])
@@ -746,6 +896,6 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Report: " + result["report_directory"])
         if result.get("report_error"):
             print("Report error: " + result["report_error"]["reason"])
-        if command in ("doctor", "inspect", "operation", "debug"):
+        if command in ("doctor", "inspect", "operation", "debug") and "provider_observations" not in result:
             print(encoded(result).decode("utf-8"), end="")
     return 1 if result.get("report_error") else {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]

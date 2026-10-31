@@ -64,6 +64,11 @@ before treating a missing capability as a transport failure.
 
 ## Runtime debug snapshots
 
+For `Unsupported source` or `Failed to load` before decoder attachment, use
+[`ott PLAYER doctor --provider`](provider-diagnostics.md). It combines a safe
+provider lookup trace with media/engine observations. The initial producer
+covers Torrent/Stremio; `debug --provider` is the same combined report.
+
 For a temporary event timeline and a notification A–B–A experiment, use
 [`ott PLAYER perf`](performance-capture.md). It is a separate opt-in capture;
 ordinary debug reads and bundles do not start that capture.
@@ -117,7 +122,7 @@ request is reported without retrying or silently downgrading. The legacy
 `debug_versions` array stays unchanged so older controllers/CLIs can keep using
 their supported schemas.
 
-New bundles use evaluator `workbench-v4` and keep exactly `manifest.json` and
+Bundles without provider diagnostics use evaluator `workbench-v4` and keep exactly `manifest.json` and
 `result.json`. They request debug v3 when both `debug_versions: [1, 2]` and
 `debug_attempts: {"version":3}` are advertised, otherwise v2 with
 `debug_versions: [1, 2]`, or v1 with the base debug capability. A rejected request
@@ -127,7 +132,10 @@ For bundles containing web observations, snapshot collection can use up to
 three quarters of the total timeout and debug gets the remaining time. Each
 snapshot keeps its own runtime and request receipts; snapshots are not assumed
 simultaneous. Debug data does not promote the bundle verdict or prove an
-operation's effect. The verifier accepts legacy and `workbench-v2/v3/v4`
+operation's effect. Provider-capable bundles use `workbench-v5` with a separate
+`provider_observations` field and explicit runtime correlation; collection
+failure preserves the other observations. See [provider diagnostics](provider-diagnostics.md).
+The verifier accepts legacy and `workbench-v2/v3/v4/v5`
 reports. Historical v3 bundles retain debug v1; v4 verification also checks
 that the saved debug version matches the advertised capabilities. Old verifiers
 reject the new evaluator instead of silently skipping its evidence.
@@ -364,10 +372,11 @@ accepted when the observations disagree. Exit codes retain their meaning:
 and `1` for an invalid export or inconsistent result. Read the JSON verdict as
 well as the integrity field; intact files can still contain invalid evidence.
 
-New bundle reports identify their evaluator as `workbench-v4` and negotiate
+Provider reports and provider-capable bundles use `workbench-v5`; other new
+bundle reports use `workbench-v4`. Bundles negotiate
 debug v3 (engine and attempts), v2 (engine) or v1 according to the player's
 advertised capabilities. This does not start a performance capture. Test reports
-use `workbench-v2`; older v2/v3 bundles remain supported. Reports without that
+use `workbench-v2`; older v2/v3/v4 bundles remain supported. Reports without that
 field use the supported legacy web evaluator; old native-only progress reports
 are not reinterpreted as passing native tests. Unknown evaluators are rejected.
 Keep all `cli/*.py` modules from the same revision together when updating.
