@@ -215,11 +215,12 @@ class TorrentSettingsCliTests(unittest.TestCase):
     def test_generic_string_file_still_preserves_interior_newlines_and_fails_type_check(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "private.txt"
-            path.write_text(SECRET + "\nsecond line\n")
-            code, out, _, client = self.run_cli(
+            path.write_text("first line\nsecond line\n")
+            code, out, err, client = self.run_cli(
                 ["t1", "setting", "commandServerToken", "--value-file", str(path)],
                 [caps(), result("get", "commandServerToken")])
         self.assertEqual((code, out, client.call.call_count), (1, "", 2))
+        self.assertIn("type, range or choices", err)
 
     def test_get_remains_redacted_and_does_not_change_any_setting(self):
         code, out, err, client = self.run_cli(["-j", "t1", "setting", "torrentStreamAddons"],
