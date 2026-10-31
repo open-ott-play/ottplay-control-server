@@ -109,3 +109,17 @@ Then run the project commands above. Keep the source, plan and channel together;
 do not invent a release sequence or edit version fields by hand. Local packaging
 does not create a qualified release: the hosted pipeline still verifies the full
 build inventory, provenance and, for an RC, its own isolated fuzz report.
+
+## Release artifact selection and retries
+
+Fresh release package uploads and RC fuzz evidence use
+`-run-<run_id>-attempt-<run_attempt>` names. Candidate and final collection
+select only matching artifacts from the current run and attempt. After a failed
+attempt, use **Re-run all jobs** so every required input is recreated together;
+older artifacts must not substitute for a missing current-attempt input.
+
+Mutation remains limited to an explicit RC dispatch on the public default
+branch. A report describes one source revision and run, not complete platform
+coverage or device acceptance. Ordinary receipt verification and project
+acceptance remain separate release prerequisites. See the shared
+[evidence contract](rc-fuzzing.md).
