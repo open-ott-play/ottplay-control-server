@@ -162,6 +162,9 @@ source commit
 This is an exact source pin, not a claim about the latest published release.
 This source includes [Torrent catalog control](torrent-catalog.md) and automatic
 [playback-state reporting](player-state.md), with retained state/history reads.
+It also validates and compacts private JSON files for the
+[`torrentStreamAddons` setting](player-settings.md#torrent-metadata-and-stream-addons)
+before sending a conditional save.
 It also includes [saved player groups](#saved-player-groups), including offline
 `group add/set/show/remove` management and group selectors in player commands.
 It also includes signed seek times and unit shorthand such as `seek -1:30` and
@@ -1648,6 +1651,13 @@ private value files and recovery. Install `player_settings.py` beside `ott.py`.
 Use `settings patch command_server|local_http [--value-file FILE]` to inspect or
 atomically change a connection. Use `setting plexFolderPaths` for the full Plex
 folder selection, with `add PATH TITLE`, `remove PATH`, or `clear` (all libraries).
+
+For supported Torrent players, configure metadata and stream addons through
+`setting torrentCatalogLanguage`, `setting torrentCatalogEndpoint --value-file
+FILE`, and `setting torrentStreamAddons --value-file FILE`. See the
+[Torrent settings examples](player-settings.md#torrent-metadata-and-stream-addons)
+for private files, manifest URLs, the eight-addon/4096-byte limit and recovery.
+These preferences do not start playback or change the manual Torrent catalog.
 
 A `provider-config` file contains `provider` and `settings`. Except for the new
 bound VPortal slot API, select the intended provider with `provider` first.

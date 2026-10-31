@@ -82,6 +82,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME notifications [on|off]    read/save the single banner and camera preference
   ott NAME settings [list|schema]    discover typed settings for this player/source
   ott NAME setting KEY [VALUE]      read or save one setting (e.g. bufSize 3)
+  ott NAME setting KEY --value-file FILE  save a private value from a UTF-8 file
   ott NAME setting players hls.js   choose a schema-listed playback engine
   ott t1,t2 notifications off        save that preference on each distinct player
   ott alias NAME UUID                name an existing device
@@ -4698,6 +4699,7 @@ def print_player_help(data, name):
         print(f"  {prefix} torrent --help  — catalog editing, transfer and operation recovery")
     if "player_settings" in controls:
         print(f"  {prefix} settings  — list typed preferences for this player and source")
+        print(f"  {prefix} setting KEY --value-file FILE  — save a private preference from a UTF-8 file")
         print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
         print(f"  {prefix} setting players [hls.js]  — read/save a supported engine for this provider/profile")
     if "player_settings_patch" in controls:

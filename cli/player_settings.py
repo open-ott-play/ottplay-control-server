@@ -1,8 +1,10 @@
 """Typed, source-bound player preferences; no provider switching or write replay."""
+import ipaddress
 import json
 import re
 import time
 from pathlib import Path
+from urllib.parse import unquote_to_bytes, urlsplit
 
 TOKEN = r"[A-Za-z0-9_.:-]{1,128}"
 ID = r"[A-Za-z][A-Za-z0-9_]{0,63}"
@@ -229,6 +231,61 @@ def display_value(value):
     return json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
 
 
+def torrent_stream_addons_value(api, word):
+    """Normalize this private JSON setting without resolving or fetching URLs."""
+    invalid = "Use a JSON array of up to 8 HTTPS manifest URLs, at most 4096 UTF-8 bytes; no change was sent"
+    try:
+        entries = json.loads(word)
+        if not isinstance(entries, list) or len(entries) > 8:
+            raise ValueError()
+        result = []
+        # Match String.trim() without rewriting private path or URL spelling.
+        trim = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+        for entry in entries:
+            if not isinstance(entry, str):
+                raise ValueError()
+            manifest = entry.strip(trim).rstrip("/")
+            if (len(manifest.encode("utf-8")) > 4096
+                    or re.search(r"[\s\x00-\x1f\x7f\\?#<>\"']", manifest)):
+                raise ValueError()
+            parsed = urlsplit(manifest)
+            if (parsed.scheme != "https" or not parsed.hostname or "@" in parsed.netloc
+                    or not parsed.path.endswith("/manifest.json")
+                    or parsed.query or parsed.fragment):
+                raise ValueError()
+            # Access validates malformed/non-numeric/out-of-range ports too.
+            parsed.port
+            hostname = parsed.hostname
+            if parsed.netloc.startswith("["):
+                if "%" in hostname or ipaddress.ip_address(hostname).version != 6:
+                    raise ValueError()
+            else:
+                if re.search(r"%(?![0-9a-fA-F]{2})", hostname):
+                    raise ValueError()
+                hostname = unquote_to_bytes(hostname).decode("utf-8", errors="strict")
+                if re.search(r"[\x00-\x20\x7f#%/:<>?@\[\]\\^|]", hostname):
+                    raise ValueError()
+                parts = hostname.removesuffix(".").split(".")
+                if len(parts) >= 4 and all(re.fullmatch(r"[0-9]+", part) for part in parts):
+                    # Legacy URL forms may use octal; only reject unambiguous
+                    # decimal components here, leaving full URL parsing to the player.
+                    if len(parts) != 4 or any(not part.startswith("0") and int(part) > 255 for part in parts):
+                        raise ValueError()
+            if re.search(r"%(?![0-9a-fA-F]{2})", parsed.path):
+                raise ValueError()
+            decoded_path = unquote_to_bytes(parsed.path).decode("utf-8", errors="strict")
+            if re.search(r"[\x00-\x1f\x7f\\]", decoded_path):
+                raise ValueError()
+            if manifest not in result:
+                result.append(manifest)
+        value = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        if len(value.encode("utf-8")) > 4096:
+            raise ValueError()
+        return value
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise api.Error(invalid) from None
+
+
 def print_result(data, descriptor=None):
     if data["op"] == "schema":
         print("Available settings (current player and source):")
@@ -308,8 +365,12 @@ def run(api, client, device, words, timeout, json_output):
             except (OSError, UnicodeError, ValueError):
                 raise api.Error("Could not read the bounded UTF-8 setting value file") from None
         elif len(words) == 3:
+            if words[2] == "--value-file":
+                raise api.Error("Use setting KEY --value-file FILE")
             word = words[2]
         operation = "get" if word is None else "set"
+        if identifier == "torrentStreamAddons" and word is not None:
+            word = torrent_stream_addons_value(api, word)
     deadline, previous = time.monotonic() + timeout, client.timeout
 
     def call(action, params, descriptor=None):
