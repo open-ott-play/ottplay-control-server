@@ -86,7 +86,8 @@ class IndexerTests(unittest.TestCase):
         self.clock = Clock()
         self.client = Client(self.clock)
         self.key_path = self.directory / "key"
-        self.key_path.write_text(SECRET + "\n")
+        self.key_path.write_text("sample-input\n")
+        self.key_path.chmod(0o600)
 
     def run_cli(self, words, *, timeout=45, json_output=True):
         output, errors = io.StringIO(), io.StringIO()
@@ -98,6 +99,7 @@ class IndexerTests(unittest.TestCase):
         raw = output.getvalue()
         self.assertEqual(errors.getvalue(), "")
         self.assertNotIn(SECRET, raw)
+        self.assertNotIn("sample-input", raw)
         self.assertNotIn(ENDPOINT, raw)
         return code, json.loads(raw) if json_output else raw
 
@@ -118,7 +120,7 @@ class IndexerTests(unittest.TestCase):
         self.assertEqual(value["source"], "ottplay-local-torrent:home/" + "b" * 32)
         requests = [r for a, r, _ in self.client.calls if a == "torrent_indexer"]
         configured = next(r for r in requests if r["op"] == "configure")
-        self.assertEqual(configured["apiKey"], SECRET)
+        self.assertEqual(configured["apiKey"], "sample-input")
         self.assertNotIn("key_file", configured)
         search = next(r for r in requests if r["op"] == "search")
         self.assertEqual((search["query"], search["offset"], search["limit"]), ("Big Buck Bunny", 4, 10))
@@ -235,9 +237,10 @@ class IndexerTests(unittest.TestCase):
         self.assertIn("Big Buck Bunny", self.run_cli(["search", "home"], json_output=False)[1])
         self.client.item["title"] = "Open " + ENDPOINT
         self.assertIn("[private text]", self.run_cli(["search", "home"], json_output=False)[1])
-        words = self.configure()
+        words = self.configure()[:-2] + ["--api-key-env", "OTT_INDEXER_TEST_KEY"]
         words[words.index("--label") + 1] = SECRET
-        self.assertIn("[private text]", self.run_cli(words, json_output=False)[1])
+        with mock.patch.dict(os.environ, {"OTT_INDEXER_TEST_KEY": SECRET}):
+            self.assertIn("[private text]", self.run_cli(words, json_output=False)[1])
         self.assertIn("Playback has not started", self.run_cli(["prepare", "home", REF], json_output=False)[1])
 
     def test_shared_wire_fixtures_match_cli_projection(self):
