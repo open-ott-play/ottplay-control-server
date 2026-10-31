@@ -48,6 +48,82 @@ stored, effective and default values; `configured` reports presence only.
 Some connection, identity and protected settings require their dedicated
 workflow and advertise that restriction.
 
+### Torrent metadata and stream addons
+
+Use these settings only when the player's live schema lists them. They do not
+enable Torrent playback on unsupported devices or select the Torrent provider.
+
+```sh
+ott t1 settings schema
+ott t1 setting torrentCatalogLanguage _eng
+ott t1 setting torrentCatalogLanguage ""       # follow the interface language
+ott t1 setting torrentCatalogEndpoint --value-file /private/catalog-base.txt
+ott t1 setting torrentStreamAddons --value-file /private/stream-addons.json
+ott t1 setting torrentCatalogEndpoint
+ott t1 setting torrentStreamAddons
+```
+
+Set `torrentCatalogLanguage` while Torrent is the active provider; it belongs
+to the current provider/profile. Use a language code from its descriptor, such
+as `_eng` or `_rus`. An empty string follows the
+interface language; it does not change audio or subtitles.
+
+`torrentCatalogEndpoint` is an installation preference. Its value file contains
+the metadata addon's **base URL**, without `/manifest.json`, for example
+`https://catalog.example.org/addon`. An empty file restores the player's default
+metadata transport. `torrentStreamAddons` is a separate installation preference:
+its file contains a JSON array of complete **manifest URLs**:
+
+```json
+[
+  "https://addons.example.org/first/manifest.json",
+  "https://addons.example.org/second/manifest.json"
+]
+```
+
+Both settings require HTTPS for external services. Local addons may use HTTP
+only with the literal host `localhost`, `127.0.0.1` or `[::1]`, with an optional
+port. For example, use `http://127.0.0.1:8080/addon` as the metadata base and
+`http://127.0.0.1:8080/addon/manifest.json` in the stream-addon array. Loopback
+means the player device, not the computer running `ott`. The CLI does not
+resolve hostnames to authorize HTTP: other LAN addresses, `*.localhost`,
+trailing-dot names, encoded hosts and alternative loopback spellings are not
+accepted. Certificate verification for HTTPS remains enabled.
+
+Replace the example URLs with your configured services. Store these UTF-8 files
+with mode `600` in a private directory with mode `700` on macOS/Linux, or use
+equivalent Windows permissions: addon paths can contain credentials. Both
+preferences return only redacted/configured state and are excluded from
+portable backups and exports.
+
+For `torrentStreamAddons`, the CLI accepts formatted JSON and sends a compact
+JSON **string** using the existing typed-settings protocol. Up to eight input
+entries are allowed, with at most 4096 UTF-8 bytes in the normalized JSON. The
+input file itself must fit within 16 KiB. The CLI trims surrounding whitespace
+and trailing slashes from each URL, removes exact duplicates in order, and
+preserves private path contents. It rejects invalid JSON, non-string entries,
+HTTP URLs outside those exact loopback hosts, user information, query strings,
+fragments and invalid manifest paths before contacting the player. Ordinary string settings are not treated
+as JSON. Set an empty array to remove all stream addons:
+
+```sh
+ott t1 setting torrentStreamAddons '[]'
+ott t1,t2 setting torrentStreamAddons --value-file /private/stream-addons.json
+```
+
+Groups save independently on each target. Keep the input file unchanged during
+the command. A successful conditional save confirms storage, not addon
+availability or a playable source. These settings configure discovery; choosing
+a movie or starting playback is a separate operation. Discovery results do not
+become entries in the [manual Torrent catalog](torrent-catalog.md).
+
+If a setting is missing, update the player and inspect its schema again. For an
+invalid-value error, check the JSON, HTTPS or exact-loopback manifest URLs and
+normalized size; the CLI never echoes the rejected private value. After a timeout or revision
+conflict, read the setting before deciding whether to submit another save.
+
+### Playback preferences
+
 `bufSize` is an application integer from **0 to 3600**. The playback engine uses
 **1–120 seconds** as an explicit buffer; **0 and values above 120 select automatic
 buffering**. Saving does not restart the current stream. `players` is a

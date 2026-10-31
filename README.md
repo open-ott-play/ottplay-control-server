@@ -29,6 +29,7 @@ Optional [reliable control](docs/reliable-control.md) adds scoped integration
 credentials, bounded durable command outcomes, resumable Local/Home application
 with exact settings verification, and explicit live/archive playback handoff.
 The [typed settings guide](docs/player-settings.md) covers `setting KEY VALUE`,
+private `--value-file` inputs, Torrent metadata/stream-addon configuration,
 runtime schema discovery, conditional saves and dedicated VPortal presets.
 These features require controller and CLI revisions containing this guide.
 Exact settings verification and handoff also require an updated player. The

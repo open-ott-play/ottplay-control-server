@@ -10,6 +10,11 @@ media traffic belong to the player/native service. Catalog operations work
 without selecting Torrent and do not switch or stop current playback. Only
 `torrent play` requests playback.
 
+This API manages manually saved sources. Movie discovery and its private
+metadata/stream-addon preferences are separate; configure them through
+[typed settings](player-settings.md#torrent-metadata-and-stream-addons).
+Search results are not included in `torrent list`, import or export.
+
 ## Commands
 
 Replace the example source with your metadata URL or quoted magnet link.
