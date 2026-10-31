@@ -218,6 +218,18 @@ def snapshot_metadata(raw, runtime, section):
     return result
 
 
+def companion_metadata(raw):
+    def error_code(value):
+        check(isinstance(value, str) and (value == "" or COMPANION_ERROR.fullmatch(value)))
+        return value
+    return exact(raw, {
+        "active": boolean,
+        "state": enum(["metadata", "select", "preparing", "ready", "error", "unknown"]),
+        "error": error_code, "downloaded": nullable(number(integral=True)),
+        "total": nullable(number(integral=True)),
+    })
+
+
 def provider_metadata(raw, runtime):
     """Validate the producer's public DTO, never the enclosing status payload."""
     try:
@@ -250,15 +262,7 @@ def provider_metadata(raw, runtime):
             "requests": array(lambda value: exact(value, request), 16), "requestsDropped": integer,
         }
         if isinstance(raw, dict) and "companion" in raw:
-            def companion_error(value):
-                check(isinstance(value, str) and (value == "" or COMPANION_ERROR.fullmatch(value)))
-                return value
-            companion = {
-                "active": boolean,
-                "state": enum(["metadata", "select", "preparing", "ready", "error", "unknown"]),
-                "error": companion_error, "downloaded": nullable(integer), "total": nullable(integer),
-            }
-            fields["companion"] = nullable(lambda value: exact(value, companion))
+            fields["companion"] = nullable(companion_metadata)
         result = exact(raw, fields)
         check(result["runtime"] == runtime)
         if not result["available"]:
@@ -277,6 +281,36 @@ def provider_metadata(raw, runtime):
         return result
     except (ValueError, TypeError, KeyError, UnicodeError, OverflowError, RecursionError):
         raise InvalidData() from None
+
+
+def provider_status_metadata(raw, caps):
+    """Keep provider v1 independent of the optional sibling wire envelope."""
+    check(isinstance(raw, dict) and isinstance(raw.get("diagnostics"), dict))
+    diagnostics = raw["diagnostics"]
+    provider = diagnostics.get("provider")
+    runtime = caps["player"]["runtime"]
+    if "companion" not in diagnostics:
+        return provider_metadata(provider, runtime)
+    # Never revive a nested legacy sample when the sibling exists but fails.
+    if isinstance(provider, dict):
+        provider = {key: value for key, value in provider.items() if key != "companion"}
+    result = provider_metadata(provider, runtime)
+    result["companion"] = None
+    if not result["available"] or caps.get("companion_diagnostics") != {"version": 1}:
+        return result
+    try:
+        raw_companion = diagnostics["companion"]
+        check(len(json.dumps(raw_companion, ensure_ascii=False, allow_nan=False,
+                             separators=(",", ":")).encode("utf-8")) <= 2048)
+        companion = exact(raw_companion, {
+            "version": number(1, 1, True), "runtime": token,
+            "capturedAt": number(integral=True), "session": nullable(companion_metadata),
+        })
+        check(companion["runtime"] == runtime)
+        result["companion"] = companion["session"]
+    except (InvalidData, ValueError, TypeError, KeyError, UnicodeError, OverflowError, RecursionError):
+        pass
+    return result
 
 
 def provider_verdict(observations):
@@ -464,8 +498,7 @@ class Workbench:
                     raise ObservationError("unsupported")
                 if section == "provider":
                     raw = self.request(self.device, "status", {}, deadline, receipts)
-                    check(isinstance(raw, dict) and isinstance(raw.get("diagnostics"), dict))
-                    data = provider_metadata(raw["diagnostics"].get("provider"), caps["player"]["runtime"])
+                    data = provider_status_metadata(raw, caps)
                 else:
                     params = {"version": debug_version if section == "debug" else 1, "runtime": caps["player"]["runtime"], "section": section}
                     if section == "operation":

@@ -88,7 +88,9 @@ perform repairs automatically.
 
 ## Reading companion evidence
 
-A companion observation has exactly these fields, for example:
+Saved reports normalize the companion session into
+`provider_observations[].data.companion`. That observation has exactly these
+fields, for example:
 
 ```json
 {
@@ -111,7 +113,7 @@ failures without exposing source addresses or arbitrary exception text.
 
 Unknown byte counts are `null` and appear as `unknown`; measured zero remains
 zero. `companion: null` means no validated companion observation is available.
-Older players may omit the field entirely. Neither case is interpreted as an
+Older reports may omit the field entirely. Neither case is interpreted as an
 inactive lease or an empty download. The snapshot contains no file names,
 session URLs, server addresses, access keys or torrent sources.
 
@@ -149,19 +151,46 @@ playback action as part of diagnosis.
 ## Compatibility and troubleshooting
 
 The player advertises `provider_diagnostics: {"version": 1}` separately from
-the existing inspection sections. The safe snapshot is carried in
-`status.diagnostics.provider`; existing controller status transport can relay
-it without a new controller release. Install the complete updated CLI and an
-updated player. Earlier players remain usable but cannot supply this report.
-Updated CLI versions accept both older snapshots without `companion` and newer
-ones containing `null` or a valid companion object. Malformed companion fields,
-unknown keys and unrecognized error strings fail validation; rejected raw data
-is not copied into JSON output or private reports.
+the existing inspection sections. `status.diagnostics.provider` retains its
+original, exact version 1 schema, without a nested companion field. Existing
+CLI versions can continue reading that provider snapshot.
+
+New players advertise `companion_diagnostics: {"version": 1}` and place the
+optional observation beside it at `status.diagnostics.companion`. This sibling
+has exactly `version`, `runtime`, `capturedAt` and `session`; `session` is either
+`null` or the five-field object shown above. The CLI validates its version,
+runtime, timestamp, fields and safe values, then stores only the session in the
+normalized report. Both observations come from the same existing `status`
+request; no extra RPC, service poll or timeout budget is introduced.
+
+A present sibling takes precedence over any transitional nested companion
+field. If the sibling is malformed, uses an unsupported version, does not
+match the runtime or lacks its capability, the normalized companion is `null`.
+The valid provider and engine observations remain available; the CLI does not
+fall back to the nested field. Unknown or malformed optional companion
+capabilities are ignored without invalidating the other capabilities. Only
+when the sibling key is absent can the CLI accept an older nested companion
+observation under the previous strict validation rules.
+
+The current version 5 provider report includes companion sessions only when
+the Torrent provider snapshot is available. Even if a player supplies a sibling
+session for another provider, an unavailable provider snapshot remains
+unavailable and its normalized companion is `null`.
+
+Existing controller status transport carries this data without a new
+controller release. Install the complete updated CLI and an updated player to
+see the companion session. Use the updated offline verifier for reports that
+retain the new capability marker; older reports remain supported. Stored
+companion fields are still strictly verified: unknown keys, invalid values and
+unrecognized error strings are rejected, and raw discarded wire data is never
+copied into the normalized JSON or private reports.
 
 - **Unsupported/missing producer:** check `ott t1 caps` and update the running
   player, not just the files on disk. No hidden provider request is attempted.
-- **Invalid response:** the snapshot violates the agreed schema or correlation
-  rules. Partial evidence is preserved; raw rejected data is not exported.
+- **Invalid response:** the provider snapshot violates the agreed schema or
+  correlation rules. Partial evidence is preserved; raw rejected data is not
+  exported. An invalid optional companion sibling alone yields a null
+  companion and preserves the valid provider snapshot.
 - **Runtime mismatch:** the page restarted during collection. Collect again
   once it is stable; do not combine old and new page observations.
 - **HTTP error:** use the addon slot, stage and status to investigate the addon
