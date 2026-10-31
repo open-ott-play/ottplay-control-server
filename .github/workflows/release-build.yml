@@ -71,7 +71,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-assets-${{ matrix.target }}
+          name: release-assets-${{ matrix.target }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: release-assets/${{ matrix.target }}/*
           if-no-files-found: error
           retention-days: 14
@@ -125,7 +125,7 @@ jobs:
       - run: python3 scripts/stage_release_assets.py --target container --pattern ottplay-control-server-container.oci.tar
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-assets-container
+          name: release-assets-container-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: release-assets/container/*
           if-no-files-found: error
           retention-days: 14
@@ -156,7 +156,7 @@ jobs:
           python3 scripts/stage_release_assets.py --target deployment --pattern 'dist/ottplay-control-server-*'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-assets-deployment
+          name: release-assets-deployment-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: release-assets/deployment/*
           if-no-files-found: error
           retention-days: 14
