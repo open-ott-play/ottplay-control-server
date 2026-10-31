@@ -225,6 +225,18 @@ class ProviderDiagnosticsReportTests(unittest.TestCase):
         data["companion"] = copy.deepcopy(COMPANION_FIXTURE["companion"])
         self.assertEqual(self.invoke(value)[0], 1)
 
+    def test_normalized_sibling_capability_and_session_verify_without_wire_envelope(self):
+        value = provider_report()
+        row = value['provider_observations'][0]
+        row['capabilities']['companion_diagnostics'] = {'version': 1}
+        row['data']['companion'] = copy.deepcopy(COMPANION_FIXTURE['companion'])
+        self.assertEqual(self.invoke(value)[0], 0)
+        row['data']['companion'] = copy.deepcopy(COMPANION_FIXTURE['companion_snapshot'])
+        self.assertEqual(self.invoke(value)[0], 1)
+        row['data']['companion'] = copy.deepcopy(COMPANION_FIXTURE['companion'])
+        row['capabilities']['companion_diagnostics'] = {'version': 1, 'secret': PUBLIC_TEST_MARKER}
+        self.assertEqual(self.invoke(value)[0], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

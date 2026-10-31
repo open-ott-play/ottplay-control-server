@@ -34,6 +34,24 @@ class ProviderDiagnosticsRoutingTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ott.Error):
                 ott.capabilities_metadata(raw)
 
+    def test_companion_capability_is_optional_and_preserves_existing_metadata(self):
+        raw = self.capabilities()
+        raw['provider_diagnostics'] = {'version': 1}
+        old = ott.capabilities_metadata(raw)
+        raw['companion_diagnostics'] = {'version': 1}
+        new = ott.capabilities_metadata(raw)
+        self.assertEqual(new.pop('companion_diagnostics'), {'version': 1})
+        self.assertEqual(new, old)
+
+    def test_unknown_or_malformed_optional_companion_capability_is_ignored(self):
+        raw = self.capabilities()
+        raw['provider_diagnostics'] = {'version': 1}
+        expected = ott.capabilities_metadata(raw)
+        for value in ({}, {'version': True}, {'version': 1.0}, {'version': 2},
+                      {'version': 1, 'address': 'https://private.invalid'}, None, []):
+            with self.subTest(value=value):
+                self.assertEqual(ott.capabilities_metadata({**raw, 'companion_diagnostics': value}), expected)
+
     def test_provider_report_directories_are_independent_for_groups(self):
         for verb in ("doctor", "debug", "dbg"):
             words = [verb, "--provider", "--out", "./incident"]

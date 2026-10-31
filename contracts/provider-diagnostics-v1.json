@@ -66,5 +66,20 @@
     "error": "cache_limit",
     "downloaded": null,
     "total": null
+  },
+  "companion_capability": {
+    "version": 1
+  },
+  "companion_snapshot": {
+    "version": 1,
+    "runtime": "page-one",
+    "capturedAt": 1000000,
+    "session": {
+      "active": true,
+      "state": "preparing",
+      "error": "",
+      "downloaded": 1048576,
+      "total": 8388608
+    }
   }
 }
