@@ -69,10 +69,10 @@ as `_eng` or `_rus`. An empty string follows the
 interface language; it does not change audio or subtitles.
 
 `torrentCatalogEndpoint` is an installation preference. Its value file contains
-the metadata addon's HTTPS **base URL**, without `/manifest.json`, for example
+the metadata addon's **base URL**, without `/manifest.json`, for example
 `https://catalog.example.org/addon`. An empty file restores the player's default
 metadata transport. `torrentStreamAddons` is a separate installation preference:
-its file contains a JSON array of complete HTTPS **manifest URLs**:
+its file contains a JSON array of complete **manifest URLs**:
 
 ```json
 [
@@ -80,6 +80,15 @@ its file contains a JSON array of complete HTTPS **manifest URLs**:
   "https://addons.example.org/second/manifest.json"
 ]
 ```
+
+Both settings require HTTPS for external services. Local addons may use HTTP
+only with the literal host `localhost`, `127.0.0.1` or `[::1]`, with an optional
+port. For example, use `http://127.0.0.1:8080/addon` as the metadata base and
+`http://127.0.0.1:8080/addon/manifest.json` in the stream-addon array. Loopback
+means the player device, not the computer running `ott`. The CLI does not
+resolve hostnames to authorize HTTP: other LAN addresses, `*.localhost`,
+trailing-dot names, encoded hosts and alternative loopback spellings are not
+accepted. Certificate verification for HTTPS remains enabled.
 
 Replace the example URLs with your configured services. Store these UTF-8 files
 with mode `600` in a private directory with mode `700` on macOS/Linux, or use
@@ -93,8 +102,8 @@ entries are allowed, with at most 4096 UTF-8 bytes in the normalized JSON. The
 input file itself must fit within 16 KiB. The CLI trims surrounding whitespace
 and trailing slashes from each URL, removes exact duplicates in order, and
 preserves private path contents. It rejects invalid JSON, non-string entries,
-HTTP URLs, user information, query strings, fragments and invalid manifest
-paths before contacting the player. Ordinary string settings are not treated
+HTTP URLs outside those exact loopback hosts, user information, query strings,
+fragments and invalid manifest paths before contacting the player. Ordinary string settings are not treated
 as JSON. Set an empty array to remove all stream addons:
 
 ```sh
@@ -109,8 +118,8 @@ a movie or starting playback is a separate operation. Discovery results do not
 become entries in the [manual Torrent catalog](torrent-catalog.md).
 
 If a setting is missing, update the player and inspect its schema again. For an
-invalid-value error, check the JSON, HTTPS manifest paths and normalized size;
-the CLI never echoes the rejected private value. After a timeout or revision
+invalid-value error, check the JSON, HTTPS or exact-loopback manifest URLs and
+normalized size; the CLI never echoes the rejected private value. After a timeout or revision
 conflict, read the setting before deciding whether to submit another save.
 
 ### Playback preferences

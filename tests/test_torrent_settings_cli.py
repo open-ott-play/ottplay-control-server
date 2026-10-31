@@ -149,6 +149,39 @@ class TorrentSettingsCliTests(unittest.TestCase):
                   "https://127.1/manifest.json", "https://0377.0.0.1/manifest.json"]
         self.assertEqual(json.loads(settings.torrent_stream_addons_value(ott, json.dumps(values))), values)
 
+    def test_http_accepts_only_literal_loopback_authorities_and_valid_ports(self):
+        values = ["http://localhost/manifest.json", "http://127.0.0.1:8080/addon/manifest.json",
+                  "http://[::1]:65535/addon/manifest.json", "HTTP://LOCALHOST:00080/manifest.json",
+                  "http://localhost:0/manifest.json"]
+        self.assertEqual(json.loads(settings.torrent_stream_addons_value(ott, json.dumps(values))), values)
+        rejected = ["example.org", "10.0.0.1", "localhost.example.org", "addon.localhost", "localhost.",
+                    "127.0.0.2", "127.1", "127.000.000.001", "2130706433", "0x7f000001",
+                    "%6cocalhost", "local%68ost", "localhoſt", "ｌｏｃａｌｈｏｓｔ",
+                    "[0:0:0:0:0:0:0:1]", "[::ffff:127.0.0.1]",
+                    "@localhost", "user@localhost", "localhost:65536", "localhost:000080",
+                    "localhost:", "localhost:-1"]
+        for authority in rejected:
+            with self.subTest(authority=authority):
+                self.assert_preflight_rejected(json.dumps(["http://" + authority + "/manifest.json"]))
+
+    def test_mixed_loopback_http_and_https_file_preserves_conditional_scalar_save(self):
+        values = ["http://127.0.0.1:8080/" + SECRET + "/manifest.json", MANIFEST]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private.json"
+            path.write_text(json.dumps(values, indent=2))
+            code, _, err, client = self.run_cli(
+                ["-j", "t1", "setting", "torrentStreamAddons", "--value-file", str(path)],
+                [caps(), result("get"), result("set")])
+        self.assertEqual((code, err, client.call.call_count), (0, "", 3))
+        self.assertEqual(client.call.call_args.args[2]["value"], json.dumps(values, separators=(",", ":")))
+
+    def test_metadata_loopback_base_remains_an_opaque_typed_setting(self):
+        value = "http://[::1]:8080/" + SECRET
+        code, _, err, client = self.run_cli(["t1", "setting", "torrentCatalogEndpoint", value],
+            [caps(), result("get", "torrentCatalogEndpoint"), result("set", "torrentCatalogEndpoint")])
+        self.assertEqual((code, err, client.call.call_count), (0, "", 3))
+        self.assertEqual(client.call.call_args.args[2]["value"], value)
+
     def test_bad_files_are_rejected_without_rpc(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "private.json"
@@ -205,7 +238,7 @@ class TorrentSettingsCliTests(unittest.TestCase):
     def test_group_uses_the_same_private_input_file_and_redacts_each_result(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "private.json"
-            path.write_text(json.dumps([MANIFEST], indent=2))
+            path.write_text(json.dumps([MANIFEST, "http://localhost:8080/manifest.json"], indent=2))
             code, out, err, client = self.run_cli(
                 ["-j", "t1,t2", "setting", "torrentStreamAddons", "--value-file", str(path)],
                 [caps(), result("get"), result("set"), caps(), result("get"), result("set")])

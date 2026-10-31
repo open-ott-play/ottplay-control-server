@@ -233,7 +233,8 @@ def display_value(value):
 
 def torrent_stream_addons_value(api, word):
     """Normalize this private JSON setting without resolving or fetching URLs."""
-    invalid = "Use a JSON array of up to 8 HTTPS manifest URLs, at most 4096 UTF-8 bytes; no change was sent"
+    invalid = ("Use a JSON array of up to 8 manifest URLs, at most 4096 UTF-8 bytes; "
+               "HTTPS is required except HTTP on localhost, 127.0.0.1 or [::1]; no change was sent")
     try:
         entries = json.loads(word)
         if not isinstance(entries, list) or len(entries) > 8:
@@ -249,7 +250,9 @@ def torrent_stream_addons_value(api, word):
                     or re.search(r"[\s\x00-\x1f\x7f\\?#<>\"']", manifest)):
                 raise ValueError()
             parsed = urlsplit(manifest)
-            if (parsed.scheme != "https" or not parsed.hostname or "@" in parsed.netloc
+            local_http = parsed.scheme == "http" and re.fullmatch(
+                r"(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?", parsed.netloc, re.IGNORECASE | re.ASCII)
+            if ((parsed.scheme != "https" and not local_http) or not parsed.hostname or "@" in parsed.netloc
                     or not parsed.path.endswith("/manifest.json")
                     or parsed.query or parsed.fragment):
                 raise ValueError()
