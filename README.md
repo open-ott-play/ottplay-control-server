@@ -88,6 +88,11 @@ Players with an owned native Torrent service also expose a typed
 entries, select a file, and export/import the catalog with optional global
 Favorites. Run `ott t1 torrent --help`; support is discovered from the player.
 
+For locally operated discovery, use `ott t1 torrent indexer --help`.
+[Local Torznab, Jackett and Prowlarr support](docs/torrent-indexer.md) includes
+write-only source configuration, explicit search pages and metadata preparation
+through the owned companion. The controller and CLI do not proxy Torrent video.
+
 Save reusable player groups with `ott group add tt t1,t2,t3,t4` and
 `ott group add oo o1,o2,o3,o4`. Then use `ott tt R`, `ott oo provider m3u`,
 or `ott tt,oo standby`. `ott groups` lists them; `ott group set` updates a

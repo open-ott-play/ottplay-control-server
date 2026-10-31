@@ -136,6 +136,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME provider local            select Local videos (legacy alias: offline)
   ott NAME torrent list              list the owned-native Torrent catalog
   ott NAME torrent --help            add, inspect, play, edit and transfer Torrent sources
+  ott NAME torrent indexer --help    manage local indexers, search and prepare sources
   ott NAME local sources [--path PATH] [--paths]  list sources; native paths are opt-in
   ott NAME local shuffle Movies      shuffle only the connected Movies folder
   ott NAME local shuffle /Volumes/data/Movies/  connect/play a path on a native player
@@ -347,7 +348,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "categories", "favorites", "aspect",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -4346,6 +4347,11 @@ def capabilities_metadata(data):
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
             raise Error(invalid)
         result["torrent_catalog"] = {"version": 1}
+    if "torrent_indexer" in data:
+        marker = data["torrent_indexer"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+        result["torrent_indexer"] = {"version": 1}
     if "playback_seek_relative" in data:
         marker = data["playback_seek_relative"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
@@ -4703,6 +4709,10 @@ def print_player_help(data, name):
         print(f"  {prefix} torrent add SOURCE --name TITLE  — inspect and save a Torrent source")
         print(f"  {prefix} torrent play ENTRY FILE_INDEX  — play one exact saved file")
         print(f"  {prefix} torrent --help  — catalog editing, transfer and operation recovery")
+    if "torrent_indexer" in controls:
+        print(f"  {prefix} torrent indexer list / caps SOURCE  — inspect local indexers")
+        print(f"  {prefix} torrent indexer search SOURCE QUERY  — find sources through the local companion")
+        print(f"  {prefix} torrent indexer --help  — source configuration and preparation")
     if "player_settings" in controls:
         print(f"  {prefix} settings  — list typed preferences for this player and source")
         print(f"  {prefix} setting KEY --value-file FILE  — save a private preference from a UTF-8 file")
@@ -6180,7 +6190,23 @@ def torrent_module():
     return module
 
 
+def torrent_indexer_module():
+    path = Path(__file__).resolve().with_name("torrent_indexer.py")
+    if not path.is_file():
+        raise Error("Install all CLI Python files from the same revision to manage local Torrent indexers")
+    spec = importlib.util.spec_from_file_location("ott_torrent_indexer", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def parse_torrent_arguments(words):
+    if words and words[0].casefold() == "indexer":
+        module = torrent_indexer_module()
+        try:
+            return module.parse(words[1:])
+        except module.IndexerError:
+            raise Error(module.USAGE) from None
     module = torrent_module()
     try:
         return module.parse(words)
@@ -6207,7 +6233,7 @@ def player_command_route(words):
     """The single dispatch table for built-in and optional player commands."""
     verb = words[0].casefold() if words else ""
     if verb == "torrent":
-        return "torrent_catalog"
+        return "torrent_indexer" if len(words) > 1 and words[1].casefold() == "indexer" else "torrent_catalog"
     if verb == "perf":
         return "performance"
     if verb in ("setting", "settings"):
@@ -6454,6 +6480,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     """Run the same resolved-player command for a single target or one group member."""
     words = args.words[1:]
     route = player_command_route(words)
+    if route == "torrent_indexer":
+        return torrent_indexer_module().run(SimpleNamespace(**globals()), client, device, words[2:],
+                                            args.timeout, args.json, args.config)
     if route == "torrent_catalog":
         return torrent_module().run(SimpleNamespace(**globals()), client, device, words[1:],
                                     args.timeout, args.json, args.config)
@@ -6845,10 +6874,11 @@ def main(argv=None):
             return 0
         torrent_command = (len(args.words) > 1 and args.words[1].casefold() == "torrent"
                            and args.words[0].casefold() not in TOP_LEVEL_COMMANDS)
+        indexer_command = torrent_command and len(args.words) > 2 and args.words[2].casefold() == "indexer"
         if torrent_command and args.words[-1] in ("--help", "-h"):
-            print(torrent_module().USAGE)
+            print(torrent_indexer_module().USAGE if indexer_command else torrent_module().USAGE)
             return 0
-        timeout_limit = 10800 if torrent_command else 300
+        timeout_limit = 10800 if torrent_command and not indexer_command else 300
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= timeout_limit:
             raise Error(f"--timeout must be between 1 and {timeout_limit} seconds")
         if torrent_command:
