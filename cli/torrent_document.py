@@ -57,6 +57,8 @@ def identifier(value):
 def source(value):
     text(value, 8192, 8192)
     require(not any(c.isspace() for c in value))
+    if re.fullmatch(r"ottplay-local-torrent:[a-z][a-z0-9-]{0,63}/[0-9a-f]{32}", value):
+        return value
     if value.lower().startswith("magnet:?"):
         return value
     try:

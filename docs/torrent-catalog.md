@@ -15,6 +15,12 @@ metadata/stream-addon preferences are separate; configure them through
 [typed settings](player-settings.md#torrent-metadata-and-stream-addons).
 Search results are not included in `torrent list`, import or export.
 
+For locally operated discovery, see [Torznab, Jackett and Prowlarr
+indexers](torrent-indexer.md). Prepared sources use exactly
+`ottplay-local-torrent:SOURCEID/SOURCEREF`, accepted by `inspect`, `add` and
+catalog import. Backing metadata belongs to that companion and is not
+transferred with catalog exports.
+
 ## Commands
 
 Replace the example source with your metadata URL or quoted magnet link.
@@ -62,7 +68,7 @@ operation; cancelling an already accepted play does not stop playback. After
 expiry/restart, an unknown operation cannot prove the earlier outcome. Read the
 current catalog before deciding on a new change.
 
-The default deadline is 45 seconds. Torrent alone accepts explicit `-t` up to
+The default deadline is 45 seconds. Torrent catalog commands accept explicit `-t` up to
 10800 seconds; metadata itself has a 75-second player deadline. Large catalogs
 transfer in bounded chunks at a conservative rate. Initial read, upload and
 verified readback of catalogs near 8 MiB can take hours; use `-t 10800` for these

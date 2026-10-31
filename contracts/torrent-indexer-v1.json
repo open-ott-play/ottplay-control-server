@@ -1,0 +1,1067 @@
+{
+  "schema": 1,
+  "action": "torrent_indexer",
+  "capability": {
+    "torrent_indexer": {
+      "version": 1
+    }
+  },
+  "valid": [
+    {
+      "name": "list",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "schema": 1,
+        "sources": [
+          {
+            "id": "home",
+            "label": "Local indexer"
+          }
+        ]
+      }
+    },
+    {
+      "name": "configure",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "sourceId": "home",
+        "label": "Local indexer",
+        "endpoint": "http://127.0.0.1:9696/1/api",
+        "apiKey": "fixture-api-key"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "schema": 1,
+        "source": {
+          "id": "home",
+          "label": "Local indexer"
+        }
+      }
+    },
+    {
+      "name": "configure-without-key",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "sourceId": "home",
+        "label": "Local indexer",
+        "endpoint": "https://indexer.example.invalid/api",
+        "apiKey": ""
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "schema": 1,
+        "source": {
+          "id": "home",
+          "label": "Local indexer"
+        }
+      }
+    },
+    {
+      "name": "remove",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "remove",
+        "sourceId": "home"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "remove",
+        "schema": 1,
+        "removed": true
+      }
+    },
+    {
+      "name": "caps",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "caps",
+        "sourceId": "home"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "caps",
+        "schema": 1,
+        "sourceId": "home",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          },
+          {
+            "id": 2040,
+            "name": "HD",
+            "parentId": 2000
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "search",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "search-nullable",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "",
+        "categoryIds": [],
+        "offset": 50,
+        "limit": 1
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": null,
+            "seeders": null,
+            "publishedAt": null,
+            "categoryIds": [],
+            "languages": []
+          }
+        ],
+        "nextOffset": 51,
+        "total": null
+      }
+    },
+    {
+      "name": "prepare",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "prepare",
+        "sourceId": "home",
+        "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "prepare",
+        "schema": 1,
+        "sourceId": "home",
+        "sourceRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "name": "rejected",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "error": "Torrent indexer request failed.",
+        "reason": "invalid_request"
+      }
+    },
+    {
+      "name": "unsupported",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "error": "Torrent indexer request failed.",
+        "reason": "unsupported"
+      }
+    }
+  ],
+  "invalid_requests": [
+    {
+      "name": "unknown-request-field",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "endpoint": "https://private.example.invalid"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "schema": 1,
+        "sources": [
+          {
+            "id": "home",
+            "label": "Local indexer"
+          }
+        ]
+      }
+    },
+    {
+      "name": "zero-version",
+      "params": {
+        "version": 0,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "schema": 1,
+        "sources": [
+          {
+            "id": "home",
+            "label": "Local indexer"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid-source-id",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "sourceId": "Home",
+        "label": "Local indexer",
+        "endpoint": "http://127.0.0.1:9696/1/api",
+        "apiKey": "fixture-api-key"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "schema": 1,
+        "source": {
+          "id": "home",
+          "label": "Local indexer"
+        }
+      }
+    },
+    {
+      "name": "endpoint-userinfo",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "sourceId": "home",
+        "label": "Local indexer",
+        "endpoint": "https://secret@example.invalid/api",
+        "apiKey": "fixture-api-key"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "schema": 1,
+        "source": {
+          "id": "home",
+          "label": "Local indexer"
+        }
+      }
+    },
+    {
+      "name": "endpoint-query",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "sourceId": "home",
+        "label": "Local indexer",
+        "endpoint": "http://127.0.0.1/api?apikey=secret",
+        "apiKey": "fixture-api-key"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "schema": 1,
+        "source": {
+          "id": "home",
+          "label": "Local indexer"
+        }
+      }
+    },
+    {
+      "name": "endpoint-fragment",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "sourceId": "home",
+        "label": "Local indexer",
+        "endpoint": "http://127.0.0.1/api#secret",
+        "apiKey": "fixture-api-key"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "schema": 1,
+        "source": {
+          "id": "home",
+          "label": "Local indexer"
+        }
+      }
+    },
+    {
+      "name": "key-control",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "sourceId": "home",
+        "label": "Local indexer",
+        "endpoint": "http://127.0.0.1:9696/1/api",
+        "apiKey": "fixture\nsecret"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "configure",
+        "schema": 1,
+        "source": {
+          "id": "home",
+          "label": "Local indexer"
+        }
+      }
+    },
+    {
+      "name": "query-too-long",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "zero-category",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          0
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "duplicate-category",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000,
+          2000
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "too-many-categories",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "offset-too-high",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 1000001,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "limit-too-high",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 101
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "non-integer-limit",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 1.5
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "invalid-result-ref",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "prepare",
+        "sourceId": "home",
+        "resultRef": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "prepare",
+        "schema": 1,
+        "sourceId": "home",
+        "sourceRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  ],
+  "invalid_results": [
+    {
+      "name": "unknown-result-field",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "schema": 1,
+        "sources": [
+          {
+            "id": "home",
+            "label": "Local indexer"
+          }
+        ],
+        "apiKey": "private-fixture"
+      }
+    },
+    {
+      "name": "wrong-runtime",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "different-runtime",
+        "op": "list",
+        "schema": 1,
+        "sources": [
+          {
+            "id": "home",
+            "label": "Local indexer"
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-op",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "remove",
+        "schema": 1,
+        "sources": [
+          {
+            "id": "home",
+            "label": "Local indexer"
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-source",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "other",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "malformed-source-list",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "schema": 1,
+        "sources": [
+          {
+            "id": "home",
+            "label": "Local",
+            "endpoint": "http://127.0.0.1/api"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid-source-ref",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "prepare",
+        "sourceId": "home",
+        "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "prepare",
+        "schema": 1,
+        "sourceId": "home",
+        "sourceRef": "../private"
+      }
+    },
+    {
+      "name": "unbounded-error-text",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "error": "Torrent indexer request failed: private-fixture",
+        "reason": "invalid_request"
+      }
+    },
+    {
+      "name": "unknown-error-code",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "list",
+        "error": "Torrent indexer request failed.",
+        "reason": "private-fixture"
+      }
+    },
+    {
+      "name": "raw-download-link",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ],
+            "downloadUrl": "https://private.invalid/file"
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "unsafe-size",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 9007199254740992,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "bad-date",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "yesterday",
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    },
+    {
+      "name": "zero-item-category",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "sourceId": "home",
+        "query": "Big Buck Bunny",
+        "categoryIds": [
+          2000
+        ],
+        "offset": 0,
+        "limit": 50
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "schema": 1,
+        "sourceId": "home",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123456789,
+            "seeders": 2,
+            "publishedAt": "2026-10-30T12:00:00Z",
+            "categoryIds": [
+              0
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": 1
+      }
+    }
+  ]
+}

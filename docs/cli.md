@@ -9,7 +9,7 @@ Keep all files from the same `cli/` revision together: `ott.py`, `programme_sear
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
 `global_favorites_remote.py`, `global_favorites_recovery.py`, `global_favorites_operations.py`,
 `global_favorites_commands.py`, `global_favorites_items.py`, `global_favorites_items_commands.py`,
-`torrent_catalog.py` and `torrent_document.py`.
+`torrent_catalog.py`, `torrent_document.py` and `torrent_indexer.py`.
 Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
@@ -50,6 +50,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Switch providers on several players](#switch-providers-on-several-players)
 - [Local folders and shuffled playback](#local-folders-and-shuffled-playback)
 - [Torrent catalog, file selection and portable export](torrent-catalog.md)
+- [Local Torznab, Jackett and Prowlarr indexers](torrent-indexer.md)
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
 - [Check searches on every registered player](#check-every-registered-player)
 - [Provider settings](#provider-settings), [M3U profiles](#m3u-profiles), [Local videos profiles](#local-videos-profiles) and [named setups](#named-setups)

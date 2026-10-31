@@ -37,6 +37,7 @@ var CommandOperations = map[string]string{
 	"perf_capture":          "start status read stop",
 	"local_media":           "sources play shuffle connect",
 	"torrent_catalog":       "read read_chunk metadata status cancel write_begin write_chunk write_commit play",
+	"torrent_indexer":       "list configure remove caps search prepare",
 }
 
 func ValidCommandAction(action string) bool {

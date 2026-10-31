@@ -71,6 +71,9 @@ func validTorrentCatalogSource(raw json.RawMessage) bool {
 			return false
 		}
 	}
+	if torrentIndexerSourceURI.MatchString(value) {
+		return true
+	}
 	if strings.HasPrefix(strings.ToLower(value), "magnet:?") {
 		return true
 	}

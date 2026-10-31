@@ -40,6 +40,7 @@ type entry struct {
 	favoritesGlobalRecovery *favoritesGlobalRecoveryRequest
 	favoritesGlobalItems    *favoritesGlobalItemsRequest
 	torrentCatalog          *torrentCatalogRequest
+	torrentIndexer          *torrentIndexerRequest
 	handoff                 *handoffRequest
 	offlineProfile          *offlineProfileRequest
 	owner, permission       string
