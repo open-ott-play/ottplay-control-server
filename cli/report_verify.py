@@ -19,6 +19,7 @@ FILES = frozenset(("manifest.json", "result.json"))
 POLICY = "workbench-v2"
 DEBUG_POLICY = "workbench-v3"
 ENGINE_POLICY = "workbench-v4"
+PROVIDER_POLICY = "workbench-v5"
 PERFORMANCE_POLICIES = ("performance-v1", "performance-v2", "performance-v3")
 MAX_PERFORMANCE_BYTES = 1024 * 1024
 MAX_PERFORMANCE_MANIFEST = 16 * 1024
@@ -343,11 +344,48 @@ def _observations(rows, api, workbench, bundle, ids, section="snapshot", stronge
     return result
 
 
+def _provider_observations(rows, api, workbench, ids):
+    """Validate saved provider DTOs, never a raw status or private configuration."""
+    require(isinstance(rows, list) and len(rows) == 1)
+    raw = rows[0]
+    common = {"lane", "status", "source", "observed_at", "requests"}
+    require(isinstance(raw, dict) and common <= set(raw)
+            and raw["lane"] == "web" and raw["source"] == "runtime_reported")
+    status = raw["status"]
+    require(status in ("observed", "unknown"))
+    _timestamp(raw["observed_at"])
+    receipts = raw["requests"]
+    require(isinstance(receipts, list) and len(receipts) <= 2)
+    for receipt in receipts:
+        require(isinstance(receipt, dict) and set(receipt) == {"action", "request_id", "status"}
+                and isinstance(receipt["request_id"], str) and workbench.REQUEST.fullmatch(receipt["request_id"])
+                and receipt["status"] in ("ok", "unconfirmed"))
+        require(receipt["request_id"] not in ids)
+        ids.add(receipt["request_id"])
+    require([row["action"] for row in receipts] in ([], ["capabilities"], ["capabilities", "status"]))
+    require(all(row["status"] == "ok" for row in receipts[:-1]))
+    caps = api.capabilities_metadata(raw["capabilities"]) if "capabilities" in raw else None
+    if caps is not None:
+        require(caps == raw["capabilities"] and receipts and receipts[0]["status"] == "ok")
+    if status == "unknown":
+        require(common | {"reason"} <= set(raw) <= common | {"reason", "capabilities"})
+        require(raw["reason"] in ERROR_REASONS and raw["reason"] != "not_bound")
+        return [{"lane": "web", "status": status, "reason": raw["reason"]}]
+    require(set(raw) == common | {"capabilities", "runtime", "data"})
+    require(caps is not None and caps.get("provider_diagnostics") == {"version": 1})
+    runtime = workbench.token(raw["runtime"])
+    require(caps["player"]["runtime"] == runtime
+            and len(receipts) == 2 and all(row["status"] == "ok" for row in receipts))
+    data = workbench.provider_metadata(raw["data"], runtime)
+    return [{"lane": "web", "status": status, "runtime": runtime, "data": data}]
+
+
 def evaluate_report(report, api, workbench):
     require(isinstance(report, dict) and type(report.get("version")) is int and report["version"] == 1)
     policy = report.get("evaluator", LEGACY_POLICY)
-    require("evaluator" not in report or policy in (POLICY, DEBUG_POLICY, ENGINE_POLICY), "unsupported_evaluator")
-    require(report.get("command") in ("bundle", "test") and report.get("read_only") is True
+    require("evaluator" not in report or policy in (POLICY, DEBUG_POLICY, ENGINE_POLICY, PROVIDER_POLICY), "unsupported_evaluator")
+    commands = ("bundle", "doctor", "debug") if policy == PROVIDER_POLICY else ("bundle", "test")
+    require(report.get("command") in commands and report.get("read_only") is True
             and report.get("physical_display_verified") is False)
     require(isinstance(report.get("device_id"), str)
             and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", report["device_id"]))
@@ -357,22 +395,40 @@ def evaluate_report(report, api, workbench):
     require(isinstance(tooling, dict) and all(isinstance(tooling.get(key), str) and HEX.fullmatch(tooling[key])
                                              for key in ("workbench_sha256", "cli_sha256")))
     bundle = report["command"] == "bundle"
+    if policy == PROVIDER_POLICY:
+        require(set(report) == {"version", "evaluator", "command", "device_id", "started_at", "completed_at",
+                                "read_only", "physical_display_verified", "tooling", "observations",
+                                "debug_observations", "provider_observations", "verdict"})
+        require(set(tooling) == {"workbench_sha256", "cli_sha256"})
     ids = set()
     before = _observations(report.get("observations"), api, workbench, bundle, ids)
-    if policy in (DEBUG_POLICY, ENGINE_POLICY):
-        require(bundle and "debug_observations" in report)
+    if policy in (DEBUG_POLICY, ENGINE_POLICY, PROVIDER_POLICY):
+        require((bundle or policy == PROVIDER_POLICY) and "debug_observations" in report)
         debug = report["debug_observations"]
         if [row["lane"] for row in before] == ["native"]:
             require(debug == [])
         else:
-            _observations(debug, api, workbench, True, ids, "debug", strongest_debug=policy == ENGINE_POLICY)
+            _observations(debug, api, workbench, True, ids, "debug",
+                          strongest_debug=policy in (ENGINE_POLICY, PROVIDER_POLICY))
     else:
         require("debug_observations" not in report)
-    if bundle:
+    correlation = None
+    if policy == PROVIDER_POLICY:
+        if [row["lane"] for row in before] == ["native"]:
+            require(report["provider_observations"] == [])
+        else:
+            _provider_observations(report["provider_observations"], api, workbench, ids)
+        correlation = workbench.provider_correlation(before, report["provider_observations"], debug)
+        require(correlation in ("matched", "mixed", "unavailable"))
+    else:
+        require("provider_observations" not in report and "provider_correlation" not in report)
+    if bundle or policy == PROVIDER_POLICY:
         require("scenario" not in report and "reason" not in report and "final_observations" not in report)
-        kind = "bundle"
+        kind = report["command"]
         verdict = "observed" if any(row["status"] == "observed" for row in before) else "unknown"
-        reason = "bundle_integrity_verified"
+        if not bundle:
+            verdict = workbench.provider_verdict(report["provider_observations"])
+        reason = "bundle_integrity_verified" if bundle else "provider_report_integrity_verified"
     elif report.get("scenario") == "health":
         require("reason" not in report and "final_observations" not in report)
         kind, verdict, reason = "test.health", workbench.health_verdict(before), "health_recomputed"
@@ -394,7 +450,10 @@ def evaluate_report(report, api, workbench):
     else:
         raise InvalidReport("unsupported_report")
     require(report.get("verdict") == verdict, "semantic_mismatch")
-    return {"evaluation_policy": policy, "report_kind": kind, "verdict": verdict, "reason": reason}
+    result = {"evaluation_policy": policy, "report_kind": kind, "verdict": verdict, "reason": reason}
+    if correlation is not None:
+        result["provider_correlation"] = correlation
+    return result
 
 
 class Parser(argparse.ArgumentParser):
@@ -584,7 +643,7 @@ def main(argv, api, workbench, json_output=False):
         report = _json(raw)
         if isinstance(report, dict):
             marker = report.get("evaluator", LEGACY_POLICY)
-            if isinstance(marker, str) and marker in (POLICY, DEBUG_POLICY, ENGINE_POLICY, LEGACY_POLICY, *PERFORMANCE_POLICIES):
+            if isinstance(marker, str) and marker in (POLICY, DEBUG_POLICY, ENGINE_POLICY, PROVIDER_POLICY, LEGACY_POLICY, *PERFORMANCE_POLICIES):
                 result["evaluation_policy"] = marker
         if isinstance(report, dict) and report.get("evaluator") in PERFORMANCE_POLICIES:
             require("capture_complete" in metadata, "invalid_manifest")

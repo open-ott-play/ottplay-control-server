@@ -189,6 +189,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME profile-config N FILE     update profile settings atomically from JSON
   ott NAME caps                      show runtime identity and supported controls
   ott NAME doctor [-j]                read web/native identity and diagnostic capabilities
+  ott NAME doctor --provider [--out DIR]  explain provider lookup with safe runtime evidence
   ott NAME debug [--engine] [-j]      read bounded runtime/native diagnostics (alias: dbg)
   ott NAME perf --help               opt-in bounded performance capture and safe notification trials
   ott NAME inspect --view ui,media    observe the interface and media without changing playback
@@ -4335,6 +4336,11 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "provider_diagnostics" in data:
+        marker = data["provider_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+        result["provider_diagnostics"] = {"version": 1}
     if "torrent_catalog" in data:
         marker = data["torrent_catalog"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
@@ -4877,8 +4883,10 @@ def print_player_help(data, name):
             and not any(key in controls for key in ("playback_seek_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
-    if sections or "debug" in controls:
+    if sections or "debug" in controls or "provider_diagnostics" in controls:
         print("\nAvailable diagnostics now:")
+        if "provider_diagnostics" in controls:
+            print(f"  {prefix} doctor --provider [--out DIR]  — explain provider lookup and correlate runtime evidence")
         if "debug" in controls:
             print(f"  {prefix} debug  — read bounded runtime and native diagnostics")
         if "doctor" in sections:
@@ -6264,7 +6272,7 @@ def group_output_arguments(words, route, prepared, suffix):
             words[index] = expand(words[index], checkpoint=True, resume=parsed["mode"] == "resume")
     else:
         verb = words[0].casefold() if words else ""
-        flag = ("--out" if route == "performance" or (route == "workbench" and verb == "bundle") else
+        flag = ("--out" if route == "performance" or (route == "workbench" and verb in ("bundle", "doctor", "debug", "dbg")) else
                 "--report" if route == "workbench" and verb == "test" else None)
         if flag:
             # Match argparse's unambiguous long-option abbreviations and = form.

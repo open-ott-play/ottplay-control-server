@@ -1643,6 +1643,10 @@ archive query is reported as `not_requested` and does not claim archive coverage
 
 ## Provider settings
 
+To diagnose a provider failure before changing settings, run
+`ott -t 45 t1 doctor --provider`. The [provider diagnostics guide](provider-diagnostics.md)
+explains lookup stages, addon HTTP outcomes, freshness and private saved reports.
+
 For individual application/provider preferences, use `ott f settings` to list
 the runtime schema, `ott f setting bufSize` to read, and `ott f setting bufSize 3`
 or `ott f setting players hls.js` to save with revision checks. See the
