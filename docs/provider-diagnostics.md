@@ -1,4 +1,4 @@
-# Provider lookup diagnostics
+# Provider and companion diagnostics
 
 Use a provider report when a movie list opens but selecting a movie shows
 `Unsupported source` or `Failed to load`. Decoder diagnostics alone cannot
@@ -28,6 +28,14 @@ directories. Each target has its own timeout and result. Bundles include
 provider evidence when the player advertises it; a missing or failed optional
 observation does not discard the other evidence.
 
+For a quick engine check, `ott -t 45 t1 debug --engine` also includes the cached
+provider/companion observation when the player advertises it. The engine is
+sampled first with its existing timeout; the optional provider read uses only
+the time left. Missing or failed companion evidence does not downgrade an
+observed engine result. Use `doctor --provider --out` or `bundle --out` for a
+saved, verifiable report; `debug --engine` retains its existing engine output
+format and does not add a file-export mode.
+
 ## What the report explains
 
 The initial producer covers Torrent/Stremio movie discovery. It reports:
@@ -41,6 +49,10 @@ The initial producer covers Torrent/Stremio movie discovery. It reports:
   response byte count when available.
 - Separately collected media generation, handle, phase and attached engine,
   where the existing inspection capabilities provide them.
+- On updated native players, the optional cached companion observation:
+  playback-lease activity, state, an allowlisted error code and downloaded/total
+  byte counts. It describes the last playback lease, separately from catalog
+  metadata requests.
 
 JSON addon slots are zero-based positions in the configuration; the readable
 summary numbers them from one. They are not addon names or stable identities
@@ -56,6 +68,8 @@ flowchart LR
     Manifest --> Request[Stream request outcome]
     Request --> Source[Playable source count]
     Source --> Media[Media generation and engine]
+    Source --> Companion[Optional local companion lease]
+    Companion --> Media
 ```
 
 These are stages to inspect, not proof that every stage ran successfully.
@@ -72,6 +86,42 @@ stream is not supported by that evidence. If sources exist and a media handle
 is present, inspect the decoder/engine observations next. The report does not
 perform repairs automatically.
 
+## Reading companion evidence
+
+A companion observation has exactly these fields, for example:
+
+```json
+{
+  "companion": {
+    "active": true,
+    "state": "preparing",
+    "error": "",
+    "downloaded": 1048576,
+    "total": 8388608
+  }
+}
+```
+
+The readable report labels this section `Companion (cached)`. `active` identifies
+an active playback lease, not confirmed video playback. States are `metadata`,
+`select`, `preparing`, `ready`, `error` and `unknown`. An empty error string means
+no error code was reported. Errors such as `companion_no_playable_files`,
+`cache_limit` or `stream_timeout` distinguish file selection, cache and transfer
+failures without exposing source addresses or arbitrary exception text.
+
+Unknown byte counts are `null` and appear as `unknown`; measured zero remains
+zero. `companion: null` means no validated companion observation is available.
+Older players may omit the field entirely. Neither case is interpreted as an
+inactive lease or an empty download. The snapshot contains no file names,
+session URLs, server addresses, access keys or torrent sources.
+
+This is the most recently received service observation. Reading it does not
+start the companion, poll its service or refresh its network status. Compare
+the cached state with the separately collected media progress and engine
+sample before deciding whether a transfer or decoding is stalled. `ready`,
+complete byte counts or an empty error do not by themselves prove physical
+playback.
+
 ## Freshness and limits
 
 The provider, interface and debug observations are sequential. A matching
@@ -80,6 +130,10 @@ A runtime mismatch prevents joining them as one playback attempt. Lookup and
 request ages refer to the producer's retained attempt; reading the report does
 not make an older attempt current. Missing or inconsistent observations remain
 unknown rather than becoming evidence of success.
+
+The companion state is not tied to a source-lookup sequence or an atomic engine
+sample. A matching runtime alone does not establish that the cached lease and
+the currently selected movie are the same attempt.
 
 Request retention is bounded. `requestsDropped` identifies omitted request
 records; only the current or last lookup is exposed. This is not a persistent
@@ -99,6 +153,10 @@ the existing inspection sections. The safe snapshot is carried in
 `status.diagnostics.provider`; existing controller status transport can relay
 it without a new controller release. Install the complete updated CLI and an
 updated player. Earlier players remain usable but cannot supply this report.
+Updated CLI versions accept both older snapshots without `companion` and newer
+ones containing `null` or a valid companion object. Malformed companion fields,
+unknown keys and unrecognized error strings fail validation; rejected raw data
+is not copied into JSON output or private reports.
 
 - **Unsupported/missing producer:** check `ott t1 caps` and update the running
   player, not just the files on disk. No hidden provider request is attempted.
@@ -114,6 +172,14 @@ updated player. Earlier players remain usable but cannot supply this report.
   and unsupported returned sources before changing player settings.
 - **Request timeout:** inspect the retained partial report. An unresponsive
   provider snapshot does not prove that the page or device crashed.
+- **No companion observation:** the player may be older, no playback client
+  may exist yet, or the observation could not be validated. Do not read this as
+  zero downloaded bytes.
+- **Companion error:** use the safe error code and media evidence together.
+  `companion_no_playable_files` points to playable-file selection; `cache_limit`
+  points to the local cache budget; `stream_timeout` identifies a transfer
+  timeout. A retained error alone does not prove that the current decoder
+  failed or justify repeating a playback command.
 
 See the [workbench guide](workbench.md) for media/engine evidence and offline
 report verification, and [Torrent settings](player-settings.md#torrent-metadata-and-stream-addons)
