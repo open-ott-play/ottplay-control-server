@@ -155,6 +155,10 @@ and private-file permissions in the platform service definition.
 - **Unknown or modified installation:** preserve the existing files and inspect
   ownership. The installer intentionally does not adopt a manually edited plist
   or an unrelated runtime directory.
+- **Archive provider media probe timed out:** the guide was searched, but the
+  selected media endpoint did not answer within its 15-second probe budget. This
+  is distinct from the overall `--timeout`; no playback was dispatched. Check the
+  media provider before repeating the search.
 - **Search succeeds but media does not play:** guide lookup and media availability
   are separate. Diagnose the provider, archive retention and player restrictions;
   do not route private stream URLs or credentials into the public EPG service.
