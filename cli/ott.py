@@ -4,6 +4,7 @@ import argparse
 import base64
 import contextlib
 import copy
+from collections import deque
 import hashlib
 import io
 import getpass
@@ -688,11 +689,13 @@ def epg_number(value):
 
 def epg_batches(channels):
     """Keep every channel while respecting each public EPG request's limits."""
+    # 2048 is the service's wire limit, not its eight-second matching capacity.
+    # Small sequential batches leave room for expensive unmatched channel names.
     batch, size = [], 2048  # Envelope and the bounded search text.
     for channel in channels:
         row = {key: value for key, value in channel.items() if key != "number"}
         row_size = len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1
-        if batch and (len(batch) == 2048 or size + row_size > 480 * 1024):
+        if batch and (len(batch) == 256 or size + row_size > 480 * 1024):
             yield batch
             batch, size = [], 2048
         batch.append(row)
@@ -732,13 +735,27 @@ def server_programs(client, device, settings, search, refresh=False):
         return {"as_of": time.time(), "checked": 0, "partial": False, "programs": [], "total": 0}, {}
     programs, targets, generation, as_of = [], {}, None, 0
     search_deadline = time.monotonic() + client.timeout
-    for batch in epg_batches(channels):
+    pending = deque(epg_batches(channels))
+    splits = 0
+    while pending:
+        batch = pending.popleft()
         batch_by_id = {row["id"]: by_id[row["id"]] for row in batch}
         remaining = search_deadline - time.monotonic()
         if remaining <= 0:
             raise Error("EPG service timed out; no player EPG scan or playback was requested")
         epg.timeout = min(10, remaining)
-        response = epg.current(batch, search)
+        try:
+            response = epg.current(batch, search)
+        except EpgHTTPError as exc:
+            if exc.status != 504 or exc.epg_code != "EPG_TIMEOUT" or len(batch) < 2 or splits >= 4:
+                raise
+            # Retry only this read-only matching work, with smaller inputs. The
+            # shared deadline and split cap also bound immediately failing APIs.
+            middle = len(batch) // 2
+            pending.appendleft(batch[middle:])
+            pending.appendleft(batch[:middle])
+            splits += 1
+            continue
         if time.monotonic() >= search_deadline:
             raise Error("EPG service timed out; no player EPG scan or playback was requested")
         invalid = "EPG service returned an invalid or incomplete current-programme result; no playback was requested"

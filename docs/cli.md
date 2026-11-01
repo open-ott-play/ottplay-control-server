@@ -1486,8 +1486,11 @@ redirects are refused. Use HTTPS outside a trusted local network.
 
 The player must support `epg_catalog` and `play_catalog`. Catalogue metadata is
 limited to 10,000 channels. The CLI searches the entire catalogue in batches of
-at most 2048 channels, leaving space within the service's 512 KiB request limit
-even for multibyte names. Every batch must use the same guide generation; missing
+at most 256 channels sequentially, leaving room within the server's eight-second
+matching deadline for expensive unmatched names. The API's 2048-channel limit is
+a request size limit, not a throughput guarantee. Batches also stay within the
+512 KiB request limit even for multibyte names. Every channel is searched; the
+batch size does not truncate the catalogue. Every batch must use the same guide generation; missing
 or invalid later batches reject the entire query without playback. The service must return a complete,
 fresh result for the fixed public `epg-one` source; the service and CLI clocks
 must be within one minute. Other `epg.source` values are rejected. Selecting
@@ -1504,8 +1507,12 @@ read within the same request deadline, and reports only a verified, known code. 
 prints the service's message, response body or private configuration. `EPG_TIMEOUT`
 with HTTP 504 means the EPG server's matching deadline expired; `EPG_RELAY` identifies
 the fixed gateway. HTTP 504 with `no verified EPG error code` has no trusted
-service diagnosis, so inspect the gateway and server separately. Errors are not
-retried automatically and never trigger a player-wide EPG scan or playback.
+service diagnosis, so inspect the gateway and server separately. For a verified
+`EPG_TIMEOUT`, the CLI divides only the failed metadata batch in half and searches
+both halves in order. At most four such divisions are allowed per query, all
+within the original current-programme deadline. A single-channel timeout fails.
+Other HTTP and transport errors are not retried. Failed or incomplete searches
+never trigger a player-wide EPG scan or playback.
 Use the gateway URL above; the legacy `epg.2560801.xyz` route has separate access
 rules and is not the recommended CLI endpoint.
 

@@ -58,7 +58,7 @@ class RemoteEpgCliTest(unittest.TestCase):
                 linked.server_programs(client, 'tv', SETTINGS, 'Три кота')
             client.call.assert_called_once_with('tv', 'epg_catalog', {})
 
-    def test_large_catalogue_search_keeps_matches_from_both_batches(self):
+    def test_large_catalogue_search_keeps_matches_from_every_bounded_batch(self):
         snapshot = {'catalog': 'large-catalog', 'channels': [
             dict(id=str(i), number=i + 1, name='Channel ' + str(i), tvgId='', tvgName='', shift=0)
             for i in range(2981)]}
@@ -66,6 +66,8 @@ class RemoteEpgCliTest(unittest.TestCase):
         client.call.return_value = snapshot
 
         def current(rows, search):
+            if len(rows) > 256:
+                raise ott.EpgHTTPError(504, 'EPG_TIMEOUT')
             response = guide()
             response.update(checked=len(rows), total=len(rows), programs=[
                 dict(id=rows[-1]['id'], start=NOW - 60, end=NOW + 60, title='Три кота')])
@@ -75,23 +77,28 @@ class RemoteEpgCliTest(unittest.TestCase):
         with mock.patch.object(ott, 'EpgClient', return_value=epg), \
                 mock.patch.object(ott.time, 'time', return_value=NOW):
             result, targets = ott.server_programs(client, 'tv', SETTINGS, 'Три кота')
-        self.assertEqual([len(call.args[0]) for call in epg.current.call_args_list], [2048, 933])
-        self.assertEqual([row['number'] for row in result['programs']], [2048, 2981])
+        expected_numbers = list(range(256, 2981, 256)) + [2981]
+        self.assertEqual([len(call.args[0]) for call in epg.current.call_args_list], [256] * 11 + [165])
+        self.assertEqual([row['id'] for call in epg.current.call_args_list for row in call.args[0]],
+                         [str(i) for i in range(2981)])
+        self.assertEqual([row['number'] for row in result['programs']], expected_numbers)
         self.assertEqual(result['checked'], result['total'])
         self.assertEqual(result['total'], 2981)
         self.assertEqual(targets[2981], {'catalog': 'large-catalog', 'id': '2980'})
         client.call.assert_called_once_with('tv', 'epg_catalog', {})
 
-        for failure in ('foreign_channel', 'changed_generation', 'partial'):
+        for failure in ('foreign_channel', 'changed_generation', 'partial', 'timeout'):
             def invalid_later_batch(rows, search):
                 response = current(rows, search)
-                if rows[0]['id'] == '2048':
+                if int(rows[0]['id']) >= 2816:
                     if failure == 'foreign_channel':
                         response['programs'][0]['id'] = '0'
                     elif failure == 'changed_generation':
                         response['generation'] = 'new-generation'
-                    else:
+                    elif failure == 'partial':
                         response['checked'] -= 1
+                    else:
+                        raise ott.EpgHTTPError(504, 'EPG_TIMEOUT')
                 return response
             epg.current.side_effect = invalid_later_batch
             with self.subTest(failure=failure), mock.patch.object(ott, 'EpgClient', return_value=epg), \
@@ -126,7 +133,7 @@ class RemoteEpgCliTest(unittest.TestCase):
         with mock.patch.object(ott, 'EpgClient', return_value=epg), \
                 mock.patch.object(ott.time, 'time', return_value=NOW):
             result, _ = ott.server_programs(client, 'tv', SETTINGS, 'Три кота')
-        self.assertEqual([row['number'] for row in result['programs']], [2981])
+        self.assertEqual([row['number'] for row in result['programs']], expected_numbers[1:])
 
     def test_multibyte_metadata_batches_fit_the_wire_limit_without_dropping_rows(self):
         channels = [dict(id=str(i), number=i + 1, name='界' * 512,
@@ -146,7 +153,7 @@ class RemoteEpgCliTest(unittest.TestCase):
                                    {'dispatched': True, 'channel': {'id': 'cats', 'number': 7, 'name': 'СТС'}}
                                    if playback is None else playback]
         epg = mock.Mock()
-        epg.current.side_effect = [guide() if response is None else response]
+        epg.current.side_effect = response if isinstance(response, Exception) else [guide() if response is None else response]
         output, errors = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'read_json', return_value={'epg': settings}), \
                 mock.patch.object(ott, 'Client', return_value=client), \
@@ -274,7 +281,8 @@ class RemoteEpgCliTest(unittest.TestCase):
                 self.assertEqual(output, '')
                 self.assertIn(str(failure), errors)
                 self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'epg_catalog', {})])
-                self.assertEqual(epg.current.call_count, 1)
+                expected = 2 if isinstance(failure, ott.EpgHTTPError) and failure.epg_code == 'EPG_TIMEOUT' else 1
+                self.assertEqual(epg.current.call_count, expected)
 
     def test_invalid_catalogs_never_call_service(self):
         cases = [{}, {'catalog': '', 'channels': []}, {'catalog': 'x' * 129, 'channels': []}]
