@@ -30,10 +30,15 @@ type haFixture struct {
 		data map[string]any
 	}
 	postFailure  bool
+	failurePath  string
 	nullReadings bool
 	onAfterReads int
+	onAfterCalls int
+	wakeCalls    int
 	wakeReads    int
 	wakePending  bool
+	// Invoked with mu held, before writing a state response.
+	stateReadHook func()
 }
 
 func newHA(t *testing.T, tv *tvFixture) *haFixture {
@@ -82,6 +87,9 @@ func newHA(t *testing.T, tv *tvFixture) *haFixture {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/api/states/media_player.native_tv" {
+			if h.stateReadHook != nil {
+				h.stateReadHook()
+			}
 			if h.wakePending {
 				h.wakeReads++
 				if h.wakeReads >= h.onAfterReads {
@@ -114,7 +122,7 @@ func newHA(t *testing.T, tv *tvFixture) *haFixture {
 			path string
 			data map[string]any
 		}{r.URL.Path, data})
-		if h.postFailure {
+		if h.postFailure || h.failurePath == r.URL.Path {
 			http.Error(w, "uncertain", 503)
 			return
 		}
@@ -124,6 +132,10 @@ func newHA(t *testing.T, tv *tvFixture) *haFixture {
 		case "/api/services/media_player/volume_mute":
 			h.muted = data["is_volume_muted"].(bool)
 		case "/api/services/media_player/turn_on":
+			h.wakeCalls++
+			if h.wakeCalls < h.onAfterCalls {
+				break
+			}
 			if h.onAfterReads > 0 {
 				h.wakePending = true
 			} else {
@@ -223,6 +235,50 @@ func TestFallbackMutationFailureIsUncertainAndNotRetried(t *testing.T) {
 	}
 }
 
+func TestNamedAppIsResolvedBeforeWakeOrFallback(t *testing.T) {
+	f := newTV(t, false)
+	h := newHA(t, f)
+	f.config.MAC = "02:03:04:05:06:07"
+	f.config.AppAliases = map[string]string{"plex": "cdp-30"}
+	m := f.manager(t)
+	wakes := 0
+	m.sendWake = func(context.Context, string, string, int) error { wakes++; return nil }
+	for _, command := range []Command{{Action: "go", App: "unknown"}, {Action: "launch", App: "cdp-30"}} {
+		_, err := m.Execute(context.Background(), "living", command)
+		assertCode(t, err, "app_not_configured", false)
+	}
+	for _, command := range []Command{{Action: "off", App: "plex"}, {Action: "on", App: "plex"}, {Action: "launch", App: "https://example.org"}} {
+		_, err := m.Execute(context.Background(), "living", command)
+		assertCode(t, err, "invalid_command", false)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if wakes != 0 || h.verified || len(h.posts) != 0 || f.count(launchApp) != 0 {
+		t.Fatal("invalid or unknown application reached wake/native/fallback transport")
+	}
+}
+
+func TestFallbackUsesSelectedNamedAppAndPreservesDefault(t *testing.T) {
+	f := newTV(t, false)
+	h := newHA(t, f)
+	h.power = "off"
+	f.config.AppAliases = map[string]string{"plex": "cdp-30"}
+	m := f.manager(t)
+	r, err := m.Execute(context.Background(), "living", Command{Action: "go", App: "plex"})
+	if err != nil || r.Outcome != "confirmed" || r.Transport != "home_assistant" || r.State == nil || r.State.AppID != "cdp-30" {
+		t.Fatalf("fallback ignored selected app: result=%+v error=%v", r, err)
+	}
+	r, err = m.Execute(context.Background(), "living", Command{Action: "launch"})
+	if err != nil || r.State == nil || r.State.AppID != "de.benzac.msx" {
+		t.Fatalf("fallback replaced default app: result=%+v error=%v", r, err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.posts) != 3 || h.posts[0].path != "/api/services/media_player/turn_on" || h.posts[1].data["payload"].(map[string]any)["id"] != "cdp-30" || h.posts[2].data["payload"].(map[string]any)["id"] != "de.benzac.msx" {
+		t.Fatalf("unexpected wake/launch requests: %v", h.posts)
+	}
+}
+
 func TestFallbackRejectsRedirectWithoutSendingToken(t *testing.T) {
 	f := newTV(t, false)
 	_ = newHA(t, f)
@@ -251,7 +307,7 @@ func TestWakeReservesShortCallerBudgetForFallback(t *testing.T) {
 	f.config.MAC = "02:03:04:05:06:07"
 	m := f.manager(t)
 	m.wakeInterval = time.Millisecond
-	m.sendWake = func(string, string, int) error { return nil }
+	m.sendWake = func(context.Context, string, string, int) error { return nil }
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	r, err := m.Execute(ctx, "living", Command{Action: "on"})
@@ -299,7 +355,12 @@ func TestWakeDoesNotReplayAfterLaunchMayHaveApplied(t *testing.T) {
 		return false
 	}
 	m := f.manager(t)
-	m.sendWake = func(string, string, int) error { f.mu.Lock(); f.power = "Active"; f.mu.Unlock(); return nil }
+	m.sendWake = func(context.Context, string, string, int) error {
+		f.mu.Lock()
+		f.power = "Active"
+		f.mu.Unlock()
+		return nil
+	}
 	r, err := m.Execute(context.Background(), "living", Command{Action: "go"})
 	assertCode(t, err, "connection_failed", true)
 	if r.Outcome != "uncertain" {
@@ -320,7 +381,7 @@ func TestGoKeepsWOLPartialEffectWhenFallbackCannotRun(t *testing.T) {
 	m := f.manager(t)
 	m.wakeWait = time.Millisecond
 	m.wakeInterval = time.Millisecond
-	m.sendWake = func(string, string, int) error { return nil }
+	m.sendWake = func(context.Context, string, string, int) error { return nil }
 	r, err := m.Execute(context.Background(), "living", Command{Action: "go"})
 	assertCode(t, err, "fallback_target_invalid", true)
 	if r.Outcome != "uncertain" {
@@ -344,7 +405,7 @@ func TestGoCanFinishThroughFallbackAfterWOL(t *testing.T) {
 	m := f.manager(t)
 	m.wakeWait = time.Millisecond
 	m.wakeInterval = time.Millisecond
-	m.sendWake = func(string, string, int) error { return nil }
+	m.sendWake = func(context.Context, string, string, int) error { return nil }
 	r, err := m.Execute(context.Background(), "living", Command{Action: "go"})
 	if err != nil || r.Outcome != "confirmed" || r.Transport != "home_assistant" || r.State.AppID != f.config.AppID {
 		t.Fatalf("successful fallback after WOL lost: result=%+v error=%v", r, err)
@@ -395,7 +456,7 @@ func TestDelayedNativeWakeWithFallbackLaunchesOnlyOnce(t *testing.T) {
 	m.wakeWait = 150 * time.Millisecond
 	m.wakeInterval = time.Millisecond
 	var timer *time.Timer
-	m.sendWake = func(string, string, int) error {
+	m.sendWake = func(context.Context, string, string, int) error {
 		timer = time.AfterFunc(25*time.Millisecond, func() { f.mu.Lock(); f.power = "Active"; f.mu.Unlock() })
 		return nil
 	}
@@ -460,5 +521,129 @@ func TestFallbackNullReadingsCannotConfirmOrBecomeRelativeBaseline(t *testing.T)
 	r, err = m.Execute(context.Background(), "living", Command{Action: "mute", Muted: boolPointer(false)})
 	if err != nil || r.Outcome != "accepted" || r.State.Muted != nil {
 		t.Fatalf("null falsely confirmed unmute: %+v, %v", r, err)
+	}
+}
+
+func TestFallbackWOLRetryRequiresOptInAndStopsAtObservedWake(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default-single-request", true: "opted-in-retry"}[retry], func(t *testing.T) {
+			f := newTV(t, false)
+			h := newHA(t, f)
+			h.power = "off"
+			h.onAfterCalls = 3
+			f.config.Fallback.WOLRetry = retry
+			// Make every post-wake probe eligible for retry; cancellation is
+			// driven by requests, not the speed of the CI runner.
+			client := &fallbackClient{c: *f.config.Fallback, token: "ha-fixture-token", http: h.server.Client(), readyPollInterval: time.Millisecond, wakeRetryInterval: time.Nanosecond}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if !retry {
+				reads := 0
+				h.stateReadHook = func() {
+					if h.wakeCalls > 0 {
+						reads++
+						if reads == 4 {
+							cancel()
+						}
+					}
+				}
+			}
+			if err := client.verifyNative(ctx); err != nil {
+				t.Fatal(err)
+			}
+			r := Result{Version: 1, DeviceID: "living", Action: "go", Transport: "home_assistant", Outcome: "accepted"}
+			err := client.execute(ctx, f.config, Command{Action: "go"}, &r)
+			if retry {
+				if err != nil || r.Outcome != "confirmed" || r.State == nil || r.State.AppID != f.config.AppID {
+					t.Fatalf("retry did not wake and launch: result=%+v error=%v", r, err)
+				}
+			} else {
+				assertCode(t, err, "not_ready", false)
+				if ctx.Err() != context.Canceled {
+					t.Fatal("safety deadline expired before fixture cancellation")
+				}
+			}
+			h.mu.Lock()
+			count := len(h.posts)
+			wakes := h.wakeCalls
+			last := h.posts[count-1].path
+			h.mu.Unlock()
+			if retry && (wakes != 3 || count != 4 || last != "/api/services/webostv/command") {
+				t.Fatalf("unexpected retry/launch order: wakes=%d posts=%d last=%s", wakes, count, last)
+			}
+			if !retry && (wakes != 1 || count != 1) {
+				t.Fatalf("retried without administrator opt-in: wakes=%d posts=%d", wakes, count)
+			}
+			time.Sleep(15 * time.Millisecond)
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if len(h.posts) != count {
+				t.Fatal("fallback continued sending after command returned")
+			}
+		})
+	}
+}
+
+func TestFallbackWOLRetryStopsOnCancellationOrAmbiguousMutation(t *testing.T) {
+	for _, failure := range []string{"cancel", "wake", "launch"} {
+		t.Run(failure, func(t *testing.T) {
+			f := newTV(t, false)
+			h := newHA(t, f)
+			h.power = "off"
+			f.config.Fallback.WOLRetry = true
+			if failure == "cancel" {
+				h.onAfterCalls = 1000
+			} else if failure == "wake" {
+				h.failurePath = "/api/services/media_player/turn_on"
+			} else {
+				h.onAfterCalls = 2
+				h.failurePath = "/api/services/webostv/command"
+			}
+			client := &fallbackClient{c: *f.config.Fallback, token: "ha-fixture-token", http: h.server.Client(), readyPollInterval: time.Millisecond, wakeRetryInterval: time.Nanosecond}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if failure == "cancel" {
+				h.stateReadHook = func() {
+					if h.wakeCalls == 3 {
+						cancel()
+					}
+				}
+			}
+			if err := client.verifyNative(ctx); err != nil {
+				t.Fatal(err)
+			}
+			r := Result{Version: 1, DeviceID: "living", Action: "go", Transport: "home_assistant", Outcome: "accepted"}
+			err := client.execute(ctx, f.config, Command{Action: "go"}, &r)
+			if failure == "cancel" {
+				assertCode(t, err, "not_ready", false)
+				if ctx.Err() != context.Canceled {
+					t.Fatal("safety deadline expired before fixture cancellation")
+				}
+			} else {
+				assertCode(t, err, "fallback_unavailable", false)
+			}
+			if !client.mutationAttempted {
+				t.Fatal("uncertain mutation was not recorded for the response wrapper")
+			}
+			h.mu.Lock()
+			count := len(h.posts)
+			wakes := h.wakeCalls
+			h.mu.Unlock()
+			if failure == "wake" && count != 1 {
+				t.Fatal("ambiguous wake was replayed")
+			}
+			if failure == "launch" && (wakes != 2 || count != 3) {
+				t.Fatalf("launch was replayed: wakes=%d posts=%d", wakes, count)
+			}
+			if failure == "cancel" && (wakes != 3 || count != 3) {
+				t.Fatalf("cancellation did not stop after third wake: wakes=%d posts=%d", wakes, count)
+			}
+			time.Sleep(15 * time.Millisecond)
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if len(h.posts) != count {
+				t.Fatal("fallback continued sending after cancellation or ambiguous mutation")
+			}
+		})
 	}
 }

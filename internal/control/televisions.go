@@ -17,6 +17,7 @@ type televisionControl interface {
 type televisionRequest struct {
 	DeviceID  string `json:"device_id"`
 	Action    string `json:"action"`
+	App       string `json:"app,omitempty"`
 	Volume    *int   `json:"volume,omitempty"`
 	Delta     *int   `json:"delta,omitempty"`
 	Muted     *bool  `json:"muted,omitempty"`
@@ -48,7 +49,7 @@ func (s *Server) serveTelevisions(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if !diagStrictJSON(data) || !diagDecode(data, &body, []string{"device_id", "action"}, "volume", "delta", "muted", "timeout_ms") {
+		if !diagStrictJSON(data) || !diagDecode(data, &body, []string{"device_id", "action"}, "app", "volume", "delta", "muted", "timeout_ms") {
 			failure(w, 400, "invalid television command")
 			return
 		}
@@ -72,7 +73,7 @@ func (s *Server) serveTelevisions(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, s.televisions.Binding(id))
 		return
 	}
-	command := television.Command{Action: body.Action, Volume: body.Volume, Delta: body.Delta, Muted: body.Muted}
+	command := television.Command{Action: body.Action, App: body.App, Volume: body.Volume, Delta: body.Delta, Muted: body.Muted}
 	if command.Validate() != nil || (body.TimeoutMS != nil && (*body.TimeoutMS < 1 || *body.TimeoutMS > 120000)) {
 		failure(w, 400, "invalid television command parameters")
 		return

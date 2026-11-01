@@ -140,9 +140,24 @@
   discovery and explicit pairing. Prefer pinned-TLS webOS and Wake-on-LAN;
   optionally fall back to the verified native Home Assistant webOS entity.
   Commands work while the player page is disconnected and distinguish observed
-  results from submitted or uncertain changes without replaying mutations.
+  results from submitted or uncertain changes without blindly replaying commands.
   Install all 37 CLI modules and configure private persistent TV credentials;
   see `docs/television.md` for setup, network wake limits and examples.
+- Repeat direct television Wake-on-LAN packets at a bounded 10-second cadence
+  during `tv on`/`tv go` readiness waits, covering standby interfaces that miss
+  an initial packet. Add opt-in `fallback.wol_retry` for native HA turn-on
+  automations verified to use only idempotent WOL or discrete PowerOn actions;
+  keep it disabled for toggles or other non-idempotent actions. Retries remain
+  inside the original deadline and stop on wake/cancellation/completion; app
+  launch runs at most once and per-TV command serialization is unchanged.
+- Add administrator-configured television app aliases for `tv go plex` and
+  `tv launch plex`, preserving the default OttPlay target. Provide the optional
+  `coco` and `cocop` Bash shortcuts for ordered TV wake, application readiness,
+  one shuffled library request and fresh playback confirmation in OttPlay or
+  native Plex. Both shortcuts share a lock and bounded execution time.
+  Native Plex uses a pinned server/client through the server proxy and rejects
+  embedded Companion errors even inside HTTP 200. Its own authorization and
+  Remote Watch Pass prompts remain effective; OttPlay is an explicit alternative.
 - Add capability-gated Local folder commands: `ott t1 local sources`,
   `local shuffle Movies`, and `local shuffle /Volumes/data/Movies/`. Play or
   shuffle the selected folder's complete eligible list, up to 50,000 items,

@@ -75,7 +75,11 @@ Required fields are `device_id` and `action`. Actions are `status`, `volume`,
 `mute`, `on`, `off`, `launch`, `go`, `apps`, and `pair`. For `volume`, specify
 either integer `volume` (0–100) or nonzero integer `delta` (-100–100), or omit
 both to read volume. `mute` requires boolean `muted`. Other actions accept no
-volume/mute fields. Optional integer `timeout_ms` is 1–120000, default 10000;
+volume/mute fields. `launch` and `go` also accept optional `app`, a configured
+alias such as `"plex"` from that television's administrator-owned `app_aliases`.
+Raw application IDs and URLs are not accepted in this field; unknown aliases
+fail before any wake or launch. Omitting it retains the default OttPlay target.
+Optional integer `timeout_ms` is 1–120000, default 10000;
 the overall operation is bounded to 120 seconds. Allow a response
 margin within the caller's deadline. Null, duplicate and unknown fields are
 rejected. Four operations may be in flight globally; each TV serializes its

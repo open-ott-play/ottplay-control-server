@@ -15,6 +15,7 @@ import (
 
 type Command struct {
 	Action string `json:"action"`
+	App    string `json:"app,omitempty"`
 	Volume *int   `json:"volume,omitempty"`
 	Delta  *int   `json:"delta,omitempty"`
 	Muted  *bool  `json:"muted,omitempty"`
@@ -66,6 +67,9 @@ func failure(code string) error   { return &Error{Code: code} }
 func uncertain(code string) error { return &Error{Code: code, Uncertain: true} }
 
 func (c Command) Validate() error {
+	if c.App != "" && ((c.Action != "launch" && c.Action != "go") || !config.ValidTelevisionAppAlias(c.App)) {
+		return failure("invalid_command")
+	}
 	if c.Volume != nil && (*c.Volume < 0 || *c.Volume > 100) {
 		return failure("invalid_command")
 	}
@@ -96,11 +100,14 @@ type boundTV struct {
 	gate   chan struct{}
 }
 type Manager struct {
-	devices      map[string]*boundTV
-	wakeWait     time.Duration
-	wakeInterval time.Duration
-	sendWake     func(string, string, int) error
+	devices           map[string]*boundTV
+	wakeWait          time.Duration
+	wakeInterval      time.Duration
+	wakeRetryInterval time.Duration
+	sendWake          func(context.Context, string, string, int) error
 }
+
+const defaultWakeRetryInterval = 10 * time.Second
 
 func New(configs []config.Television) (*Manager, error) {
 	// Detach pointer fields from caller-owned configuration.
@@ -118,7 +125,7 @@ func New(configs []config.Television) (*Manager, error) {
 	if config.ValidateTelevisions(items) != nil {
 		return nil, failure("invalid_configuration")
 	}
-	m := &Manager{devices: map[string]*boundTV{}, wakeWait: 90 * time.Second, wakeInterval: 500 * time.Millisecond, sendWake: sendMagicPacket}
+	m := &Manager{devices: map[string]*boundTV{}, wakeWait: 90 * time.Second, wakeInterval: 500 * time.Millisecond, wakeRetryInterval: defaultWakeRetryInterval, sendWake: sendMagicPacket}
 	for _, c := range items {
 		gate := make(chan struct{}, 1)
 		gate <- struct{}{}
@@ -150,7 +157,7 @@ func (m *Manager) Binding(id string) Binding {
 	if d.config.MAC != "" || d.config.Fallback != nil {
 		b.Capabilities = append(b.Capabilities, "on")
 	}
-	if hasLaunch(d.config) {
+	if hasLaunch(d.config) || len(d.config.AppAliases) != 0 {
 		b.Capabilities = append(b.Capabilities, "launch", "go")
 	}
 	return b
@@ -167,6 +174,16 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 		return r, failure("not_configured")
 	}
 	d := m.devices[id]
+	c := d.config
+	if cmd.App != "" {
+		app, ok := c.AppAliases[cmd.App]
+		if !ok {
+			return r, failure("app_not_configured")
+		}
+		// Resolve an administrator-owned name for this request only. Keep the
+		// ordinary OttPlay target intact for subsequent unqualified commands.
+		c.AppID, c.LaunchURL = app, ""
+	}
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	select {
@@ -175,30 +192,30 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 	case <-ctx.Done():
 		return r, failure("deadline")
 	}
-	if (cmd.Action == "launch" || cmd.Action == "go") && !hasLaunch(d.config) {
+	if (cmd.Action == "launch" || cmd.Action == "go") && !hasLaunch(c) {
 		return r, failure("launch_not_configured")
 	}
 	if cmd.Action == "on" || cmd.Action == "go" {
-		return m.wake(ctx, d.config, cmd, r)
+		return m.wake(ctx, c, cmd, r)
 	}
 	nativeCtx, nativeCancel := context.WithCancel(ctx)
-	if cmd.Action != "pair" && d.config.Fallback != nil {
+	if cmd.Action != "pair" && c.Fallback != nil {
 		nativeCancel()
 		nativeCtx, nativeCancel = phaseContext(ctx, 6*time.Second, 2)
 	}
 	defer nativeCancel()
-	s, err := connect(nativeCtx, d.config, cmd.Action == "pair")
+	s, err := connect(nativeCtx, c, cmd.Action == "pair")
 	if err == nil {
 		defer s.close()
 		if cmd.Action == "pair" {
-			if err = writeCredentials(d.config.ClientKeyFile, s.credentials); err != nil {
+			if err = writeCredentials(c.ClientKeyFile, s.credentials); err != nil {
 				return r, err
 			}
 			r.Outcome = "confirmed"
 			r.Pairing = &Pairing{Paired: true}
 			return r, nil
 		}
-		err = s.execute(nativeCtx, d.config, cmd, &r)
+		err = s.execute(nativeCtx, c, cmd, &r)
 		if err == nil {
 			return r, nil
 		}
@@ -208,8 +225,8 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 		}
 	}
 	nativeCancel()
-	if cmd.Action != "pair" && d.config.Fallback != nil && ctx.Err() == nil {
-		return executeFallback(ctx, d.config, cmd, r)
+	if cmd.Action != "pair" && c.Fallback != nil && ctx.Err() == nil {
+		return executeFallback(ctx, c, cmd, r)
 	}
 	return r, err
 }
@@ -269,16 +286,27 @@ func (m *Manager) wake(ctx context.Context, c config.Television, cmd Command, r 
 		return result, err
 	}
 	if c.MAC != "" && ctx.Err() == nil {
-		if m.sendWake(c.MAC, c.Broadcast, c.WOLPort) == nil {
+		if m.sendWake(ctx, c.MAC, c.Broadcast, c.WOLPort) == nil {
 			woken = true
 			r.Transport = "wake_on_lan"
 			r.Outcome = "accepted"
 			r.State = &State{Power: "unknown"}
 			probe, cancel := m.wakeProbeContext(ctx, c.Fallback != nil)
+			retryInterval := m.wakeRetryInterval
+			if retryInterval <= 0 {
+				retryInterval = defaultWakeRetryInterval
+			}
+			nextWake := time.Now().Add(retryInterval)
 			for probe.Err() == nil {
 				if done, err := ready(probe); done {
 					cancel()
 					return finish(r, err)
+				}
+				// Repeat only an idempotent magic packet while this foreground
+				// wake is still pending. No timer survives this request.
+				if probe.Err() == nil && !time.Now().Before(nextWake) {
+					_ = m.sendWake(probe, c.MAC, c.Broadcast, c.WOLPort)
+					nextWake = time.Now().Add(retryInterval)
 				}
 				if !wait(probe, m.wakeInterval) {
 					break
@@ -324,7 +352,10 @@ func wait(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func sendMagicPacket(mac, broadcast string, port int) error {
+func sendMagicPacket(ctx context.Context, mac, broadcast string, port int) error {
+	if ctx.Err() != nil {
+		return failure("deadline")
+	}
 	address, err := net.ParseMAC(mac)
 	if err != nil || len(address) != 6 {
 		return failure("invalid_configuration")
@@ -336,12 +367,21 @@ func sendMagicPacket(mac, broadcast string, port int) error {
 	for i := 0; i < 16; i++ {
 		packet = append(packet, address...)
 	}
-	conn, err := net.DialTimeout("udp4", net.JoinHostPort(broadcast, strconv.Itoa(port)), 2*time.Second)
+	conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "udp4", net.JoinHostPort(broadcast, strconv.Itoa(port)))
 	if err != nil {
 		return failure("wake_unavailable")
 	}
 	defer conn.Close()
-	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	deadline := time.Now().Add(2 * time.Second)
+	if bound, ok := ctx.Deadline(); ok && bound.Before(deadline) {
+		deadline = bound
+	}
+	_ = conn.SetWriteDeadline(deadline)
+	if ctx.Err() != nil {
+		return failure("deadline")
+	}
 	if n, err := conn.Write(packet); err != nil || n != len(packet) {
 		return failure("wake_unavailable")
 	}

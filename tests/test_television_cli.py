@@ -63,6 +63,9 @@ class TelevisionCliTest(unittest.TestCase):
                  (["wake"], {"action": "on"}), (["ON"], {"action": "on"}),
                  (["off"], {"action": "off"}), (["launch"], {"action": "launch"}),
                  (["go"], {"action": "go"}), (["start"], {"action": "go"}),
+                 (["go", "plex"], {"action": "go", "app": "plex"}),
+                 (["start", "Plex"], {"action": "go", "app": "plex"}),
+                 (["launch", "media-station_x"], {"action": "launch", "app": "media-station_x"}),
                  (["apps"], {"action": "apps"}), (["pair"], {"action": "pair"})]
         for words, params in cases:
             with self.subTest(words=words):
@@ -77,6 +80,8 @@ class TelevisionCliTest(unittest.TestCase):
         invalid = [["volume", "-0"], ["volume", "+0"], ["volume", "101"], ["volume", "+101"],
                    ["volume", "1.5"], ["volume", "nan"], ["volume", "01"], ["mute"], ["mute", "toggle"],
                    ["off", "now"], ["launch", "https://private.example"], ["pair", "secret"], ["power"],
+                   ["go", "plex", "extra"], ["go", "../plex"], ["go", "com.plex.app"],
+                   ["go", "a" * 33], ["on", "plex"],
                    ["shell", "anything"], ["status", "extra"]]
         for words in invalid:
             with self.subTest(words=words):
@@ -165,6 +170,17 @@ class TelevisionCliTest(unittest.TestCase):
         self.assertIn("may have executed", err)
         self.assertNotIn("SECRET", err)
         self.assertNotIn("private", err)
+
+    def test_unknown_app_reports_configuration_error_without_retry(self):
+        client = self.client()
+        client.api.side_effect = None
+        client.api.return_value = 200, {"version": 1, "device_id": "living", "action": "go",
+                                        "code": "app_not_configured", "uncertain": False}
+        code, out, err, client = self.run_cli(["l", "tv", "go", "plex"], client)
+        self.assertEqual((code, out, client.api.call_count), (1, "", 1))
+        self.assertIn("app_aliases", err)
+        self.assertNotIn("may have executed", err)
+        client.call.assert_not_called()
 
     def test_transport_failure_does_not_replay_relative_change_or_call_player(self):
         client = self.client()
