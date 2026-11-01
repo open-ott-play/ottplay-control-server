@@ -1,4 +1,5 @@
 import contextlib
+import email.message
 import http.server
 import importlib.machinery
 import importlib.util
@@ -265,12 +266,15 @@ class RemoteEpgCliTest(unittest.TestCase):
         self.assertEqual(client.call.call_count, 1)
 
     def test_service_errors_never_fall_back_to_player_scan(self):
-        result, output, errors, client, epg = self.run_command(['p', 'cats'], response=ott.Error('EPG service unavailable'))
-        self.assertEqual(result, 1)
-        self.assertEqual(output, '')
-        self.assertIn('EPG service unavailable', errors)
-        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'epg_catalog', {})])
-        self.assertEqual(epg.current.call_count, 1)
+        for failure in (ott.Error('EPG service unavailable'), ott.EpgHTTPError(504, 'EPG_TIMEOUT'),
+                        ott.EpgHTTPError(504, 'EPG_RELAY'), ott.EpgHTTPError(504)):
+            with self.subTest(failure=str(failure)):
+                result, output, errors, client, epg = self.run_command(['p', 'cats'], response=failure)
+                self.assertEqual(result, 1)
+                self.assertEqual(output, '')
+                self.assertIn(str(failure), errors)
+                self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'epg_catalog', {})])
+                self.assertEqual(epg.current.call_count, 1)
 
     def test_invalid_catalogs_never_call_service(self):
         cases = [{}, {'catalog': '', 'channels': []}, {'catalog': 'x' * 129, 'channels': []}]
@@ -360,6 +364,22 @@ class RemoteEpgCliTest(unittest.TestCase):
 
 
 class EpgTransportTest(unittest.TestCase):
+    def http_failure(self, body, status=504, media_types=('application/json',)):
+        headers = email.message.Message()
+        for value in media_types:
+            headers.add_header('Content-Type', value)
+        stream = io.BytesIO(body)
+        error = ott.urllib.error.HTTPError('https://private.example/secret', status,
+                                           'private-reason', headers, stream)
+        client = ott.EpgClient(SETTINGS, 5)
+        with mock.patch.object(client.opener, 'open', side_effect=error) as opening, \
+                self.assertRaises(ott.EpgHTTPError) as failure:
+            client.current([], 'cats')
+        opening.assert_called_once()
+        self.assertTrue(stream.closed)
+        self.assertNotIn('private', str(failure.exception))
+        return failure.exception
+
     def serve(self, handler):
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
         server.daemon_threads = True
@@ -410,6 +430,84 @@ class EpgTransportTest(unittest.TestCase):
                     'https://epg.example\n', 'https://epg.example\\other']:
             with self.subTest(url=url), self.assertRaises(ott.Error):
                 ott.EpgClient(dict(SETTINGS, url=url), 5)
+
+    def test_verified_http_errors_distinguish_server_gateway_and_untyped_timeouts(self):
+        for code, statuses in ott.EPG_HTTP_CODES.items():
+            for status in statuses:
+                with self.subTest(code=code, status=status):
+                    body = json.dumps({'version': 1, 'source': 'epg-one',
+                                       'error': {'code': code, 'message': 'private token and URL'}}).encode()
+                    failure = self.http_failure(body, status)
+                    self.assertEqual((failure.status, failure.epg_code), (status, code))
+                    self.assertIn(code, str(failure))
+                    if code == 'EPG_TIMEOUT':
+                        self.assertIn('server matching timed out', str(failure))
+                    elif code == 'EPG_RELAY':
+                        self.assertIn('gateway returned', str(failure))
+        failure = self.http_failure(b'<html>private gateway error</html>', media_types=('text/html',))
+        self.assertEqual((failure.status, failure.epg_code), (504, None))
+        self.assertIn('no verified EPG error code', str(failure))
+
+    def test_malformed_or_mismatched_http_envelopes_are_not_trusted(self):
+        valid = {'version': 1, 'source': 'epg-one', 'error': {'code': 'EPG_TIMEOUT'}}
+        cases = [b'private-not-json', b'\xff', b'[]', b'null',
+                 b'{"version":1,"version":1,"source":"epg-one","error":{"code":"EPG_TIMEOUT"}}',
+                 b'{"version":1,"source":"epg-one","error":{"code":"EPG_TIMEOUT","x":NaN}}',
+                 json.dumps(dict(valid, version=True)).encode(),
+                 json.dumps(dict(valid, source='private-source')).encode(),
+                 json.dumps(dict(valid, error={'code': 'private-code'})).encode(),
+                 json.dumps(dict(valid, error={'code': ['EPG_TIMEOUT']})).encode(),
+                 json.dumps(dict(valid, error={'code': 'EPG_BUSY'})).encode()]
+        for body in cases:
+            with self.subTest(body=body):
+                self.assertIsNone(self.http_failure(body).epg_code)
+        for media_types in ((), ('text/html',), ('application/json', 'application/json')):
+            with self.subTest(media_types=media_types):
+                self.assertIsNone(self.http_failure(json.dumps(valid).encode(), media_types=media_types).epg_code)
+
+    def test_http_error_body_limit_includes_ignored_message_fields(self):
+        base = json.dumps({'version': 1, 'source': 'epg-one', 'error': {'code': 'EPG_TIMEOUT'}}).encode()
+        self.assertEqual(self.http_failure(base + b' ' * (4096 - len(base))).epg_code, 'EPG_TIMEOUT')
+        body = base + b' ' * (4097 - len(base))
+        self.assertIsNone(self.http_failure(body).epg_code)
+        stream = io.BytesIO(body + b'private' * 10000)
+        error = ott.urllib.error.HTTPError('https://private.example/secret', 504, 'private-reason',
+                                           {'Content-Type': 'application/json'}, stream)
+        self.assertIsNone(ott.epg_http_error_code(error, time.monotonic() + 5, threading.Event()))
+        self.assertEqual(stream.tell(), 4097)
+        error.close()
+
+    def test_trickling_http_error_obeys_original_deadline_without_reposting(self):
+        requests, stopped = [], threading.Event()
+        self.addCleanup(stopped.set)
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                requests.append(self.rfile.read(int(self.headers['Content-Length'])))
+                body = json.dumps({'version': 1, 'source': 'epg-one',
+                                   'error': {'code': 'EPG_TIMEOUT', 'message': 'private'}}).encode()
+                self.send_response(504)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                for byte in body:
+                    if stopped.wait(0.05): return
+                    try:
+                        self.wfile.write(bytes([byte]))
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError): return
+        server = self.serve(Handler)
+        client = ott.EpgClient({'url': f'http://127.0.0.1:{server.server_port}', 'source': 'epg-one'}, 0.3)
+        started = time.monotonic()
+        with self.assertRaisesRegex(ott.Error, 'EPG service timed out') as failure:
+            client.current([], '')
+        self.assertLess(time.monotonic() - started, 0.8)
+        self.assertNotIn('private', str(failure.exception))
+        self.assertEqual(len(requests), 1)
+        for thread in threading.enumerate():
+            if thread.name == 'ottplay-epg-http':
+                thread.join(0.5)
+                self.assertFalse(thread.is_alive())
 
     def test_trickling_response_obeys_wall_deadline_without_reposting(self):
         requests = []

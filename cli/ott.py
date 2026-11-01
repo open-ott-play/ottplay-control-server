@@ -522,6 +522,72 @@ class HTTPError(Error):
         }.get(code, "Check the request parameters."))
 
 
+EPG_HTTP_CODES = {
+    "EPG_REQUEST": frozenset((400,)), "EPG_REQUEST_LIMIT": frozenset((413,)),
+    "EPG_NOT_READY": frozenset((503,)), "EPG_CHANNEL": frozenset((404,)),
+    "EPG_GENERATION": frozenset((409,)), "EPG_BUSY": frozenset((429,)),
+    "EPG_CHANNEL_LIMIT": frozenset((422,)), "EPG_INTERNAL": frozenset((500,)),
+    "EPG_TIMEOUT": frozenset((504,)),
+    "EPG_RELAY": frozenset((400, 404, 413, 429, 502, 503, 504)),
+}
+
+
+class EpgHTTPError(Error):
+    def __init__(self, status, epg_code=None):
+        self.status, self.epg_code = status, epg_code
+        if epg_code == "EPG_TIMEOUT":
+            message = "EPG server matching timed out (HTTP 504, EPG_TIMEOUT)"
+        elif epg_code == "EPG_RELAY":
+            message = f"EPG gateway returned HTTP {status} (EPG_RELAY)"
+        else:
+            detail = epg_code or "no verified EPG error code"
+            message = f"EPG service returned HTTP {status} ({detail})"
+        super().__init__(message + "; no player EPG scan or playback was requested")
+
+
+def epg_http_error_code(error, deadline, cancelled):
+    """Read a bounded error envelope; never include remote messages in output."""
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate EPG error field")
+            result[key] = value
+        return result
+
+    def reject_constant(_):
+        raise ValueError("Invalid EPG error constant")
+
+    try:
+        headers = error.headers
+        types = headers.get_all("Content-Type", []) if hasattr(headers, "get_all") else [headers.get("Content-Type")]
+        if (len(types) != 1 or not isinstance(types[0], str)
+                or len(types[0]) > 256 or types[0].partition(";")[0].strip().lower() != "application/json"):
+            return None
+        body = bytearray()
+        while True:
+            if cancelled.is_set() or time.monotonic() >= deadline:
+                raise Error("EPG service timed out; no player EPG scan or playback was requested")
+            chunk = error.read1(4097 - len(body))
+            if not chunk:
+                remaining = getattr(error.fp, "length", None)
+                if isinstance(remaining, int) and remaining > 0:
+                    return None
+                break
+            body.extend(chunk)
+            if len(body) > 4096:
+                return None
+        value = json.loads(body.decode("utf-8"), object_pairs_hook=unique_fields, parse_constant=reject_constant)
+        if (not isinstance(value, dict) or type(value.get("version")) is not int
+                or value["version"] != 1 or value.get("source") != "epg-one"
+                or not isinstance(value.get("error"), dict)):
+            return None
+        code = value["error"].get("code")
+        return code if isinstance(code, str) and error.code in EPG_HTTP_CODES.get(code, ()) else None
+    except (AttributeError, OSError, http.client.HTTPException, TypeError, ValueError, RecursionError):
+        return None
+
+
 class EpgClient:
     """Public EPG transport, deliberately independent of controller credentials."""
     def __init__(self, settings, timeout):
@@ -596,9 +662,11 @@ class EpgClient:
                     if len(body) > 2 * 1024 * 1024:
                         raise Error("EPG service response exceeds the size limit")
         except urllib.error.HTTPError as exc:
-            code = exc.code
-            exc.close()
-            raise Error(f"EPG service returned HTTP {code}; no player EPG scan or playback was requested") from None
+            try:
+                code = epg_http_error_code(exc, deadline, cancelled)
+            finally:
+                exc.close()
+            raise EpgHTTPError(exc.code, code) from None
         except (OSError, http.client.HTTPException):
             raise Error("EPG service unavailable; no player EPG scan or playback was requested") from None
         except ValueError:

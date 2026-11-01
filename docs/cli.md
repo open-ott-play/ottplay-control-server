@@ -1474,7 +1474,7 @@ To search current programmes on the shared EPG service, add this optional field
 to the same CLI configuration:
 
 ```json
-"epg": {"url": "https://epg.2560801.xyz/epg/v1", "source": "epg-one"}
+"epg": {"url": "https://ottplay-epg-api.igw-2560801.workers.dev/epg/v1", "source": "epg-one"}
 ```
 
 With `epg` configured, all `p` commands ask the player only for its channel
@@ -1498,6 +1498,16 @@ every channel's EPG on the player. Current-programme HTTP requests are limited
 to ten seconds (or the smaller remaining budget) and 2 MiB of response data;
 all current-programme batches together share the `--timeout` budget. Archive
 history requests allow twenty seconds and 16 MiB per response.
+
+For an HTTP failure, the CLI accepts only a JSON error envelope of at most 4 KiB,
+read within the same request deadline, and reports only a verified, known code. It never
+prints the service's message, response body or private configuration. `EPG_TIMEOUT`
+with HTTP 504 means the EPG server's matching deadline expired; `EPG_RELAY` identifies
+the fixed gateway. HTTP 504 with `no verified EPG error code` has no trusted
+service diagnosis, so inspect the gateway and server separately. Errors are not
+retried automatically and never trigger a player-wide EPG scan or playback.
+Use the gateway URL above; the legacy `epg.2560801.xyz` route has separate access
+rules and is not the recommended CLI endpoint.
 
 With this optional EPG service configured, title launch follows this order:
 `ott PLAYER TITLE` searches channel names first, then current programme titles,
