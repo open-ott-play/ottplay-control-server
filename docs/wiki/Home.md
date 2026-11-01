@@ -13,6 +13,7 @@ editing it does not automatically publish GitHub Wiki pages.
 
 - [Start and connect a player](../../README.md)
 - [Terminal CLI: installation and command reference](../cli.md)
+- [Native LG television power, system volume and app launch](../television.md)
 - [Current playback, retained reports and viewing history](../player-state.md)
 - [Typed settings, source-bound saves and VPortal preset migration](../player-settings.md)
 - [Home Assistant: active-player banners, token setup and recovery](../home-assistant.md)

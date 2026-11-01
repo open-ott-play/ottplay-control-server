@@ -126,6 +126,11 @@ Use the Python CLI for player aliases, live volume, channel search, current EPG,
 provider selection and supported provider configuration: [CLI guide](docs/cli.md).
 Both server and player must include the request/response extension.
 
+For physical LG television power, system volume and app launch, use the separate
+[native TV controls](docs/television.md): `ott l tv volume 25`, `ott l tv off`
+or `ott -t 60 l tv go`. They work while the player page is closed, prefer direct
+webOS control and use Home Assistant only as a configured fallback.
+
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
 cover macOS/Linux and Windows, Python/PATH setup and the required CLI modules.

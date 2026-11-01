@@ -40,8 +40,12 @@ ott -j l tv status             # validated JSON, including the selected transpor
 Absolute volume values are integers from 0 through 100. Relative changes are
 nonzero integers from -100 through +100. Mute uses an explicit `on` or `off`;
 there is no ambiguous toggle command. TV operations accept `--timeout` from 1
-through 120 seconds, applied separately to each group member. Pairing and wake
-may need `-t 60` or `-t 90`.
+through 120 seconds, applied separately to each group member. Pairing may need
+`-t 60`. For a slow cold boot, use `ott -t 90 lg2 tv go` so readiness and app
+launch share a sufficient bounded budget. An accepted app launch does not
+confirm playback: after the TV has finished starting, read `ott lg2 tv status`
+for physical TV state and `ott lg2` for the player. Do not replay `go` merely
+because its receipt was accepted rather than confirmed.
 
 All ordinary player groups work with TV commands:
 
@@ -100,6 +104,14 @@ Add a separate binding for `lg2` with its own device ID, address, MAC and pairin
 file. The controller must be able to reach each TV; reserve its address in DHCP.
 Prefer TLS on port 3001. Port 3000 with `tls: false` is only for televisions that
 need an explicitly configured unencrypted LAN connection.
+
+`broadcast` is the IPv4 destination of the UDP Wake-on-LAN packet. A subnet's
+directed broadcast address is appropriate when the network forwards it;
+routers may filter directed broadcasts across subnets. The TV's own unicast
+IPv4 address can also work across a routed network when the router retains a
+usable neighbor mapping for the sleeping TV. This depends on the router and
+TV network interface; unicast wake is not guaranteed. Test wake from the
+controller's actual network location, including its container or pod.
 
 Use either `launch_url` for the hosted player or `app_id` for an installed app,
 never both. Discover actual app IDs with `tv apps`; the CLI does not accept

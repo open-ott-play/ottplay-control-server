@@ -118,7 +118,7 @@ func New(configs []config.Television) (*Manager, error) {
 	if config.ValidateTelevisions(items) != nil {
 		return nil, failure("invalid_configuration")
 	}
-	m := &Manager{devices: map[string]*boundTV{}, wakeWait: 20 * time.Second, wakeInterval: 500 * time.Millisecond, sendWake: sendMagicPacket}
+	m := &Manager{devices: map[string]*boundTV{}, wakeWait: 90 * time.Second, wakeInterval: 500 * time.Millisecond, sendWake: sendMagicPacket}
 	for _, c := range items {
 		gate := make(chan struct{}, 1)
 		gate <- struct{}{}
@@ -167,7 +167,7 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 		return r, failure("not_configured")
 	}
 	d := m.devices[id]
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	select {
 	case <-d.gate:
@@ -274,11 +274,7 @@ func (m *Manager) wake(ctx context.Context, c config.Television, cmd Command, r 
 			r.Transport = "wake_on_lan"
 			r.Outcome = "accepted"
 			r.State = &State{Power: "unknown"}
-			probe, cancel := context.WithTimeout(ctx, m.wakeWait)
-			if c.Fallback != nil {
-				cancel()
-				probe, cancel = phaseContext(ctx, min(m.wakeWait, 5*time.Second), 2)
-			}
+			probe, cancel := m.wakeProbeContext(ctx, c.Fallback != nil)
 			for probe.Err() == nil {
 				if done, err := ready(probe); done {
 					cancel()
@@ -299,6 +295,13 @@ func (m *Manager) wake(ctx context.Context, c config.Television, cmd Command, r 
 		return r, nil
 	}
 	return finish(r, failure("not_ready"))
+}
+
+func (m *Manager) wakeProbeContext(ctx context.Context, hasFallback bool) (context.Context, context.CancelFunc) {
+	if hasFallback {
+		return phaseContext(ctx, m.wakeWait, 2)
+	}
+	return context.WithTimeout(ctx, m.wakeWait)
 }
 
 // Reserve part of the caller's existing budget for the fallback. No phase may

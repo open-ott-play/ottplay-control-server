@@ -31,6 +31,9 @@ type haFixture struct {
 	}
 	postFailure  bool
 	nullReadings bool
+	onAfterReads int
+	wakeReads    int
+	wakePending  bool
 }
 
 func newHA(t *testing.T, tv *tvFixture) *haFixture {
@@ -79,6 +82,13 @@ func newHA(t *testing.T, tv *tvFixture) *haFixture {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/api/states/media_player.native_tv" {
+			if h.wakePending {
+				h.wakeReads++
+				if h.wakeReads >= h.onAfterReads {
+					h.power = "on"
+					h.wakePending = false
+				}
+			}
 			attributes := map[string]any{"volume_level": h.volume, "is_volume_muted": h.muted, "app_id": h.app}
 			if h.nullReadings {
 				attributes["volume_level"] = nil
@@ -114,7 +124,11 @@ func newHA(t *testing.T, tv *tvFixture) *haFixture {
 		case "/api/services/media_player/volume_mute":
 			h.muted = data["is_volume_muted"].(bool)
 		case "/api/services/media_player/turn_on":
-			h.power = "on"
+			if h.onAfterReads > 0 {
+				h.wakePending = true
+			} else {
+				h.power = "on"
+			}
 		case "/api/services/media_player/turn_off":
 			h.power = "off"
 		case "/api/services/webostv/command":
@@ -339,6 +353,90 @@ func TestGoCanFinishThroughFallbackAfterWOL(t *testing.T) {
 	defer h.mu.Unlock()
 	if len(h.posts) != 2 || h.posts[0].path != "/api/services/media_player/turn_on" || h.posts[1].path != "/api/services/webostv/command" {
 		t.Fatalf("unexpected fallback requests: %v", h.posts)
+	}
+}
+
+func TestLongWakeBudgetsUseCallerDeadline(t *testing.T) {
+	m, err := New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
+	defer cancel()
+	native, nativeCancel := m.wakeProbeContext(ctx, true)
+	defer nativeCancel()
+	deadline, _ := native.Deadline()
+	if remaining := time.Until(deadline); remaining < 35*time.Second || remaining > 40*time.Second {
+		t.Fatalf("native wake did not reserve meaningful half-budget: %s", remaining)
+	}
+	withoutFallback, noFallbackCancel := m.wakeProbeContext(ctx, false)
+	defer noFallbackCancel()
+	deadline, _ = withoutFallback.Deadline()
+	if remaining := time.Until(deadline); remaining < 75*time.Second || remaining > 80*time.Second {
+		t.Fatalf("direct wake ignored long caller deadline: %s", remaining)
+	}
+	ha, haCancel := fallbackReadinessContext(ctx)
+	defer haCancel()
+	deadline, _ = ha.Deadline()
+	if remaining := time.Until(deadline); remaining < 75*time.Second || remaining > 80*time.Second {
+		t.Fatalf("HA readiness retained an early fixed cutoff: %s", remaining)
+	}
+}
+
+func TestDelayedNativeWakeWithFallbackLaunchesOnlyOnce(t *testing.T) {
+	f := newTV(t, false)
+	h := newHA(t, f)
+	if err := writeCredentials(f.config.ClientKeyFile, credentials{ClientKey: "fixture-paired-key"}); err != nil {
+		t.Fatal(err)
+	}
+	f.power = "Power Off"
+	f.config.MAC = "02:03:04:05:06:07"
+	m := f.manager(t)
+	m.wakeWait = 150 * time.Millisecond
+	m.wakeInterval = time.Millisecond
+	var timer *time.Timer
+	m.sendWake = func(string, string, int) error {
+		timer = time.AfterFunc(25*time.Millisecond, func() { f.mu.Lock(); f.power = "Active"; f.mu.Unlock() })
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	r, err := m.Execute(ctx, "living", Command{Action: "go"})
+	if timer != nil {
+		timer.Stop()
+	}
+	if err != nil || r.Transport != "webos" || r.Outcome != "confirmed" || f.count(launchApp) != 1 {
+		t.Fatalf("delayed native wake failed: result=%+v error=%v", r, err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.verified || len(h.posts) != 0 {
+		t.Fatal("fallback ran before native wake budget was used")
+	}
+}
+
+func TestFallbackGoWaitsForDelayedReadinessBeforeOneLaunch(t *testing.T) {
+	f := newTV(t, false)
+	h := newHA(t, f)
+	h.power = "off"
+	h.onAfterReads = 4
+	client := &fallbackClient{c: *f.config.Fallback, token: "ha-fixture-token", http: h.server.Client(), readyPollInterval: time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := client.verifyNative(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := Result{Version: 1, DeviceID: "living", Action: "go", Transport: "home_assistant", Outcome: "accepted"}
+	if err := client.execute(ctx, f.config, Command{Action: "go"}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Outcome != "confirmed" || r.State.AppID != f.config.AppID {
+		t.Fatalf("delayed HA readiness failed: %+v", r)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.wakeReads < 4 || len(h.posts) != 2 || h.posts[1].path != "/api/services/webostv/command" {
+		t.Fatalf("unexpected wake/launch order: reads=%d posts=%v", h.wakeReads, h.posts)
 	}
 }
 

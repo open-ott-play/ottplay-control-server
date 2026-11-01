@@ -21,6 +21,7 @@ type fallbackClient struct {
 	token             string
 	http              *http.Client
 	mutationAttempted bool
+	readyPollInterval time.Duration
 }
 
 func executeFallback(ctx context.Context, c config.Television, cmd Command, r Result) (Result, error) {
@@ -35,7 +36,7 @@ func executeFallback(ctx context.Context, c config.Television, cmd Command, r Re
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 3 * time.Second}).DialContext, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 4 * time.Second}
 	defer transport.CloseIdleConnections()
-	f := &fallbackClient{c: *c.Fallback, token: token, http: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	f := &fallbackClient{c: *c.Fallback, token: token, http: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, readyPollInterval: 500 * time.Millisecond}
 	// Checking the entity registry prevents a server -> OttPlay HA entity ->
 	// server loop. A matching friendly name or media_player domain is not proof.
 	if err = f.verifyNative(ctx); err != nil {
@@ -270,8 +271,12 @@ func (f *fallbackClient) execute(ctx context.Context, c config.Television, cmd C
 			}
 			r.Outcome = "accepted"
 			r.State = nil
-			probe, cancel := context.WithTimeout(ctx, 10*time.Second)
+			probe, cancel := fallbackReadinessContext(ctx)
 			defer cancel()
+			pollInterval := f.readyPollInterval
+			if pollInterval <= 0 {
+				pollInterval = 500 * time.Millisecond
+			}
 			for probe.Err() == nil {
 				if observed, err := f.state(probe); err == nil {
 					state = observed
@@ -280,7 +285,7 @@ func (f *fallbackClient) execute(ctx context.Context, c config.Television, cmd C
 						break
 					}
 				}
-				if !wait(probe, 500*time.Millisecond) {
+				if !wait(probe, pollInterval) {
 					break
 				}
 			}
@@ -300,6 +305,12 @@ func (f *fallbackClient) execute(ctx context.Context, c config.Television, cmd C
 		return f.launch(ctx, c, r)
 	}
 	return failure("unsupported")
+}
+
+func fallbackReadinessContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	// Slow webOS boots can take a minute. Use the caller's remaining budget,
+	// rather than returning early while an accepted wake is still in progress.
+	return context.WithTimeout(ctx, 90*time.Second)
 }
 
 func (f *fallbackClient) launch(ctx context.Context, c config.Television, r *Result) error {
