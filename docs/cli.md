@@ -1524,6 +1524,35 @@ then available archive programmes. `ott PLAYER p TITLE` starts at the programme
 step. Both list the matches and choose one randomly when several match.
 `p --list TITLE` searches without launching playback.
 
+Search progress is written to **stderr** and flushed immediately, including with
+`--json`; stdout retains only the command's result. Messages identify the player,
+current stage, completed/total work when known, and elapsed seconds. Long requests
+emit a `Still working` message every five seconds without changing the request's
+timeout or repeating it. Player groups emit these messages live for each member.
+
+```text
+[search l] Searching player channel names [0.0s]
+[search l] Reading player channel catalogue [0.4s]
+[search l] Searching current EPG channels 1536/2029 [6.2s]
+[search l] No current matches; searching available archives [12.1s]
+[search l] Loading programme history 240/816 [18.2s]
+[search l] Checking archive media 3 [25.1s]
+[search l] Still working: Checking archive media 3 [30.1s]
+```
+
+Archive stages distinguish cached results/mappings, history loading, candidate
+resolution on the player, and checking the initial media bytes. A counter without
+a total reports checked candidates rather than an estimated percentage. A slow
+archive search can outlast the current-EPG budget because its individual history,
+resolver and media requests have separate timeouts; progress reports do not
+claim that it has completed. Use `Ctrl-C` to interrupt a search.
+
+```sh
+ott l три кота 2>search.log
+ott -j l p --list "три кота" >results.json 2>search.log
+ott t1,t2 p --list "news" 2>search.log
+```
+
 Archive lookup uses `/match` and `/programmes` on the same EPG service. Only
 channels advertising archive support are eligible, within the smaller of their
 retention and **144 hours**. Adjacent matching programmes form one result; an

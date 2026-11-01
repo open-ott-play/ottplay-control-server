@@ -3,7 +3,7 @@
 Guide requests contain metadata only. Resolved media URLs live only in memory
 between the authenticated controller and its local availability probe.
 """
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import hashlib
 from http.client import HTTPException
@@ -48,6 +48,11 @@ class SearchError(Exception):
 
 class GenerationChanged(SearchError):
     pass
+
+
+def _progress(callback, stage, completed=None, total=None):
+    if callback is not None:
+        callback(stage, completed, total)
 
 
 def text_key(value):
@@ -185,7 +190,7 @@ def valid_candidates(rows, channels, now):
     return True
 
 
-def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts=1):
+def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts=1, *, progress=None):
     read = cached if cache is None else cache.read
     write = remember if cache is None else cache.write
     lifetime = max(1, ttl)
@@ -195,9 +200,11 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
         try:
             clock = time.time()
             key = [base, metadata]
+            _progress(progress, "Reading cached channel mappings")
             mapping = read("mapping", key, ttl, refresh or bool(attempt))
             if not valid_mapping(mapping, metadata, clock, lifetime):
                 generation, mappings = None, {}
+                _progress(progress, "Matching archive channels", 0, len(metadata))
                 for start in range(0, len(metadata), 100):
                     batch = metadata[start:start + 100]
                     response = request(base, "/match", {"version": 1, "source": "epg-one", "channels": batch})
@@ -207,10 +214,13 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                     if not isinstance(response.get("mappings"), dict):
                         raise SearchError("Invalid EPG channel mapping")
                     mappings.update({row["id"]: response["mappings"].get(row["id"]) for row in batch})
+                    _progress(progress, "Matching archive channels", start + len(batch), len(metadata))
                 mapping = {"generation": generation, "mappings": mappings, "until": clock + lifetime}
                 if not valid_mapping(mapping, metadata, clock, lifetime):
                     raise SearchError("Invalid EPG channel mapping")
                 write("mapping", key, mapping)
+            else:
+                _progress(progress, "Using cached channel mappings", len(metadata), len(metadata))
             ids = {}
             for channel in channels:
                 match = mapping["mappings"].get(channel["id"])
@@ -239,16 +249,21 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                 return key, rows, saved["until"]
 
             guides, until = {}, mapping["until"]
+            keys = set(ids.values())
+            _progress(progress, "Loading programme history", 0, len(keys))
             with ThreadPoolExecutor(max_workers=4) as pool:
-                for key, rows, expires in pool.map(fetch, set(ids.values())):
+                for task in as_completed([pool.submit(fetch, key) for key in keys]):
+                    key, rows, expires = task.result()
                     guides[key] = rows
                     until = min(until, expires)
+                    _progress(progress, "Loading programme history", len(guides), len(keys))
             return [(channel, [{**row, "time": row["time"] + channel["shift"],
                                 "time_to": row["time_to"] + channel["shift"]} for row in guides[ids[channel["id"]]]])
                     for channel in channels if channel["id"] in ids], until
         except GenerationChanged:
             if attempt:
                 raise
+            _progress(progress, "Guide changed; refreshing archive schedules")
     raise SearchError("EPG changed repeatedly; retry the search")
 
 
@@ -355,7 +370,7 @@ def archive_available(url, start, require_hls=False, allow_redirects=False):
     return False
 
 
-def search_archives(client, device, settings, snapshot, query, refresh=False, catalog_expired=None):
+def search_archives(client, device, settings, snapshot, query, refresh=False, catalog_expired=None, *, progress=None):
     capability = snapshot.get("archive")
     if (not isinstance(capability, dict) or capability.get("version") != 1
             or not isinstance(capability.get("revision"), str) or not 1 <= len(capability["revision"]) <= 128):
@@ -369,6 +384,7 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
     identity = [client.config["server"], device, capability["revision"]]
     key = [base, identity, text_key(query)]
     until = time.time() + GUIDE_TTL
+    _progress(progress, "Reading cached archive results")
     previous = cached("query", key, GUIDE_TTL, refresh)
     selected = None
     now = time.time()
@@ -376,12 +392,14 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
         candidates = previous.get("programs")
         if valid_candidates(candidates, channels, now):
             selected = candidates
+            _progress(progress, "Using cached archive results", len(selected), len(selected))
     receipt = snapshot["catalog"]
     checked_at = time.monotonic()
 
     def fresh_receipt(force=False):
         nonlocal receipt, checked_at
         if force or time.monotonic() - checked_at >= 60:
+            _progress(progress, "Refreshing player catalogue")
             current = client.call(device, "epg_catalog", {})
             if (not isinstance(current, dict) or current.get("channels") != channels
                     or current.get("archive") != capability or not isinstance(current.get("catalog"), str)):
@@ -396,14 +414,17 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                 "consecutive": count, "archive_hours": channel["archiveHours"]}
 
     if selected is None:
-        guide, until = schedules(base, channels, refresh)
+        guide, until = schedules(base, channels, refresh, progress=progress)
+        checked_candidates = 0
 
         def verify(channel, row):
+            nonlocal checked_candidates
             archive_key = [identity, channel["id"], row["time"]]
             verified = cached("archive", archive_key, ARCHIVE_TTL, refresh) is True
             if not verified:
                 params = {"catalog": fresh_receipt(), "id": channel["id"], "start": row["time"],
                           "end": row["time_to"], "title": row["name"]}
+                _progress(progress, "Resolving archive candidates", checked_candidates)
                 try:
                     response = client.call(device, "resolve_archive", params)
                 except Exception as exc:
@@ -411,14 +432,21 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                         raise
                     # Retry only an acknowledged expired read, never playback.
                     params["catalog"] = fresh_receipt(force=True)
+                    _progress(progress, "Resolving archive candidates", checked_candidates)
                     response = client.call(device, "resolve_archive", params)
                 if not isinstance(response, dict) or response.get("resolved") is not True:
                     raise SearchError("The player did not resolve the selected archive")
+                _progress(progress, "Checking archive media", checked_candidates)
                 verified = archive_available(response.get("url"), row["time"])
                 if verified:
                     remember("archive", archive_key, True)
+            else:
+                _progress(progress, "Using cached archive availability", checked_candidates)
+            checked_candidates += 1
+            _progress(progress, "Checking archive availability", checked_candidates)
             return verified
 
+        _progress(progress, "Searching programme history")
         choices, boundary = select_from_schedules(guide, query, verify)
         selected = [result(*choice) for choice in choices]
         until = min(until, boundary)
@@ -433,5 +461,6 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
             targets[(row["number"], row["start"])] = target
         else:
             targets[row["number"]] = target
+    _progress(progress, "Archive search complete", len(selected), len(selected))
     return {"as_of": time.time(), "checked": len(channels), "total": len(channels),
             "partial": False, "programs": selected}, targets

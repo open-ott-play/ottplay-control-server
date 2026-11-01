@@ -589,6 +589,64 @@ def epg_http_error_code(error, deadline, cancelled):
         return None
 
 
+class SearchProgress:
+    """Keep search diagnostics live on stderr without changing result output."""
+    heartbeat_seconds = 5
+    update_seconds = 1
+
+    def __init__(self, player, stream=None):
+        self.player = clean(str(player))[:128]
+        self.stream = sys.stderr if stream is None else stream
+        self.started = time.monotonic()
+        self.last_output = self.started
+        self.stage, self.completed, self.total = None, None, None
+        self.lock = threading.Lock()
+        self.stopped = threading.Event()
+        self.thread = None
+
+    def __enter__(self):
+        self.thread = threading.Thread(target=self._heartbeat, name="ottplay-search-progress", daemon=True)
+        self.thread.start()
+        return self
+
+    def _write(self, now, waiting=False):
+        stage = ("Still working: " if waiting else "") + self.stage
+        if self.completed is not None:
+            stage += " " + str(self.completed)
+            if self.total is not None:
+                stage += "/" + str(self.total)
+        try:
+            print(f"[search {self.player}] {stage} [{max(0, now - self.started):.1f}s]",
+                  file=self.stream, flush=True)
+        except (OSError, ValueError):
+            # A closed diagnostics destination must not interrupt a search.
+            pass
+        self.last_output = now
+
+    def __call__(self, stage, completed=None, total=None):
+        with self.lock:
+            if self.stopped.is_set():
+                return
+            now = time.monotonic()
+            changed = stage != self.stage
+            self.stage, self.completed, self.total = clean(stage), completed, total
+            if changed or (total is not None and completed == total) or now - self.last_output >= self.update_seconds:
+                self._write(now)
+
+    def _heartbeat(self):
+        while not self.stopped.wait(self.heartbeat_seconds):
+            with self.lock:
+                now = time.monotonic()
+                if not self.stopped.is_set() and self.stage and now - self.last_output >= self.heartbeat_seconds:
+                    self._write(now, waiting=True)
+
+    def __exit__(self, kind, value, traceback):
+        self("Search complete" if kind is None else "Search stopped")
+        self.stopped.set()
+        if self.thread is not None:
+            self.thread.join()
+
+
 class EpgClient:
     """Public EPG transport, deliberately independent of controller credentials."""
     def __init__(self, settings, timeout):
@@ -709,10 +767,12 @@ def expired_epg_catalog(error):
             and error.data.get("error") == "Channels or provider changed. Retry the EPG query before playing.")
 
 
-def server_programs(client, device, settings, search, refresh=False):
+def server_programs(client, device, settings, search, refresh=False, progress=None):
     epg = EpgClient(settings, client.timeout)
     if not epg_text(search, 1024, "utf-8"):
         raise Error("Programme search must contain at most 1024 UTF-8 bytes")
+    if progress:
+        progress("Reading player channel catalogue")
     snapshot = client.call(device, "epg_catalog", {})
     invalid = "The player returned an invalid EPG catalogue; no playback was requested"
     if (not isinstance(snapshot, dict) or not epg_text(snapshot.get("catalog"), 128, "utf-8")
@@ -737,6 +797,7 @@ def server_programs(client, device, settings, search, refresh=False):
     search_deadline = time.monotonic() + client.timeout
     pending = deque(epg_batches(channels))
     splits = 0
+    checked = 0
     while pending:
         batch = pending.popleft()
         batch_by_id = {row["id"]: by_id[row["id"]] for row in batch}
@@ -744,6 +805,8 @@ def server_programs(client, device, settings, search, refresh=False):
         if remaining <= 0:
             raise Error("EPG service timed out; no player EPG scan or playback was requested")
         epg.timeout = min(10, remaining)
+        if progress:
+            progress("Searching current EPG channels", checked, len(channels))
         try:
             response = epg.current(batch, search)
         except EpgHTTPError as exc:
@@ -755,6 +818,8 @@ def server_programs(client, device, settings, search, refresh=False):
             pending.appendleft(batch[middle:])
             pending.appendleft(batch[:middle])
             splits += 1
+            if progress:
+                progress("Splitting timed-out EPG batch", splits, 4)
             continue
         if time.monotonic() >= search_deadline:
             raise Error("EPG service timed out; no player EPG scan or playback was requested")
@@ -788,14 +853,20 @@ def server_programs(client, device, settings, search, refresh=False):
             raise Error("EPG guide changed during search; retry the query. No playback was requested")
         generation = response["generation"]
         as_of = max(as_of, response["asOf"])
+        checked += len(batch)
+        if progress:
+            progress("Searching current EPG channels", checked, len(channels))
     programs = [row for row in programs if row["start"] <= as_of < row["end"]]
     if not programs and search.strip():
+        if progress:
+            progress("No current matches; searching available archives")
         spec = importlib.util.spec_from_file_location("ott_programme_search", Path(__file__).resolve().with_name("programme_search.py"))
         history = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(history)
         try:
+            options = {"progress": progress} if progress is not None else {}
             return history.search_archives(client, device, settings, snapshot, search, refresh,
-                                           catalog_expired=expired_epg_catalog)
+                                           catalog_expired=expired_epg_catalog, **options)
         except history.SearchError as exc:
             raise Error(str(exc)) from None
     return {"as_of": as_of, "checked": len(channels), "partial": False,
@@ -6495,7 +6566,7 @@ def player_group_command(client, config, targets, args, argv):
                     client.on_receipt = receipt
                 with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
                     code = execute_player_command(client, config, local_args, argv, device,
-                                                  prepared=local_prepared, grouped=True)
+                                                  prepared=local_prepared, grouped=True, progress_stream=stderr)
             except (PlayerRejected, PlayerUnsupported) as exc:
                 reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
                 row["error"] = "The " + action + " request was " + reason + "; inspect this player before another change. The request was not repeated."
@@ -6566,7 +6637,7 @@ def player_group_command(client, config, targets, args, argv):
     return next((code for code in (1, 2, 3) if code in codes), 0 if succeeded == len(results) else 1)
 
 
-def execute_player_command(client, config, args, argv, device, *, prepared=None, grouped=False):
+def execute_player_command(client, config, args, argv, device, *, prepared=None, grouped=False, progress_stream=None):
     """Run the same resolved-player command for a single target or one group member."""
     words = args.words[1:]
     route = player_command_route(words)
@@ -6664,17 +6735,24 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "command" and params.get("command") == "random_channel":
         data = random_command(client, device, params, args.timeout)
     elif action == "programs" and "epg" in config:
-        data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh)
+        with SearchProgress(args.words[0], progress_stream) as progress:
+            data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh,
+                                                progress=progress)
     elif action == "playback" and params.get("operation") == "seek_relative":
         data = relative_seek_command(client, device, params, args.timeout)
     elif action == "play":
-        data, playback_error = play_channel(client, device, params, args.timeout)
-        if data.get("channels") == [] and "epg" in config and data.get("version") != 1:
-            print("No channel matches. Searching current EPG and available archives...", file=sys.stderr)
-            query = params["query"]
-            data, catalog_play = server_programs(client, device, config["epg"], query, refresh=args.refresh)
-            action, params, words = "programs", {"search": query}, ["p", query]
-            playback_error = None
+        context = SearchProgress(args.words[0], progress_stream) if "epg" in config else contextlib.nullcontext()
+        with context as progress:
+            if progress:
+                progress("Searching player channel names")
+            data, playback_error = play_channel(client, device, params, args.timeout)
+            if data.get("channels") == [] and "epg" in config and data.get("version") != 1:
+                progress("No channel matches; searching current EPG and available archives")
+                query = params["query"]
+                data, catalog_play = server_programs(client, device, config["epg"], query, refresh=args.refresh,
+                                                    progress=progress)
+                action, params, words = "programs", {"search": query}, ["p", query]
+                playback_error = None
     else:
         try:
             data = client.call(device, action, params)
