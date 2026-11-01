@@ -798,6 +798,8 @@ def server_programs(client, device, settings, search, refresh=False, progress=No
     except policy.ConfigurationError as exc:
         raise Error(str(exc)) from None
     deadline = time.monotonic() + client.timeout
+    if isinstance(search, str) and search.strip() and unicodedata.unidata_version != "17.0.0" and progress:
+        progress("Using compatible EPG search for Python Unicode " + unicodedata.unidata_version)
     try:
         return _server_programs(client, device, primary, search, refresh, progress, fast, deadline)
     except (EpgHTTPError, EpgTransportError) as exc:
@@ -907,7 +909,10 @@ def _server_programs(client, device, settings, search, refresh, progress, fast, 
             raise Error("EPG guide changed during search; retry the query. No playback was requested")
         generation = response["generation"]
         as_of = max(as_of, response["asOf"])
-        if search.strip() and type(response.get("searchVersion")) is int and response["searchVersion"] == 1:
+        # The compact endpoint's archive predicate is pinned to Unicode 17.
+        # Older (or future) tables cannot safely validate its complete matches.
+        if (search.strip() and unicodedata.unidata_version == "17.0.0"
+                and type(response.get("searchVersion")) is int and response["searchVersion"] == 1):
             return epg_module("epg_search").run(SimpleNamespace(**globals()), client, device, settings,
                                                 snapshot, search, deadline, progress=progress, fast=fast,
                                                 generation=generation, refresh=refresh)

@@ -84,6 +84,7 @@ class FallbackIntegrationTest(unittest.TestCase):
         self.assertEqual([len(call.args[0]) for call in self.local.current.call_args_list], [256, 44])
         self.assert_read_only()
 
+    @patch.object(ott.unicodedata, 'unidata_version', '17.0.0')
     def test_compact_mid_batch_failover_restarts_discovery_and_pins_new_generation(self):
         self.primary.current.side_effect = lambda rows, query: dict(response(rows), searchVersion=1)
         self.local.current.side_effect = lambda rows, query: dict(response(rows, 'local-generation'), searchVersion=1)
@@ -100,6 +101,63 @@ class FallbackIntegrationTest(unittest.TestCase):
         self.assertEqual([call.kwargs['generation'] for call in self.local.search.call_args_list],
                          ['local-generation'] * 2)
         self.assert_read_only()
+
+    def test_mismatched_unicode_keeps_complete_current_lookup_across_fallback(self):
+        for version in ('14.0.0', '16.0.0', '18.0.0'):
+            with self.subTest(version=version), patch.object(ott.unicodedata, 'unidata_version', version):
+                self.client.call.reset_mock(side_effect=True)
+                self.client.call.side_effect = [catalogue(), catalogue('local')]
+                self.primary.current.reset_mock()
+                self.local.current.reset_mock()
+                def primary(rows, query):
+                    if rows[0]['id'] == 'remote256':
+                        raise ott.EpgHTTPError(503, 'EPG_NOT_READY')
+                    return dict(response(rows), searchVersion=1)
+                self.primary.current.side_effect = primary
+                self.local.current.side_effect = lambda rows, query: dict(
+                    response(rows, 'local-generation'), searchVersion=1)
+                progress = Mock()
+                result, targets = self.run_search(progress=progress)
+                self.assert_local_only(result, targets)
+                self.assertEqual([len(call.args[0]) for call in self.primary.current.call_args_list], [256, 44])
+                self.assertEqual([len(call.args[0]) for call in self.local.current.call_args_list], [256, 44])
+                self.primary.search.assert_not_called()
+                self.local.search.assert_not_called()
+                self.assertEqual([call.args[0] for call in progress.call_args_list
+                                  if call.args[0].startswith('Using compatible EPG search')],
+                                 ['Using compatible EPG search for Python Unicode ' + version])
+                self.assert_read_only()
+
+    def test_mismatched_unicode_keeps_complete_history_and_search_options(self):
+        original_spec = ott.importlib.util.spec_from_file_location
+        for version in ('14.0.0', '16.0.0'):
+            with self.subTest(version=version), patch.object(ott.unicodedata, 'unidata_version', version):
+                self.client.call.reset_mock(side_effect=True)
+                self.client.call.return_value = catalogue()
+                self.primary.current.reset_mock()
+                self.primary.current.side_effect = lambda rows, query: dict(
+                    response(rows), programs=[], searchVersion=1)
+                archived = ({'programs': [{'title': 'Cats', 'mode': 'archive'}]}, {'selected': 'archive'})
+                history_search = Mock(return_value=archived)
+                def load_spec(name, *args, **kwargs):
+                    spec = original_spec(name, *args, **kwargs)
+                    if name == 'ott_programme_search':
+                        original_execute = spec.loader.exec_module
+                        def execute(module):
+                            original_execute(module)
+                            module.search_archives = history_search
+                        spec.loader.exec_module = execute
+                    return spec
+                with patch.object(ott.importlib.util, 'spec_from_file_location', side_effect=load_spec):
+                    result = self.run_search(fast=True, refresh=True)
+                self.assertEqual(result, archived)
+                self.assertEqual([len(call.args[0]) for call in self.primary.current.call_args_list], [256, 44])
+                history_search.assert_called_once_with(
+                    self.client, 'tv', {'url': SETTINGS['url'], 'source': 'epg-one'}, catalogue(), 'Cats', True,
+                    catalog_expired=ott.expired_epg_catalog, progress=None, fast=True, deadline=45)
+                self.primary.search.assert_not_called()
+                self.local.search.assert_not_called()
+                self.assert_read_only(1)
 
     def test_fallback_retains_remaining_budget_and_restores_controller_timeout(self):
         catalogue_budgets, guide_budgets = [], []

@@ -50,6 +50,13 @@ ott l три кота
 To use the local guide deliberately, set `epg.url` to the loopback URL and remove
 `fallback_url`. Do not configure the same endpoint as both primary and fallback.
 
+The compact search API uses Unicode 17.0.0 matching rules. The CLI uses that API
+only when Python's `unicodedata.unidata_version` is also `17.0.0`; other versions
+retain the compatible current-programme and full-history search, including the
+local fallback. This can take longer for archive searches. A single stderr
+progress message identifies compatibility mode. Check the installed runtime with
+`python3 -c 'import unicodedata; print(unicodedata.unidata_version)'`.
+
 ## Install on macOS
 
 Use a tested `ottplay-server` binary containing the native EPG search/cache
