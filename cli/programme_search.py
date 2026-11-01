@@ -461,6 +461,11 @@ def _select_chains(current, chains, verify, *, fast=False, deadline=None):
                    and item[1]["time"] >= now - min(144, item[0]["archiveHours"]) * 3600]
 
 
+def _current_from_schedules(guide, query, now):
+    return [(channel, row, "live", 1) for channel, rows in guide for row in rows
+            if row["time"] <= now < row["time_to"] and matches(row["name"], query)]
+
+
 def select_from_schedules(guide, query, verify, *, fast=False, deadline=None):
     """Select live broadcasts or each earliest playable contiguous archive chain.
 
@@ -470,8 +475,7 @@ def select_from_schedules(guide, query, verify, *, fast=False, deadline=None):
     if fast:
         guide = _validate_guide(guide)
     def current(now):
-        return [(channel, row, "live", 1) for channel, rows in guide for row in rows
-                if row["time"] <= now < row["time_to"] and matches(row["name"], query)]
+        return _current_from_schedules(guide, query, now)
 
     now = time.time()
     chains = [(channel, chain) for channel, rows in guide
@@ -642,6 +646,7 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
     _progress(progress, "Reading cached archive results")
     previous = cached("query", key, GUIDE_TTL, refresh) if not fast and prepared is None else None
     selected = None
+    recheck_current = None
     candidate_count = None
     now = time.time()
     if fresh(previous, now):
@@ -740,6 +745,7 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
             if deadline is not None:
                 options["deadline"] = deadline
             choices, boundary = select_from_schedules(guide, query, verify, **options)
+            recheck_current = lambda now: _current_from_schedules(guide, query, now)
         else:
             checks = 0
             def current(now):
@@ -756,12 +762,29 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                 return [(channel, row, "live", 1) for channel, row in rows
                         if row["time"] <= now < row["time_to"]]
             choices = _select_chains(current, chains, verify, fast=fast, deadline=deadline)
+            recheck_current = current
             boundary = until
         selected = [result(*choice) for choice in choices]
         until = min(until, boundary)
         if not fast and selected and selected[0]["mode"] == "archive":
             remember("query", key, {"programs": selected, "until": until})
     receipt = fresh_receipt(force=True)
+    # The final catalogue read can cross a programme boundary or the provider's
+    # retention cutoff too. Never let its latency revive an ended live choice.
+    had_selection = bool(selected)
+    live = recheck_current(time.time()) if recheck_current is not None else []
+    _remaining(deadline)
+    now = time.time()
+    live = [item for item in live if item[1]["time"] <= now < item[1]["time_to"]]
+    if live:
+        selected = [result(*item) for item in live]
+    elif recheck_current is None and not fresh(previous, now):
+        selected = []
+    else:
+        selected = [row for row in selected if row["mode"] == "archive"
+                    and now - row["archive_hours"] * 3600 <= row["start"] < row["end"] <= now]
+    if fast and had_selection and not selected:
+        raise SearchError("Programme selection expired during validation; retry the query. No playback was requested")
     targets = {}
     for row in selected:
         target = {"catalog": receipt, "id": row["id"]}

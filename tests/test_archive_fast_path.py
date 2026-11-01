@@ -114,7 +114,7 @@ class FastSelectionTest(unittest.TestCase):
             result, _ = search.search_archives(client, 'tv', SETTINGS, SNAPSHOT, 'три кота',
                                                fast=True, prepared=prepared, refresh_current=fresh)
         self.assertEqual(result['programs'][0]['mode'], 'live')
-        fresh.assert_called_once()
+        self.assertEqual(fresh.call_count, 2)
         schedules.assert_not_called()
         for invalid in (dict(prepared, chains=prepared['chains'] + [(dict(CHANNEL, id='foreign'), [row(-600, -500)])]),
                         dict(prepared, chains=[(CHANNEL, [row(-900, -800), row(-700, -600)])])):
@@ -192,6 +192,88 @@ class FastSelectionTest(unittest.TestCase):
             return []
         selected = search._select_chains(current, [(channel, [candidate])], lambda *args: True, fast=True)
         self.assertEqual(selected, [])
+
+    def test_final_catalogue_latency_cannot_return_ended_live_or_expired_archive(self):
+        channel = dict(CHANNEL, archiveHours=1)
+        snapshot = dict(SNAPSHOT, channels=[channel])
+        for mode in ('archive', 'live'):
+            for compact in (False, True):
+                with self.subTest(mode=mode, compact=compact):
+                    self.clock.return_value = NOW
+                    item = row(-3599, -3500) if mode == 'archive' else row(-1, 1)
+                    current = [] if mode == 'archive' else [(channel, item)]
+                    chains = [(channel, [item])] if mode == 'archive' else []
+                    client = Mock(config={'server': 'https://control.example'}, timeout=45)
+                    def rpc(device, action, params):
+                        if action == 'epg_catalog':
+                            self.clock.return_value = NOW + 3
+                            return copy.deepcopy(snapshot)
+                        return {'resolved': True, 'url': 'https://private.example/secret'}
+                    client.call.side_effect = rpc
+                    options = ({'prepared': {'current': current, 'chains': chains, 'until': NOW + 100},
+                                'refresh_current': lambda: current} if compact else {})
+                    with patch.object(search, 'schedules', return_value=([(channel, [item])], NOW + 100)), \
+                            patch.object(search, 'archive_available', return_value=True), \
+                            self.assertRaisesRegex(search.SearchError, 'selection expired.*No playback was requested'):
+                        search.search_archives(client, 'tv', SETTINGS, snapshot, 'три кота', fast=True, **options)
+                    self.assertTrue(all(call.args[1] in ('resolve_archive', 'epg_catalog')
+                                        for call in client.call.call_args_list))
+
+    def test_new_live_match_wins_after_final_catalogue_read(self):
+        archive, upcoming = row(-100, -90), row(1, 30)
+        for compact in (False, True):
+            with self.subTest(compact=compact):
+                self.clock.return_value = NOW
+                client = Mock(config={'server': 'https://control.example'}, timeout=45)
+                def rpc(device, action, params):
+                    if action == 'epg_catalog':
+                        self.clock.return_value = NOW + 3
+                        return copy.deepcopy(SNAPSHOT)
+                    return {'resolved': True, 'url': 'https://private.example/secret'}
+                client.call.side_effect = rpc
+                options = ({'prepared': {'current': [], 'chains': [(CHANNEL, [archive])], 'until': NOW + 100},
+                            'refresh_current': lambda: [(CHANNEL, upcoming)]} if compact else {})
+                with patch.object(search, 'schedules', return_value=([(CHANNEL, [archive, upcoming])], NOW + 100)), \
+                        patch.object(search, 'archive_available', return_value=True):
+                    result, targets = search.search_archives(client, 'tv', SETTINGS, SNAPSHOT, 'три кота',
+                                                             fast=True, **options)
+                self.assertEqual([(item['mode'], item['start']) for item in result['programs']], [('live', NOW + 1)])
+                self.assertEqual(targets, {1: {'catalog': SNAPSHOT['catalog'], 'id': CHANNEL['id']}})
+
+    def test_full_list_filters_only_archives_expired_during_final_catalogue_read(self):
+        channel = dict(CHANNEL, archiveHours=1)
+        snapshot = dict(SNAPSHOT, channels=[channel])
+        client = Mock(config={'server': 'https://control.example'}, timeout=45)
+        def rpc(device, action, params):
+            if action == 'epg_catalog':
+                self.clock.return_value = NOW + 3
+                return copy.deepcopy(snapshot)
+            return {'resolved': True, 'url': 'https://private.example/secret'}
+        client.call.side_effect = rpc
+        guide = [(channel, [row(-3599, -3500), row(-100, -90)])]
+        with patch.object(search, 'schedules', return_value=(guide, NOW + 100)), \
+                patch.object(search, 'archive_available', return_value=True):
+            result, targets = search.search_archives(client, 'tv', SETTINGS, snapshot, 'три кота')
+        self.assertEqual([item['start'] for item in result['programs']], [NOW - 100])
+        self.assertNotIn((1, NOW - 3599), targets)
+        self.assertIn((1, NOW - 100), targets)
+
+    def test_complete_query_cache_expires_during_final_catalogue_read(self):
+        client = Mock(config={'server': 'https://control.example'}, timeout=45)
+        def rpc(device, action, params):
+            if action == 'epg_catalog':
+                self.clock.return_value = NOW + 3
+                return copy.deepcopy(SNAPSHOT)
+            raise AssertionError('a complete query cache should not resolve media')
+        client.call.side_effect = rpc
+        cached_row = {'id': CHANNEL['id'], 'channel': CHANNEL['name'], 'number': 1, 'title': 'Три кота',
+                      'start': NOW - 100, 'end': NOW - 90, 'mode': 'archive', 'consecutive': 1, 'archive_hours': 144}
+        cached_value = {'programs': [cached_row], 'until': NOW + 1}
+        with patch.object(search, 'cached', return_value=cached_value), patch.object(search, 'schedules') as schedules:
+            result, targets = search.search_archives(client, 'tv', SETTINGS, SNAPSHOT, 'три кота')
+        self.assertEqual(result['programs'], [])
+        self.assertEqual(targets, {})
+        schedules.assert_not_called()
 
 
 class CountingResponse(io.BytesIO):

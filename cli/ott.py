@@ -914,6 +914,7 @@ def _server_programs(client, device, settings, search, refresh, progress, fast, 
         checked += len(batch)
         if progress:
             progress("Searching current EPG channels", checked, len(channels))
+    as_of = max(as_of, time.time())
     programs = [row for row in programs if row["start"] <= as_of < row["end"]]
     if not programs and search.strip():
         if progress:
@@ -6891,6 +6892,10 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                 target = catalog_play.get(key) if catalog_play is not None else None
                 if archive and target is None:
                     raise Error("The selected archive has no exact playback target; no playback was requested")
+                if not archive and (catalog_play is not None or selected.get("mode") == "live"):
+                    if (not epg_number(selected.get("start")) or not epg_number(selected.get("end"))
+                            or not selected["start"] <= time.time() < selected["end"]):
+                        raise Error("Programme selection expired during validation; retry the query. No playback was requested")
                 # Use the returned catalogue number, even for duplicate or numeric names.
                 playback = (client.call(device, "play_archive_catalog" if archive else "play_catalog", target) if target is not None
                             else client.call(device, "play", {"query": str(number)}))

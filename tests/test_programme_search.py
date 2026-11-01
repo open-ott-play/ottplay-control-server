@@ -189,7 +189,7 @@ class LaunchTest(unittest.TestCase):
         client.device.return_value = "tv"
         client.call.return_value = {"dispatched": True,
             "channel": {"number": selected["number"], "name": selected["channel"], "id": selected["id"]},
-            "start": selected["start"], "end": selected["end"], "mode": selected["mode"]}
+            "start": selected["start"], "end": selected["end"], "mode": selected.get("mode", "live")}
         output, errors = io.StringIO(), io.StringIO()
         with patch.object(ott, "read_json", return_value={"epg": SETTINGS}), \
              patch.object(ott, "Client", return_value=client), \
@@ -271,6 +271,21 @@ class LaunchTest(unittest.TestCase):
                 self.assertNotIn("Archive playback requested:", errors)
                 self.assertNotIn("Channel switch requested:", errors)
                 client.call.assert_not_called()
+
+    def test_live_programme_must_still_be_current_before_dispatch(self):
+        target = {"catalog": "fresh", "id": "cats"}
+        for mode in (None, "live"):
+            for start, end in ((-600, 0), (1, 600)):
+                selected = {"id": "cats", "number": 1, "channel": "Same", "title": "Cats",
+                            "start": NOW + start, "end": NOW + end}
+                if mode is not None:
+                    selected["mode"] = mode
+                with self.subTest(mode=mode, start=start, end=end):
+                    status, _, errors, client = self.launch_programmes([selected], {1: target}, selected)
+                    self.assertEqual(status, 1)
+                    self.assertIn("Programme selection expired", errors)
+                    self.assertIn("No playback was requested", errors)
+                    client.call.assert_not_called()
 
     def test_terminal_archive_receipt_includes_title_and_original_broadcast_date(self):
         selected = {"id": "cats", "number": 1, "channel": "Same", "title": "Три кота — серия 7",
