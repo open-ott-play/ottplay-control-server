@@ -1,5 +1,8 @@
 """Local EPG fallback policy and per-user sidecar installation contracts."""
 import copy
+import contextlib
+import io
+import os
 import hashlib
 import importlib.util
 import json
@@ -28,6 +31,15 @@ SOURCE = 'a' * 40
 
 
 class FallbackPolicyTest(unittest.TestCase):
+    def test_installer_refuses_other_platforms_before_accessing_files(self):
+        with mock.patch.object(installer.sys, 'platform', 'win32'), \
+                mock.patch.object(installer, 'Paths') as paths, \
+                contextlib.redirect_stderr(io.StringIO()) as errors, self.assertRaises(SystemExit) as error:
+            installer.main(['status'])
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn('macOS LaunchAgent', errors.getvalue())
+        paths.assert_not_called()
+
     def test_existing_configuration_stays_primary_only(self):
         source = copy.deepcopy(PRIMARY)
         primary, local = fallback.split_settings(source)
@@ -83,6 +95,7 @@ class FallbackPolicyTest(unittest.TestCase):
         self.assertFalse(fallback.eligible_failure(status=403, transport=True))
 
 
+@unittest.skipUnless(os.name == "posix", "macOS installer tests require POSIX file permissions")
 class SidecarInstallerTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

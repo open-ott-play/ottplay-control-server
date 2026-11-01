@@ -256,24 +256,30 @@ class SmallProbeTest(unittest.TestCase):
             self.assertTrue(body.closed)
 
     def test_probe_deadline_covers_the_entire_trickling_response(self):
-        stopped = threading.Event()
+        stopped, closed = threading.Event(), threading.Event()
         class SlowResponse(CountingResponse):
             def read1(self, count):
                 stopped.wait(0.04)
                 return super().read1(min(count, 1))
+            def close(self):
+                super().close()
+                closed.set()
         stream = SlowResponse((b'G' + b'x' * 187) * 3)
         opener = Mock(); opener.open.return_value = stream
-        started = time.monotonic()
-        try:
-            with patch.object(search, 'build_opener', return_value=opener), self.assertRaises(search.SearchTimeout):
-                search.archive_available('https://media.example/token', NOW, deadline=started + 0.08, strict=True)
-            self.assertLess(time.monotonic() - started, 0.5)
-        finally:
-            stopped.set()
-        for thread in threading.enumerate():
-            if thread.name == 'ottplay-archive-http':
-                thread.join(0.2)
-        self.assertTrue(stream.did_close)
+        # TLS trust-store setup is unrelated to trickling-body cancellation and
+        # can exceed this short deadline on a cold Windows runner.
+        with patch.object(search, 'build_opener', return_value=opener), \
+                patch.object(search, 'https_handler', return_value=Mock()):
+            started = time.monotonic()
+            try:
+                with self.assertRaises(search.SearchTimeout):
+                    search.archive_available('https://media.example/token', NOW,
+                                             deadline=started + 0.2, strict=True)
+                self.assertLess(time.monotonic() - started, 1.0)
+            finally:
+                stopped.set()
+            self.assertTrue(closed.wait(2), 'the cancelled response must be closed')
+        opener.open.assert_called_once()
         self.assertLess(stream.bytes_read, 377)
 
     def test_numeric_loopback_guide_bypasses_proxy_but_public_and_dns_hosts_do_not(self):
