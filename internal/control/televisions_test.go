@@ -70,6 +70,10 @@ func TestTelevisionRejectsAmbiguousOrArbitraryCommands(t *testing.T) {
 	for _, body := range []string{
 		`{"device_id":"first","action":"off","action":"on"}`,
 		`{"device_id":"first","action":"launch","url":"http://attacker.example"}`,
+		`{"device_id":"first","action":"launch","app":null}`,
+		`{"device_id":"first","action":"launch","app":"plex","app":"other"}`,
+		`{"device_id":"first","action":"launch","app":"http://attacker.example"}`,
+		`{"device_id":"first","action":"off","app":"plex"}`,
 		`{"device_id":"first","action":"volume","volume":101}`,
 		`{"device_id":"first","action":"volume","volume":20,"delta":5}`,
 		`{"device_id":"first","action":"volume","volume":null}`,
@@ -87,6 +91,21 @@ func TestTelevisionRejectsAmbiguousOrArbitraryCommands(t *testing.T) {
 	expect(t, request(s, "POST", "/api/televisions", adminToken, `{"device_id":"first","action":"off"}`, map[string]string{"Origin": "https://attacker.example"}), 403)
 	if fake.calls.Load() != 0 {
 		t.Fatal("invalid input reached the TV")
+	}
+}
+
+func TestTelevisionForwardsNamedAppWithoutChangingPlayerQueue(t *testing.T) {
+	s := newTestServer(t)
+	fake := &fakeTelevisionControl{execute: func(_ context.Context, id string, cmd television.Command) (television.Result, error) {
+		if id != "first" || cmd.Action != "go" || cmd.App != "plex" {
+			t.Fatalf("named app was not preserved: %q %+v", id, cmd)
+		}
+		return television.Result{Version: 1, DeviceID: id, Action: cmd.Action, Transport: "webos", Outcome: "accepted"}, nil
+	}}
+	s.televisions = fake
+	expect(t, request(s, "POST", "/api/televisions", adminToken, `{"device_id":"first","action":"go","app":"plex"}`, nil), 200)
+	if fake.calls.Load() != 1 || len(s.devices[0].queue) != 0 {
+		t.Fatal("named application launch entered the player command queue")
 	}
 }
 

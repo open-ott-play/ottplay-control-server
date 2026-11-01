@@ -27,6 +27,16 @@ func TestTelevisionDefaultsAndValidation(t *testing.T) {
 		{"multicast MAC", func(c *Television) { c.MAC = "01:00:00:00:00:01" }},
 		{"zero MAC", func(c *Television) { c.MAC = "00:00:00:00:00:00" }},
 		{"invalid broadcast", func(c *Television) { c.Broadcast = "example.org" }},
+		{"uppercase app alias", func(c *Television) { c.AppAliases = map[string]string{"Plex": "cdp-30"} }},
+		{"long app alias", func(c *Television) { c.AppAliases = map[string]string{"abcdefghijklmnopqrstuvwxyz1234567": "cdp-30"} }},
+		{"empty app target", func(c *Television) { c.AppAliases = map[string]string{"plex": ""} }},
+		{"app target URL", func(c *Television) { c.AppAliases = map[string]string{"plex": "https://example.org"} }},
+		{"too many app aliases", func(c *Television) {
+			c.AppAliases = map[string]string{}
+			for i := range 17 {
+				c.AppAliases[string(rune('a'+i))] = "cdp-30"
+			}
+		}},
 		{"fallback token", func(c *Television) {
 			c.Fallback = &TelevisionFallback{URL: "https://ha.example.org", TokenFile: "relative", EntityID: "media_player.tv"}
 		}},
@@ -52,5 +62,10 @@ func TestTelevisionDefaultsAndValidation(t *testing.T) {
 	}
 	if ValidateTelevisions([]Television{base, base}) == nil {
 		t.Fatal("duplicate binding accepted")
+	}
+	c = base
+	c.AppAliases = map[string]string{"plex": "cdp-30", "media_station-x": "de.benzac.msx"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid named applications rejected: %v", err)
 	}
 }

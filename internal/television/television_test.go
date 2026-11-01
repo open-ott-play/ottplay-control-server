@@ -239,6 +239,48 @@ func TestNativeStatusVolumeMuteAndLaunch(t *testing.T) {
 	}
 }
 
+func TestNamedAppLaunchDoesNotReplaceDefault(t *testing.T) {
+	for _, webDefault := range []bool{false, true} {
+		t.Run(map[bool]string{false: "app-default", true: "web-default"}[webDefault], func(t *testing.T) {
+			f := newTV(t, false)
+			f.config.AppAliases = map[string]string{"plex": "cdp-30"}
+			wantDefault := f.config.AppID
+			if webDefault {
+				f.config.AppID = ""
+				f.config.LaunchURL = "https://player.ottplay.here.now/"
+				wantDefault = "com.webos.app.browser"
+			}
+			m := f.manager(t)
+			// Configuration is captured at startup, including the alias map.
+			f.config.AppAliases["plex"] = "changed-after-startup"
+			r, err := m.Execute(context.Background(), "living", Command{Action: "go", App: "plex"})
+			if err != nil || r.Outcome != "confirmed" || r.State.AppID != "cdp-30" {
+				t.Fatalf("named launch failed: result=%+v error=%v", r, err)
+			}
+			r, err = m.Execute(context.Background(), "living", Command{Action: "launch"})
+			if err != nil || r.State == nil || r.State.AppID != wantDefault {
+				t.Fatalf("named launch replaced the default: result=%+v error=%v", r, err)
+			}
+		})
+	}
+}
+
+func TestNamedAppOnlyBindingNeedsExplicitAlias(t *testing.T) {
+	f := newTV(t, false)
+	f.config.AppID = ""
+	f.config.AppAliases = map[string]string{"plex": "cdp-30"}
+	m := f.manager(t)
+	if !strings.Contains(strings.Join(m.Binding("living").Capabilities, ","), "launch") {
+		t.Fatal("named launch capability missing")
+	}
+	_, err := m.Execute(context.Background(), "living", Command{Action: "go"})
+	assertCode(t, err, "launch_not_configured", false)
+	r, err := m.Execute(context.Background(), "living", Command{Action: "launch", App: "plex"})
+	if err != nil || r.State == nil || r.State.AppID != "cdp-30" {
+		t.Fatalf("explicit alias without default failed: result=%+v error=%v", r, err)
+	}
+}
+
 func TestNativeAppsEmptyArrayAndBindingSanitized(t *testing.T) {
 	f := newTV(t, false)
 	m := f.manager(t)

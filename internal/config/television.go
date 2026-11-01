@@ -25,6 +25,7 @@ type Television struct {
 	WOLPort           int                 `json:"wol_port,omitempty"`
 	AppID             string              `json:"app_id,omitempty"`
 	LaunchURL         string              `json:"launch_url,omitempty"`
+	AppAliases        map[string]string   `json:"app_aliases,omitempty"`
 	Fallback          *TelevisionFallback `json:"fallback,omitempty"`
 }
 
@@ -39,6 +40,9 @@ type TelevisionFallback struct {
 
 var televisionHost = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 var televisionApp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$`)
+var televisionAppAlias = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+func ValidTelevisionAppAlias(alias string) bool { return televisionAppAlias.MatchString(alias) }
 
 func (c Television) Secure() bool { return c.TLS == nil || *c.TLS }
 
@@ -114,6 +118,14 @@ func (c Television) Validate() error {
 	}
 	if (c.AppID != "" && !televisionApp.MatchString(c.AppID)) || (c.LaunchURL != "" && !televisionURL(c.LaunchURL, false)) || (c.AppID != "" && c.LaunchURL != "") {
 		return errors.New("television requires at most one valid app_id or HTTP(S) launch_url")
+	}
+	if len(c.AppAliases) > 16 {
+		return errors.New("television app_aliases supports at most 16 named applications")
+	}
+	for alias, app := range c.AppAliases {
+		if !ValidTelevisionAppAlias(alias) || !televisionApp.MatchString(app) {
+			return errors.New("television app_aliases requires lowercase aliases and installed application IDs")
+		}
 	}
 	if c.Fallback != nil {
 		f := c.Fallback

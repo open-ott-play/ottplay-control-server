@@ -235,6 +235,50 @@ func TestFallbackMutationFailureIsUncertainAndNotRetried(t *testing.T) {
 	}
 }
 
+func TestNamedAppIsResolvedBeforeWakeOrFallback(t *testing.T) {
+	f := newTV(t, false)
+	h := newHA(t, f)
+	f.config.MAC = "02:03:04:05:06:07"
+	f.config.AppAliases = map[string]string{"plex": "cdp-30"}
+	m := f.manager(t)
+	wakes := 0
+	m.sendWake = func(context.Context, string, string, int) error { wakes++; return nil }
+	for _, command := range []Command{{Action: "go", App: "unknown"}, {Action: "launch", App: "cdp-30"}} {
+		_, err := m.Execute(context.Background(), "living", command)
+		assertCode(t, err, "app_not_configured", false)
+	}
+	for _, command := range []Command{{Action: "off", App: "plex"}, {Action: "on", App: "plex"}, {Action: "launch", App: "https://example.org"}} {
+		_, err := m.Execute(context.Background(), "living", command)
+		assertCode(t, err, "invalid_command", false)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if wakes != 0 || h.verified || len(h.posts) != 0 || f.count(launchApp) != 0 {
+		t.Fatal("invalid or unknown application reached wake/native/fallback transport")
+	}
+}
+
+func TestFallbackUsesSelectedNamedAppAndPreservesDefault(t *testing.T) {
+	f := newTV(t, false)
+	h := newHA(t, f)
+	h.power = "off"
+	f.config.AppAliases = map[string]string{"plex": "cdp-30"}
+	m := f.manager(t)
+	r, err := m.Execute(context.Background(), "living", Command{Action: "go", App: "plex"})
+	if err != nil || r.Outcome != "confirmed" || r.Transport != "home_assistant" || r.State == nil || r.State.AppID != "cdp-30" {
+		t.Fatalf("fallback ignored selected app: result=%+v error=%v", r, err)
+	}
+	r, err = m.Execute(context.Background(), "living", Command{Action: "launch"})
+	if err != nil || r.State == nil || r.State.AppID != "de.benzac.msx" {
+		t.Fatalf("fallback replaced default app: result=%+v error=%v", r, err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.posts) != 3 || h.posts[0].path != "/api/services/media_player/turn_on" || h.posts[1].data["payload"].(map[string]any)["id"] != "cdp-30" || h.posts[2].data["payload"].(map[string]any)["id"] != "de.benzac.msx" {
+		t.Fatalf("unexpected wake/launch requests: %v", h.posts)
+	}
+}
+
 func TestFallbackRejectsRedirectWithoutSendingToken(t *testing.T) {
 	f := newTV(t, false)
 	_ = newHA(t, f)

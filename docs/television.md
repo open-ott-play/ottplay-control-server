@@ -2,7 +2,8 @@
 
 The `tv` command controls a bound physical LG webOS television independently of
 its OttPlay page. It can read and change **system volume**, wake or switch off
-the television, and open the configured OttPlay application or web address.
+the television, and open the configured OttPlay application or web address,
+or another installed application selected from an administrator-owned allowlist.
 The controller connects directly to webOS first. An explicitly configured Home
 Assistant integration is a fallback.
 
@@ -31,6 +32,8 @@ ott l tv off                   # switch off the physical television
 ott l tv launch                # open its configured app/URL while it is awake
 ott -t 60 l tv go               # wake, wait for direct control, then open OttPlay
 ott -t 60 lg2 tv start          # alias for tv go
+ott -t 90 lg2 tv go plex        # wake and open the configured Plex app alias
+ott lg2 tv launch plex          # open that app on an already-awake TV
 ott l tv apps                  # list applications reported by webOS
 ott -t 60 l tv pair             # accept the connection prompt on this TV
 ott l tv --help                # local help; no credentials or connection needed
@@ -90,6 +93,9 @@ The following addresses and IDs are examples:
       "broadcast": "192.168.1.255",
       "wol_port": 9,
       "launch_url": "https://player.ottplay.here.now/",
+      "app_aliases": {
+        "plex": "cdp-30"
+      },
       "fallback": {
         "url": "http://homeassistant.local:8123",
         "token_file": "/var/lib/ottplay-control/private/televisions/home-assistant-token",
@@ -119,6 +125,22 @@ never both. Discover actual app IDs with `tv apps`; the CLI does not accept
 arbitrary launch addresses or arbitrary webOS commands. `launch` does not wake
 a sleeping TV. `go` combines wake and launch. Opening an app is separate from
 confirming that OttPlay connected or that its video decoder started playing.
+
+Optional `app_aliases` maps up to 16 short names to installed application IDs.
+Names begin with a lowercase letter and contain only lowercase letters,
+digits, `_` or `-`, up to 32 characters. Use the TV's actual ID from `tv apps`;
+the example `plex: cdp-30` is not a universal ID for every platform. The CLI
+normalizes an entered alias to lowercase. `tv launch plex` and `tv go plex`
+select that named target for one request; a later unqualified `tv go` still
+opens the original `app_id` or `launch_url`. Aliases also work when only named
+targets are configured, but then an unqualified launch has no default.
+
+Unknown names are rejected before wake or launch, and an alias may only be used
+with `launch`, `go` or its `start` spelling. The same selected app is used if
+the command needs the HA fallback. Opening native Plex confirms only the app
+launch; selecting a library and confirming playback requires Plex Companion
+or the existing HA Plex integration. Ordinary `ott NAME plex ...` commands
+continue to control Plex playback inside OttPlay.
 
 Pairing saves a private JSON credential containing `client_key` and the
 `certificate_sha256` identity. Keep its directory private and writable by the

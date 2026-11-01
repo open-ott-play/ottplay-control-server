@@ -130,6 +130,10 @@ For physical LG television power, system volume and app launch, use the separate
 [native TV controls](docs/television.md): `ott l tv volume 25`, `ott l tv off`
 or `ott -t 60 l tv go`. They work while the player page is closed, prefer direct
 webOS control and use Home Assistant only as a configured fallback.
+Configured app aliases also support `ott -t 90 lg2 tv go plex` without changing
+the default OttPlay app. The [Bash startup shortcuts](docs/shell-shortcuts.md)
+provide `coco` for OttPlay and `cocop` for native Plex, with bounded readiness
+checks and playback confirmation.
 
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)

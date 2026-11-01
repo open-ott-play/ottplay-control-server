@@ -15,6 +15,7 @@ import (
 
 type Command struct {
 	Action string `json:"action"`
+	App    string `json:"app,omitempty"`
 	Volume *int   `json:"volume,omitempty"`
 	Delta  *int   `json:"delta,omitempty"`
 	Muted  *bool  `json:"muted,omitempty"`
@@ -66,6 +67,9 @@ func failure(code string) error   { return &Error{Code: code} }
 func uncertain(code string) error { return &Error{Code: code, Uncertain: true} }
 
 func (c Command) Validate() error {
+	if c.App != "" && ((c.Action != "launch" && c.Action != "go") || !config.ValidTelevisionAppAlias(c.App)) {
+		return failure("invalid_command")
+	}
 	if c.Volume != nil && (*c.Volume < 0 || *c.Volume > 100) {
 		return failure("invalid_command")
 	}
@@ -153,7 +157,7 @@ func (m *Manager) Binding(id string) Binding {
 	if d.config.MAC != "" || d.config.Fallback != nil {
 		b.Capabilities = append(b.Capabilities, "on")
 	}
-	if hasLaunch(d.config) {
+	if hasLaunch(d.config) || len(d.config.AppAliases) != 0 {
 		b.Capabilities = append(b.Capabilities, "launch", "go")
 	}
 	return b
@@ -170,6 +174,16 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 		return r, failure("not_configured")
 	}
 	d := m.devices[id]
+	c := d.config
+	if cmd.App != "" {
+		app, ok := c.AppAliases[cmd.App]
+		if !ok {
+			return r, failure("app_not_configured")
+		}
+		// Resolve an administrator-owned name for this request only. Keep the
+		// ordinary OttPlay target intact for subsequent unqualified commands.
+		c.AppID, c.LaunchURL = app, ""
+	}
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	select {
@@ -178,30 +192,30 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 	case <-ctx.Done():
 		return r, failure("deadline")
 	}
-	if (cmd.Action == "launch" || cmd.Action == "go") && !hasLaunch(d.config) {
+	if (cmd.Action == "launch" || cmd.Action == "go") && !hasLaunch(c) {
 		return r, failure("launch_not_configured")
 	}
 	if cmd.Action == "on" || cmd.Action == "go" {
-		return m.wake(ctx, d.config, cmd, r)
+		return m.wake(ctx, c, cmd, r)
 	}
 	nativeCtx, nativeCancel := context.WithCancel(ctx)
-	if cmd.Action != "pair" && d.config.Fallback != nil {
+	if cmd.Action != "pair" && c.Fallback != nil {
 		nativeCancel()
 		nativeCtx, nativeCancel = phaseContext(ctx, 6*time.Second, 2)
 	}
 	defer nativeCancel()
-	s, err := connect(nativeCtx, d.config, cmd.Action == "pair")
+	s, err := connect(nativeCtx, c, cmd.Action == "pair")
 	if err == nil {
 		defer s.close()
 		if cmd.Action == "pair" {
-			if err = writeCredentials(d.config.ClientKeyFile, s.credentials); err != nil {
+			if err = writeCredentials(c.ClientKeyFile, s.credentials); err != nil {
 				return r, err
 			}
 			r.Outcome = "confirmed"
 			r.Pairing = &Pairing{Paired: true}
 			return r, nil
 		}
-		err = s.execute(nativeCtx, d.config, cmd, &r)
+		err = s.execute(nativeCtx, c, cmd, &r)
 		if err == nil {
 			return r, nil
 		}
@@ -211,8 +225,8 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 		}
 	}
 	nativeCancel()
-	if cmd.Action != "pair" && d.config.Fallback != nil && ctx.Err() == nil {
-		return executeFallback(ctx, d.config, cmd, r)
+	if cmd.Action != "pair" && c.Fallback != nil && ctx.Err() == nil {
+		return executeFallback(ctx, c, cmd, r)
 	}
 	return r, err
 }

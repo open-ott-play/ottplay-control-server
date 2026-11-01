@@ -150,6 +150,11 @@
   keep it disabled for toggles or other non-idempotent actions. Retries remain
   inside the original deadline and stop on wake/cancellation/completion; app
   launch runs at most once and per-TV command serialization is unchanged.
+- Add administrator-configured television app aliases for `tv go plex` and
+  `tv launch plex`, preserving the default OttPlay target. Provide the optional
+  `coco` and `cocop` Bash shortcuts for ordered TV wake, application readiness,
+  one shuffled library request and fresh playback confirmation in OttPlay or
+  native Plex. Both shortcuts share a lock and bounded execution time.
 - Add capability-gated Local folder commands: `ott t1 local sources`,
   `local shuffle Movies`, and `local shuffle /Volumes/data/Movies/`. Play or
   shuffle the selected folder's complete eligible list, up to 50,000 items,

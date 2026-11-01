@@ -14,6 +14,7 @@ ERRORS = {
     "invalid_configuration": "The controller's television binding is invalid",
     "not_configured": "No television is bound to this player on the controller",
     "launch_not_configured": "No OttPlay app or URL is configured for this television",
+    "app_not_configured": "This named application is not configured for the television; add it to the controller's app_aliases",
     "credential_unavailable": "The television pairing credential is unavailable on the controller",
     "credential_invalid": "The television pairing credential is invalid",
     "not_paired": "The television is not paired; use tv pair while its screen is on",
@@ -48,12 +49,13 @@ def help_text(name="NAME"):
   {prefix} mute on|off           set system mute explicitly
   {prefix} on / wake             wake the television
   {prefix} off                   switch off the television
-  {prefix} launch                open the configured OttPlay app or URL
-  {prefix} go / start            wake, wait for the TV, then open OttPlay
+  {prefix} launch [APP]          open OttPlay or an administrator-configured app alias
+  {prefix} go / start [APP]      wake, wait for the TV, then open that app
   {prefix} apps                  list applications reported by the television
   {prefix} pair                  pair once; accept the request on the TV
 
 Direct webOS control is preferred; Home Assistant is a configured fallback.
+Example: {prefix} go plex (requires app_aliases.plex on the controller).
 Player standby/go, restart, exit and volume keep their existing meanings.
 Use ott -t 90 {shlex.quote(name)} tv pair or tv go for a longer deadline (maximum 120s).
 Lists/groups work for television controls; pairing requires one television.
@@ -70,6 +72,8 @@ def parse(api, words):
         return None
     if op in ("status", "on", "off", "launch", "go", "apps", "pair") and not tail:
         return {"action": op}
+    if op in ("launch", "go") and len(tail) == 1 and re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", tail[0].casefold()):
+        return {"action": op, "app": tail[0].casefold()}
     if op == "volume":
         if not tail:
             return {"action": "status"}
@@ -80,7 +84,7 @@ def parse(api, words):
                 return {"action": "volume", "delta" if relative else "volume": value}
     if op == "mute" and len(tail) == 1 and tail[0].casefold() in ("on", "off"):
         return {"action": "mute", "muted": tail[0].casefold() == "on"}
-    raise api.Error("Use tv status, volume [0..100|+N|-N], mute on|off, on, off, launch, go, apps or pair")
+    raise api.Error("Use tv status, volume [0..100|+N|-N], mute on|off, on, off, launch [APP], go [APP], apps or pair")
 
 
 def require(api, condition, mutating=False):
@@ -198,7 +202,7 @@ def overview_help(api, client, device, name):
         prefix = "ott " + shlex.quote(name) + " tv"
         print("Television controls (available independently of the player):")
         print(f"  {prefix} status / volume [N|+N|-N] / mute on|off")
-        print(f"  {prefix} on / off / launch / go / apps / pair")
+        print(f"  {prefix} on / off / launch [APP] / go [APP] / apps / pair")
         print(f"  {prefix} --help  — television power and system volume; player controls stay separate")
         print()
 
