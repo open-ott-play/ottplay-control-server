@@ -1011,8 +1011,11 @@ Reasons are `controller_unavailable`, `controller_http_error`, `invalid_response
 `deadline`, `dns`, `tls`, `socket`, `protocol`, `truncated`, or `unknown`.
 `deadline` means the CLI's local deadline expired; a socket timeout is classified
 as `socket`. These categories describe the observed transport failure; they do
-not identify an outage's cause or prove that the player is offline. A timed-out
-mutation can still execute before its server-side TTL expires. When an ID is
+not identify an outage's cause or prove that the player is offline. Healthy
+`pending` receipts followed by the final poll reaching the command deadline
+report `request_pending_timeout`: the player has not acknowledged yet. An
+earlier unresolved connection failure still reports `controller_unavailable`.
+A timed-out mutation can still execute before its server-side TTL expires. When an ID is
 available, read the retained controller receipt with an authenticated request,
 without resubmitting the original command:
 

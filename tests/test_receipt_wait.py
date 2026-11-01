@@ -123,6 +123,73 @@ class ReceiptWaitTest(unittest.TestCase):
         self.assertLess(sum(self.sleeps), 0.3)
         self.assertLessEqual(self.now, self.client.timeout + 1e-9)
 
+    def test_final_deadline_preserves_confirmed_pending_with_network_overhead(self):
+        def read(query, timeout):
+            duration = int(query.get('wait_ms', ['0'])[0]) / 1000 + 0.15
+            self.now += min(duration, timeout)
+            if duration >= timeout:
+                raise ott.TransportError('fixture request deadline', 'deadline')
+            return 202, {'status': 'pending'}
+        self.read = read
+        with self.assertRaises(ott.RequestError) as failure:
+            self.call()
+        self.assertEqual(failure.exception.reason, 'request_pending_timeout')
+        self.assertEqual(failure.exception.request_id, REQUEST_ID)
+        self.assertIsNone(failure.exception.transport_category)
+        self.assertGreater(len(self.gets), 1)
+        self.assertEqual(len(self.posts), 1)
+        self.assertEqual(self.now, self.client.timeout)
+
+    def test_final_deadline_without_confirmed_pending_keeps_transport_failure(self):
+        def read(query, timeout):
+            self.now += timeout
+            raise ott.TransportError('fixture request deadline', 'deadline')
+        self.read = read
+        with self.assertRaises(ott.RequestError) as failure:
+            self.call()
+        self.assertEqual(failure.exception.reason, 'controller_unavailable')
+        self.assertEqual(failure.exception.transport_category, 'deadline')
+        self.assertEqual(failure.exception.request_id, REQUEST_ID)
+        self.assertEqual((len(self.posts), len(self.gets)), (1, 1))
+
+    def test_early_transport_failure_after_pending_is_not_hidden_by_final_deadline(self):
+        for category in ('dns', 'socket', 'deadline'):
+            with self.subTest(category=category):
+                self.now, self.posts, self.gets, self.sleeps = 0, [], [], []
+                self.client.timeout = 30
+                def read(query, timeout):
+                    if len(self.gets) == 1:
+                        self.now += 1
+                        return 202, {'status': 'pending'}
+                    if len(self.gets) == 2:
+                        self.now += 10 if category == 'deadline' else 0.1
+                        raise ott.TransportError('fixture early failure', category)
+                    self.now += timeout
+                    raise ott.TransportError('fixture request deadline', 'deadline')
+                self.read = read
+                with self.assertRaises(ott.RequestError) as failure:
+                    self.call()
+                self.assertEqual(failure.exception.reason, 'controller_unavailable')
+                self.assertEqual(failure.exception.transport_category, 'deadline')
+                self.assertEqual(failure.exception.request_id, REQUEST_ID)
+                self.assertEqual((len(self.posts), len(self.gets)), (1, 3))
+
+    def test_recovered_pending_resets_early_failure_before_final_deadline(self):
+        def read(query, timeout):
+            if len(self.gets) == 1:
+                raise ott.TransportError('fixture early failure', 'dns')
+            if len(self.gets) == 2:
+                self.now += 1
+                return 202, {'status': 'pending'}
+            self.now += timeout
+            raise ott.TransportError('fixture request deadline', 'deadline')
+        self.read = read
+        with self.assertRaises(ott.RequestError) as failure:
+            self.call()
+        self.assertEqual(failure.exception.reason, 'request_pending_timeout')
+        self.assertIsNone(failure.exception.transport_category)
+        self.assertEqual((len(self.posts), len(self.gets)), (1, 3))
+
     def test_failed_receipt_reads_never_fall_back_to_resubmitting(self):
         for code, reason in ((400, 'controller_http_error'), (403, 'unauthorized'),
                              (404, 'receipt_missing'), (429, 'rate_limited')):
