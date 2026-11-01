@@ -9,7 +9,7 @@ Keep all files from the same `cli/` revision together: `ott.py`, `programme_sear
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
 `global_favorites_remote.py`, `global_favorites_recovery.py`, `global_favorites_operations.py`,
 `global_favorites_commands.py`, `global_favorites_items.py`, `global_favorites_items_commands.py`,
-`torrent_catalog.py`, `torrent_document.py` and `torrent_indexer.py`.
+`torrent_catalog.py`, `torrent_document.py`, `torrent_indexer.py` and `television.py`.
 Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
@@ -160,9 +160,12 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`c76cb9b728b8f3db936a0acbee903969d686312b`](https://github.com/open-ott-play/ottplay-control-server/commit/c76cb9b728b8f3db936a0acbee903969d686312b).
+[`7a8325cd41f4a46e14fe439e1fea2d390202a7f3`](https://github.com/open-ott-play/ottplay-control-server/commit/7a8325cd41f4a46e14fe439e1fea2d390202a7f3).
 This is an exact source pin, not a claim about the latest published release.
-It includes [direct LG television controls](television.md). Keep all 37 Python
+It includes [direct LG television controls](television.md), named app launches
+such as `ott -t 90 lg2 tv go plex`, and the optional
+[`coco` / `cocop` Bash startup helpers](shell-shortcuts.md). The helpers have a
+separate installation and native Plex dependencies. Keep all 37 Python
 modules together, including `television.py`; updating the Go server alone does
 not add `tv` commands to an older local CLI. The installation checks below include
 `tv --help`, which runs without configuration or contacting a television.
@@ -246,7 +249,7 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=c76cb9b728b8f3db936a0acbee903969d686312b
+  ott_ref=7a8325cd41f4a46e14fe439e1fea2d390202a7f3
   ott_source="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8"
   python3 --version
   mkdir -p "$HOME/.local/share"
@@ -306,7 +309,7 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'c76cb9b728b8f3db936a0acbee903969d686312b'
+$ottRef = '7a8325cd41f4a46e14fe439e1fea2d390202a7f3'
 $ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
