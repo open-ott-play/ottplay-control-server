@@ -577,7 +577,10 @@ def archive_available(url, start, require_hls=False, allow_redirects=False, *, d
             url, start, require_hls, allow_redirects, end, cancelled), end)
     except SearchTimeout:
         if strict:
-            raise
+            if deadline is not None and time.monotonic() >= deadline:
+                raise
+            raise ArchiveTransientError(
+                "Archive provider media probe timed out; no playback was requested") from None
     except HTTPError as exc:
         code = exc.code
         exc.close()

@@ -364,6 +364,37 @@ class SmallProbeTest(unittest.TestCase):
         opener.open.assert_called_once()
         self.assertLess(stream.bytes_read, 377)
 
+    def test_local_probe_timeout_is_a_transient_provider_failure(self):
+        for deadline in (145, None):
+            with self.subTest(deadline=deadline), \
+                    patch.object(search.time, 'monotonic', side_effect=[100, 115]), \
+                    patch.object(search, '_bounded_read', side_effect=search.SearchTimeout('private token')) as read:
+                with self.assertRaisesRegex(search.ArchiveTransientError, 'Archive provider media probe timed out') as failure:
+                    search.archive_available('https://media.example/private', NOW, deadline=deadline, strict=True)
+                self.assertNotIn('private', str(failure.exception))
+                self.assertNotIsInstance(failure.exception, search.SearchTimeout)
+                self.assertEqual(read.call_args.args[1], 115)
+                read.assert_called_once()
+
+    def test_expired_overall_budget_remains_a_search_timeout(self):
+        for deadline, finished in ((110, 110), (115, 115), (145, 145)):
+            timeout = search.SearchTimeout('Archive search timed out; no playback was requested')
+            with self.subTest(deadline=deadline), \
+                    patch.object(search.time, 'monotonic', side_effect=[100, finished]), \
+                    patch.object(search, '_bounded_read', side_effect=timeout) as read:
+                with self.assertRaises(search.SearchTimeout) as failure:
+                    search.archive_available('https://media.example/private', NOW, deadline=deadline, strict=True)
+                self.assertIs(failure.exception, timeout)
+                self.assertEqual(read.call_args.args[1], min(115, deadline))
+                read.assert_called_once()
+
+    def test_non_strict_probe_preserves_false_on_timeout(self):
+        with patch.object(search.time, 'monotonic', return_value=100), \
+                patch.object(search, '_bounded_read', side_effect=search.SearchTimeout('timed out')) as read:
+            self.assertFalse(search.archive_available('https://media.example/private', NOW, deadline=145))
+        self.assertEqual(read.call_args.args[1], 115)
+        read.assert_called_once()
+
     def test_numeric_loopback_guide_bypasses_proxy_but_public_and_dns_hosts_do_not(self):
         body = json.dumps({'version': 1, 'source': 'epg-one', 'generation': 'g1', 'stale': False}).encode()
         for base, bypass in (('http://127.0.0.1:9999/epg/v1', True), ('http://[::1]:9999/epg/v1', True),
