@@ -533,6 +533,17 @@ EPG_HTTP_CODES = {
 }
 
 
+class EpgTransportError(Error):
+    """An EPG-origin transport failure, never a controller/player failure."""
+
+
+def epg_module(name):
+    spec = importlib.util.spec_from_file_location("ott_" + name, Path(__file__).resolve().with_name(name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class EpgHTTPError(Error):
     def __init__(self, status, epg_code=None):
         self.status, self.epg_code = status, epg_code
@@ -649,7 +660,9 @@ class SearchProgress:
 
 class EpgClient:
     """Public EPG transport, deliberately independent of controller credentials."""
-    def __init__(self, settings, timeout):
+    def __init__(self, settings, timeout, operation="current"):
+        if operation not in ("current", "search"):
+            raise Error("Invalid EPG operation")
         if (not isinstance(settings, dict) or set(settings) != {"url", "source"}
                 or settings["source"] != "epg-one" or not isinstance(settings["url"], str)):
             raise Error('EPG configuration must contain url and source "epg-one"')
@@ -665,15 +678,26 @@ class EpgClient:
             invalid = True
         if invalid:
             raise Error("EPG url must be an HTTP(S) address without credentials, whitespace, query or fragment")
-        self.url = url.rstrip("/") + "/current"
+        self.url = url.rstrip("/") + "/" + operation
         self.timeout = min(10, timeout)
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *args, **kwargs):
                 return None
-        self.opener = urllib.request.build_opener(NoRedirect(), https_handler())
+        handlers = [NoRedirect(), https_handler()]
+        if epg_module("epg_fallback").is_local_url(url):
+            handlers.insert(0, urllib.request.ProxyHandler({}))
+        self.opener = urllib.request.build_opener(*handlers)
 
     def current(self, channels, search):
-        payload = {"version": 1, "source": "epg-one", "channels": channels, "search": search}
+        return self._request({"version": 1, "source": "epg-one", "channels": channels, "search": search})
+
+    def search(self, channels, query, generation=None):
+        payload = {"version": 1, "source": "epg-one", "channels": channels, "search": query}
+        if generation is not None:
+            payload["generation"] = generation
+        return self._request(payload)
+
+    def _request(self, payload):
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > 512 * 1024:
             raise Error("EPG catalogue exceeds the request size limit; no playback was requested")
@@ -690,10 +714,10 @@ class EpgClient:
             ok, value = outcome.get(timeout=max(0, deadline - time.monotonic()))
         except queue.Empty:
             cancelled.set()
-            raise Error("EPG service timed out; no player EPG scan or playback was requested") from None
+            raise EpgTransportError("EPG service timed out; no player EPG scan or playback was requested") from None
         if time.monotonic() >= deadline:
             cancelled.set()
-            raise Error("EPG service timed out; no player EPG scan or playback was requested")
+            raise EpgTransportError("EPG service timed out; no player EPG scan or playback was requested")
         if not ok:
             raise value
         return value
@@ -703,14 +727,14 @@ class EpgClient:
             "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "ottplay-cli/1.0"})
         try:
             if cancelled.is_set() or time.monotonic() >= deadline:
-                raise Error("EPG service timed out")
+                raise EpgTransportError("EPG service timed out")
             with self.opener.open(request, timeout=self.timeout) as response:
                 if response.status != 200:
                     raise Error("EPG service did not return a successful response")
                 body = bytearray()
                 while True:
                     if cancelled.is_set() or time.monotonic() >= deadline:
-                        raise Error("EPG service timed out")
+                        raise EpgTransportError("EPG service timed out")
                     chunk = response.read1(min(65536, 2 * 1024 * 1024 + 1 - len(body)))
                     if not chunk:
                         remaining = getattr(response, "length", None)
@@ -727,7 +751,7 @@ class EpgClient:
                 exc.close()
             raise EpgHTTPError(exc.code, code) from None
         except (OSError, http.client.HTTPException):
-            raise Error("EPG service unavailable; no player EPG scan or playback was requested") from None
+            raise EpgTransportError("EPG service unavailable; no player EPG scan or playback was requested") from None
         except ValueError:
             raise Error("EPG service returned invalid JSON") from None
 
@@ -767,13 +791,41 @@ def expired_epg_catalog(error):
             and error.data.get("error") == "Channels or provider changed. Retry the EPG query before playing.")
 
 
-def server_programs(client, device, settings, search, refresh=False, progress=None):
-    epg = EpgClient(settings, client.timeout)
+def server_programs(client, device, settings, search, refresh=False, progress=None, fast=False):
+    policy = epg_module("epg_fallback")
+    try:
+        primary, fallback = policy.split_settings(settings)
+    except policy.ConfigurationError as exc:
+        raise Error(str(exc)) from None
+    deadline = time.monotonic() + client.timeout
+    try:
+        return _server_programs(client, device, primary, search, refresh, progress, fast, deadline)
+    except (EpgHTTPError, EpgTransportError) as exc:
+        eligible = policy.eligible_failure(status=getattr(exc, "status", None),
+                                           transport=isinstance(exc, EpgTransportError))
+        if fallback is None or not eligible or time.monotonic() >= deadline:
+            raise
+        if progress:
+            progress("Remote EPG unavailable; restarting search with the local guide")
+        # Discard all primary results: a query uses one origin and one generation.
+        return _server_programs(client, device, fallback, search, refresh, progress, fast, deadline)
+
+
+def _server_programs(client, device, settings, search, refresh, progress, fast, deadline):
+    epg = EpgClient(settings, min(client.timeout, max(0, deadline - time.monotonic())))
     if not epg_text(search, 1024, "utf-8"):
         raise Error("Programme search must contain at most 1024 UTF-8 bytes")
     if progress:
         progress("Reading player channel catalogue")
-    snapshot = client.call(device, "epg_catalog", {})
+    previous_timeout = client.timeout
+    client.timeout = min(previous_timeout, max(0, deadline - time.monotonic()))
+    if client.timeout <= 0:
+        client.timeout = previous_timeout
+        raise Error("EPG search timed out; no playback was requested")
+    try:
+        snapshot = client.call(device, "epg_catalog", {})
+    finally:
+        client.timeout = previous_timeout
     invalid = "The player returned an invalid EPG catalogue; no playback was requested"
     if (not isinstance(snapshot, dict) or not epg_text(snapshot.get("catalog"), 128, "utf-8")
             or not snapshot["catalog"].strip() or not isinstance(snapshot.get("channels"), list)
@@ -794,7 +846,7 @@ def server_programs(client, device, settings, search, refresh=False, progress=No
     if not channels:
         return {"as_of": time.time(), "checked": 0, "partial": False, "programs": [], "total": 0}, {}
     programs, targets, generation, as_of = [], {}, None, 0
-    search_deadline = time.monotonic() + client.timeout
+    search_deadline = deadline
     pending = deque(epg_batches(channels))
     splits = 0
     checked = 0
@@ -827,7 +879,9 @@ def server_programs(client, device, settings, search, refresh=False, progress=No
         if (not isinstance(response, dict) or type(response.get("version")) is not int or response["version"] != 1
                 or response.get("source") != "epg-one" or not epg_text(response.get("generation"), 256)
                 or not response["generation"] or type(response.get("fetchedAt")) is not int
-                or not 0 < response["fetchedAt"] <= 9007199254740991 or not epg_number(response.get("asOf"))
+                or not 0 < response["fetchedAt"] <= 9007199254740991
+                or not -60 <= time.time() - response["fetchedAt"] / 1000 < 7200
+                or not epg_number(response.get("asOf"))
                 or abs(response["asOf"] - time.time()) > 60
                 or type(response.get("checked")) is not int or response["checked"] != len(batch)
                 or type(response.get("total")) is not int or response["total"] != len(batch)
@@ -853,6 +907,10 @@ def server_programs(client, device, settings, search, refresh=False, progress=No
             raise Error("EPG guide changed during search; retry the query. No playback was requested")
         generation = response["generation"]
         as_of = max(as_of, response["asOf"])
+        if search.strip() and type(response.get("searchVersion")) is int and response["searchVersion"] == 1:
+            return epg_module("epg_search").run(SimpleNamespace(**globals()), client, device, settings,
+                                                snapshot, search, deadline, progress=progress, fast=fast,
+                                                generation=generation, refresh=refresh)
         checked += len(batch)
         if progress:
             progress("Searching current EPG channels", checked, len(channels))
@@ -864,9 +922,13 @@ def server_programs(client, device, settings, search, refresh=False, progress=No
         history = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(history)
         try:
-            options = {"progress": progress} if progress is not None else {}
+            options = {"progress": progress, "fast": fast, "deadline": deadline}
             return history.search_archives(client, device, settings, snapshot, search, refresh,
                                            catalog_expired=expired_epg_catalog, **options)
+        except history.EpgAvailabilityError as exc:
+            if exc.status is not None:
+                raise EpgHTTPError(exc.status) from None
+            raise EpgTransportError(str(exc)) from None
         except history.SearchError as exc:
             raise Error(str(exc)) from None
     return {"as_of": as_of, "checked": len(channels), "partial": False,
@@ -1076,8 +1138,13 @@ class Client:
                 raise RequestError("invalid_response", "enqueue", "The server did not return a request ID. "
                                    "The request may have been accepted; do not repeat the change blindly.")
             request_id = queued["id"]
+            advertised_wait = queued.get("receipt_wait_ms")
+            if isinstance(advertised_wait, str) and re.fullmatch(r"[1-9][0-9]{0,3}", advertised_wait):
+                advertised_wait = int(advertised_wait)
+            wait_options = ({"wait_ms": advertised_wait} if type(advertised_wait) is int
+                            and 1 <= advertised_wait <= 1000 else {})
             try:
-                receipt = self._wait_receipt(query, request_id, deadline)
+                receipt = self._wait_receipt(query, request_id, deadline, **wait_options)
             except Error as exc:
                 exc.request_id = request_id
                 if isinstance(exc, PlayerRejected):
@@ -1103,19 +1170,25 @@ class Client:
                     # Output failure cannot replay or change a completed operation.
                     pass
 
-    def _wait_receipt(self, query, request_id, deadline):
+    def _wait_receipt(self, query, request_id, deadline, wait_ms=0):
         last_failure = None
         last_transport_category = None
+        backoff = 0 if wait_ms else 0.8
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            time.sleep(min(0.8, remaining))
+            if backoff:
+                time.sleep(min(backoff, remaining))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
+            poll_start = time.monotonic()
+            wait = min(wait_ms, max(0, int(remaining * 1000) - 50))
+            suffix = "&wait_ms=" + str(wait) if wait else ""
+            backoff = 0.8
             try:
-                status, result = self.api("/api/requests" + query + "&id=" + request_id, timeout=remaining)
+                status, result = self.api("/api/requests" + query + "&id=" + request_id + suffix, timeout=remaining)
             except TransportError as exc:
                 last_failure = "controller_unavailable"
                 last_transport_category = exc.category
@@ -1142,6 +1215,7 @@ class Client:
                                        "The request may have been executed; do not repeat the change blindly.", request_id)
                 last_failure = None
                 last_transport_category = None
+                backoff = 0 if wait_ms and time.monotonic() - poll_start >= 0.1 else 0.8
                 continue
             if status != 200 or not isinstance(result, dict) or result.get("id") != request_id or result.get("status") not in ("ok", "rejected", "unsupported") or not isinstance(result.get("data"), dict):
                 raise RequestError("invalid_response", "receipt", "The server returned an invalid player response. "
@@ -1189,9 +1263,12 @@ def play_channel(client, device, params, timeout=45):
         client.timeout = previous_timeout
 
 
+NUMERIC_CHANNEL_QUERY = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+
+
 def _play_channel(client, device, params, deadline):
     text = params["query"].strip()
-    if not text or re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
+    if not text or re.fullmatch(NUMERIC_CHANNEL_QUERY, text):
         return client.call(device, "play", params), None
     exact_id = text[3:] if text.casefold().startswith("id:") else None
     if exact_id is not None and not media_text(exact_id, 2048):
@@ -1263,12 +1340,15 @@ def select_programme(programs):
     invalid = "The player returned an invalid programme list; no switch was requested"
     if not isinstance(programs, list):
         raise Error(invalid)
-    previous = (0, 0)
+    previous = (0, 0, 0, "")
     for row in programs:
-        order = (row.get("number", 0), row.get("start", 0) if row.get("mode") == "archive" else 0) if isinstance(row, dict) else (0, 0)
+        order = ((row.get("number", 0), row.get("start", 0), row.get("end", 0), row.get("title", ""))
+                 if isinstance(row, dict) and row.get("mode") in ("archive", "live")
+                 else (row.get("number", 0), 0, 0, "") if isinstance(row, dict) else (0, 0, 0, ""))
         if (not isinstance(row, dict) or type(row.get("number")) is not int
                 or not 0 < row["number"] <= 9007199254740991
-                or type(order[1]) not in (int, float) or not previous < order
+                or type(order[1]) not in (int, float) or type(order[2]) not in (int, float)
+                or not isinstance(order[3], str) or not previous < order
                 or (row.get("mode") == "archive" and
                     (type(row.get("start")) is not int or type(row.get("end")) is not int
                      or not time.time() - 144 * 3600 <= row["start"] < row["end"] <= time.time()))
@@ -6737,11 +6817,12 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "programs" and "epg" in config:
         with SearchProgress(args.words[0], progress_stream) as progress:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh,
-                                                progress=progress)
+                                                progress=progress, fast=not listing_option(words))
     elif action == "playback" and params.get("operation") == "seek_relative":
         data = relative_seek_command(client, device, params, args.timeout)
     elif action == "play":
-        context = SearchProgress(args.words[0], progress_stream) if "epg" in config else contextlib.nullcontext()
+        searching = "epg" in config and bool(params["query"].strip()) and not re.fullmatch(NUMERIC_CHANNEL_QUERY, params["query"].strip())
+        context = SearchProgress(args.words[0], progress_stream) if searching else contextlib.nullcontext()
         with context as progress:
             if progress:
                 progress("Searching player channel names")
@@ -6750,7 +6831,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                 progress("No channel matches; searching current EPG and available archives")
                 query = params["query"]
                 data, catalog_play = server_programs(client, device, config["epg"], query, refresh=args.refresh,
-                                                    progress=progress)
+                                                    progress=progress, fast=True)
                 action, params, words = "programs", {"search": query}, ["p", query]
                 playback_error = None
     else:
@@ -6806,8 +6887,10 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
             try:
                 number = selected["number"]
                 archive = selected.get("mode") == "archive"
-                key = (number, selected["start"]) if archive else number
-                target = catalog_play[key] if catalog_play is not None else None
+                key = (number, selected["start"], selected["end"], selected["title"]) if archive else number
+                target = catalog_play.get(key) if catalog_play is not None else None
+                if archive and target is None:
+                    raise Error("The selected archive has no exact playback target; no playback was requested")
                 # Use the returned catalogue number, even for duplicate or numeric names.
                 playback = (client.call(device, "play_archive_catalog" if archive else "play_catalog", target) if target is not None
                             else client.call(device, "play", {"query": str(number)}))
@@ -6816,12 +6899,13 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                         or type(channel.get("number")) is not int or channel["number"] != number
                         or channel.get("name") != selected["channel"]
                         or (target is not None and channel.get("id") != target["id"])
-                        or (archive and (playback.get("start") != selected["start"] or playback.get("end") != selected["end"]))):
+                        or (archive and (playback.get("mode", "archive") != "archive"
+                                         or playback.get("start") != selected["start"] or playback.get("end") != selected["end"]))):
                     raise Error("The player did not confirm the requested channel switch. The request may have executed; do not repeat the change blindly.")
                 if catalog_play is not None:
                     playback = {"dispatched": True, "channel": {key: channel[key] for key in ("id", "number", "name")}}
                     if archive:
-                        playback.update({"mode": "archive", "start": selected["start"], "end": selected["end"]})
+                        playback.update({"mode": "archive", "start": selected["start"], "end": selected["end"], "title": selected["title"]})
                 data["playback"] = playback
             except Error as exc:
                 playback_error = exc
@@ -6965,7 +7049,13 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                      for row in data.get("channels", [])) if action == "play" else 0)
         if len(data.get("programs", data.get("channels", []))) > 1 and exact != 1:
             print(f"Randomly selected channel: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
-        print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
+        if data["playback"].get("mode") == "archive":
+            chosen = data["playback"]
+            started = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(chosen["start"]))
+            print(f"Archive playback requested: {channel['number']}: {clean(channel['name'])} — "
+                  f"{clean(chosen['title'])} (from {started})", file=sys.stderr)
+        else:
+            print(f"Channel switch requested: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
     if action in ("vportal", "vportal_random"):
         shuffled = "shuffled; " if action == "vportal_random" else ""
         print(f"VPortal playback requested: {data['total']} videos; {shuffled}repeat enabled.", file=sys.stderr)

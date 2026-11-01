@@ -74,14 +74,16 @@ func (b *bucket) allow(now time.Time, limit int) bool {
 }
 
 type device struct {
-	stateRate     bucket
-	id            string
-	token         [32]byte
-	queue         []entry
-	lastSeen      time.Time
-	rate          bucket
-	results       map[string]requestResult
-	notifications notificationPresence
+	stateRate      bucket
+	id             string
+	token          [32]byte
+	queue          []entry
+	lastSeen       time.Time
+	rate           bucket
+	results        map[string]requestResult
+	resultChanged  chan struct{}
+	receiptWaiters int
+	notifications  notificationPresence
 }
 
 type Server struct {

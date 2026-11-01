@@ -3,21 +3,25 @@
 Guide requests contain metadata only. Resolved media URLs live only in memory
 between the authenticated controller and its local availability probe.
 """
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
 from datetime import datetime
 import hashlib
 from http.client import HTTPException
+import ipaddress
 import json
 import os
+import queue
+import secrets
 import ssl
 from pathlib import Path
 import re
 import tempfile
+import threading
 import time
 import unicodedata
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urljoin, urlsplit
-from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, build_opener
+from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, ProxyHandler, build_opener
 
 
 
@@ -46,8 +50,76 @@ class SearchError(Exception):
     pass
 
 
+class EpgAvailabilityError(SearchError):
+    """A guide endpoint failed before any candidate or playback was selected."""
+    def __init__(self, message, *, status=None, transport=False):
+        self.status, self.transport = status, transport
+        super().__init__(message)
+
+
 class GenerationChanged(SearchError):
     pass
+
+
+class SearchTimeout(SearchError):
+    pass
+
+
+class ArchiveSourceError(SearchError):
+    pass
+
+
+class ArchiveTransientError(SearchError):
+    pass
+
+
+def _remaining(deadline=None, maximum=None, cancelled=None):
+    if cancelled is not None and cancelled.is_set():
+        raise SearchTimeout("Archive search timed out; no playback was requested")
+    remaining = None if deadline is None else deadline - time.monotonic()
+    if remaining is not None and remaining <= 0:
+        raise SearchTimeout("Archive search timed out; no playback was requested")
+    return maximum if remaining is None else remaining if maximum is None else min(maximum, remaining)
+
+
+def _bounded_read(action, deadline):
+    """Bound the caller even when a peer keeps an individual socket read alive."""
+    if deadline is None:
+        return action(None)
+    cancelled, outcome = threading.Event(), queue.Queue(maxsize=1)
+    def run():
+        try:
+            outcome.put((True, action(cancelled)))
+        except Exception as exc:
+            if cancelled.is_set() and isinstance(exc, HTTPError):
+                exc.close()
+            outcome.put((False, exc))
+    _remaining(deadline)
+    threading.Thread(target=run, name="ottplay-archive-http", daemon=True).start()
+    try:
+        ok, value = outcome.get(timeout=_remaining(deadline))
+    except queue.Empty:
+        cancelled.set()
+        raise SearchTimeout("Archive search timed out; no playback was requested") from None
+    if time.monotonic() >= deadline:
+        cancelled.set()
+        raise SearchTimeout("Archive search timed out; no playback was requested")
+    if not ok:
+        raise value
+    return value
+
+
+def _read_prefix(response, count, deadline=None, cancelled=None, initial=b""):
+    data = bytearray(initial)
+    read = getattr(response, "read1", response.read)
+    while len(data) < count:
+        _remaining(deadline, cancelled=cancelled)
+        chunk = read(count - len(data))
+        if not chunk:
+            break
+        data.extend(chunk)
+    _remaining(deadline, cancelled=cancelled)
+    return bytes(data)
 
 
 def _progress(callback, stage, completed=None, total=None):
@@ -102,14 +174,25 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def epg_request(base, path, payload=None, attempts=1):
+def epg_request(base, path, payload=None, attempts=1, *, deadline=None):
+    return _bounded_read(lambda cancelled: _epg_request(base, path, payload, attempts, deadline, cancelled), deadline)
+
+
+def _epg_request(base, path, payload, attempts, deadline, cancelled):
     body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode()
     request = Request(base + path, data=body, headers={"Content-Type": "application/json", "User-Agent": "ottplay-cli/1.0"})
+    handlers = [NoRedirect(), https_handler()]
+    try:
+        if ipaddress.ip_address(urlsplit(base).hostname).is_loopback:
+            handlers.insert(0, ProxyHandler({}))
+    except (TypeError, ValueError):
+        pass
     try:
         for attempt in range(attempts):
             try:
-                with build_opener(NoRedirect(), https_handler()).open(request, timeout=20) as response:
-                    raw = response.read(16 * 1024 * 1024 + 1)
+                with build_opener(*handlers).open(
+                        request, timeout=_remaining(deadline, 20, cancelled)) as response:
+                    raw = _read_prefix(response, 16 * 1024 * 1024 + 1, deadline, cancelled)
                 break
             except HTTPError as exc:
                 exc.close()
@@ -118,7 +201,12 @@ def epg_request(base, path, payload=None, attempts=1):
             except (OSError, HTTPException):
                 if attempt + 1 == attempts:
                     raise
-            time.sleep(attempt + 1)
+            delay = min(attempt + 1, _remaining(deadline, attempt + 1, cancelled))
+            if cancelled is None:
+                time.sleep(delay)
+            elif cancelled.wait(delay):
+                _remaining(deadline, cancelled=cancelled)
+        _remaining(deadline, cancelled=cancelled)
         if len(raw) > 16 * 1024 * 1024:
             raise ValueError()
         value = json.loads(raw)
@@ -131,8 +219,15 @@ def epg_request(base, path, payload=None, attempts=1):
         exc.close()
         if exc.code == 409:
             raise GenerationChanged("EPG changed during the archive search") from None
+        if exc.code in (429, 500, 502, 503, 504):
+            raise EpgAvailabilityError(
+                "EPG history request failed (HTTP %s); no playback was requested" % exc.code,
+                status=exc.code) from None
         raise SearchError("EPG history request failed (HTTP %s); no playback was requested" % exc.code) from None
-    except (OSError, HTTPException, ValueError):
+    except (OSError, HTTPException):
+        raise EpgAvailabilityError(
+            "Could not read fresh EPG history; no playback was requested", transport=True) from None
+    except ValueError:
         raise SearchError("Could not read fresh EPG history; no playback was requested") from None
 
 
@@ -190,14 +285,20 @@ def valid_candidates(rows, channels, now):
     return True
 
 
-def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts=1, *, progress=None):
+def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts=1, *, progress=None, deadline=None):
     read = cached if cache is None else cache.read
     write = remember if cache is None else cache.write
     lifetime = max(1, ttl)
-    request = epg_request if attempts == 1 else lambda *args: epg_request(*args, attempts=attempts)
+    options = {}
+    if attempts != 1:
+        options["attempts"] = attempts
+    if deadline is not None:
+        options["deadline"] = deadline
+    request = epg_request if not options else lambda *args: epg_request(*args, **options)
     metadata = [{k: c[k] for k in ("id", "name", "tvgId", "tvgName")} for c in channels]
     for attempt in range(2):
         try:
+            _remaining(deadline)
             clock = time.time()
             key = [base, metadata]
             _progress(progress, "Reading cached channel mappings")
@@ -206,6 +307,7 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                 generation, mappings = None, {}
                 _progress(progress, "Matching archive channels", 0, len(metadata))
                 for start in range(0, len(metadata), 100):
+                    _remaining(deadline)
                     batch = metadata[start:start + 100]
                     response = request(base, "/match", {"version": 1, "source": "epg-one", "channels": batch})
                     if generation is not None and generation != response["generation"]:
@@ -229,6 +331,7 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                 ids[channel["id"]] = (match["channelId"], match["shift"])
 
             def fetch(key):
+                _remaining(deadline)
                 cache_key = [base, mapping["generation"], key]
                 saved = read("guide", cache_key, ttl, refresh)
                 clock = time.time()
@@ -245,18 +348,38 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                         raise GenerationChanged("EPG history changed")
                     rows = clean_rows(response.get("rows"))
                     saved = {"rows": rows, "until": clock + lifetime}
+                    _remaining(deadline)
                     write("guide", cache_key, saved)
                 return key, rows, saved["until"]
 
             guides, until = {}, mapping["until"]
             keys = set(ids.values())
             _progress(progress, "Loading programme history", 0, len(keys))
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                for task in as_completed([pool.submit(fetch, key) for key in keys]):
-                    key, rows, expires = task.result()
-                    guides[key] = rows
-                    until = min(until, expires)
-                    _progress(progress, "Loading programme history", len(guides), len(keys))
+            pool, pending, remaining_keys = ThreadPoolExecutor(max_workers=4), set(), iter(keys)
+            try:
+                def submit_next():
+                    key = next(remaining_keys, None)
+                    if key is not None:
+                        _remaining(deadline)
+                        pending.add(pool.submit(fetch, key))
+                for _ in range(4):
+                    submit_next()
+                while pending:
+                    done, _ = wait(pending, timeout=_remaining(deadline), return_when=FIRST_COMPLETED)
+                    _remaining(deadline)
+                    for task in done:
+                        pending.remove(task)
+                        key, rows, expires = task.result()
+                        guides[key] = rows
+                        until = min(until, expires)
+                        _progress(progress, "Loading programme history", len(guides), len(keys))
+                        submit_next()
+            finally:
+                for task in pending:
+                    task.cancel()
+                # Deadline-aware reads release workers without waiting for unrelated
+                # queued histories; no additional work is scheduled after expiry.
+                pool.shutdown(wait=deadline is None, cancel_futures=True)
             return [(channel, [{**row, "time": row["time"] + channel["shift"],
                                 "time_to": row["time_to"] + channel["shift"]} for row in guides[ids[channel["id"]]]])
                     for channel in channels if channel["id"] in ids], until
@@ -284,35 +407,130 @@ def archive_chains(rows, query, now, hours):
     return result
 
 
-def select_from_schedules(guide, query, verify):
+def _validate_guide(guide):
+    if not isinstance(guide, list) or len(guide) > 10000:
+        raise SearchError("Invalid archive candidate catalogue")
+    result, ids, numbers = [], set(), set()
+    for item in guide:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise SearchError("Invalid archive candidate catalogue")
+        channel, rows = item
+        if (not isinstance(channel, dict) or not isinstance(channel.get("id"), str)
+                or not channel["id"] or channel["id"] in ids
+                or not isinstance(channel.get("name"), str) or not channel["name"]
+                or type(channel.get("number")) is not int or channel["number"] < 1
+                or channel["number"] in numbers or type(channel.get("archiveHours")) is not int
+                or not 0 <= channel["archiveHours"] <= 144):
+            raise SearchError("Invalid archive candidate catalogue")
+        ids.add(channel["id"])
+        numbers.add(channel["number"])
+        result.append((channel, clean_rows(rows)))
+    return result
+
+
+def _select_chains(current, chains, verify, *, fast=False, deadline=None):
+    _remaining(deadline)
+    selected = current(time.time())
+    if not selected:
+        candidates = list(chains)
+        if fast:
+            # Randomize complete chains, not episodes or network completion order.
+            # Under stable availability, the first playable chain is uniform.
+            secrets.SystemRandom().shuffle(candidates)
+        for channel, chain in candidates:
+            _remaining(deadline)
+            for index, row in enumerate(chain):
+                _remaining(deadline)
+                if row["time"] < time.time() - min(144, channel["archiveHours"]) * 3600:
+                    continue
+                if verify(channel, row):
+                    _remaining(deadline)
+                    if row["time"] < time.time() - min(144, channel["archiveHours"]) * 3600:
+                        continue
+                    selected.append((channel, row, "archive", len(chain) - index))
+                    break
+            if fast and selected:
+                break
+    # Availability probes can cross a programme boundary or retention cutoff.
+    _remaining(deadline)
+    now = time.time()
+    live = current(now)
+    _remaining(deadline)
+    now = time.time()
+    return live or [item for item in selected if item[2] == "archive"
+                   and item[1]["time"] >= now - min(144, item[0]["archiveHours"]) * 3600]
+
+
+def select_from_schedules(guide, query, verify, *, fast=False, deadline=None):
     """Select live broadcasts or each earliest playable contiguous archive chain.
 
     Sources supply only the private archive resolver/probe. Matching, retention,
     adjacency and the late live recheck are shared by local and remote players.
     """
+    if fast:
+        guide = _validate_guide(guide)
     def current(now):
         return [(channel, row, "live", 1) for channel, rows in guide for row in rows
                 if row["time"] <= now < row["time_to"] and matches(row["name"], query)]
 
     now = time.time()
-    selected = current(now)
-    if not selected:
-        for channel, rows in guide:
-            for chain in archive_chains(rows, query, now, channel["archiveHours"]):
-                for index, row in enumerate(chain):
-                    if row["time"] < time.time() - min(144, channel["archiveHours"]) * 3600:
-                        continue
-                    if verify(channel, row):
-                        selected.append((channel, row, "archive", len(chain) - index))
-                        break
-    # Availability probes can cross a programme boundary or retention cutoff.
+    chains = [(channel, chain) for channel, rows in guide
+              for chain in archive_chains(rows, query, now, channel["archiveHours"])]
+    selected = _select_chains(current, chains, verify, fast=fast, deadline=deadline)
     now = time.time()
-    live = current(now)
-    selected = live or [item for item in selected if item[2] == "archive"
-                       and item[1]["time"] >= now - min(144, item[0]["archiveHours"]) * 3600]
     boundaries = [stamp for _, rows in guide for row in rows if matches(row["name"], query)
                   for stamp in (row["time"], row["time_to"]) if stamp > now]
     return selected, min(boundaries, default=float("inf"))
+
+
+def _prepared_candidates(prepared, channels, query):
+    """Validate the whole compact candidate universe before probing any media."""
+    if (not isinstance(prepared, dict) or set(prepared) != {"current", "chains", "until"}
+            or type(prepared["until"]) not in (int, float)
+            or not time.time() < prepared["until"] <= time.time() + GUIDE_TTL
+            or not isinstance(prepared["current"], list) or not isinstance(prepared["chains"], list)
+            or len(prepared["current"]) + len(prepared["chains"]) > 10000):
+        raise SearchError("Invalid compact archive candidates")
+    by_id = {channel["id"]: channel for channel in channels}
+    def channel_of(value):
+        if (not isinstance(value, dict) or not isinstance(value.get("id"), str)
+                or value != by_id.get(value["id"])):
+            raise SearchError("Compact archive candidates do not match the player catalogue")
+        return value
+    def pair(item):
+        if not isinstance(item, (tuple, list)) or len(item) != 2:
+            raise SearchError("Invalid compact archive candidates")
+        return channel_of(item[0]), item[1]
+    current, current_ids = [], set()
+    for item in prepared["current"]:
+        channel, row = pair(item)
+        rows = clean_rows([row])
+        if rows != [row] or not matches(row["name"], query):
+            raise SearchError("Invalid compact current programmes")
+        identity = (channel["id"], row["time"], row["time_to"], row["name"])
+        if identity in current_ids:
+            raise SearchError("Duplicate compact current programme")
+        current_ids.add(identity)
+        current.append((channel, row))
+    chains, identities, total = [], set(), len(current)
+    for item in prepared["chains"]:
+        channel, rows = pair(item)
+        clean = clean_rows(rows)
+        if not clean or clean != rows or not channel["archiveHours"]:
+            raise SearchError("Invalid compact archive chain")
+        if (any(not matches(row["name"], query) for row in clean)
+                or any(row["time_to"] > time.time() for row in clean)
+                or any(left["time_to"] != right["time"] for left, right in zip(clean, clean[1:]))):
+            raise SearchError("Invalid compact archive chain")
+        identity = (channel["id"], tuple((row["time"], row["time_to"], row["name"]) for row in clean))
+        if identity in identities:
+            raise SearchError("Duplicate compact archive chain")
+        identities.add(identity)
+        total += len(clean)
+        if total > 10000:
+            raise SearchError("Compact archive candidates exceed the row limit")
+        chains.append((channel, clean))
+    return current, chains, prepared["until"]
 
 
 def origin(url):
@@ -340,37 +558,74 @@ def same_origin_opener(expected):
     return build_opener(SameOriginRedirect(), https_handler())
 
 
-def archive_available(url, start, require_hls=False, allow_redirects=False):
+def archive_available(url, start, require_hls=False, allow_redirects=False, *, deadline=None, strict=False):
+    """Check media reachability, rejecting a contradictory HLS wall-clock stamp.
+
+    Unstamped HLS/TS does not prove an archive timeline: providers may return
+    live media for an archive URL. Archive-mode dispatch remains the player's
+    responsibility; requiring PDT/ENDLIST here would reject valid archives.
+    """
+    end = time.monotonic() + 15
+    if deadline is not None:
+        end = min(end, deadline)
     try:
-        expected = origin(url)
-        opener = same_origin_opener(expected) if allow_redirects else build_opener(NoRedirect(), https_handler())
-        for depth in range(4):
-            if origin(url) != expected:
-                return False
-            with opener.open(Request(url, headers={"User-Agent": "ottplay-cli/1.0"}), timeout=15) as response:
-                raw = response.read(256 * 1024 + 1)
-                response_url = response.geturl() if allow_redirects else url
-            if not raw.startswith(b"#EXTM3U"):
-                return ((not require_hls or depth > 0) and len(raw) >= 377 and all(raw[i] == 0x47 for i in (0, 188, 376))) or (
-                    depth > 0 and len(raw) >= 16 and raw[4:8] in (b"styp", b"moof"))
-            if len(raw) > 256 * 1024:
-                return False
-            lines = [line.strip() for line in raw.decode("utf-8-sig").splitlines() if line.strip()]
-            stamps = [line.split(":", 1)[1] for line in lines if line.startswith("#EXT-X-PROGRAM-DATE-TIME:")]
-            if stamps and abs(datetime.fromisoformat(stamps[0].replace("Z", "+00:00")).timestamp() - start) > 120:
-                return False
-            links = [line for line in lines if not line.startswith("#")]
-            if not links or not any(line.startswith(("#EXTINF:", "#EXT-X-STREAM-INF:")) for line in lines):
-                return False
-            url = urljoin(response_url, links[0])
+        return _bounded_read(lambda cancelled: _archive_available(
+            url, start, require_hls, allow_redirects, end, cancelled), end)
+    except SearchTimeout:
+        if strict:
+            raise
     except HTTPError as exc:
+        code = exc.code
         exc.close()
-    except (OSError, HTTPException, ValueError, SearchError):
+        if strict and code in (401, 403):
+            raise ArchiveSourceError("Archive source denied access; no playback was requested") from None
+        if strict and (code == 429 or code >= 500):
+            raise ArchiveTransientError("Archive source is temporarily unavailable; no playback was requested") from None
+    except (OSError, HTTPException):
+        if strict:
+            raise ArchiveTransientError("Archive media request failed; no playback was requested") from None
+    except SearchError:
+        if strict:
+            raise ArchiveSourceError("The player returned an invalid archive address") from None
+    except ValueError:
         pass
     return False
 
 
-def search_archives(client, device, settings, snapshot, query, refresh=False, catalog_expired=None, *, progress=None):
+def _archive_available(url, start, require_hls, allow_redirects, deadline, cancelled):
+    expected = origin(url)
+    opener = same_origin_opener(expected) if allow_redirects else build_opener(NoRedirect(), https_handler())
+    for depth in range(4):
+        _remaining(deadline, cancelled=cancelled)
+        if origin(url) != expected:
+            return False
+        with opener.open(Request(url, headers={"User-Agent": "ottplay-cli/1.0"}),
+                         timeout=_remaining(deadline, 15, cancelled)) as response:
+            raw = _read_prefix(response, 16, deadline, cancelled)
+            response_url = response.geturl() if allow_redirects else url
+            if not raw.startswith(b"#EXTM3U"):
+                if depth > 0 and len(raw) >= 16 and raw[4:8] in (b"styp", b"moof"):
+                    return True
+                if require_hls and depth == 0:
+                    return False
+                raw = _read_prefix(response, 377, deadline, cancelled, raw)
+                return len(raw) >= 377 and all(raw[i] == 0x47 for i in (0, 188, 376))
+            raw = _read_prefix(response, 256 * 1024 + 1, deadline, cancelled, raw)
+        if len(raw) > 256 * 1024:
+            return False
+        lines = [line.strip() for line in raw.decode("utf-8-sig").splitlines() if line.strip()]
+        stamps = [line.split(":", 1)[1] for line in lines if line.startswith("#EXT-X-PROGRAM-DATE-TIME:")]
+        if stamps and abs(datetime.fromisoformat(stamps[0].replace("Z", "+00:00")).timestamp() - start) > 120:
+            return False
+        links = [line for line in lines if not line.startswith("#")]
+        if not links or not any(line.startswith(("#EXTINF:", "#EXT-X-STREAM-INF:")) for line in lines):
+            return False
+        url = urljoin(response_url, links[0])
+    return False
+
+def search_archives(client, device, settings, snapshot, query, refresh=False, catalog_expired=None, *,
+                    progress=None, fast=False, deadline=None, prepared=None, refresh_current=None):
+    _remaining(deadline)
     capability = snapshot.get("archive")
     if (not isinstance(capability, dict) or capability.get("version") != 1
             or not isinstance(capability.get("revision"), str) or not 1 <= len(capability["revision"]) <= 128):
@@ -385,8 +640,9 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
     key = [base, identity, text_key(query)]
     until = time.time() + GUIDE_TTL
     _progress(progress, "Reading cached archive results")
-    previous = cached("query", key, GUIDE_TTL, refresh)
+    previous = cached("query", key, GUIDE_TTL, refresh) if not fast and prepared is None else None
     selected = None
+    candidate_count = None
     now = time.time()
     if fresh(previous, now):
         candidates = previous.get("programs")
@@ -396,11 +652,23 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
     receipt = snapshot["catalog"]
     checked_at = time.monotonic()
 
+    def call(action, params):
+        if deadline is None:
+            return client.call(device, action, params)
+        previous_timeout = client.timeout
+        client.timeout = min(previous_timeout, _remaining(deadline))
+        try:
+            response = client.call(device, action, params)
+            _remaining(deadline)
+            return response
+        finally:
+            client.timeout = previous_timeout
+
     def fresh_receipt(force=False):
         nonlocal receipt, checked_at
         if force or time.monotonic() - checked_at >= 60:
             _progress(progress, "Refreshing player catalogue")
-            current = client.call(device, "epg_catalog", {})
+            current = call("epg_catalog", {})
             if (not isinstance(current, dict) or current.get("channels") != channels
                     or current.get("archive") != capability or not isinstance(current.get("catalog"), str)):
                 raise SearchError("The player's catalogue changed during search; no playback was requested")
@@ -414,11 +682,25 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                 "consecutive": count, "archive_hours": channel["archiveHours"]}
 
     if selected is None:
-        guide, until = schedules(base, channels, refresh, progress=progress)
+        if prepared is None:
+            options = {"progress": progress}
+            if deadline is not None:
+                options["deadline"] = deadline
+            guide, until = schedules(base, channels, refresh, **options)
+            if fast:
+                guide = _validate_guide(guide)
+                candidate_count = sum(len(archive_chains(rows, query, time.time(), channel["archiveHours"]))
+                                      for channel, rows in guide)
+        else:
+            if not callable(refresh_current):
+                raise SearchError("Compact archive search requires a current-programme recheck")
+            current_rows, chains, until = _prepared_candidates(prepared, channels, query)
+            candidate_count = len(chains)
         checked_candidates = 0
 
         def verify(channel, row):
             nonlocal checked_candidates
+            _remaining(deadline)
             archive_key = [identity, channel["id"], row["time"]]
             verified = cached("archive", archive_key, ARCHIVE_TTL, refresh) is True
             if not verified:
@@ -426,19 +708,23 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                           "end": row["time_to"], "title": row["name"]}
                 _progress(progress, "Resolving archive candidates", checked_candidates)
                 try:
-                    response = client.call(device, "resolve_archive", params)
+                    response = call("resolve_archive", params)
                 except Exception as exc:
                     if catalog_expired is None or not catalog_expired(exc):
                         raise
                     # Retry only an acknowledged expired read, never playback.
                     params["catalog"] = fresh_receipt(force=True)
                     _progress(progress, "Resolving archive candidates", checked_candidates)
-                    response = client.call(device, "resolve_archive", params)
+                    response = call("resolve_archive", params)
                 if not isinstance(response, dict) or response.get("resolved") is not True:
                     raise SearchError("The player did not resolve the selected archive")
                 _progress(progress, "Checking archive media", checked_candidates)
-                verified = archive_available(response.get("url"), row["time"])
+                options = {"strict": True} if fast or deadline is not None else {}
+                if deadline is not None:
+                    options["deadline"] = deadline
+                verified = archive_available(response.get("url"), row["time"], **options)
                 if verified:
+                    _remaining(deadline)
                     remember("archive", archive_key, True)
             else:
                 _progress(progress, "Using cached archive availability", checked_candidates)
@@ -447,10 +733,33 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
             return verified
 
         _progress(progress, "Searching programme history")
-        choices, boundary = select_from_schedules(guide, query, verify)
+        if prepared is None:
+            options = {}
+            if fast:
+                options["fast"] = True
+            if deadline is not None:
+                options["deadline"] = deadline
+            choices, boundary = select_from_schedules(guide, query, verify, **options)
+        else:
+            checks = 0
+            def current(now):
+                nonlocal checks
+                rows = current_rows
+                if checks:
+                    _progress(progress, "Rechecking current programmes")
+                    rows = refresh_current()
+                    _remaining(deadline)
+                    rows, _, _ = _prepared_candidates(
+                        {"current": rows, "chains": [], "until": time.time() + 1}, channels, query)
+                    now = time.time()
+                checks += 1
+                return [(channel, row, "live", 1) for channel, row in rows
+                        if row["time"] <= now < row["time_to"]]
+            choices = _select_chains(current, chains, verify, fast=fast, deadline=deadline)
+            boundary = until
         selected = [result(*choice) for choice in choices]
         until = min(until, boundary)
-        if selected and selected[0]["mode"] == "archive":
+        if not fast and selected and selected[0]["mode"] == "archive":
             remember("query", key, {"programs": selected, "until": until})
     receipt = fresh_receipt(force=True)
     targets = {}
@@ -458,9 +767,14 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
         target = {"catalog": receipt, "id": row["id"]}
         if row["mode"] == "archive":
             target.update({k: row[k] for k in ("start", "end", "title")})
+            targets[(row["number"], row["start"], row["end"], row["title"])] = target
             targets[(row["number"], row["start"])] = target
         else:
             targets[row["number"]] = target
     _progress(progress, "Archive search complete", len(selected), len(selected))
-    return {"as_of": time.time(), "checked": len(channels), "total": len(channels),
-            "partial": False, "programs": selected}, targets
+    data = {"as_of": time.time(), "checked": len(channels), "total": len(channels),
+            "partial": False, "programs": selected}
+    if fast:
+        data.update(selection="random_first_available", verified_all=False,
+                    candidate_chains=len(selected) if candidate_count is None else candidate_count)
+    return data, targets
