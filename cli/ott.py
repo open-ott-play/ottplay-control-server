@@ -1183,6 +1183,7 @@ class Client:
     def _wait_receipt(self, query, request_id, deadline, wait_ms=0):
         last_failure = None
         last_transport_category = None
+        pending_confirmed = False
         backoff = 0 if wait_ms else 0.8
         while True:
             remaining = deadline - time.monotonic()
@@ -1200,6 +1201,12 @@ class Client:
             try:
                 status, result = self.api("/api/requests" + query + "&id=" + request_id + suffix, timeout=remaining)
             except TransportError as exc:
+                # A final long poll can exhaust the caller's deadline after
+                # healthy pending receipts. Preserve that known state unless
+                # an earlier transport failure has not since recovered.
+                if (exc.category == "deadline" and pending_confirmed and
+                        last_failure is None and time.monotonic() >= deadline):
+                    break
                 last_failure = "controller_unavailable"
                 last_transport_category = exc.category
                 continue
@@ -1225,6 +1232,7 @@ class Client:
                                        "The request may have been executed; do not repeat the change blindly.", request_id)
                 last_failure = None
                 last_transport_category = None
+                pending_confirmed = True
                 backoff = 0 if wait_ms and time.monotonic() - poll_start >= 0.1 else 0.8
                 continue
             if status != 200 or not isinstance(result, dict) or result.get("id") != request_id or result.get("status") not in ("ok", "rejected", "unsupported") or not isinstance(result.get("data"), dict):
