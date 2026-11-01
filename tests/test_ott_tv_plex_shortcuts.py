@@ -57,7 +57,7 @@ def library(operation="list"):
 
 
 def native_config():
-    return {"plex_url": "http://127.0.0.1:32400", "plex_token_file": "/tmp/test-plex-token",
+    return {"plex_url": "http://127.0.0.1:32400", "plex_token_file": str(ROOT / "test-plex-token"),
             "plex_client_id": "lg2-client", "plex_server_id": "test-server", "expected_app_id": "native-plex"}
 
 
