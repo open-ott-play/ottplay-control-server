@@ -12,6 +12,10 @@ second Python implementation of channel matching are not required.
 
 ## Configure the fallback
 
+Install the [reviewed CLI source](cli.md#choose-the-cli-source-revision) first,
+keeping its Python modules together. That source includes both the guide
+fallback and the explicit stateful archive proxy policy described below.
+
 Keep every existing CLI configuration field and add `fallback_url` inside the
 existing `epg` object in `~/.config/ottplay-control/cli.json` (or `OTT_CONFIG`):
 
