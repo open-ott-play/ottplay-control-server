@@ -2,16 +2,13 @@ import contextlib
 import copy
 import importlib.util
 import io
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,38 +57,32 @@ def library(operation="list"):
 
 
 def native_config():
-    return {"ha_url": "http://127.0.0.1:8123", "ha_token_file": "/tmp/test-ha-token",
-            "plex_entity": "media_player.native_plex", "scan_entity": "button.scan_plex_clients",
-            "expected_app_id": "native-plex"}
+    return {"plex_url": "http://127.0.0.1:32400", "plex_token_file": "/tmp/test-plex-token",
+            "plex_client_id": "lg2-client", "plex_server_id": "test-server", "expected_app_id": "native-plex"}
 
 
-def native_state(state="idle", updated=0, library=None, position=None):
-    return {"entity_id": "media_player.native_plex", "state": state,
-            "last_updated": f"2026-11-01T12:00:{updated:02d}+00:00",
-            "attributes": {"supported_features": 512, "media_library_title": library,
-                           "media_content_id": "123" if library else None,
-                           "media_position": position,
-                           "media_position_updated_at": f"2026-11-01T12:00:{updated:02d}+00:00"}}
+def native_ready(ready=True):
+    return {"ready": ready, "capabilities": ["playback", "playqueues"] if ready else []}
 
 
-class FakeHA:
-    def __init__(self, states, failures=()):
-        self.states, self.failures, self.calls = list(states), list(failures), []
+def native_queue():
+    return {"queue_id": 3810, "count": 500, "truncated": True, "first_id": "123"}
 
-    def state(self, entity, seconds=6):
-        self.calls.append(("state", entity))
-        result = self.states.pop(0)
+
+def native_playing(queue_id=3810):
+    return {"state": "playing", "queue_id": queue_id, "content_id": "123", "position": 1}
+
+
+class FakeAdapter:
+    def __init__(self, responses):
+        self.responses, self.calls = list(responses), []
+
+    def call(self, operation, seconds=6, queue_id=None):
+        self.calls.append((operation, seconds, queue_id))
+        result = self.responses.pop(0)
         if isinstance(result, Exception):
             raise result
         return copy.deepcopy(result)
-
-    def service(self, domain, service, body, seconds=6):
-        self.calls.append((service, copy.deepcopy(body)))
-        if self.failures:
-            result = self.failures.pop(0)
-            if isinstance(result, Exception):
-                raise result
-        return []
 
 
 class FakeRunner:
@@ -216,105 +207,61 @@ class WorkflowTests(unittest.TestCase):
 
 
 class NativeWorkflowTests(unittest.TestCase):
-    def workflow(self, states, failures=()):
+    def workflow(self, responses):
         clock, stream = Clock(), io.StringIO()
         opened = television()
         opened.update(action="status", state={"power": "on", "app_id": "native-plex"})
         runner = FakeRunner([television(), opened], clock)
-        ha = FakeHA(states, failures)
+        adapter = FakeAdapter(responses)
         progress = shortcut.Progress(stream, clock, "cocop")
-        flow = shortcut.NativeWorkflow(ott, runner, progress, 240, native_config(), ha, clock, clock.sleep)
-        return flow, ha, runner, stream, clock
+        flow = shortcut.NativeWorkflow(ott, runner, progress, 240, native_config(), adapter, clock, clock.sleep)
+        return flow, adapter, runner, stream, clock
 
-    def test_launches_native_app_and_sends_exactly_one_ha_play_request(self):
-        flow, ha, runner, stream, _ = self.workflow([
-            native_state("unavailable"), native_state(),
-            native_state("playing", 1, "Other library"), native_state("playing", 2, shortcut.COLLECTION)])
-        self.assertEqual(flow.run()["library"], shortcut.COLLECTION)
+    def test_prepares_and_plays_once_then_confirms_exact_queue_id(self):
+        flow, adapter, runner, stream, _ = self.workflow([
+            native_ready(False), shortcut.ReadPending(), native_ready(), native_queue(),
+            {"accepted": True, "queue_id": 3810}, native_playing(3809), native_playing()])
+        self.assertEqual(flow.run()["queue_id"], 3810)
         self.assertEqual(runner.calls[0][0], ["tv", "go", "plex"])
-        services = [call for call in ha.calls if call[0] != "state"]
-        self.assertEqual([call[0] for call in services], ["press", "play_media"])
-        payload = services[1][1]
-        self.assertEqual(payload["entity_id"], "media_player.native_plex")
-        self.assertEqual(payload["media_content_type"], "movie")
-        self.assertEqual(json.loads(payload["media_content_id"]), {
-            "library_name": shortcut.COLLECTION, "libtype": "movie", "allow_multiple": True,
-            "maxresults": 500, "shuffle": True})
+        operations = [call[0] for call in adapter.calls]
+        self.assertEqual(operations.count("prepare"), 1)
+        self.assertEqual(operations.count("play"), 1)
+        self.assertEqual([call[2] for call in adapter.calls if call[0] in ("play", "status")], [3810, 3810, 3810])
         self.assertIn("[cocop lg2]", stream.getvalue())
+        self.assertIn("limit of 500", stream.getvalue())
+        self.assertIn("queue 3810 with 500 items (first item 123)", stream.getvalue())
 
-    def test_same_cached_playing_state_does_not_confirm_new_play(self):
-        stale = native_state("playing", 0, shortcut.COLLECTION)
-        flow, ha, _, stream, clock = self.workflow([stale] * 50)
+    def test_old_playback_never_confirms_new_queue_even_while_position_advances(self):
+        old = [dict(native_playing(3809), position=second) for second in range(50)]
+        flow, adapter, _, stream, clock = self.workflow([
+            native_ready(), native_queue(), {"accepted": True, "queue_id": 3810}, *old])
         with self.assertRaisesRegex(shortcut.ShortcutError, "Timed out"):
             flow.run()
-        self.assertEqual(sum(call[0] == "play_media" for call in ha.calls), 1)
+        self.assertEqual(sum(call[0] == "play" for call in adapter.calls), 1)
         self.assertLessEqual(clock(), 45)
         self.assertNotIn("playback confirmed", stream.getvalue())
 
-    def test_old_playback_with_advancing_timestamps_and_position_does_not_confirm(self):
-        states = [native_state("playing", second, shortcut.COLLECTION, 10 + second) for second in range(50)]
-        flow, ha, _, stream, _ = self.workflow(states)
-        with self.assertRaisesRegex(shortcut.ShortcutError, "Timed out"):
-            flow.run()
-        self.assertEqual(sum(call[0] == "play_media" for call in ha.calls), 1)
-        self.assertNotIn("playback confirmed", stream.getvalue())
+    def test_missing_queue_id_is_not_confirmation(self):
+        unknown = {"state": "unknown", "queue_id": None, "content_id": None, "position": None}
+        flow, _, _, _, _ = self.workflow([
+            native_ready(), native_queue(), {"accepted": True, "queue_id": 3810}, unknown, native_playing()])
+        self.assertEqual(flow.run()["queue_id"], 3810)
 
-    def test_changed_media_id_or_same_item_position_reset_confirms(self):
-        for changed_item in (True, False):
-            before = native_state("playing", 0, shortcut.COLLECTION, 10)
-            after = native_state("playing", 1, shortcut.COLLECTION, 0)
-            if changed_item:
-                after["attributes"].update(media_content_id="456", media_position=11)
-            flow, ha, _, _, _ = self.workflow([before, after])
-            with self.subTest(changed_item=changed_item):
-                self.assertEqual(flow.run()["state"], "playing")
-                self.assertEqual(sum(call[0] == "play_media" for call in ha.calls), 1)
-
-    def test_off_and_standby_are_not_ready_despite_play_capability(self):
-        flow, ha, _, _, _ = self.workflow([
-            native_state("off"), native_state("standby"), native_state(),
-            native_state("playing", 1, shortcut.COLLECTION)])
-        flow.run()
-        play_index = next(i for i, call in enumerate(ha.calls) if call[0] == "play_media")
-        self.assertEqual(sum(call[0] == "state" for call in ha.calls[:play_index]), 3)
-
-    def test_delayed_client_is_discovered_by_bounded_rescan_even_after_scan_timeout(self):
-        for first_scan in (None, shortcut.ReadPending()):
-            states = [native_state("unavailable")] * 10
-            states += [native_state(), native_state("playing", 1, shortcut.COLLECTION)]
-            flow, ha, _, _, clock = self.workflow(states, [first_scan])
-            with self.subTest(first_scan=type(first_scan).__name__):
+    def test_prepare_or_play_error_is_never_repeated(self):
+        for fail_prepare in (True, False):
+            responses = [native_ready()]
+            if not fail_prepare:
+                responses.append(native_queue())
+            responses.append(shortcut.ShortcutError("uncertain"))
+            flow, adapter, _, _, _ = self.workflow(responses)
+            with self.subTest(fail_prepare=fail_prepare), self.assertRaisesRegex(shortcut.ShortcutError, "uncertain"):
                 flow.run()
-                self.assertEqual(sum(call[0] == "press" for call in ha.calls), 2)
-                self.assertEqual(sum(call[0] == "play_media" for call in ha.calls), 1)
-                self.assertGreaterEqual(clock(), 10)
-                self.assertLess(clock(), 60)
+            self.assertEqual(sum(call[0] == "prepare" for call in adapter.calls), 1)
+            self.assertEqual(sum(call[0] == "play" for call in adapter.calls), 0 if fail_prepare else 1)
 
-    def test_only_discovery_button_uses_retryable_http_classification(self):
-        runner = mock.Mock()
-        ha = shortcut.HomeAssistant(native_config(), runner)
-        ha.service("button", "press", {"entity_id": native_config()["scan_entity"]})
-        self.assertFalse(runner.ha_call.call_args.kwargs["mutating"])
-        ha.service("media_player", "play_media", {})
-        self.assertTrue(runner.ha_call.call_args.kwargs["mutating"])
-
-    def test_uncertain_ha_play_is_not_repeated(self):
-        flow, ha, _, _, _ = self.workflow([native_state()], [None, shortcut.ShortcutError("uncertain")])
-        with self.assertRaisesRegex(shortcut.ShortcutError, "uncertain"):
-            flow.run()
-        self.assertEqual(sum(call[0] == "play_media" for call in ha.calls), 1)
-
-    def test_missing_play_capability_never_sends_play(self):
-        state = native_state()
-        state["attributes"]["supported_features"] = 0
-        flow, ha, _, _, clock = self.workflow([state] * 65)
-        with self.assertRaises(shortcut.ShortcutError):
-            flow.run()
-        self.assertFalse(any(call[0] == "play_media" for call in ha.calls))
-        self.assertLessEqual(clock(), 60)
-
-    def test_foreground_app_is_checked_before_discovery_or_play(self):
-        flow, ha, runner, _, _ = self.workflow([native_state(), native_state("playing", 1, shortcut.COLLECTION)])
+    def test_foreground_app_is_checked_before_plex_discovery_or_play(self):
+        flow, _, runner, _, _ = self.workflow([
+            native_ready(), native_queue(), {"accepted": True, "queue_id": 3810}, native_playing()])
         correct = runner.responses[-1]
         wrong = copy.deepcopy(correct)
         wrong["state"]["app_id"] = "msx"
@@ -323,19 +270,50 @@ class NativeWorkflowTests(unittest.TestCase):
         self.assertEqual([call[0] for call in runner.calls],
                          [["tv", "go", "plex"], ["tv", "status"], ["tv", "status"], ["tv", "status"]])
 
-    def test_invalid_config_or_state_is_rejected_without_private_details(self):
+    def test_discovery_timeout_creates_no_queue_and_sends_no_play(self):
+        flow, adapter, _, _, clock = self.workflow([native_ready(False)] * 65)
+        with self.assertRaises(shortcut.ShortcutError):
+            flow.run()
+        self.assertTrue(all(call[0] == "discover" for call in adapter.calls))
+        self.assertLessEqual(clock(), 60)
+
+    def test_invalid_config_or_status_is_rejected_without_private_details(self):
         for url in ("http://user:secret@example.test", "http://example.test/?token=secret",
                     "file:///tmp/config", "https://example.test/#secret", "http://["):
             with self.subTest(url=url), self.assertRaises(shortcut.ShortcutError) as error:
-                shortcut.native_config(dict(native_config(), ha_url=url))
+                shortcut.native_config(dict(native_config(), plex_url=url))
             self.assertNotIn("secret", str(error.exception))
-        for change in ({"supported_features": True}, {"media_position_updated_at": "invalid"},
-                       {"media_content_id": {"token": "secret"}}, {"media_position": True},
-                       {"media_position": float("nan")}, {"media_position": -1}, {"media_position": 10 ** 1000}):
-            raw = native_state("playing", 1, shortcut.COLLECTION)
-            raw["attributes"].update(change)
+        for change in ({"queue_id": True}, {"position": float("nan")},
+                       {"position": -1}, {"position": 10 ** 1000}, {"content_id": {"token": "secret"}}):
+            flow, _, _, _, _ = self.workflow([
+                native_ready(), native_queue(), {"accepted": True, "queue_id": 3810},
+                dict(native_playing(), **change)])
             with self.subTest(change=change), self.assertRaises(shortcut.ShortcutError):
-                shortcut.native_state(raw, "media_player.native_plex")
+                flow.run()
+
+    def test_adapter_pins_one_controller_and_increments_command_ids(self):
+        runner = mock.Mock()
+        adapter = shortcut.PlexAdapter(native_config(), runner)
+        adapter.call("discover")
+        adapter.call("prepare", 45)
+        adapter.call("play", 45, 3810)
+        adapter.call("status", 8, 3810)
+        calls = runner.plex_call.call_args_list
+        self.assertEqual([call.args[0]["command_id"] for call in calls], [1, 2, 3, 4])
+        self.assertEqual(len({call.args[0]["controller_id"] for call in calls}), 1)
+        self.assertEqual([call.kwargs["mutating"] for call in calls], [False, True, True, False])
+        self.assertEqual(set(calls[0].args[0]["config"]),
+                         {"plex_url", "plex_token_file", "plex_client_id", "plex_server_id"})
+
+    def test_helper_rejects_urls_unsupported_by_native_adapter_before_runtime(self):
+        for url in ("https://plex.example.test", "http://plex.example.test:32400/plex",
+                    "http://[::1]:32400", "http://@plex.example.test:32400",
+                    "http://plex.example.test:0", "http://plex.example.test:65536",
+                    "http://plex.example.test:32400/\n", "http://plex.example.test:32400/\\"):
+            with self.subTest(url=url), self.assertRaises(shortcut.ShortcutError):
+                shortcut.native_config(dict(native_config(), plex_url=url))
+        self.assertEqual(shortcut.native_config(dict(native_config(), plex_url="https://plex.example.test:32400/"))["plex_url"],
+                         "https://plex.example.test:32400")
 
 
 @unittest.skipIf(os.name == "nt", "The Bash shortcut process and lock boundary requires POSIX")
@@ -345,12 +323,10 @@ class HostBoundaryTests(unittest.TestCase):
             path = Path(directory) / "lg2.lock"
             with shortcut.television_lock(path):
                 inode = path.stat().st_ino
-                with self.assertRaisesRegex(shortcut.ShortcutError, "Another LG2"):
-                    with shortcut.television_lock(path):
-                        self.fail("overlap accepted")
-            with self.assertRaisesRegex(RuntimeError, "failure"):
-                with shortcut.television_lock(path):
-                    raise RuntimeError("failure")
+                with self.assertRaisesRegex(shortcut.ShortcutError, "Another LG2"), shortcut.television_lock(path):
+                    self.fail("overlap accepted")
+            with self.assertRaisesRegex(RuntimeError, "failure"), shortcut.television_lock(path):
+                raise RuntimeError("failure")
             with shortcut.television_lock(path):
                 self.assertEqual(path.stat().st_ino, inode)
 
@@ -360,15 +336,13 @@ class HostBoundaryTests(unittest.TestCase):
             target = Path(directory) / "target"
             target.touch()
             path.symlink_to(target)
-            with self.assertRaises(OSError):
-                with shortcut.television_lock(path):
-                    pass
+            with self.assertRaises(OSError), shortcut.television_lock(path):
+                pass
             path.unlink()
             path.touch(mode=0o644)
             path.chmod(0o644)
-            with self.assertRaises(shortcut.ShortcutError):
-                with shortcut.television_lock(path):
-                    pass
+            with self.assertRaises(shortcut.ShortcutError), shortcut.television_lock(path):
+                pass
 
     def test_installed_symlink_is_resolved_before_loading(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -378,13 +352,32 @@ class HostBoundaryTests(unittest.TestCase):
             self.assertEqual(resolved, ROOT / "cli/ott.py")
             self.assertTrue(callable(api.plex_queue_metadata))
 
-    def run_script(self, content, mutating=False):
+    def run_script(self, content, mutating=False, native=False):
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "fake.py"
             script.write_text(content)
             progress = shortcut.Progress(io.StringIO())
             runner = shortcut.Runner(script, progress, time.monotonic() + 3)
+            if native:
+                return runner.run([sys.executable, str(script)], 1, mutating=mutating, safe_rejection=True)
             return runner.call(["caps"], 1, mutating=mutating)
+
+    def test_native_rejection_reports_only_allowlisted_numeric_code(self):
+        safe = ("Native Plex rejected the Companion request (code 403); check that the native Plex app "
+                "is ready and supports this operation. The request was not repeated.")
+        with self.assertRaisesRegex(shortcut.ShortcutError, r"request \(code 403\)"):
+            self.run_script(f"import sys; print({safe!r}, file=sys.stderr); sys.exit(1)", True, True)
+        for message in (safe + " token=private", "Private URL token=private", safe.replace("403", "token=private")):
+            with self.subTest(message=message), self.assertRaises(shortcut.ShortcutError) as error:
+                self.run_script(f"import sys; print({message!r}, file=sys.stderr); sys.exit(1)", True, True)
+            self.assertNotIn("private", str(error.exception))
+            self.assertNotIn("code 403", str(error.exception))
+
+    def test_native_timeout_advice_mentions_screen_gate_and_explicit_alternative(self):
+        self.assertIn("Remote Watch Pass", shortcut.NATIVE_INSPECT)
+        self.assertIn("even on the LAN", shortcut.NATIVE_INSPECT)
+        self.assertIn("Use 'coco'", shortcut.NATIVE_INSPECT)
+        self.assertIn("never started automatically", shortcut.NATIVE_INSPECT)
 
     def test_runner_uses_json_no_shell_and_never_prints_failed_output(self):
         result = self.run_script("import json,sys; print(json.dumps({'args':sys.argv[1:]}))")
@@ -404,9 +397,9 @@ class HostBoundaryTests(unittest.TestCase):
             children.append(process)
             return process
 
-        with mock.patch.object(shortcut.subprocess, "Popen", side_effect=record):
-            with self.assertRaisesRegex(shortcut.ShortcutError, "may have been accepted"):
-                self.run_script("import time; time.sleep(30)", True)
+        with mock.patch.object(shortcut.subprocess, "Popen", side_effect=record), \
+                self.assertRaisesRegex(shortcut.ShortcutError, "may have been accepted"):
+            self.run_script("import time; time.sleep(30)", True)
         self.assertEqual(len(children), 1)
         self.assertIsNotNone(children[0].poll())
 
@@ -418,57 +411,6 @@ class HostBoundaryTests(unittest.TestCase):
             self.assertEqual(shortcut.main(["extra"]), 2)
         lock.assert_not_called()
         load.assert_not_called()
-
-
-@unittest.skipIf(os.name == "nt", "Private token files and Bash shortcuts require POSIX")
-class NativeHTTPTests(unittest.TestCase):
-    def test_native_http_uses_private_token_and_does_not_follow_redirects(self):
-        requests = []
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                requests.append((self.path, self.headers.get("Authorization")))
-                if self.server.redirect:
-                    self.send_response(302)
-                    self.send_header("Location", "/token-must-not-reach-here")
-                    self.end_headers()
-                else:
-                    body = json.dumps(native_state()).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-
-            def log_message(self, *args):
-                pass
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        server.redirect = False
-        worker = threading.Thread(target=server.serve_forever, daemon=True)
-        worker.start()
-        try:
-            with tempfile.TemporaryDirectory() as directory:
-                token = Path(directory) / "ha-token"
-                token.write_text("test-token-never-for-production")
-                token.chmod(0o600)
-                config = dict(native_config(), ha_url=f"http://127.0.0.1:{server.server_port}", ha_token_file=str(token))
-                runner = shortcut.Runner(ROOT / "cli/ott.py", shortcut.Progress(io.StringIO()), time.monotonic() + 15)
-                ha = shortcut.HomeAssistant(config, runner)
-                self.assertEqual(ha.state("media_player.native_plex")["state"], "idle")
-                self.assertEqual(requests[-1][1], "Bearer test-token-never-for-production")
-                server.redirect = True
-                with self.assertRaises(shortcut.ReadPending):
-                    ha.state("media_player.native_plex")
-                self.assertEqual(len(requests), 2)
-                token.chmod(0o644)
-                with self.assertRaises(shortcut.ReadPending):
-                    ha.state("media_player.native_plex")
-                self.assertEqual(len(requests), 2)
-        finally:
-            server.shutdown()
-            server.server_close()
-            worker.join(timeout=2)
 
 
 if __name__ == "__main__":

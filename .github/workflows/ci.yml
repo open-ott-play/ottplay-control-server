@@ -59,7 +59,11 @@ jobs:
           node --test player.test.cjs
           CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o /tmp/ott-android-agent .
       - name: Test terminal CLI
-        run: python3 -m unittest discover -s tests -v
+        run: |
+          if [ "$RUNNER_OS" != Windows ]; then
+            python3 -m pip install --require-hashes --only-binary=:all: -r scripts/requirements-plex-shortcuts.txt
+          fi
+          python3 -m unittest discover -s tests -v
       - name: Scan reachable Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Exercise the native binary

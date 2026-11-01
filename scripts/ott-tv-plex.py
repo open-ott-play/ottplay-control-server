@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Wake LG2, open OttPlay, and confirm one Cocomelon shuffle request."""
 import contextlib
-import datetime
 import importlib.util
 import json
 import math
 import os
-from pathlib import Path
 import re
 import signal
 import stat
@@ -15,7 +13,8 @@ import sys
 import tempfile
 import time
 import urllib.parse
-import urllib.request
+import uuid
+from pathlib import Path
 
 try:
     import fcntl
@@ -27,7 +26,11 @@ COLLECTION = "MultCocomelonAll"
 TOTAL_SECONDS = 240
 OUTPUT_LIMIT = 1024 * 1024
 INSPECT = "Inspect 'ott lg2 tv status' and 'ott lg2 plex status' before retrying. No change was repeated."
-NATIVE_INSPECT = "Inspect 'ott lg2 tv status' and native Plex in Home Assistant before retrying. No change was repeated."
+NATIVE_INSPECT = (
+    "Inspect 'ott lg2 tv status' and the TV screen for a Plex authorization or Remote Watch Pass prompt, "
+    "even on the LAN. Use 'coco' for playback through OttPlay; it is never started automatically. "
+    "No change was repeated."
+)
 
 
 class ShortcutError(Exception):
@@ -111,131 +114,43 @@ def load_cli(path):
 
 
 def native_config(value):
-    required = {"ha_url", "ha_token_file", "plex_entity", "scan_entity", "expected_app_id"}
-    optional = {"library_count_entity", "player", "library"}
+    required = {"plex_url", "plex_token_file", "plex_client_id", "plex_server_id", "expected_app_id"}
+    optional = {"player", "library"}
     if (not isinstance(value, dict) or not required <= value.keys() or value.keys() - required - optional
             or any(not isinstance(item, str) or not item for item in value.values())):
         raise ShortcutError("Native Plex requires a complete shortcuts.json configuration.")
     try:
-        url = urllib.parse.urlsplit(value["ha_url"])
-        valid_url = (url.scheme in ("http", "https") and bool(url.hostname) and url.port != 0
-                     and not url.username and not url.password and not url.query and not url.fragment)
+        url = urllib.parse.urlsplit(value["plex_url"])
+        valid_url = (url.scheme in ("http", "https") and bool(url.hostname)
+                     and url.port is not None and 1 <= url.port <= 65535 and ":" not in url.hostname
+                     and url.username is None and url.password is None and not url.query and not url.fragment
+                     and url.path in ("", "/") and not re.search(r"[\s\\]", value["plex_url"]))
     except ValueError:
         valid_url = False
-    token_path = Path(value["ha_token_file"]).expanduser()
-    entities = {"plex_entity": "media_player", "scan_entity": "button", "library_count_entity": "sensor"}
+    token_path = Path(value["plex_token_file"]).expanduser()
     if (not valid_url or not token_path.is_absolute()
-            or any(key in value and not re.fullmatch(domain + r"\.[a-z0-9_]+", value[key])
-                   for key, domain in entities.items())
+            or any(not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value[key])
+                   for key in ("plex_client_id", "plex_server_id"))
             or not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", value["expected_app_id"])
             or value.get("player", PLAYER) != PLAYER or value.get("library", COLLECTION) != COLLECTION):
         raise ShortcutError("The native Plex shortcut configuration is invalid.")
-    return dict(value, ha_url=value["ha_url"].rstrip("/"), ha_token_file=str(token_path))
+    return dict(value, plex_url=value["plex_url"].rstrip("/"), plex_token_file=str(token_path))
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-def internal_ha_request():
-    """One HTTP operation in a killable child; no token is passed on the command line."""
-    try:
-        payload = json.loads(sys.stdin.buffer.read(65537))
-        config = native_config(payload["config"])
-        timeout = payload["timeout"]
-        if type(timeout) not in (int, float) or not 1 <= timeout <= 45:
-            raise ValueError("invalid timeout")
-        path, method = payload["path"], payload["method"]
-        allowed_states = {"/api/states/" + config[key] for key in
-                          ("plex_entity", "scan_entity", "library_count_entity") if key in config}
-        allowed_services = {"/api/services/button/press", "/api/services/media_player/play_media"}
-        if not ((method == "GET" and path in allowed_states)
-                or (method == "POST" and path in allowed_services)):
-            raise ValueError("unsupported operation")
-        if method == "POST":
-            expected = {"entity_id": config["scan_entity"]}
-            if path.endswith("/play_media"):
-                expected = {"entity_id": config["plex_entity"], "media_content_type": "movie",
-                            "media_content_id": json.dumps({"library_name": COLLECTION, "libtype": "movie",
-                                                            "allow_multiple": True, "maxresults": 500, "shuffle": True})}
-            if payload.get("body") != expected:
-                raise ValueError("unsupported service payload")
-        descriptor = os.open(config["ha_token_file"], os.O_RDONLY | os.O_NOFOLLOW)
-        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
-            info = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                    or info.st_mode & 0o077 or info.st_size > 4096):
-                raise ValueError("private token file required")
-            token = stream.read(4097).strip()
-        if not re.fullmatch(r"[A-Za-z0-9._~-]{20,4096}", token):
-            raise ValueError("invalid token")
-        body = json.dumps(payload["body"]).encode("utf-8") if method == "POST" else None
-        request = urllib.request.Request(config["ha_url"] + path, data=body, method=method,
-                                         headers={"Authorization": "Bearer " + token,
-                                                  "Content-Type": "application/json"})
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-        with opener.open(request, timeout=timeout) as response:
-            raw = response.read(OUTPUT_LIMIT + 1)
-        if len(raw) > OUTPUT_LIMIT:
-            raise ValueError("oversized response")
-        print(json.dumps({"data": json.loads(raw)}, allow_nan=False))
-        return 0
-    except Exception:
-        # Parent reports the stage and uncertainty, never a private URL or token.
-        print("Home Assistant request did not complete.", file=sys.stderr)
-        return 1
-
-
-class HomeAssistant:
+class PlexAdapter:
     def __init__(self, config, runner):
-        self.config, self.runner = config, runner
+        self.config = {key: config[key] for key in ("plex_url", "plex_token_file", "plex_client_id", "plex_server_id")}
+        self.runner = runner
+        self.controller_id = "ott-cocop-" + str(uuid.uuid4())
+        self.command_id = 0
 
-    def request(self, method, path, body=None, seconds=6):
-        # The configured Scan Clients button is idempotent discovery. Its HTTP
-        # timeout is safe to poll again; playback submission is never retried.
-        mutating = method == "POST" and path != "/api/services/button/press"
-        return self.runner.ha_call({"config": self.config, "method": method, "path": path, "body": body},
-                                   seconds=seconds, mutating=mutating)
-
-    def state(self, entity, seconds=6):
-        return self.request("GET", "/api/states/" + entity, seconds=seconds)
-
-    def service(self, domain, service, body, seconds=6):
-        return self.request("POST", "/api/services/" + domain + "/" + service, body, seconds)
-
-
-def timestamp(value):
-    if not isinstance(value, str) or len(value) > 64:
-        return None
-    try:
-        result = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return result.timestamp() if result.tzinfo is not None else None
-    except (ValueError, OverflowError):
-        return None
-
-
-def native_state(raw, entity):
-    if (not isinstance(raw, dict) or raw.get("entity_id") != entity or not isinstance(raw.get("state"), str)
-            or not isinstance(raw.get("attributes"), dict) or timestamp(raw.get("last_updated")) is None):
-        raise ShortcutError("Home Assistant returned invalid native Plex state metadata.")
-    attrs = raw["attributes"]
-    features = attrs.get("supported_features", 0)
-    library, content_id = attrs.get("media_library_title"), attrs.get("media_content_id")
-    position = attrs.get("media_position")
-    if (type(features) is not int or not 0 <= features < 2 ** 53
-            or raw["state"] not in ("unknown", "unavailable", "off", "idle", "on", "playing", "paused", "buffering", "standby")
-            or (library is not None and (not isinstance(library, str) or len(library) > 256))
-            or (content_id is not None and not ((isinstance(content_id, str) and 0 < len(content_id) <= 2048)
-                                               or (type(content_id) is int and content_id > 0)))
-            or (attrs.get("media_position_updated_at") is not None
-                and timestamp(attrs["media_position_updated_at"]) is None)
-            or (position is not None and (type(position) not in (int, float)
-                                           or position < 0 or position > 1e12 or not math.isfinite(position)))):
-        raise ShortcutError("Home Assistant returned invalid native Plex capabilities.")
-    return {"state": raw["state"], "features": features, "updated": timestamp(raw["last_updated"]),
-            "position_updated": timestamp(attrs.get("media_position_updated_at")),
-            "library": library, "content_id": content_id, "position": position}
+    def call(self, operation, seconds=6, queue_id=None):
+        self.command_id += 1
+        payload = {"config": self.config, "operation": operation, "controller_id": self.controller_id,
+                   "command_id": self.command_id}
+        if queue_id is not None:
+            payload["queue_id"] = queue_id
+        return self.runner.plex_call(payload, seconds, mutating=operation in ("prepare", "play"))
 
 
 class Runner:
@@ -265,12 +180,12 @@ class Runner:
         args = [sys.executable, str(self.cli_path), "--json", "-t", str(timeout), PLAYER, *words]
         return self.run(args, timeout, mutating)
 
-    def ha_call(self, payload, seconds=6, mutating=False):
+    def plex_call(self, payload, seconds=6, mutating=False):
         timeout = self.budget(seconds)
-        args = [sys.executable, str(Path(__file__).resolve()), "--internal-ha-request"]
-        return self.run(args, timeout, mutating, dict(payload, timeout=timeout))["data"]
+        args = [sys.executable, str(Path(__file__).resolve().with_name("ott_plex_native.py"))]
+        return self.run(args, timeout, mutating, dict(payload, timeout=timeout), safe_rejection=True)["data"]
 
-    def run(self, args, timeout, mutating=False, input_data=None):
+    def run(self, args, timeout, mutating=False, input_data=None, safe_rejection=False):
         # Temporary files bound memory and prevent raw diagnostics or credentials
         # from reaching the terminal. Only validated JSON leaves this boundary.
         with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors, tempfile.TemporaryFile() as source:
@@ -298,6 +213,15 @@ class Runner:
             finally:
                 self.stop(process)
             if process.returncode:
+                if safe_rejection:
+                    errors.seek(0)
+                    rejected = re.fullmatch(
+                        rb"Native Plex rejected the Companion request \(code ([1-9][0-9]{2})\); "
+                        rb"check that the native Plex app is ready and supports this operation\. "
+                        rb"The request was not repeated\.\n?", errors.read(2049))
+                    if rejected:
+                        code = rejected.group(1).decode("ascii")
+                        raise ShortcutError(f"Native Plex rejected the Companion request (code {code}). " + self.inspect)
                 if mutating:
                     raise ShortcutError("The command did not confirm success; it may have been accepted. " + self.inspect)
                 raise ReadPending()
@@ -403,19 +327,24 @@ class Workflow:
 
 
 class NativeWorkflow(Workflow):
-    def __init__(self, api, runner, progress, deadline, config, ha=None,
+    def __init__(self, api, runner, progress, deadline, config, adapter=None,
                  clock=time.monotonic, sleep=time.sleep):
         super().__init__(api, runner, progress, deadline, clock, sleep)
         self.inspect = NATIVE_INSPECT
         self.config = config
-        self.ha = ha if ha is not None else HomeAssistant(config, runner)
+        self.adapter = adapter if adapter is not None else PlexAdapter(config, runner)
 
-    def state(self, until):
+    def require(self, condition):
+        if not condition:
+            raise ShortcutError("Plex Server returned invalid native playback metadata. " + self.inspect)
+
+    def read_adapter(self, operation, until, queue_id=None):
         remaining = min(until, self.deadline) - self.clock()
         if remaining < 1.5:
             raise ShortcutError("Timed out while " + self.progress.label.lower() + ". " + self.inspect)
-        return native_state(self.ha.state(self.config["plex_entity"], min(6, remaining - 0.5)),
-                            self.config["plex_entity"])
+        result = self.adapter.call(operation, min(8, remaining - 0.5), queue_id=queue_id)
+        self.require(isinstance(result, dict))
+        return result
 
     def wait_native(self):
         until = min(self.deadline, self.clock() + 60)
@@ -433,60 +362,36 @@ class NativeWorkflow(Workflow):
             except ReadPending:
                 pass
             self.pause(until)
-        self.progress.phase("Waiting for the native Plex client to accept playback")
-        next_scan = self.clock()
+        self.progress.phase("Waiting for Plex Server to discover the native player")
         while True:
-            if self.clock() >= next_scan:
-                remaining = min(until, self.deadline) - self.clock()
-                if remaining < 1.5:
-                    raise ShortcutError("Native Plex client discovery timed out. " + self.inspect)
-                self.progress.phase("Discovering the native Plex client in Home Assistant")
-                try:
-                    self.ha.service("button", "press", {"entity_id": self.config["scan_entity"]},
-                                    seconds=min(15, remaining - 0.5))
-                except ReadPending:
-                    pass
-                next_scan = self.clock() + 10
-                self.progress.phase("Waiting for the native Plex client to accept playback")
             try:
-                state = self.state(until)
-                if state["state"] not in ("unknown", "unavailable", "off", "standby") and state["features"] & 512:
-                    return state
+                result = self.read_adapter("discover", until)
+                capabilities = result.get("capabilities")
+                self.require(type(result.get("ready")) is bool and isinstance(capabilities, list)
+                             and len(capabilities) <= 32
+                             and all(isinstance(item, str) and len(item) <= 64 for item in capabilities))
+                if result["ready"] and {"playback", "playqueues"} <= set(capabilities):
+                    return
             except ReadPending:
                 pass
             self.pause(until)
 
-    def report_limit(self):
-        entity = self.config.get("library_count_entity")
-        if not entity:
-            return
-        try:
-            raw = self.ha.state(entity)
-            count = raw.get("state") if isinstance(raw, dict) and raw.get("entity_id") == entity else None
-            if isinstance(count, str) and re.fullmatch(r"[0-9]{1,10}", count) and int(count) > 500:
-                self.progress.phase("Native Plex will shuffle at most 500 matching library items")
-        except ReadPending:
-            pass
-
-    def confirm_native(self, before):
-        self.progress.phase("Waiting for fresh native Plex playback confirmation")
+    def confirm_native(self, queue_id):
+        self.progress.phase("Waiting for native Plex to play the exact requested queue")
         until = min(self.deadline, self.clock() + 45)
         while True:
             self.pause(until)
             try:
-                state = self.state(until)
+                state = self.read_adapter("status", until, queue_id)
             except ReadPending:
                 continue
-            fresh = (state["updated"] > before["updated"]
-                     and (state["position_updated"] is None or before["position_updated"] is None
-                          or state["position_updated"] > before["position_updated"]))
-            content_id = state["content_id"]
-            content_changed = str(content_id) != str(before["content_id"])
-            position_reset = (state["position"] is not None and before["position"] is not None
-                              and before["position"] - state["position"] > 2)
-            if (state["state"] == "playing" and state["library"] == COLLECTION and fresh
-                    and isinstance(content_id, (str, int)) and not isinstance(content_id, bool)
-                    and bool(str(content_id)) and (content_changed or position_reset)):
+            observed_queue, content_id, position = state.get("queue_id"), state.get("content_id"), state.get("position")
+            self.require(state.get("state") in ("playing", "paused", "stopped", "buffering", "unknown", "idle")
+                         and (observed_queue is None or (type(observed_queue) is int and 0 < observed_queue < 2 ** 53))
+                         and (content_id is None or (isinstance(content_id, str) and 0 < len(content_id) <= 128))
+                         and (position is None or (type(position) in (int, float) and 0 <= position <= 1e12
+                                                   and math.isfinite(position))))
+            if state["state"] == "playing" and observed_queue == queue_id and content_id:
                 self.progress.phase("Native Plex playback confirmed")
                 return state
 
@@ -500,20 +405,29 @@ class NativeWorkflow(Workflow):
                                "go", {"action": "go", "app": "plex"})
         if result["outcome"] not in ("accepted", "confirmed"):
             raise ShortcutError("The native Plex launch was not confirmed. " + self.inspect)
-        self.report_limit()
-        before = self.wait_native()
-        self.progress.phase("Sending one native Plex shuffle request")
-        self.ha.service("media_player", "play_media", {
-            "entity_id": self.config["plex_entity"], "media_content_type": "movie",
-            "media_content_id": json.dumps({"library_name": COLLECTION, "libtype": "movie",
-                                            "allow_multiple": True, "maxresults": 500, "shuffle": True})}, seconds=45)
-        return self.confirm_native(before)
+        self.wait_native()
+        self.progress.phase("Preparing one shuffled native Plex queue")
+        prepared = self.adapter.call("prepare", 45)
+        self.require(isinstance(prepared, dict))
+        queue_id = prepared.get("queue_id")
+        self.require(type(queue_id) is int and 0 < queue_id < 2 ** 53
+                     and type(prepared.get("count")) is int and 1 <= prepared["count"] <= 500
+                     and type(prepared.get("truncated")) is bool
+                     and isinstance(prepared.get("first_id"), str)
+                     and re.fullmatch(r"[1-9][0-9]{0,15}", prepared["first_id"]) is not None)
+        self.progress.phase(f"Prepared native Plex queue {queue_id} with {prepared['count']} items "
+                            f"(first item {prepared['first_id']})")
+        if prepared["truncated"]:
+            self.progress.phase("Using the supported native Plex queue limit of 500 items")
+        self.progress.phase("Sending one native Plex playback request")
+        accepted = self.adapter.call("play", 45, queue_id)
+        self.require(isinstance(accepted, dict) and accepted.get("accepted") is True
+                     and type(accepted.get("queue_id")) is int and accepted["queue_id"] == queue_id)
+        return self.confirm_native(queue_id)
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv == ["--internal-ha-request"]:
-        return internal_ha_request()
     if argv in (["-h"], ["--help"]):
         print("Usage: coco | cocop\nWake LG2 and shuffle MultCocomelonAll in OttPlay or native Plex; wait up to 240 seconds.")
         return 0
@@ -529,6 +443,9 @@ def main(argv=None):
             path, api = load_cli(Path.home() / ".local/bin/ott")
             runner = Runner(path, progress, deadline, inspect=inspect)
             if native:
+                if (not Path(__file__).resolve().with_name("ott_plex_native.py").is_file()
+                        or importlib.util.find_spec("plexapi") is None or importlib.util.find_spec("requests") is None):
+                    raise ShortcutError("Install the native Plex adapter and pinned shortcut Python environment first.")
                 config_path = Path.home() / ".config/ottplay-control/shortcuts.json"
                 with config_path.open(encoding="utf-8") as stream:
                     config = native_config(json.loads(stream.read(65537)))

@@ -2,7 +2,7 @@
 
 `coco` wakes LG2, opens its configured OttPlay application, and plays a shuffled
 `MultCocomelonAll` Plex collection. `cocop` opens the television's native Plex
-application and starts that library through Home Assistant. Both take no
+application and starts that library through Plex Server. Both take no
 arguments. The `lg2` alias and its
 native television binding must already be configured; see
 [native television control](television.md).
@@ -12,17 +12,19 @@ installed CLI revisions:
 
 ```sh
 mkdir -p "$HOME/.local/lib/ottplay-shortcuts"
-install -m 755 scripts/ott-tv-plex.py "$HOME/.local/lib/ottplay-shortcuts/ott-tv-plex.py"
+install -m 755 scripts/ott-tv-plex.py scripts/ott_plex_native.py "$HOME/.local/lib/ottplay-shortcuts/"
+python3 -m venv "$HOME/.local/lib/ottplay-shortcuts/venv"
+"$HOME/.local/lib/ottplay-shortcuts/venv/bin/python" -m pip install --require-hashes -r scripts/requirements-plex-shortcuts.txt
 ```
 
 On macOS or Linux, add this function to `~/.bashrc`:
 
 ```bash
 coco() {
-    python3 "$HOME/.local/lib/ottplay-shortcuts/ott-tv-plex.py" --mode ott "$@"
+    "$HOME/.local/lib/ottplay-shortcuts/venv/bin/python" "$HOME/.local/lib/ottplay-shortcuts/ott-tv-plex.py" --mode ott "$@"
 }
 cocop() {
-    python3 "$HOME/.local/lib/ottplay-shortcuts/ott-tv-plex.py" --mode native "$@"
+    "$HOME/.local/lib/ottplay-shortcuts/venv/bin/python" "$HOME/.local/lib/ottplay-shortcuts/ott-tv-plex.py" --mode native "$@"
 }
 ```
 
@@ -67,69 +69,76 @@ and verify its installed application ID with `ott lg2 tv apps`. The ordinary
 OttPlay launch target stays unchanged. `ott lg2 tv go plex` must open the native
 Plex application successfully.
 
-Home Assistant must already have its Plex integration connected to the server
-and expose the actual LG Plex client as a `media_player` entity. Use the Plex
-integration's **Scan Clients** button entity, not the LG webOS entity or an
-OttPlay proxy entity, for this content handoff. The Plex client must be signed
-in and allowed to play the library.
+The native app must be signed in to your Plex Server and able to access the
+library. It must also authorize playback under Plex's own account and network
+rules. During LG2 validation the native app displayed **“Remote playback
+requires Remote Watch Pass”**, despite the LAN setup. Native playback was not
+confirmed in that state; successful queue creation or an accepted command does
+not bypass the prompt. Check the television screen if `cocop` cannot confirm
+playback. Run `coco` explicitly to use Plex through OttPlay instead; the helper
+never switches applications automatically after an uncertain native request.
+
+This path uses Plex Companion through the server's client proxy. It
+pins the Plex server and native client by their machine identifiers; friendly
+names are not sufficient. A native client may advertise a loopback address,
+which is not directly reachable from the controller Mac. The helper therefore
+forces server-proxied control on each new client snapshot.
 
 Create `~/.config/ottplay-control/shortcuts.json`, replacing these example
-entity IDs and paths with your installation's values:
+identifiers and paths with your installation's values:
 
 ```json
 {
-  "ha_url": "https://home-assistant.example.test",
-  "ha_token_file": "/home/user/.config/ottplay-control/ha-token",
-  "plex_entity": "media_player.native_lg_plex",
-  "scan_entity": "button.plex_server_scan_clients",
-  "expected_app_id": "your-installed-plex-app-id",
-  "library_count_entity": "sensor.plex_server_library_multcocomelonall"
+  "plex_url": "https://plex.example.test:32400",
+  "plex_token_file": "/home/user/.config/ottplay-control/plex-token",
+  "plex_server_id": "your-plex-server-machine-identifier",
+  "plex_client_id": "your-native-lg-plex-client-identifier",
+  "expected_app_id": "your-installed-plex-app-id"
 }
 ```
 
-`library_count_entity` is optional; it enables a warning when the library exceeds
-500 items. The token file contains only a Home Assistant long-lived access token,
-must be a regular file owned by your user, and must have mode `0600` or `0400`.
-Symlinks and group/world permissions are rejected. Do not put tokens in shell
-functions, command arguments or the JSON configuration. No Plex server token is
-needed by the helper. HTTP redirects are rejected and environment HTTP proxies
-are disabled; HTTPS certificates are verified normally.
+The token file contains only a Plex access token, must be a regular file owned
+by your user, and must have mode `0600` or `0400`. Symlinks and group/world
+permissions are rejected. Keep tokens out of shell functions, command arguments
+and the JSON configuration. HTTPS certificates are verified; redirects,
+environment HTTP proxies, and requests to another server origin are rejected.
+The pinned dependency file installs PlexAPI and its HTTP dependencies into the
+shortcut-specific environment; the ordinary `ott` installation stays separate.
+The server URL must include an explicit port and contain only an HTTP(S) origin
+(an optional trailing slash is accepted). IPv6 literals and path prefixes are
+not supported by this adapter's PlexAPI playback URL handling; invalid URLs
+are rejected before the television is changed.
 
 Run `cocop`. It sends one `tv go plex`, waits until the TV reports the expected
-foreground application, invokes the configured Scan Clients button, and
-waits for a native Plex entity with playback support. If the client is still
-unavailable or not ready, it repeats only this idempotent discovery step no more
-often than every 10 seconds, within the same 60-second readiness budget. A scan
-HTTP timeout can also be retried. It then sends one
-`media_player.play_media` request with:
+foreground application, and polls Plex Server until the configured client
+supports playback, timelines and play queues. It then:
 
-```json
-{
-  "media_content_type": "movie",
-  "media_content_id": "{\"library_name\":\"MultCocomelonAll\",\"libtype\":\"movie\",\"allow_multiple\":true,\"maxresults\":500,\"shuffle\":true}"
-}
-```
+1. Resolves `MultCocomelonAll` and creates one shuffled queue of up to 500 items.
+2. Sends one playback request for that exact server-created queue through the
+   Plex Server client proxy.
+3. Polls the pinned client's timeline until it reports `playing` with that exact
+   queue ID and a media ID.
 
-The request also names the configured native Plex entity. Playback confirmation
-requires `playing`, a matching `media_library_title`, a media ID, and a newer
-Home Assistant update than the snapshot taken before playback was requested.
-The media ID must also change, or the same item's playback position must drop
-by more than two seconds. Neither cached state nor normally advancing old
-playback counts. If a new shuffle happens to pick the same item near its start,
-the helper may report an uncertain result instead of claiming success.
-Native Plex searches at most
-500 matching items before shuffling; this is not a sample of the full library
-when the library is larger.
+Old playback, another queue and a missing queue ID cannot confirm this request.
+The prepared queue ID and first media ID are printed to stderr for diagnosis.
+When the library is larger than 500 items, the helper reports the cap and
+shuffles the selected 500-item subset. Neither queue creation nor playback is
+retried automatically. Client discovery and timeline reads are safe to repeat.
 
-The same 240-second total deadline applies. Foreground-app and client readiness
-share a 60-second limit; playback submission and confirmation each allow up to
-45 seconds within the remaining total budget. HTTP calls run in bounded child
-processes so a stalled connection cannot keep the helper running indefinitely.
-Cancellation stops local polling and further requests. An already accepted
-server-side operation can still finish, so a timeout or interrupt never causes
-an automatic playback retry.
+The same 240-second total deadline applies. Foreground-app and client discovery
+share a 60-second limit; queue preparation, playback submission and confirmation
+each allow up to 45 seconds within the remaining total budget. Network operations
+run in bounded child processes, so a stalled connection cannot keep the helper
+running indefinitely. Cancellation stops local polling and further requests.
+An already accepted server-side operation can still finish; a timeout or
+interrupt therefore never causes an automatic playback retry.
 
-If `cocop` fails, inspect `ott lg2 tv status` and the native Plex entity in Home
-Assistant. Check its playback support, library attribute, client discovery and
-library access. `ott lg2 plex status` describes Plex playback inside OttPlay and
-does not report the separate native application's queue.
+If `cocop` fails, inspect `ott lg2 tv status` and native Plex on the television.
+Look for authorization or Remote Watch Pass prompts even when using the LAN.
+Check the token's access to the configured server/library, the exact server and
+client machine identifiers, and the native client's Companion support. A
+successful app launch alone is not evidence that Plex has registered the
+client. `ott lg2 plex status` describes Plex playback inside OttPlay and does
+not report the separate native application's queue. Home Assistant is not
+needed for native Plex content control; it may still be used by the television
+binding for power-on fallback.

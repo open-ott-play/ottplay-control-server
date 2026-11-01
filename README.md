@@ -133,7 +133,8 @@ webOS control and use Home Assistant only as a configured fallback.
 Configured app aliases also support `ott -t 90 lg2 tv go plex` without changing
 the default OttPlay app. The [Bash startup shortcuts](docs/shell-shortcuts.md)
 provide `coco` for OttPlay and `cocop` for native Plex, with bounded readiness
-checks and playback confirmation.
+checks and playback confirmation. Native Plex remains subject to its own
+authorization and Remote Watch Pass requirements.
 
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
