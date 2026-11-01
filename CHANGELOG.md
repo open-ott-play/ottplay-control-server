@@ -135,6 +135,14 @@
 
 ### Changes
 
+- Add administrator-bound native LG television control through `ott l tv` and
+  player groups: system volume/mute, power, app launch, wake-and-launch, app
+  discovery and explicit pairing. Prefer pinned-TLS webOS and Wake-on-LAN;
+  optionally fall back to the verified native Home Assistant webOS entity.
+  Commands work while the player page is disconnected and distinguish observed
+  results from submitted or uncertain changes without replaying mutations.
+  Install all 37 CLI modules and configure private persistent TV credentials;
+  see `docs/television.md` for setup, network wake limits and examples.
 - Add capability-gated Local folder commands: `ott t1 local sources`,
   `local shuffle Movies`, and `local shuffle /Volumes/data/Movies/`. Play or
   shuffle the selected folder's complete eligible list, up to 50,000 items,

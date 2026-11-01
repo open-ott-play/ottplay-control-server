@@ -80,6 +80,10 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott t1,t2,t3,t4 R                  any player command accepts a list; results per player
   ott t1,t2 watch --duration 30       observe players and decoder progress (read-only)
   ott ha status [-j]                 Home Assistant bridge and active banner recipients
+  ott NAME tv status                television power, system volume and active app
+  ott NAME tv volume [N|+N|-N]       read/set television volume independently of the player
+  ott NAME tv on / off / launch / go  wake, power off, open OttPlay, or wake and open it
+  ott NAME tv --help                direct television controls, pairing and HA fallback
   ott NAME notifications [on|off]    read/save the single banner and camera preference
   ott NAME settings [list|schema]    discover typed settings for this player/source
   ott NAME setting KEY [VALUE]      read or save one setting (e.g. bufSize 3)
@@ -1036,8 +1040,12 @@ class Client:
                 return None
         self.opener = urllib.request.build_opener(NoRedirect(), https_handler())
 
-    def api(self, path, payload=None, timeout=None, *, raw=False):
-        budget = min(10, self.timeout if timeout is None else timeout)
+    def api(self, path, payload=None, timeout=None, *, raw=False, timeout_cap=10):
+        # Only explicitly opted-in endpoints may wait longer than the normal
+        # ten-second request cap. The total wall deadline still bounds them.
+        if type(timeout_cap) not in (int, float) or not 1 <= timeout_cap <= 120 or not math.isfinite(timeout_cap):
+            raise Error("HTTP timeout cap must be between 1 and 120 seconds")
+        budget = min(timeout_cap, self.timeout if timeout is None else timeout)
         deadline = time.monotonic() + budget
         cancelled = threading.Event()
         outcome = queue.Queue(maxsize=1)
@@ -6513,6 +6521,16 @@ def player_groups_module():
     return module
 
 
+def television_module():
+    path = Path(__file__).resolve().with_name("television.py")
+    if not path.is_file():
+        raise Error("Install television.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_television", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def player_group_targets(client, selector):
     """Resolve saved groups and comma lists before any per-player request."""
     return player_groups_module().targets(SimpleNamespace(**globals()), client, selector)
@@ -6521,6 +6539,8 @@ def player_group_targets(client, selector):
 def player_command_route(words):
     """The single dispatch table for built-in and optional player commands."""
     verb = words[0].casefold() if words else ""
+    if verb == "tv":
+        return "television"
     if verb == "torrent":
         return "torrent_indexer" if len(words) > 1 and words[1].casefold() == "indexer" else "torrent_catalog"
     if verb == "perf":
@@ -6665,6 +6685,10 @@ def player_group_command(client, config, targets, args, argv):
         raise Error("provider requires a provider ID, index or name")
     if route == "android" and len(words) > 1 and words[1].casefold() == "bind" and len(targets) > 1:
         raise Error("android bind requires one player; a native queue cannot be shared by multiple players")
+    if route == "television":
+        television = television_module().parse(SimpleNamespace(**globals()), words[1:])
+        if television and television["action"] == "pair" and len(targets) > 1:
+            raise Error("Television pairing requires one player at a time")
     if route == "preset":
         parsed = parse_preset_load(words)
         name, _ = validate_preset(config, parsed["preset"])
@@ -6769,6 +6793,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     """Run the same resolved-player command for a single target or one group member."""
     words = args.words[1:]
     route = player_command_route(words)
+    if route == "television":
+        return television_module().run(SimpleNamespace(**globals()), client, device, args.words[0],
+                                       words[1:], args.timeout, args.json)
     if route == "torrent_indexer":
         return torrent_indexer_module().run(SimpleNamespace(**globals()), client, device, words[2:],
                                             args.timeout, args.json, args.config)
@@ -6829,6 +6856,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         return global_favorites_host_command(client, config, args, [(args.words[0], device)], params)
     status_overview = action == "status" and command_verb(words) != "v"
     status_deadline = time.monotonic() + args.timeout if status_overview else None
+    if status_overview and not args.json:
+        television_module().overview_help(SimpleNamespace(**globals()), client, device, args.words[0])
     catalog_play = None
     implicit_search_deadline = None
     playback_error = None
@@ -6885,6 +6914,16 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                                                     progress=progress, fast=True, deadline=implicit_search_deadline)
                 action, params, words = "programs", {"search": query}, ["p", query]
                 playback_error = None
+    elif status_overview and not args.json:
+        previous_timeout = client.timeout
+        try:
+            remaining = status_deadline - time.monotonic()
+            if remaining <= 0:
+                raise Error("Player status exceeded --timeout")
+            client.timeout = remaining
+            data = client.call(device, action, params)
+        finally:
+            client.timeout = previous_timeout
     else:
         try:
             data = client.call(device, action, params)
@@ -7196,15 +7235,22 @@ def main(argv=None):
             return 0
         torrent_command = (len(args.words) > 1 and args.words[1].casefold() == "torrent"
                            and args.words[0].casefold() not in TOP_LEVEL_COMMANDS)
+        television_command = (len(args.words) > 1 and args.words[1].casefold() == "tv"
+                              and args.words[0].casefold() not in TOP_LEVEL_COMMANDS)
+        if television_command and [word.casefold() for word in args.words[2:]] in (["--help"], ["-h"], ["help"]):
+            print(television_module().help_text(args.words[0]))
+            return 0
         indexer_command = torrent_command and len(args.words) > 2 and args.words[2].casefold() == "indexer"
         if torrent_command and args.words[-1] in ("--help", "-h"):
             print(torrent_indexer_module().USAGE if indexer_command else torrent_module().USAGE)
             return 0
-        timeout_limit = 10800 if torrent_command and not indexer_command else 300
+        timeout_limit = 120 if television_command else 10800 if torrent_command and not indexer_command else 300
         if not math.isfinite(args.timeout) or not 1 <= args.timeout <= timeout_limit:
             raise Error(f"--timeout must be between 1 and {timeout_limit} seconds")
         if torrent_command:
             parse_torrent_arguments(args.words[2:])
+        if television_command:
+            television_module().parse(SimpleNamespace(**globals()), args.words[2:])
         if len(args.words) >= 2 and args.words[1].casefold() == "watch" and args.words[-1] in ("--help", "-h"):
             fleet_module().arguments(args.words[2:], args.json)
             return 0
