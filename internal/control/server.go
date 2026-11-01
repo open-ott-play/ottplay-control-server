@@ -18,6 +18,7 @@ import (
 
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
 	"github.com/open-ott-play/ottplay-control-server/internal/homeassistant"
+	"github.com/open-ott-play/ottplay-control-server/internal/television"
 	"github.com/open-ott-play/ottplay-control-server/internal/wire"
 )
 
@@ -118,12 +119,18 @@ type Server struct {
 	publicRate, createRate bucket
 	notificationStats      notificationCounters
 	homeAssistantStatus    func() homeassistant.Snapshot
+	televisions            televisionControl
+	televisionSlots        chan struct{}
 	notificationMedia      notificationMediaStore
 }
 
 func New(c config.Config) (*Server, error) {
 	c.Defaults()
 	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	tvs, err := television.New(c.Televisions)
+	if err != nil {
 		return nil, err
 	}
 	registry, err := openDeviceRegistry(c)
@@ -149,6 +156,8 @@ func New(c config.Config) (*Server, error) {
 		active = registryActiveConfig(c, identities)
 	}
 	s := &Server{started: time.Now(), admin: sha256.Sum256([]byte(c.AdminToken)), origins: make(map[string]bool), allowNull: c.AllowNullOrigin, ttl: time.Duration(c.CommandTTLSeconds) * time.Second, maxPending: c.MaxPendingPerDevice, now: time.Now, transportSlots: make(chan struct{}, 16), transportLarge: make(chan struct{}, 1)}
+	s.televisions = tvs
+	s.televisionSlots = make(chan struct{}, 4)
 	s.configureOperators(c.Operators)
 	s.registry = registry
 	s.diagnostics, err = newDiagnostics(active)
@@ -373,6 +382,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		methods = "GET,POST"
 	case "/api/requests":
 		methods = "GET,POST"
+	case "/api/televisions":
+		methods = "GET,POST"
 	case "/api/responses":
 		methods = "POST"
 	case wire.LegacyNotifyPath, wire.AckPath:
@@ -436,7 +447,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := (path == playerStatePath && r.Method == http.MethodGet) || path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses" && path != playerStatePath)
+	requiresAdmin := (path == playerStatePath && r.Method == http.MethodGet) || path == "/api/televisions" || path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses" && path != playerStatePath)
 	operatorRoute := operator != nil && ((path == playerStatePath && r.Method == http.MethodGet) || path == "/api/home-assistant/status" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
 	if (!operatorRoute && requiresAdmin != admin) || (operator != nil && !operatorRoute) {
 		failure(w, 403, "credential role is not allowed")
@@ -477,6 +488,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/home-assistant/status" {
 		s.notificationStatus(w, r, now)
+		return
+	}
+	if path == "/api/televisions" {
+		s.serveTelevisions(w, r)
 		return
 	}
 	if path == "/api/devices" {

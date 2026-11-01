@@ -60,6 +60,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
 - [Home Assistant connection and event delivery status](#home-assistant-event-status), [per-player notification preference](#per-player-notification-preference)
+- [Direct LG television power, system volume and app launch](television.md)
 - [Read-only doctor, inspect, debug, bundles and test scenarios](workbench.md)
 - [Monitor one player or a group and diagnose failures](monitoring-runbook.md)
 - [Verify saved reports offline](workbench.md#verify-saved-evidence-offline)
@@ -159,8 +160,12 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`25722c2df04cde0733a600fc7795909b507d604a`](https://github.com/open-ott-play/ottplay-control-server/commit/25722c2df04cde0733a600fc7795909b507d604a).
+[`c76cb9b728b8f3db936a0acbee903969d686312b`](https://github.com/open-ott-play/ottplay-control-server/commit/c76cb9b728b8f3db936a0acbee903969d686312b).
 This is an exact source pin, not a claim about the latest published release.
+It includes [direct LG television controls](television.md). Keep all 37 Python
+modules together, including `television.py`; updating the Go server alone does
+not add `tv` commands to an older local CLI. The installation checks below include
+`tv --help`, which runs without configuration or contacting a television.
 It includes [bounded EPG search batches](#programme-search-configuration-and-archives),
 compact guide search and a [local native EPG fallback](local-epg.md), with
 server/gateway error diagnostics for large channel catalogues. The explicit
@@ -209,7 +214,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 36 Python modules, including
+The current CLI contains 37 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -241,8 +246,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=25722c2df04cde0733a600fc7795909b507d604a
-  ott_source="$HOME/.local/share/ottplay-control-server-local-25722c2df04c"
+  ott_ref=c76cb9b728b8f3db936a0acbee903969d686312b
+  ott_source="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -258,13 +263,14 @@ contacting a controller:
   python3 "$ott_source/cli/ott.py" diagnostics --help
   python3 "$ott_source/cli/ott.py" report verify --help
   python3 "$ott_source/cli/ott.py" t1 perf start --help
+  python3 "$ott_source/cli/ott.py" l tv --help
 )
 ```
 
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-25722c2df04c/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -278,7 +284,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-25722c2df04c/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -300,8 +306,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '25722c2df04cde0733a600fc7795909b507d604a'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-25722c2df04c'
+$ottRef = 'c76cb9b728b8f3db936a0acbee903969d686312b'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -322,6 +328,7 @@ py -3 $ottScript --help
 py -3 $ottScript diagnostics --help
 py -3 $ottScript report verify --help
 py -3 $ottScript t1 perf start --help
+py -3 $ottScript l tv --help
 ```
 
 In the remaining examples replace `ott` with `py -3 $ottScript`, for example
@@ -347,12 +354,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-25722c2df04c/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-25722c2df04c\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -381,7 +388,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-25722c2df04c`, stages the replacement beside it, then switches atomically.
+`ott.before-local-c76cb9b728b8`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -393,9 +400,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-25722c2df04c")
-staged = launcher.with_name("ott.switch-local-25722c2df04c")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-25722c2df04c/cli/ott.py"
+backup = launcher.with_name("ott.before-local-c76cb9b728b8")
+staged = launcher.with_name("ott.switch-local-c76cb9b728b8")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -3125,6 +3132,31 @@ The `local` preset section delivers folder configuration. The separate numbered
 Local videos profile import/export commands still describe a saved selection
 and its private binding; assigning a profile the name `Movies` does not select
 or grant access to a folder with that name.
+
+## Physical television controls
+
+A configured LG television has a separate `tv` control path that works even
+when its OttPlay page is closed. It uses direct webOS control first and an
+explicitly configured Home Assistant fallback when needed. This lane requires
+the controller's `admin_token` in the CLI's private `server_config`; scoped
+operator and player tokens cannot control the physical TV.
+
+```sh
+ott l tv status
+ott l tv volume 25              # system volume; ordinary `v` remains player volume
+ott l tv volume -5
+ott l tv mute off
+ott -t 60 l tv go               # wake the TV and open its configured OttPlay app/URL
+ott l tv off                   # physical TV power-off; ordinary standby stops the player
+ott l,lg2 tv volume 20          # ordinary lists and named groups are supported
+ott -t 60 l tv pair             # pair one TV; accept the prompt on its screen
+```
+
+`tv on` wakes without launching an app, and `tv launch` opens the app on an
+already awake TV. Output distinguishes the selected transport and whether the
+result is confirmed, merely accepted, or uncertain. Mutations are never blindly
+repeated after a timeout. See [direct LG television control](television.md) for
+configuration, all aliases, pairing, Wake-on-LAN and troubleshooting.
 
 ## Restarting playback or the player
 
