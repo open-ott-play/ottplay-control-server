@@ -1527,6 +1527,20 @@ never trigger a player-wide EPG scan or playback.
 Use the gateway URL above; the legacy `epg.2560801.xyz` route has separate access
 rules and is not the recommended CLI endpoint.
 
+For an HTTP failure, the CLI accepts only a JSON error envelope of at most 4 KiB,
+read within the same request deadline, and reports only a verified, known code. It never
+prints the service's message, response body or private configuration. `EPG_TIMEOUT`
+with HTTP 504 means the EPG server's matching deadline expired; `EPG_RELAY` identifies
+the fixed gateway. HTTP 504 with `no verified EPG error code` has no trusted
+service diagnosis, so inspect the gateway and server separately. For a verified
+`EPG_TIMEOUT`, the CLI divides only the failed metadata batch in half and searches
+both halves in order. At most four such divisions are allowed per query, all
+within the original current-programme deadline. A single-channel timeout fails.
+Other HTTP and transport errors are not retried. Failed or incomplete searches
+never trigger a player-wide EPG scan or playback.
+Use the gateway URL above; the legacy `epg.2560801.xyz` route has separate access
+rules and is not the recommended CLI endpoint.
+
 With this optional EPG service configured, title launch follows this order:
 `ott PLAYER TITLE` searches channel names first, then current programme titles,
 then available archive programmes. `ott PLAYER p TITLE` starts at the programme
@@ -1561,6 +1575,35 @@ requests make slow progress. Increase `-t` for a cold guide if necessary, or use
 
 ```sh
 ott -t 45 l три кота 2>search.log
+ott -j l p --list "три кота" >results.json 2>search.log
+ott t1,t2 p --list "news" 2>search.log
+```
+
+Search progress is written to **stderr** and flushed immediately, including with
+`--json`; stdout retains only the command's result. Messages identify the player,
+current stage, completed/total work when known, and elapsed seconds. Long requests
+emit a `Still working` message every five seconds without changing the request's
+timeout or repeating it. Player groups emit these messages live for each member.
+
+```text
+[search l] Searching player channel names [0.0s]
+[search l] Reading player channel catalogue [0.4s]
+[search l] Searching current EPG channels 1536/2029 [6.2s]
+[search l] No current matches; searching available archives [12.1s]
+[search l] Loading programme history 240/816 [18.2s]
+[search l] Checking archive media 3 [25.1s]
+[search l] Still working: Checking archive media 3 [30.1s]
+```
+
+Archive stages distinguish cached results/mappings, history loading, candidate
+resolution on the player, and checking the initial media bytes. A counter without
+a total reports checked candidates rather than an estimated percentage. A slow
+archive search can outlast the current-EPG budget because its individual history,
+resolver and media requests have separate timeouts; progress reports do not
+claim that it has completed. Use `Ctrl-C` to interrupt a search.
+
+```sh
+ott l три кота 2>search.log
 ott -j l p --list "три кота" >results.json 2>search.log
 ott t1,t2 p --list "news" 2>search.log
 ```
