@@ -204,7 +204,7 @@ class LaunchTest(unittest.TestCase):
         program = {"id": "cats", "channel": "Channel", "number": 1, "title": "Cats", "mode": "archive",
                    "start": NOW - 600, "end": NOW - 300, "consecutive": 3}
         target = {"catalog": "fresh", "id": "cats", "title": "Cats", "start": NOW - 600, "end": NOW - 300}
-        client = Mock()
+        client = Mock(timeout=45)
         client.device.return_value = "tv"
         client.call.side_effect = [ott.PlayerUnsupported("Legacy player"), {"channels": []}, {"dispatched": True,
             "channel": {"number": 1, "name": "Channel", "id": "cats"}, "start": NOW - 600, "end": NOW - 300}]

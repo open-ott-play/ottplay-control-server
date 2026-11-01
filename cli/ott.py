@@ -440,6 +440,10 @@ class Error(Exception):
     pass
 
 
+class MediaCatalogChanged(Error):
+    """A read-only catalogue request rejected its explicitly bound snapshot."""
+
+
 class RequestError(Error):
     """A bounded request failure with machine-readable cause and stage."""
     def __init__(self, reason, stage, message, request_id=None, *, transport_category=None):
@@ -791,13 +795,13 @@ def expired_epg_catalog(error):
             and error.data.get("error") == "Channels or provider changed. Retry the EPG query before playing.")
 
 
-def server_programs(client, device, settings, search, refresh=False, progress=None, fast=False):
+def server_programs(client, device, settings, search, refresh=False, progress=None, fast=False, deadline=None):
     policy = epg_module("epg_fallback")
     try:
         primary, fallback = policy.split_settings(settings)
     except policy.ConfigurationError as exc:
         raise Error(str(exc)) from None
-    deadline = time.monotonic() + client.timeout
+    deadline = time.monotonic() + client.timeout if deadline is None else deadline
     if isinstance(search, str) and search.strip() and unicodedata.unidata_version != "17.0.0" and progress:
         progress("Using compatible EPG search for Python Unicode " + unicodedata.unidata_version)
     try:
@@ -1261,10 +1265,11 @@ def channel_identity(value):
     return None
 
 
-def play_channel(client, device, params, timeout=45):
+def play_channel(client, device, params, timeout=45, progress=None, deadline=None):
     previous_timeout = client.timeout
     try:
-        return _play_channel(client, device, params, time.monotonic() + timeout)
+        return _play_channel(client, device, params,
+                             time.monotonic() + timeout if deadline is None else deadline, progress)
     finally:
         client.timeout = previous_timeout
 
@@ -1272,15 +1277,29 @@ def play_channel(client, device, params, timeout=45):
 NUMERIC_CHANNEL_QUERY = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 
 
-def _play_channel(client, device, params, deadline):
+def _play_channel(client, device, params, deadline, progress=None):
     text = params["query"].strip()
     if not text or re.fullmatch(NUMERIC_CHANNEL_QUERY, text):
         return client.call(device, "play", params), None
     exact_id = text[3:] if text.casefold().startswith("id:") else None
     if exact_id is not None and not media_text(exact_id, 2048):
         raise Error("Use play id:VIDEO_ID with an exact nonempty ID from the selected category")
-    response = read_media_channels(client, device, "" if exact_id is not None else text, deadline,
-                                   require_modern=exact_id is not None)
+    for attempt in range(2):
+        try:
+            response = read_media_channels(client, device, "" if exact_id is not None else text, deadline,
+                                           require_modern=exact_id is not None, allow_loading=exact_id is not None)
+            break
+        except MediaCatalogChanged:
+            if attempt or time.monotonic() >= deadline:
+                raise Error("The player catalogue changed during channel-name lookup. "
+                            "No playback was requested; retry the search after the catalogue settles.") from None
+            if progress:
+                progress("Player catalogue changed; restarting channel-name lookup")
+        except RequestError as exc:
+            metadata = request_error_metadata(exc)
+            exc.args = ("Channel-name lookup was not confirmed (" + metadata["action"] + "/" +
+                        metadata["stage"] + ": " + metadata["reason"] + "). No playback was requested.",)
+            raise
     modern = response.get("version") == 1 if isinstance(response, dict) else False
     matches = response.get("channels") if isinstance(response, dict) else None
     invalid = "The player returned an invalid channel list; no switch was requested"
@@ -3757,6 +3776,9 @@ def media_request(client, device, action, params, deadline):
                 and error["op"] == params.get("op", action) and error["state"] == "error"
                 and isinstance(error["error"], str) and error["error"] in CATEGORY_ERRORS):
             detail = CATEGORY_ERRORS[error["error"]]
+            if error["error"] == "catalog_changed" and (action == "channels" or
+                    action == "categories" and params.get("op") == "list"):
+                raise MediaCatalogChanged(detail + " The request was not repeated.") from None
         raise Error(detail + " The request was not repeated.") from None
     except PlayerUnsupported:
         raise Error("This player or controller does not support media catalog requests. Update both; the request was not repeated.") from None
@@ -3879,7 +3901,7 @@ def categories_command(client, device, params, timeout):
 
 def read_media_channels(client, device, search, deadline, require_modern=False, page_limit=None, page_offset=0,
                         expected_provider=None, controls=None, category_override=None,
-                        source_categories=None, complete_only=False):
+                        source_categories=None, complete_only=False, allow_loading=True):
     controls = media_capabilities(client, device, deadline) if controls is None else controls
     if controls is None:
         if page_limit is not None:
@@ -3902,6 +3924,9 @@ def read_media_channels(client, device, search, deadline, require_modern=False, 
                   if source_categories is None else source_categories)
     if expected_provider is not None and categories["provider"] != expected_provider:
         raise Error("The provider changed before its catalog was read; no playback was requested")
+    if categories["loading"] and not allow_loading:
+        raise Error("The media catalog is still loading; no playback was requested. "
+                    "Retry the title search when catalogue loading finishes.")
     runtime, category = categories["runtime"], category_override or categories["selected"]
     limit = maximum if page_limit is None else page_limit
     result, rows, identities = None, [], set()
@@ -6788,6 +6813,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     status_overview = action == "status" and command_verb(words) != "v"
     status_deadline = time.monotonic() + args.timeout if status_overview else None
     catalog_play = None
+    implicit_search_deadline = None
     playback_error = None
     plex_settings = action == "provider_settings" and params.get("provider") == "plex"
     if action == "provider" and (grouped or len(words) > 2 or "--" in words[1:]):
@@ -6828,16 +6854,18 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         data = relative_seek_command(client, device, params, args.timeout)
     elif action == "play":
         searching = "epg" in config and bool(params["query"].strip()) and not re.fullmatch(NUMERIC_CHANNEL_QUERY, params["query"].strip())
+        implicit_search_deadline = time.monotonic() + args.timeout if searching else None
         context = SearchProgress(args.words[0], progress_stream) if searching else contextlib.nullcontext()
         with context as progress:
             if progress:
                 progress("Searching player channel names")
-            data, playback_error = play_channel(client, device, params, args.timeout)
+            data, playback_error = play_channel(client, device, params, args.timeout, progress=progress,
+                                                deadline=implicit_search_deadline)
             if data.get("channels") == [] and "epg" in config and data.get("version") != 1:
                 progress("No channel matches; searching current EPG and available archives")
                 query = params["query"]
                 data, catalog_play = server_programs(client, device, config["epg"], query, refresh=args.refresh,
-                                                    progress=progress, fast=True)
+                                                    progress=progress, fast=True, deadline=implicit_search_deadline)
                 action, params, words = "programs", {"search": query}, ["p", query]
                 playback_error = None
     else:
@@ -6902,8 +6930,17 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                             or not selected["start"] <= time.time() < selected["end"]):
                         raise Error("Programme selection expired during validation; retry the query. No playback was requested")
                 # Use the returned catalogue number, even for duplicate or numeric names.
-                playback = (client.call(device, "play_archive_catalog" if archive else "play_catalog", target) if target is not None
-                            else client.call(device, "play", {"query": str(number)}))
+                previous_timeout = client.timeout
+                try:
+                    if implicit_search_deadline is not None:
+                        remaining = implicit_search_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise Error("Programme search exceeded --timeout; no playback was requested")
+                        client.timeout = min(previous_timeout, remaining)
+                    playback = (client.call(device, "play_archive_catalog" if archive else "play_catalog", target) if target is not None
+                                else client.call(device, "play", {"query": str(number)}))
+                finally:
+                    client.timeout = previous_timeout
                 channel = playback.get("channel") if isinstance(playback, dict) else None
                 if (not isinstance(channel, dict) or playback.get("dispatched") is not True
                         or type(channel.get("number")) is not int or channel["number"] != number
