@@ -667,9 +667,15 @@ class EpgClient:
     def __init__(self, settings, timeout, operation="current"):
         if operation not in ("current", "search"):
             raise Error("Invalid EPG operation")
-        if (not isinstance(settings, dict) or set(settings) != {"url", "source"}
+        if (not isinstance(settings, dict) or not {"url", "source"}.issubset(settings)
+                or set(settings) - {"url", "source", "stateful_archive_origins"}
                 or settings["source"] != "epg-one" or not isinstance(settings["url"], str)):
             raise Error('EPG configuration must contain url and source "epg-one"')
+        policy = epg_module("epg_fallback")
+        try:
+            policy.stateful_archive_origins(settings.get("stateful_archive_origins", []))
+        except policy.ConfigurationError as exc:
+            raise Error(str(exc)) from None
         url = settings["url"]
         try:
             parsed = urllib.parse.urlsplit(url)
@@ -5740,6 +5746,9 @@ See docs/cli.md for the request and result contract.
         module_path = Path(__file__).resolve().with_name("playlist_search.py")
         if not module_path.is_file() or not module_path.with_name("programme_search.py").is_file():
             return failure("resolver_unavailable", "Install playlist_search.py and programme_search.py beside ott.py.")
+        origins = request.get("stateful_archive_origins", [])
+        if isinstance(origins, list) and origins and not module_path.with_name("epg_fallback.py").is_file():
+            return failure("resolver_unavailable", "Install epg_fallback.py beside ott.py to use stateful_archive_origins.")
         spec = importlib.util.spec_from_file_location("ott_playlist_search", module_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
