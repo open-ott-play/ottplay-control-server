@@ -37,6 +37,8 @@ type haFixture struct {
 	wakeCalls    int
 	wakeReads    int
 	wakePending  bool
+	// Invoked with mu held, before writing a state response.
+	stateReadHook func()
 }
 
 func newHA(t *testing.T, tv *tvFixture) *haFixture {
@@ -85,6 +87,9 @@ func newHA(t *testing.T, tv *tvFixture) *haFixture {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/api/states/media_player.native_tv" {
+			if h.stateReadHook != nil {
+				h.stateReadHook()
+			}
 			if h.wakePending {
 				h.wakeReads++
 				if h.wakeReads >= h.onAfterReads {
@@ -483,9 +488,22 @@ func TestFallbackWOLRetryRequiresOptInAndStopsAtObservedWake(t *testing.T) {
 			h.power = "off"
 			h.onAfterCalls = 3
 			f.config.Fallback.WOLRetry = retry
-			client := &fallbackClient{c: *f.config.Fallback, token: "ha-fixture-token", http: h.server.Client(), readyPollInterval: time.Millisecond, wakeRetryInterval: 5 * time.Millisecond}
-			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			// Make every post-wake probe eligible for retry; cancellation is
+			// driven by requests, not the speed of the CI runner.
+			client := &fallbackClient{c: *f.config.Fallback, token: "ha-fixture-token", http: h.server.Client(), readyPollInterval: time.Millisecond, wakeRetryInterval: time.Nanosecond}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			if !retry {
+				reads := 0
+				h.stateReadHook = func() {
+					if h.wakeCalls > 0 {
+						reads++
+						if reads == 4 {
+							cancel()
+						}
+					}
+				}
+			}
 			if err := client.verifyNative(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -497,6 +515,9 @@ func TestFallbackWOLRetryRequiresOptInAndStopsAtObservedWake(t *testing.T) {
 				}
 			} else {
 				assertCode(t, err, "not_ready", false)
+				if ctx.Err() != context.Canceled {
+					t.Fatal("safety deadline expired before fixture cancellation")
+				}
 			}
 			h.mu.Lock()
 			count := len(h.posts)
@@ -534,9 +555,16 @@ func TestFallbackWOLRetryStopsOnCancellationOrAmbiguousMutation(t *testing.T) {
 				h.onAfterCalls = 2
 				h.failurePath = "/api/services/webostv/command"
 			}
-			client := &fallbackClient{c: *f.config.Fallback, token: "ha-fixture-token", http: h.server.Client(), readyPollInterval: time.Millisecond, wakeRetryInterval: 5 * time.Millisecond}
-			ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+			client := &fallbackClient{c: *f.config.Fallback, token: "ha-fixture-token", http: h.server.Client(), readyPollInterval: time.Millisecond, wakeRetryInterval: time.Nanosecond}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			if failure == "cancel" {
+				h.stateReadHook = func() {
+					if h.wakeCalls == 3 {
+						cancel()
+					}
+				}
+			}
 			if err := client.verifyNative(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -544,6 +572,9 @@ func TestFallbackWOLRetryStopsOnCancellationOrAmbiguousMutation(t *testing.T) {
 			err := client.execute(ctx, f.config, Command{Action: "go"}, &r)
 			if failure == "cancel" {
 				assertCode(t, err, "not_ready", false)
+				if ctx.Err() != context.Canceled {
+					t.Fatal("safety deadline expired before fixture cancellation")
+				}
 			} else {
 				assertCode(t, err, "fallback_unavailable", false)
 			}
@@ -560,8 +591,8 @@ func TestFallbackWOLRetryStopsOnCancellationOrAmbiguousMutation(t *testing.T) {
 			if failure == "launch" && (wakes != 2 || count != 3) {
 				t.Fatalf("launch was replayed: wakes=%d posts=%d", wakes, count)
 			}
-			if failure == "cancel" && wakes < 2 {
-				t.Fatal("cancellation test did not exercise retry")
+			if failure == "cancel" && (wakes != 3 || count != 3) {
+				t.Fatalf("cancellation did not stop after third wake: wakes=%d posts=%d", wakes, count)
 			}
 			time.Sleep(15 * time.Millisecond)
 			h.mu.Lock()
