@@ -22,6 +22,7 @@ type fallbackClient struct {
 	http              *http.Client
 	mutationAttempted bool
 	readyPollInterval time.Duration
+	wakeRetryInterval time.Duration
 }
 
 func executeFallback(ctx context.Context, c config.Television, cmd Command, r Result) (Result, error) {
@@ -277,6 +278,11 @@ func (f *fallbackClient) execute(ctx context.Context, c config.Television, cmd C
 			if pollInterval <= 0 {
 				pollInterval = 500 * time.Millisecond
 			}
+			retryInterval := f.wakeRetryInterval
+			if retryInterval <= 0 {
+				retryInterval = defaultWakeRetryInterval
+			}
+			nextWake := time.Now().Add(retryInterval)
 			for probe.Err() == nil {
 				if observed, err := f.state(probe); err == nil {
 					state = observed
@@ -284,6 +290,14 @@ func (f *fallbackClient) execute(ctx context.Context, c config.Television, cmd C
 					if state.Power == "on" {
 						break
 					}
+				}
+				// HA turn_on may run arbitrary user automation. Only retry when
+				// its binding explicitly declares a WOL-only, idempotent action.
+				if f.c.WOLRetry && probe.Err() == nil && !time.Now().Before(nextWake) {
+					if err = f.service(probe, "media_player", "turn_on", nil); err != nil {
+						return err
+					}
+					nextWake = time.Now().Add(retryInterval)
 				}
 				if !wait(probe, pollInterval) {
 					break

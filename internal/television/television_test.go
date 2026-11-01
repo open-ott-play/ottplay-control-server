@@ -382,7 +382,7 @@ func TestWOLPacketAndNoFalseAwakeConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err = sendMagicPacket("02:03:04:05:06:07", "127.0.0.1", conn.LocalAddr().(*net.UDPAddr).Port); err != nil {
+	if err = sendMagicPacket(context.Background(), "02:03:04:05:06:07", "127.0.0.1", conn.LocalAddr().(*net.UDPAddr).Port); err != nil {
 		t.Fatal(err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
@@ -408,7 +408,7 @@ func TestWOLPacketAndNoFalseAwakeConfirmation(t *testing.T) {
 	m.wakeWait = 20 * time.Millisecond
 	m.wakeInterval = time.Millisecond
 	wakes := 0
-	m.sendWake = func(string, string, int) error { wakes++; return nil }
+	m.sendWake = func(context.Context, string, string, int) error { wakes++; return nil }
 	r, err := m.Execute(context.Background(), "living", Command{Action: "on"})
 	if err != nil || r.Outcome != "accepted" || r.Transport != "wake_on_lan" || r.State.Power != "unknown" || wakes != 1 {
 		t.Fatalf("wake=%+v error=%v sends=%d", r, err, wakes)
@@ -420,6 +420,81 @@ func TestWOLPacketAndNoFalseAwakeConfirmation(t *testing.T) {
 	}
 	if f.count(launchApp) != 0 {
 		t.Fatal("launched before wake confirmed")
+	}
+}
+
+func TestNativeWOLRetryStopsWhenReadyAndLaunchesOnce(t *testing.T) {
+	f := newTV(t, false)
+	f.power = "Power Off"
+	f.config.MAC = "02:03:04:05:06:07"
+	m := f.manager(t)
+	m.wakeWait = time.Second
+	m.wakeInterval = time.Millisecond
+	m.wakeRetryInterval = 5 * time.Millisecond
+	var wakes atomic.Int32
+	m.sendWake = func(ctx context.Context, _, _ string, _ int) error {
+		if ctx.Err() != nil {
+			t.Error("wake attempted after deadline")
+		}
+		if wakes.Add(1) == 3 {
+			f.mu.Lock()
+			f.power = "Active"
+			f.mu.Unlock()
+		}
+		return nil
+	}
+	r, err := m.Execute(context.Background(), "living", Command{Action: "go"})
+	if err != nil || r.Outcome != "confirmed" || r.Transport != "webos" || f.count(launchApp) != 1 || wakes.Load() != 3 {
+		t.Fatalf("retry did not wake and launch once: result=%+v error=%v wakes=%d", r, err, wakes.Load())
+	}
+	time.Sleep(15 * time.Millisecond)
+	if wakes.Load() != 3 || f.count(launchApp) != 1 {
+		t.Fatal("wake or launch continued after command completed")
+	}
+}
+
+func TestNativeWOLRetryStopsAtCallerCancellation(t *testing.T) {
+	f := newTV(t, false)
+	f.power = "Power Off"
+	f.config.MAC = "02:03:04:05:06:07"
+	m := f.manager(t)
+	m.wakeWait = time.Second
+	m.wakeInterval = time.Millisecond
+	m.wakeRetryInterval = 5 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wakes atomic.Int32
+	m.sendWake = func(context.Context, string, string, int) error {
+		if wakes.Add(1) == 3 {
+			cancel()
+		}
+		return nil
+	}
+	r, err := m.Execute(ctx, "living", Command{Action: "go"})
+	assertCode(t, err, "not_ready", true)
+	if r.Outcome != "uncertain" || wakes.Load() != 3 || f.count(launchApp) != 0 {
+		t.Fatalf("canceled wake had unexpected effects: result=%+v wakes=%d", r, wakes.Load())
+	}
+	time.Sleep(15 * time.Millisecond)
+	if wakes.Load() != 3 {
+		t.Fatal("wake continued after cancellation")
+	}
+}
+
+func TestCanceledWOLDoesNotSendPacket(t *testing.T) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = sendMagicPacket(ctx, "02:03:04:05:06:07", "127.0.0.1", conn.LocalAddr().(*net.UDPAddr).Port)
+	assertCode(t, err, "deadline", false)
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Millisecond))
+	_, _, err = conn.ReadFromUDP(make([]byte, 102))
+	if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+		t.Fatalf("canceled wake sent a packet: %v", err)
 	}
 }
 

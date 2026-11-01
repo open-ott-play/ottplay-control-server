@@ -93,7 +93,8 @@ The following addresses and IDs are examples:
       "fallback": {
         "url": "http://homeassistant.local:8123",
         "token_file": "/var/lib/ottplay-control/private/televisions/home-assistant-token",
-        "entity_id": "media_player.lg_living_room"
+        "entity_id": "media_player.lg_living_room",
+        "wol_retry": false
       }
     }
   ]
@@ -202,10 +203,42 @@ or disabling notification banners does not select the TV control transport.
 The output identifies `direct webOS`, `Wake-on-LAN`, or `Home Assistant
 fallback`, so a successful fallback cannot be mistaken for a direct connection.
 
-Fallback is only safe before an uncertain direct mutation. If a command may
+Fallback does not replay a potentially applied webOS command. If a command may
 already have reached the television, the controller reports uncertainty instead
 of repeating it through Home Assistant. This matters especially for relative
 volume changes. Inspect `tv status` before issuing another change.
+
+### Bounded wake retries
+
+A television can miss the first wake packet just after shutdown while its
+standby network interface is settling. Use one bounded request such as
+`ott -t 90 lg2 tv go`. Direct Wake-on-LAN packets may repeat no more often than every 10 seconds
+while the TV has not yet been observed awake, within that same request's
+deadline. The controller stops the wake loop on an awake observation,
+cancellation or completion; `go` launches the configured app at most once.
+
+Home Assistant wake retries are **disabled by default** because its native
+TV turn-on automation may run arbitrary actions. Enable `fallback.wol_retry`
+only after verifying that the selected entity's entire wake automation uses
+idempotent actions: Wake-on-LAN or a discrete `PowerOn` command that cannot
+turn an already-awake television off. A power-toggle command or any other
+non-idempotent automation must keep `wol_retry: false`.
+
+After upgrading the controller, add `"wol_retry": true` to the existing TV
+binding's `fallback` object, preserve its URL/token/entity settings, then
+validate and restart the controller.
+
+With this opt-in, the HA native `turn_on` request may repeat no more often than every 10 seconds
+until the TV is observed awake or the original deadline/cancellation ends the
+operation. For an RF ESPHome wake relay, each request can invoke its finite
+three-packet burst; the controller owns the longer readiness wait. This does
+not repeat a failed or ambiguous HA service request. It does not enable retries for volume, mute, power-off or app launch, and does not
+create a background wake task after the request returns.
+
+Commands for one television remain serialized: `tv off` does not interrupt an
+in-progress `tv go`. Cancel the running request before sending another command
+when you need to stop waiting. If a request ends with an uncertain result,
+inspect TV state before issuing a new mutation.
 
 ## Results and monitoring
 
@@ -231,6 +264,7 @@ OttPlay is closed, or OttPlay may be in standby while the TV remains on.
 | Certificate mismatch | Follow the changed-certificate procedure above. `tv pair` intentionally does not overwrite a saved pin. |
 | Credential is invalid in Kubernetes | Use a regular 0600 file owned by UID 65532 on the private writable claim, not a projected Secret symlink; check permissions after rollout. |
 | Wake packet accepted but TV stays off | Check its network-wake settings, MAC and broadcast subnet. Some TV/network combinations do not keep Wi-Fi reachable in standby. |
+| Wake fails immediately after shutdown | Allow the standby interface to settle. Use one longer bounded `tv go` request; enable HA `wol_retry` only for a verified idempotent wake automation as described above. |
 | Controller runs in Kubernetes or another subnet | Ensure the controller can reach webOS and send the wake packet to the TV's LAN. UDP broadcasts generally do not cross routed/container networks automatically; a working HA fallback may provide the LAN-side wake path. |
 | HA fallback cannot wake the TV | Test the native LG entity directly in HA and configure its own wake support. Fallback cannot create an unavailable power-on capability. |
 | Volume cannot be changed | Confirm system audio is controllable in the selected output mode. A fixed-level optical output or external receiver may need its own volume control. |

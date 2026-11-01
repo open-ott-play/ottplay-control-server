@@ -32,6 +32,9 @@ type TelevisionFallback struct {
 	URL       string `json:"url"`
 	TokenFile string `json:"token_file"`
 	EntityID  string `json:"entity_id"`
+	// WOLRetry is an administrator assertion that this entity's turn-on
+	// automation only sends idempotent Wake-on-LAN packets, never a power toggle.
+	WOLRetry bool `json:"wol_retry,omitempty"`
 }
 
 var televisionHost = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
