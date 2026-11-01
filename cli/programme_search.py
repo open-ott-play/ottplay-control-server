@@ -1,11 +1,12 @@
 """Shared archive search for every player using the OTT-play control protocol.
 
-Guide requests contain metadata only. Resolved media URLs live only in memory
-between the authenticated controller and its local availability probe.
+Guide requests contain metadata only. Resolved media URLs live only in memory.
+Explicitly configured stateful origins defer media checks to actual playback.
 """
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
 from datetime import datetime
 import hashlib
+import importlib.util
 from http.client import HTTPException
 import ipaddress
 import json
@@ -13,6 +14,7 @@ import os
 import queue
 import secrets
 import ssl
+import sys
 from pathlib import Path
 import re
 import tempfile
@@ -22,6 +24,53 @@ import unicodedata
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, ProxyHandler, build_opener
+
+_archive_policy = None
+
+
+def archive_origin_policy():
+    global _archive_policy
+    if _archive_policy is None:
+        path = Path(__file__).resolve().with_name("epg_fallback.py")
+        if not path.is_file():
+            raise SearchError("Install epg_fallback.py beside programme_search.py to use stateful_archive_origins")
+        spec = importlib.util.spec_from_file_location("ott_archive_origin_policy", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _archive_policy = module
+    return _archive_policy
+
+
+def archive_probe_origins(settings):
+    value = settings.get("stateful_archive_origins", [])
+    if not isinstance(value, list) or len(value) > 32:
+        raise SearchError("stateful_archive_origins must be a list of at most 32 HTTP(S) origins")
+    if not value:
+        return []
+    policy = archive_origin_policy()
+    try:
+        return policy.stateful_archive_origins(value)
+    except policy.ConfigurationError as exc:
+        raise SearchError(str(exc)) from None
+
+
+def defer_archive_probe(url, origins):
+    # Validate the private resolver result even when no HTTP request will follow.
+    origin(url)
+    policy = archive_origin_policy()
+    try:
+        return policy.canonical_archive_origin(url) in origins
+    except policy.ConfigurationError:
+        # A URL outside the stricter configuration grammar is never allowlisted.
+        return False
+
+
+def deferred_archive_notice(progress=None):
+    message = "Archive availability deferred to playback for configured stateful origin"
+    if progress is not None:
+        _progress(progress, message)
+    else:
+        print(message, file=sys.stderr)
 
 
 
@@ -632,6 +681,7 @@ def _archive_available(url, start, require_hls, allow_redirects, deadline, cance
 
 def search_archives(client, device, settings, snapshot, query, refresh=False, catalog_expired=None, *,
                     progress=None, fast=False, deadline=None, prepared=None, refresh_current=None):
+    probe_origins = archive_probe_origins(settings)
     _remaining(deadline)
     capability = snapshot.get("archive")
     if (not isinstance(capability, dict) or capability.get("version") != 1
@@ -647,10 +697,11 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
     key = [base, identity, text_key(query)]
     until = time.time() + GUIDE_TTL
     _progress(progress, "Reading cached archive results")
-    previous = cached("query", key, GUIDE_TTL, refresh) if not fast and prepared is None else None
+    previous = cached("query", key, GUIDE_TTL, refresh) if not probe_origins and not fast and prepared is None else None
     selected = None
     recheck_current = None
     candidate_count = None
+    deferred = set()
     now = time.time()
     if fresh(previous, now):
         candidates = previous.get("programs")
@@ -685,9 +736,12 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
         return receipt
 
     def result(channel, row, mode, count=1):
-        return {"id": channel["id"], "channel": channel["name"], "number": channel["number"],
+        value = {"id": channel["id"], "channel": channel["name"], "number": channel["number"],
                 "title": row["name"], "start": row["time"], "end": row["time_to"], "mode": mode,
                 "consecutive": count, "archive_hours": channel["archiveHours"]}
+        if mode == "archive" and (channel["id"], row["time"], row["time_to"], row["name"]) in deferred:
+            value["availability"] = "deferred"
+        return value
 
     if selected is None:
         if prepared is None:
@@ -710,7 +764,7 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
             nonlocal checked_candidates
             _remaining(deadline)
             archive_key = [identity, channel["id"], row["time"]]
-            verified = cached("archive", archive_key, ARCHIVE_TTL, refresh) is True
+            verified = not probe_origins and cached("archive", archive_key, ARCHIVE_TTL, refresh) is True
             if not verified:
                 params = {"catalog": fresh_receipt(), "id": channel["id"], "start": row["time"],
                           "end": row["time_to"], "title": row["name"]}
@@ -726,6 +780,13 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                     response = call("resolve_archive", params)
                 if not isinstance(response, dict) or response.get("resolved") is not True:
                     raise SearchError("The player did not resolve the selected archive")
+                if probe_origins and defer_archive_probe(response.get("url"), probe_origins):
+                    if not deferred:
+                        deferred_archive_notice(progress)
+                    deferred.add((channel["id"], row["time"], row["time_to"], row["name"]))
+                    checked_candidates += 1
+                    _progress(progress, "Resolving archive eligibility without media requests", checked_candidates)
+                    return True
                 _progress(progress, "Checking archive media", checked_candidates)
                 options = {"strict": True} if fast or deadline is not None else {}
                 if deadline is not None:
@@ -769,7 +830,7 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
             boundary = until
         selected = [result(*choice) for choice in choices]
         until = min(until, boundary)
-        if not fast and selected and selected[0]["mode"] == "archive":
+        if not probe_origins and not fast and selected and selected[0]["mode"] == "archive":
             remember("query", key, {"programs": selected, "until": until})
     receipt = fresh_receipt(force=True)
     # The final catalogue read can cross a programme boundary or the provider's
@@ -800,7 +861,10 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
     _progress(progress, "Archive search complete", len(selected), len(selected))
     data = {"as_of": time.time(), "checked": len(channels), "total": len(channels),
             "partial": False, "programs": selected}
+    has_deferred = any(row.get("availability") == "deferred" for row in selected)
+    if has_deferred:
+        data["verified_all"] = False
     if fast:
-        data.update(selection="random_first_available", verified_all=False,
+        data.update(selection="random_first_eligible" if has_deferred else "random_first_available", verified_all=False,
                     candidate_chains=len(selected) if candidate_count is None else candidate_count)
     return data, targets

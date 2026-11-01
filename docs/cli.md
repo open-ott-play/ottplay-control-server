@@ -1539,6 +1539,8 @@ candidate chains, checks their earliest available member and stops after the
 first playable chain; it does not probe every result before starting one.
 `p --list TITLE` verifies and lists all matches without launching playback.
 Fast selection is never written into the cache as a complete result list.
+For explicitly configured [stateful archive proxies](#stateful-archive-proxies),
+media checks are deferred and candidates are labelled accordingly.
 
 Plex and VPortal title searches stay within their selected media catalogue; an
 empty movie or episode result does not switch providers or search the TV guide.
@@ -1609,6 +1611,47 @@ Old installations retain live searches and report the needed update if an
 archive fallback is required. Local validation of shared code does not install
 new packages on offline TVs or phones.
 
+### Stateful archive proxies
+
+Some proxies create, replace or stop a shared streaming session when an archive
+URL is fetched. Probing several candidates can therefore interrupt playback
+even before the CLI sends a play command. For a proxy known to behave this way,
+add its exact origin to the optional local CLI policy:
+
+```json
+"epg": {
+  "url": "https://ottplay-epg-api.igw-2560801.workers.dev/epg/v1",
+  "source": "epg-one",
+  "fallback_url": "http://127.0.0.1:18792/epg/v1",
+  "stateful_archive_origins": ["http://localhost:8090"]
+}
+```
+
+An origin is a scheme, hostname and optional port. Up to 32 entries are allowed;
+credentials, paths other than `/`, queries, fragments and whitespace are rejected
+before search I/O. Scheme/hostname case, default ports and IPv6 spelling are
+normalized. Different schemes, non-default ports and hostnames remain distinct:
+`localhost` does not match `127.0.0.1`. There is no automatic proxy detection.
+Use the origin returned in the player's archive address, not the EPG endpoint.
+
+For matching origins, the CLI still resolves each candidate through the player
+and checks the catalogue, access restrictions, programme times and retention.
+It makes **no manifest or segment request** for that candidate. The earliest
+eligible programme in each chain can be selected, but media availability is
+deferred to playback. Stderr reports this decision; JSON rows include
+`"availability": "deferred"`, with `"verified_all": false`. Fast archive selection
+uses `"selection": "random_first_eligible"` instead of claiming availability.
+This does not guarantee the provider has the requested recording. A failed
+playback request is not automatically repeated with another candidate.
+
+A nonempty policy bypasses old query-result and archive-availability caches so
+previous positive checks cannot skip origin classification. Deferred results
+are never cached as verified; complete query results are not cached while this
+policy is active. Guide metadata caches continue to work, and unmatched origins
+retain their existing media checks and error handling. The policy survives an
+EPG fallback but is never sent to the public guide service. Remove the setting,
+or use an empty list, to restore ordinary probing.
+
 ## Local playlist resolver
 
 `ott resolve --request-stdin` lets a local launcher such as VL use the same
@@ -1642,6 +1685,18 @@ An optional `cache_dir` selects a private
 local cache directory. `refresh: true` bypasses caches for this request. Private
 provider URLs belong in this stdin object, never in command-line arguments or
 shared logs. A launcher should use a subprocess argument list and capture stdout.
+
+The same stateful-proxy policy is available as the optional top-level
+`"stateful_archive_origins": ["https://proxy.example"]` request field. The launcher
+must supply it explicitly: this command never imports `epg` or any other setting
+from `cli.json`. Matching archive rows return `"availability": "deferred"` and a
+stderr notice, with no media probing or verified-result caching. Playlist and
+EPG metadata requests still run. A launcher must not describe deferred rows as
+verified playable recordings. Minimal resolver-only installations must add
+`epg_fallback.py` from the same revision to use a nonempty origin list. Existing
+three-file installations (`ott.py`, `programme_search.py`, `playlist_search.py`)
+continue to work with the policy absent or empty; full CLI installations already
+include the policy module.
 
 Search order is playlist title, currently airing programme, then playable
 archive within the channel's retention and 144 hours. Only named HTTP(S)

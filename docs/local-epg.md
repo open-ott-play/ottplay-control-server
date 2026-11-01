@@ -38,6 +38,13 @@ results from different sources are not combined. The original search deadline
 still applies. Playback is dispatched only after a complete accepted search and
 is never retried through the fallback.
 
+If the same `epg` object contains an explicit
+[`stateful_archive_origins` policy](cli.md#stateful-archive-proxies), both primary
+and fallback searches preserve it locally. Switching guide services never turns
+media probing back on for those origins. Deferred candidates are marked in the
+result and are not cached as verified recordings; the origin list is not sent to
+either EPG service.
+
 The normal stderr progress identifies when a local search starts. JSON results
 remain on stdout:
 
