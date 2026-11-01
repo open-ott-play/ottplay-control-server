@@ -184,17 +184,33 @@ class HistoryTest(unittest.TestCase):
 
 
 class LaunchTest(unittest.TestCase):
+    def launch_programmes(self, rows, targets, selected):
+        client = Mock()
+        client.device.return_value = "tv"
+        client.call.return_value = {"dispatched": True,
+            "channel": {"number": selected["number"], "name": selected["channel"], "id": selected["id"]},
+            "start": selected["start"], "end": selected["end"], "mode": selected.get("mode", "live")}
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(ott, "read_json", return_value={"epg": SETTINGS}), \
+             patch.object(ott, "Client", return_value=client), \
+             patch.object(ott.time, "time", return_value=NOW), \
+             patch.object(ott.secrets, "choice", return_value=selected), \
+             patch.object(ott, "server_programs", return_value=({"programs": rows}, targets)), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            status = ott.main(["tv", "p", "cats"])
+        return status, output.getvalue(), errors.getvalue(), client
+
     def test_no_channel_match_falls_back_to_epg_and_dispatches_archive_once(self):
         program = {"id": "cats", "channel": "Channel", "number": 1, "title": "Cats", "mode": "archive",
                    "start": NOW - 600, "end": NOW - 300, "consecutive": 3}
         target = {"catalog": "fresh", "id": "cats", "title": "Cats", "start": NOW - 600, "end": NOW - 300}
-        client = Mock()
+        client = Mock(timeout=45)
         client.device.return_value = "tv"
         client.call.side_effect = [ott.PlayerUnsupported("Legacy player"), {"channels": []}, {"dispatched": True,
             "channel": {"number": 1, "name": "Channel", "id": "cats"}, "start": NOW - 600, "end": NOW - 300}]
         with patch.object(ott, "read_json", return_value={"epg": SETTINGS}), patch.object(ott, "Client", return_value=client), \
              patch.object(ott.time, "time", return_value=NOW), \
-             patch.object(ott, "server_programs", return_value=({"programs": [program]}, {(1, NOW - 600): target})) as epg, \
+             patch.object(ott, "server_programs", return_value=({"programs": [program]}, {(1, NOW - 600, NOW - 300, "Cats"): target})) as epg, \
              contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
             # The category-list alias is reserved; explicit play preserves title search.
             self.assertEqual(ott.main(["tv", "play", "cats"]), 0)
@@ -209,6 +225,79 @@ class LaunchTest(unittest.TestCase):
                 {"number": 1, "channel": "Same", "title": "Cats", "mode": "archive", "start": NOW - 400, "end": NOW - 300}]
         with patch.object(ott.time, "time", return_value=NOW), patch.object(ott.secrets, "choice", return_value=rows[1]):
             self.assertEqual(ott.select_programme(rows), rows[1])
+
+    def test_same_start_archive_selection_preserves_exact_end_and_title(self):
+        rows = [{"id": "cats", "number": 1, "channel": "Same", "mode": "archive", "consecutive": 1, "start": NOW - 600,
+                 "end": NOW + end, "title": title}
+                for end, title in [(-500, "Cats A"), (-500, "Cats B"), (-300, "Cats C")]]
+        targets = {(item["number"], item["start"], item["end"], item["title"]):
+                   {"catalog": "fresh", **{key: item[key] for key in ("id", "start", "end", "title")}}
+                   for item in rows}
+        # The legacy key collides. Exact selection must never use its last writer.
+        targets[(1, NOW - 600)] = targets[(1, NOW - 600, NOW - 300, "Cats C")]
+        for selected in rows:
+            with self.subTest(selected=selected["title"]):
+                status, _, errors, client = self.launch_programmes(rows, targets, selected)
+                self.assertEqual(status, 0, errors)
+                expected = targets[(1, selected["start"], selected["end"], selected["title"])]
+                client.call.assert_called_once_with("tv", "play_archive_catalog", expected)
+                archive_lines = [line for line in errors.splitlines() if line.startswith("Archive playback requested:")]
+                self.assertEqual(len(archive_lines), 1)
+                self.assertIn(selected["title"], archive_lines[0])
+
+    def test_overlapping_live_rows_are_accepted_and_dispatch_the_selected_channel(self):
+        rows = [{"id": "cats", "number": 1, "channel": "Same", "mode": "live",
+                 "start": NOW + start, "end": NOW + end, "title": title}
+                for start, end, title in [(-100, 100, "Cats A"), (-100, 100, "Cats B"), (-50, 50, "Cats C")]]
+        target = {"catalog": "fresh", "id": "cats"}
+        for selected in rows:
+            with self.subTest(selected=selected["title"]):
+                status, _, errors, client = self.launch_programmes(rows, {1: target}, selected)
+                self.assertEqual(status, 0, errors)
+                client.call.assert_called_once_with("tv", "play_catalog", target)
+                self.assertIn("Channel switch requested: 1: Same", errors)
+                self.assertNotIn("Archive playback requested:", errors)
+
+    def test_archive_without_exact_target_never_falls_back_to_live_playback(self):
+        selected = {"id": "cats", "number": 1, "channel": "Same", "title": "Cats", "mode": "archive", "consecutive": 1,
+                    "start": NOW - 600, "end": NOW - 300}
+        legacy = {"catalog": "old", "id": "cats", "start": NOW - 600, "end": NOW - 300, "title": "Cats"}
+        for targets in (None, {}, {1: {"catalog": "live", "id": "cats"}}, {(1, NOW - 600): legacy}):
+            with self.subTest(targets=targets):
+                status, _, errors, client = self.launch_programmes([selected], targets, selected)
+                self.assertEqual(status, 1)
+                self.assertIn("no exact playback target", errors)
+                self.assertIn("no playback was requested", errors)
+                self.assertNotIn("Archive playback requested:", errors)
+                self.assertNotIn("Channel switch requested:", errors)
+                client.call.assert_not_called()
+
+    def test_live_programme_must_still_be_current_before_dispatch(self):
+        target = {"catalog": "fresh", "id": "cats"}
+        for mode in (None, "live"):
+            for start, end in ((-600, 0), (1, 600)):
+                selected = {"id": "cats", "number": 1, "channel": "Same", "title": "Cats",
+                            "start": NOW + start, "end": NOW + end}
+                if mode is not None:
+                    selected["mode"] = mode
+                with self.subTest(mode=mode, start=start, end=end):
+                    status, _, errors, client = self.launch_programmes([selected], {1: target}, selected)
+                    self.assertEqual(status, 1)
+                    self.assertIn("Programme selection expired", errors)
+                    self.assertIn("No playback was requested", errors)
+                    client.call.assert_not_called()
+
+    def test_terminal_archive_receipt_includes_title_and_original_broadcast_date(self):
+        selected = {"id": "cats", "number": 1, "channel": "Same", "title": "Три кота — серия 7",
+                    "mode": "archive", "consecutive": 1, "start": NOW - 600, "end": NOW - 300}
+        target = {"catalog": "fresh", **{key: selected[key] for key in ("id", "start", "end", "title")}}
+        status, _, errors, _ = self.launch_programmes(
+            [selected], {(1, NOW - 600, NOW - 300, selected["title"]): target}, selected)
+        self.assertEqual(status, 0, errors)
+        self.assertIn("Archive playback requested: 1: Same — " + selected["title"], errors)
+        expected_start = ott.time.strftime("%Y-%m-%d %H:%M:%S %Z", ott.time.localtime(NOW - 600))
+        self.assertIn("(from " + expected_start + ")", errors)
+        self.assertNotIn("Channel switch requested:", errors)
 
 
 class HistoryTransportTest(unittest.TestCase):

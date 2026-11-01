@@ -202,7 +202,13 @@ CORS is a browser boundary, not authentication. Keep administrator access separa
 
 ## Request/response extension (protocol 1)
 
-`POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
+`POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. New servers also return `receipt_wait_ms: "1000"`. When advertised, callers may add
+`wait_ms=1..1000` to the receipt GET to wait briefly for a result. This is optional,
+strictly bounded, and read-only; it never resubmits a command. The server permits
+at most eight waiting receipts per device; excess readers receive immediate
+pending status. Cancellation releases the slot. Legacy callers omit the field.
+
+Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
 
 The `kiosk` action uses the same authenticated request route with
 `params: {"mode":"status|on|set|off"}`. `on` optionally accepts a string `query`;

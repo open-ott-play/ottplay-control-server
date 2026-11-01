@@ -44,8 +44,8 @@ type requestResult struct {
 // Requests are an opt-in extension to the v1 command wire contract. Legacy
 // clients ignore them, and the CLI times out rather than claiming execution.
 func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now time.Time, route string) {
-	q, ok := query(r, "device_id", "id")
-	if !ok || (r.Method == "POST" && q.Has("id")) {
+	q, ok := query(r, "device_id", "id", "wait_ms")
+	if !ok || (r.Method == "POST" && (q.Has("id") || q.Has("wait_ms"))) {
 		failure(w, 400, "unsupported query parameters")
 		return
 	}
@@ -78,33 +78,16 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 			failure(w, 400, "a request id is required")
 			return
 		}
-		s.mu.Lock()
-		s.expire(now)
-		result, found := d.results[q.Get("id")]
-		pending := false
-		permitted := !found || ownResult(r, result.owner, result.permission)
-		for _, e := range d.queue {
-			if e.rpc && e.id == q.Get("id") {
-				pending = true
-				permitted = ownResult(r, e.owner, e.permission)
+		wait := 0
+		if q.Has("wait_ms") {
+			var err error
+			wait, err = strconv.Atoi(q.Get("wait_ms"))
+			if err != nil || wait < 1 || wait > 1000 || strconv.Itoa(wait) != q.Get("wait_ms") {
+				failure(w, 400, "wait_ms must be an integer from 1 to 1000")
+				return
 			}
 		}
-		s.mu.Unlock()
-		if !permitted {
-			failure(w, 403, "request scope is not allowed")
-			return
-		}
-		if found {
-			// The envelope was already validated and bounded on receipt. Encoding
-			// it again expands HTML characters and can exceed the same wire limit.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(result.data)
-		} else if pending {
-			reply(w, 202, map[string]string{"status": "pending"})
-		} else {
-			failure(w, 404, "request expired or not found")
-		}
+		s.readRequestReceipt(w, r, d, q.Get("id"), time.Duration(wait)*time.Millisecond)
 		return
 	}
 	b, ok := readBody(w, r)
@@ -408,7 +391,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	d.queue = append(d.queue, e)
 	s.bytes += len(data)
 	s.mu.Unlock()
-	reply(w, 202, map[string]string{"status": "queued", "id": id})
+	reply(w, 202, map[string]string{"status": "queued", "id": id, "receipt_wait_ms": "1000"})
 }
 
 func profileInteger(raw json.RawMessage, min, max int) bool {
@@ -809,6 +792,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		copy(d.queue[i:], d.queue[i+1:])
 		d.queue[len(d.queue)-1] = entry{}
 		d.queue = d.queue[:len(d.queue)-1]
+		if d.resultChanged != nil {
+			close(d.resultChanged)
+			d.resultChanged = nil
+		}
 		if now.After(d.lastSeen) {
 			d.lastSeen = now
 		}

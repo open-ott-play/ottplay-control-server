@@ -103,7 +103,8 @@ class SearchProgressTest(unittest.TestCase):
                                timeout=45, refresh=False, config='/unused')
         visited = []
 
-        def search(client, device, settings, query, refresh=False, progress=None):
+        def search(client, device, settings, query, refresh=False, progress=None, fast=False):
+            self.assertFalse(fast)
             self.assertIsNotNone(progress)
             self.assertIs(progress.stream, errors)
             self.assertIsNot(ott.sys.stderr, errors)
