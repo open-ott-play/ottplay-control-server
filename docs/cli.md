@@ -159,8 +159,10 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`e5ec75b5a84c5e3b4c12a3eceaba4aa9311f9855`](https://github.com/open-ott-play/ottplay-control-server/commit/e5ec75b5a84c5e3b4c12a3eceaba4aa9311f9855).
+[`42d0a6e59a32bf49ed3d14dab62ea55d9010858e`](https://github.com/open-ott-play/ottplay-control-server/commit/42d0a6e59a32bf49ed3d14dab62ea55d9010858e).
 This is an exact source pin, not a claim about the latest published release.
+It includes [bounded EPG search batches](#programme-search-configuration-and-archives)
+and verified server/gateway error diagnostics for large channel catalogues.
 This source includes [Torrent catalog control](torrent-catalog.md) and automatic
 [playback-state reporting](player-state.md), with retained state/history reads.
 It also validates and compacts private JSON files for the
@@ -234,8 +236,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=e5ec75b5a84c5e3b4c12a3eceaba4aa9311f9855
-  ott_source="$HOME/.local/share/ottplay-control-server-local-e5ec75b5a84c"
+  ott_ref=42d0a6e59a32bf49ed3d14dab62ea55d9010858e
+  ott_source="$HOME/.local/share/ottplay-control-server-local-42d0a6e59a32"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -257,7 +259,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-e5ec75b5a84c/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-42d0a6e59a32/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -271,7 +273,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-e5ec75b5a84c/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-42d0a6e59a32/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -293,8 +295,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'e5ec75b5a84c5e3b4c12a3eceaba4aa9311f9855'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-e5ec75b5a84c'
+$ottRef = '42d0a6e59a32bf49ed3d14dab62ea55d9010858e'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-42d0a6e59a32'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -340,12 +342,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-e5ec75b5a84c/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-42d0a6e59a32/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-e5ec75b5a84c\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-42d0a6e59a32\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -374,7 +376,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-e5ec75b5a84c`, stages the replacement beside it, then switches atomically.
+`ott.before-local-42d0a6e59a32`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -386,9 +388,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-e5ec75b5a84c")
-staged = launcher.with_name("ott.switch-local-e5ec75b5a84c")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-e5ec75b5a84c/cli/ott.py"
+backup = launcher.with_name("ott.before-local-42d0a6e59a32")
+staged = launcher.with_name("ott.switch-local-42d0a6e59a32")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-42d0a6e59a32/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -1474,7 +1476,7 @@ To search current programmes on the shared EPG service, add this optional field
 to the same CLI configuration:
 
 ```json
-"epg": {"url": "https://epg.2560801.xyz/epg/v1", "source": "epg-one"}
+"epg": {"url": "https://ottplay-epg-api.igw-2560801.workers.dev/epg/v1", "source": "epg-one"}
 ```
 
 With `epg` configured, all `p` commands ask the player only for its channel
@@ -1486,8 +1488,11 @@ redirects are refused. Use HTTPS outside a trusted local network.
 
 The player must support `epg_catalog` and `play_catalog`. Catalogue metadata is
 limited to 10,000 channels. The CLI searches the entire catalogue in batches of
-at most 2048 channels, leaving space within the service's 512 KiB request limit
-even for multibyte names. Every batch must use the same guide generation; missing
+at most 256 channels sequentially, leaving room within the server's eight-second
+matching deadline for expensive unmatched names. The API's 2048-channel limit is
+a request size limit, not a throughput guarantee. Batches also stay within the
+512 KiB request limit even for multibyte names. Every channel is searched; the
+batch size does not truncate the catalogue. Every batch must use the same guide generation; missing
 or invalid later batches reject the entire query without playback. The service must return a complete,
 fresh result for the fixed public `epg-one` source; the service and CLI clocks
 must be within one minute. Other `epg.source` values are rejected. Selecting
@@ -1499,11 +1504,54 @@ to ten seconds (or the smaller remaining budget) and 2 MiB of response data;
 all current-programme batches together share the `--timeout` budget. Archive
 history requests allow twenty seconds and 16 MiB per response.
 
+For an HTTP failure, the CLI accepts only a JSON error envelope of at most 4 KiB,
+read within the same request deadline, and reports only a verified, known code. It never
+prints the service's message, response body or private configuration. `EPG_TIMEOUT`
+with HTTP 504 means the EPG server's matching deadline expired; `EPG_RELAY` identifies
+the fixed gateway. HTTP 504 with `no verified EPG error code` has no trusted
+service diagnosis, so inspect the gateway and server separately. For a verified
+`EPG_TIMEOUT`, the CLI divides only the failed metadata batch in half and searches
+both halves in order. At most four such divisions are allowed per query, all
+within the original current-programme deadline. A single-channel timeout fails.
+Other HTTP and transport errors are not retried. Failed or incomplete searches
+never trigger a player-wide EPG scan or playback.
+Use the gateway URL above; the legacy `epg.2560801.xyz` route has separate access
+rules and is not the recommended CLI endpoint.
+
 With this optional EPG service configured, title launch follows this order:
 `ott PLAYER TITLE` searches channel names first, then current programme titles,
 then available archive programmes. `ott PLAYER p TITLE` starts at the programme
 step. Both list the matches and choose one randomly when several match.
 `p --list TITLE` searches without launching playback.
+
+Search progress is written to **stderr** and flushed immediately, including with
+`--json`; stdout retains only the command's result. Messages identify the player,
+current stage, completed/total work when known, and elapsed seconds. Long requests
+emit a `Still working` message every five seconds without changing the request's
+timeout or repeating it. Player groups emit these messages live for each member.
+
+```text
+[search l] Searching player channel names [0.0s]
+[search l] Reading player channel catalogue [0.4s]
+[search l] Searching current EPG channels 1536/2029 [6.2s]
+[search l] No current matches; searching available archives [12.1s]
+[search l] Loading programme history 240/816 [18.2s]
+[search l] Checking archive media 3 [25.1s]
+[search l] Still working: Checking archive media 3 [30.1s]
+```
+
+Archive stages distinguish cached results/mappings, history loading, candidate
+resolution on the player, and checking the initial media bytes. A counter without
+a total reports checked candidates rather than an estimated percentage. A slow
+archive search can outlast the current-EPG budget because its individual history,
+resolver and media requests have separate timeouts; progress reports do not
+claim that it has completed. Use `Ctrl-C` to interrupt a search.
+
+```sh
+ott l три кота 2>search.log
+ott -j l p --list "три кота" >results.json 2>search.log
+ott t1,t2 p --list "news" 2>search.log
+```
 
 Archive lookup uses `/match` and `/programmes` on the same EPG service. Only
 channels advertising archive support are eligible, within the smaller of their
