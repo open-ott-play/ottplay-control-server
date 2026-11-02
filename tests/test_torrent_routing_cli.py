@@ -5,7 +5,6 @@ import io
 import json
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -61,9 +60,10 @@ class TorrentRoutingTest(unittest.TestCase):
 
     def test_group_routes_each_target_with_separate_export_path(self):
         config = {'players': {'t1': 'dev1', 't2': 'dev2'}}
-        client = SimpleNamespace(config=config, server='https://controller.example', timeout=10800, on_receipt=None,
-                                 credentials={'devices': [{'id': value} for value in config['players'].values()]},
-                                 device=lambda name: config['players'][name])
+        client = ott.Client.__new__(ott.Client)
+        client.config, client.server = config, 'https://controller.example'
+        client.timeout, client.on_receipt = 10800, None
+        client.credentials = {'devices': [{'id': value} for value in config['players'].values()]}
         module = ott.torrent_module()
         calls = []
         def run(api, current, device, words, timeout, as_json, path):
@@ -77,8 +77,9 @@ class TorrentRoutingTest(unittest.TestCase):
                                              destination, '--with-favorites'], config, client)
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(json.loads(out)['succeeded'], 2)
-        self.assertEqual([row[0] for row in calls], ['dev1', 'dev2'])
-        self.assertEqual([Path(row[1][1]).name for row in calls], ['catalog.t1.json', 'catalog.t2.json'])
+        self.assertCountEqual([row[0] for row in calls], ['dev1', 'dev2'])
+        self.assertEqual({row[0]: Path(row[1][1]).name for row in calls},
+                         {'dev1': 'catalog.t1.json', 'dev2': 'catalog.t2.json'})
         self.assertTrue(all(row[2:] == (10800, True) for row in calls))
 
 

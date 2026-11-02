@@ -95,7 +95,8 @@ through the owned companion. The controller and CLI do not proxy Torrent video.
 
 Save reusable player groups with `ott group add tt t1,t2,t3,t4` and
 `ott group add oo o1,o2,o3,o4`. Then use `ott tt R`, `ott oo provider m3u`,
-or `ott tt,oo standby`. `ott groups` lists them; `ott group set` updates a
+or `ott tt,oo standby`. `ott tt local shuffle ~/v/data/Movies/` sends each
+player its own Local playback request concurrently. `ott groups` lists them; `ott group set` updates a
 group and `ott group remove` removes it. See [saved player groups](docs/cli.md#saved-player-groups)
 for configuration, examples and per-player failure behavior.
 
@@ -198,8 +199,10 @@ ott t1,t2,t3,t4 restart stream
 ott -j --receipt t1,t2,t3,t4 caps
 ```
 
-The CLI resolves all names first, runs the command once per distinct player and
-reports each result. A failure on one player does not undo successful changes on another.
+The CLI resolves all names first and runs up to eight players concurrently, once
+per distinct device. A slow player does not hold up the other active players.
+Text results appear as players finish; JSON results retain list order.
+A failure on one player does not undo successful changes on another.
 The [player-group guide](docs/cli.md#run-a-command-on-several-players) covers
 settings, Plex, presets, diagnostics, separate output files and partial failures.
 

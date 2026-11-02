@@ -219,7 +219,11 @@ class TelevisionCliTest(unittest.TestCase):
         code, out, err, client = self.run_cli(["-j", "l,lg2,living_alias", "tv", "off"])
         self.assertEqual((code, err, client.api.call_count), (0, "", 2))
         self.assertEqual(json.loads(out)["succeeded"], 2)
-        self.assertEqual([call.args[1]["device_id"] for call in client.api.call_args_list], ["living", "bedroom"])
+        self.assertCountEqual([call.args[1]["device_id"] for call in client.api.call_args_list], ["living", "bedroom"])
+        for call in client.api.call_args_list:
+            self.assertEqual(call.args[0], '/api/televisions')
+            self.assertEqual(call.args[1]['action'], 'off')
+        self.assertEqual([row['player'] for row in json.loads(out)['results']], ['l', 'lg2'])
         code, out, err, client = self.run_cli(["l,lg2", "tv", "pair"])
         self.assertEqual((code, out, client.api.call_count), (1, "", 0))
         self.assertIn("one player", err)

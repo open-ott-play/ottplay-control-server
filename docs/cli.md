@@ -887,6 +887,8 @@ ott tt                             # controls and status for each member
 ott tt R                           # each player chooses its own random channel
 ott oo provider m3u
 ott tt provider m3u 1
+ott tt local shuffle ~/v/data/Movies/ # start each player independently, in parallel
+ott tt local shuffle Movies         # use each player's configured Local source
 ott tt +10s                        # relative seek on each player's current VOD/archive
 ott tt standby
 ott tt go
@@ -909,7 +911,8 @@ The configuration stores a flat list of names, for example:
 Group names are case-insensitive, up to 32 letters/digits/underscores/hyphens,
 and cannot collide with player aliases, device IDs or top-level CLI commands.
 Nested groups are not supported. Each command may expand up to 64 member names;
-duplicate device identities are executed once in first-occurrence order.
+duplicate device identities are executed once. Results retain first-occurrence
+order in JSON; commands run concurrently as described below.
 Every name is resolved before any player request. If a saved member is removed
 or renamed, update the group with `group set`; an unknown member prevents the
 entire command from being sent. A group with a malformed member list can be deleted
@@ -959,14 +962,20 @@ Aliases for the same UUID are deduplicated, retaining the first name and list
 order. An exact existing alias or UUID containing a comma keeps its single-player
 meaning; use different aliases to express a list.
 
-Commands run in order. A failure on one player does not prevent execution on the
-remaining players. There is no group rollback or automatic replay of failed or
-uncertain requests. Each command retains its normal per-player timeout and any
-specific options such as update `--wait`; a group can therefore take longer than
-one timeout. For example, `ott -t 30 t1,t2,t3,t4 local shuffle Movies` gives each
-target a separate 30-second capability-and-command budget, in sequence. Three
-exhausted budgets followed by one quick response can take about 92 seconds.
-This is not a 30-second deadline for the whole group. The CLI timeout does not
+Commands run concurrently, with at most eight active players. Capability discovery,
+command submission and result waiting are independent for each player. A slow or
+unreachable T1 therefore does not delay T2–T4. Each player keeps its own ordered
+command steps, timeout, connection and receipt callback. Groups larger than eight
+start another member when a worker becomes free.
+
+A failure on one player does not prevent execution on the remaining players.
+There is no group rollback or automatic replay of failed or uncertain requests.
+Each command retains its normal per-player timeout and any specific options such
+as update `--wait`. For example, `ott -t 30 tt local shuffle Movies` gives each of
+the four targets a separate 30-second capability-and-command budget concurrently,
+rather than adding those four budgets together. This is not a fixed 30-second
+deadline for the whole group, especially for larger groups or commands with their
+own wait options. The CLI timeout does not
 cancel an accepted request or extend its independent server-side TTL.
 Capabilities, settings locks, native bindings and local permission
 requirements are checked independently by the existing command. Random choices
@@ -981,7 +990,10 @@ or another appropriate read command to inspect individual outcomes.
 
 ### Group results and interruption
 
-Text output labels each player's result. `-j` / `--json` emits one aggregate
+Text output labels each player's result and emits it as that player finishes;
+T2 can report success while T1 is still waiting. Live search progress and
+`--receipt` diagnostics remain on stderr, tagged with the player name.
+`-j` / `--json` emits one aggregate
 object containing `action`, ordered `results`, `succeeded` and `failed`. Every
 result has `player` and `ok`; it can also contain `data`, `error`, `warnings` or
 `output`. General group commands include the original handler's `exit_code`.
@@ -1056,8 +1068,9 @@ acknowledgement does not prove visible playback or completed application restart
 
 The aggregate exit code uses this precedence: `130` (interrupted), `1` (error),
 `2` (failed diagnostic check), `3` (partial or unknown result), then `0` (all
-succeeded). Consult each result for its command-specific meaning. Ctrl-C stops
-the remaining player commands; unstarted targets are reported as interrupted.
+succeeded). Consult each result for its command-specific meaning. Ctrl-C cancels
+queued workers and stops further requests from active workers. Unstarted targets
+are identified separately from interrupted targets whose command may have executed.
 It cannot recall a command already accepted by a player. Inspect uncertain
 outcomes before explicitly retrying only the affected targets.
 

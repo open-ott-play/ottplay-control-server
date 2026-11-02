@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import threading
 import unittest
 from unittest import mock
 
@@ -30,13 +31,13 @@ class ProviderGroupTest(unittest.TestCase):
             code = ott.main(words)
         return code, output.getvalue(), errors.getvalue(), client
 
-    def test_four_players_use_single_provider_requests_in_requested_order(self):
+    def test_four_players_use_single_provider_requests(self):
         for verb in ('provider', 'prov', 'PROV'):
             with self.subTest(verb=verb):
                 code, out, err, client = self.run_cli(['t1,t2,t3,t4', verb, 'm3u'])
                 self.assertEqual((code, err), (0, ''))
-                self.assertEqual(out, ''.join(f't{i}: Provider switch requested: m3u\n' for i in range(1, 5)))
-                self.assertEqual(client.call.call_args_list,
+                self.assertCountEqual(out.splitlines(), [f't{i}: Provider switch requested: m3u' for i in range(1, 5)])
+                self.assertCountEqual(client.call.call_args_list,
                     [mock.call(f'dev_{i}', 'provider', {'query': 'm3u'}) for i in range(1, 5)])
 
     def test_every_target_is_resolved_before_the_first_mutation(self):
@@ -49,7 +50,7 @@ class ProviderGroupTest(unittest.TestCase):
         code, _, _, _ = self.run_cli(['t1,t2,t3,t4', 'provider', 'm3u'], client)
         self.assertEqual(code, 0)
         self.assertEqual(events[:4], [('resolve', f't{i}') for i in range(1, 5)])
-        self.assertEqual(events[4:], [('send', f'dev_{i}') for i in range(1, 5)])
+        self.assertCountEqual(events[4:], [('send', f'dev_{i}') for i in range(1, 5)])
 
     def test_invalid_or_unknown_lists_send_nothing(self):
         for selector in ('t1,', ',t1', 't1,,t2', 't1, ,t2', ',', 't1,missing,t2'):
@@ -73,8 +74,10 @@ class ProviderGroupTest(unittest.TestCase):
         self.assertEqual((code, err), (0, ''))
         result = json.loads(out)
         self.assertEqual([row['player'] for row in result['results']], ['T1', 'DEV_2', 'upper'])
-        self.assertEqual(client.call.call_args_list, [request for device in ('dev_1', 'dev_2', 'DEV_1')
-            for request in (mock.call(device, 'providers', {}), mock.call(device, 'provider', {'query': 'Мой провайдер'}))])
+        self.assertEqual(client.call.call_count, 6)
+        for device in ('dev_1', 'dev_2', 'DEV_1'):
+            self.assertEqual([call for call in client.call.call_args_list if call.args[0] == device],
+                             [mock.call(device, 'providers', {}), mock.call(device, 'provider', {'query': 'Мой провайдер'})])
         self.assertEqual((result['succeeded'], result['failed']), (3, 0))
 
     def test_single_target_and_exact_comma_alias_keep_existing_output(self):
@@ -102,12 +105,18 @@ class ProviderGroupTest(unittest.TestCase):
 
     def test_mixed_failure_json_is_one_complete_ordered_result(self):
         client = self.make_client()
-        client.call.side_effect = [
+        responses = dict(zip(client.config['players'].values(), [
             {'dispatched': True, 'provider': 'm3u', 'secret': 'do-not-show'},
             ott.PlayerRejected('https://private/?token=do-not-show', {'error': 'do-not-show'}),
             ott.Error('The request may have been accepted; do not repeat the change blindly.'),
             {'dispatched': True, 'provider': 'm3u'},
-        ]
+        ]))
+        def reply(device, action, params):
+            result = responses[device]
+            if isinstance(result, Exception):
+                raise result
+            return result
+        client.call.side_effect = reply
         code, out, err, _ = self.run_cli(['-j', 't1,t2,t3,t4', 'provider', 'm3u'], client)
         self.assertEqual((code, err), (1, ''))
         result = json.loads(out)
@@ -125,7 +134,8 @@ class ProviderGroupTest(unittest.TestCase):
                      {'dispatched': True, 'provider': 'https://secret'}, {'dispatched': True, 'provider': ''}):
             with self.subTest(data=data):
                 client = self.make_client()
-                client.call.side_effect = [data, {'dispatched': True, 'provider': 'm3u'}]
+                client.call.side_effect = lambda device, action, params: (
+                    data if device == 'dev_1' else {'dispatched': True, 'provider': 'm3u'})
                 code, out, _, _ = self.run_cli(['-j', 't1,t2', 'provider', 'm3u'], client)
                 result = json.loads(out)
                 self.assertEqual(code, 1)
@@ -134,14 +144,22 @@ class ProviderGroupTest(unittest.TestCase):
                 self.assertNotIn('https://secret', out)
                 self.assertEqual(client.call.call_count, 2)
 
-    def test_text_result_is_emitted_before_next_player_starts(self):
+    def test_ready_text_result_is_emitted_while_first_player_waits(self):
         client = self.make_client()
-        output, errors = io.StringIO(), io.StringIO()
+        second_result = threading.Event()
+        class ObservedOutput(io.StringIO):
+            def write(self, value):
+                count = super().write(value)
+                if 't2: Error: The provider request was unsupported' in self.getvalue():
+                    second_result.set()
+                return count
+        output, errors = ObservedOutput(), io.StringIO()
         events = []
         def call(device, action, params):
             events.append(device)
-            if device == 'dev_2':
-                self.assertEqual(output.getvalue(), 't1: Provider switch requested: m3u\n')
+            if device == 'dev_1':
+                self.assertTrue(second_result.wait(5), 'ready player result was held behind the first player')
+            elif device == 'dev_2':
                 raise ott.PlayerUnsupported('private', {})
             return {'dispatched': True, 'provider': 'm3u'}
         client.call.side_effect = call
@@ -150,9 +168,11 @@ class ProviderGroupTest(unittest.TestCase):
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             code = ott.main(['t1,t2,t3', 'provider', 'm3u'])
         self.assertEqual(code, 1)
-        self.assertEqual(events, ['dev_1', 'dev_2', 'dev_3'])
+        self.assertCountEqual(events, ['dev_1', 'dev_2', 'dev_3'])
         self.assertIn('t2: Error: The provider request was unsupported', output.getvalue())
-        self.assertTrue(output.getvalue().endswith('t3: Provider switch requested: m3u\n'))
+        self.assertIn('t3: Provider switch requested: m3u\n', output.getvalue())
+        self.assertGreater(output.getvalue().index('t1: Provider switch requested: m3u'),
+                           output.getvalue().index('t2: Error: The provider request was unsupported'))
 
     def test_real_client_receipts_bind_each_target_and_never_repeat_posts(self):
         client = self.make_client()
@@ -166,9 +186,9 @@ class ProviderGroupTest(unittest.TestCase):
                 self.assertEqual(payload, {'action': 'provider', 'params': {'query': 'm3u'}})
                 if device == 'dev_2':
                     raise ott.TransportError('Connection interrupted')
-                request_id = f'{len(posted):032x}'
+                request_id = f'{int(device[-1]):032x}'
                 responses[device] = request_id
-                return 202, {'id': request_id}
+                return 202, {'id': request_id, 'receipt_wait_ms': '1000'}
             request_id = responses[device]
             if device == 'dev_3':
                 return 200, {'id': request_id, 'status': 'unsupported', 'data': {'error': 'secret-token'}}
@@ -179,10 +199,12 @@ class ProviderGroupTest(unittest.TestCase):
         result = json.loads(out)
         receipts = [json.loads(line) for line in err.splitlines()]
         self.assertEqual(code, 1)
-        self.assertEqual(posted, ['dev_1', 'dev_2', 'dev_3', 'dev_4'])
-        self.assertEqual([r['player'] for r in receipts], ['t1', 't2', 't3', 't4'])
-        self.assertEqual([r['status'] for r in receipts], ['ok', 'unknown', 'unsupported', 'ok'])
-        self.assertEqual([r['request_id'] for r in receipts], [f'{1:032x}', None, f'{3:032x}', f'{4:032x}'])
+        self.assertCountEqual(posted, ['dev_1', 'dev_2', 'dev_3', 'dev_4'])
+        self.assertEqual(len(receipts), 4)
+        by_player = {r['player']: r for r in receipts}
+        self.assertEqual(set(by_player), {'t1', 't2', 't3', 't4'})
+        self.assertEqual([by_player[f't{i}']['status'] for i in range(1, 5)], ['ok', 'unknown', 'unsupported', 'ok'])
+        self.assertEqual([by_player[f't{i}']['request_id'] for i in range(1, 5)], [f'{1:032x}', None, f'{3:032x}', f'{4:032x}'])
         self.assertTrue(all(r['action'] == 'provider' for r in receipts))
         self.assertIn('may have been accepted', result['results'][1]['error'])
         self.assertNotIn('secret-token', out + err)

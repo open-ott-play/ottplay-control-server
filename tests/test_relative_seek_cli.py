@@ -28,12 +28,12 @@ def receipt(offset=10, start=30, position=40, clamped=False):
 
 class RelativeSeekTest(unittest.TestCase):
     def run_cli(self, words, responses=None, selector='tv', machine=True):
-        client = mock.Mock()
+        client = ott.Client.__new__(ott.Client)
         client.timeout = 45
+        client.server, client.on_receipt = 'https://controller.example', None
         client.config = {'players': {'tv': 'dev_tv', 'other': 'dev_other'}}
         client.credentials = {'devices': []}
-        client.device.side_effect = lambda name: client.config['players'][name]
-        client.call.side_effect = responses or [caps(), receipt()]
+        client.call = mock.Mock(side_effect=responses or [caps(), receipt()])
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'Client', return_value=client), mock.patch.object(ott, 'read_json', return_value=client.config), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = ott.main((['-j'] if machine else []) + [selector] + words)
@@ -186,7 +186,11 @@ class RelativeSeekTest(unittest.TestCase):
             return caps(device == 'dev_tv') if action == 'capabilities' else receipt()
         code, out, _, client = self.run_cli(['seek', '+10'], call, selector='tv,other,tv')
         self.assertEqual(code, 1)
-        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}), mock.call('dev_tv', 'playback', {'operation': 'seek_relative', 'offset': 10}), mock.call('dev_other', 'capabilities', {})])
+        self.assertEqual(client.call.call_count, 3)
+        self.assertEqual([call for call in client.call.call_args_list if call.args[0] == 'dev_tv'],
+                         [mock.call('dev_tv', 'capabilities', {}), mock.call('dev_tv', 'playback', {'operation': 'seek_relative', 'offset': 10})])
+        self.assertEqual([call for call in client.call.call_args_list if call.args[0] == 'dev_other'],
+                         [mock.call('dev_other', 'capabilities', {})])
         self.assertIn('seek_relative', out)
 
     def test_capability_help_is_separate(self):

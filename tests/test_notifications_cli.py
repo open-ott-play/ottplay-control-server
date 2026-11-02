@@ -117,16 +117,28 @@ class NotificationsCliTest(unittest.TestCase):
         self.assertIn('update the controller', err)
 
     def test_group_resolves_all_and_deduplicates_before_sending(self):
-        client = self.client([capabilities(), result('set', False), capabilities(), result('set', False)])
+        client = self.client(())
         events = []
         resolve = client.device
         client.device = lambda name: (events.append(('resolve', name)), resolve(name))[1]
-        responses = iter(client.call.side_effect)
-        client.call.side_effect = lambda device, action, params: (events.append(('send', device)), next(responses))[1]
+        def respond(device, action, params):
+            events.append(('send', device))
+            self.assertIn(device, ('dev_1', 'dev_2'))
+            if action == 'capabilities':
+                self.assertEqual(params, {})
+                return capabilities()
+            self.assertEqual(action, 'notifications')
+            self.assertEqual(params, {'version': 1, 'runtime': RUNTIME, 'operation': 'set', 'enabled': False})
+            return result('set', False)
+        client.call.side_effect = respond
         code, out, err, client = self.run_cli(['-j', 'T1,alias,t2', 'notifications', 'off'], client=client)
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(events[:3], [('resolve', 'T1'), ('resolve', 'alias'), ('resolve', 't2')])
         self.assertEqual(client.call.call_count, 4)
+        for device in ('dev_1', 'dev_2'):
+            self.assertEqual([call for call in client.call.call_args_list if call.args[0] == device],
+                             [mock.call(device, 'capabilities', {}), mock.call(device, 'notifications', {
+                                 'version': 1, 'runtime': RUNTIME, 'operation': 'set', 'enabled': False})])
         data = json.loads(out)
         self.assertEqual((data['succeeded'], data['failed']), (2, 0))
         self.assertEqual([row['player'] for row in data['results']], ['T1', 't2'])
@@ -140,11 +152,26 @@ class NotificationsCliTest(unittest.TestCase):
 
     def test_group_partial_failure_does_not_hide_success(self):
         bad = {'version': 1, 'runtime': RUNTIME, 'operation': 'set', 'error': 'storage_unavailable'}
+        def respond(device, action, params):
+            self.assertIn(device, ('dev_1', 'dev_2'))
+            if action == 'capabilities':
+                self.assertEqual(params, {})
+                return capabilities()
+            self.assertEqual(action, 'notifications')
+            self.assertEqual(params, {'version': 1, 'runtime': RUNTIME, 'operation': 'set', 'enabled': False})
+            if device == 'dev_1':
+                raise ott.PlayerRejected(SECRET, bad)
+            return result('set', False)
         code, out, err, client = self.run_cli(['-j', 't1,t2', 'notifications', 'off'],
-            [capabilities(), ott.PlayerRejected(SECRET, bad), capabilities(), result('set', False)])
+            respond)
         self.assertEqual((code, err, client.call.call_count), (1, '', 4))
+        for device in ('dev_1', 'dev_2'):
+            self.assertEqual([call for call in client.call.call_args_list if call.args[0] == device],
+                             [mock.call(device, 'capabilities', {}), mock.call(device, 'notifications', {
+                                 'version': 1, 'runtime': RUNTIME, 'operation': 'set', 'enabled': False})])
         data = json.loads(out)
         self.assertEqual((data['succeeded'], data['failed']), (1, 1))
+        self.assertEqual([row['player'] for row in data['results']], ['t1', 't2'])
         self.assertFalse(data['results'][0]['ok']); self.assertTrue(data['results'][1]['ok'])
         self.assertNotIn(SECRET, out)
 

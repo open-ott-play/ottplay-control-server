@@ -5,6 +5,7 @@ import base64
 import contextlib
 import copy
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import hashlib
 import io
 import getpass
@@ -249,7 +250,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
 
 Configuration: ~/.config/ottplay-control/cli.json or OTT_CONFIG.
 --receipt writes one safe JSON request receipt to stderr per player RPC; stdout is unchanged.
-Comma-separated player lists accept any player command; each distinct player runs once, in order.
+Player lists run each distinct player once, up to 8 concurrently; JSON results retain list order.
 Add a channel number, R/random or name to switch and play from the provider's complete All catalog.
 Use provider "Local videos" -- NAME to separate a multiword provider from a channel explicitly.
 An exact full channel name wins; otherwise a random partial-name match is selected. Playback wakes standby.
@@ -1022,6 +1023,14 @@ def print_request_receipt(receipt):
     print(json.dumps(receipt, ensure_ascii=True, allow_nan=False, separators=(",", ":")), file=sys.stderr, flush=True)
 
 
+def client_opener():
+    # Never forward an administrator credential through an HTTP redirect.
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    return urllib.request.build_opener(NoRedirect(), https_handler())
+
+
 class Client:
     def __init__(self, config, timeout=45):
         self.config = config
@@ -1034,17 +1043,25 @@ class Client:
         self.token = self.credentials.get("operator_token", self.credentials.get("admin_token"))
         if not isinstance(self.token, str) or not self.token:
             raise Error("Private credentials require operator_token or admin_token")
-        # Never forward an administrator credential through an HTTP redirect.
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *args, **kwargs):
-                return None
-        self.opener = urllib.request.build_opener(NoRedirect(), https_handler())
+        self.opener = client_opener()
+
+    def for_group(self, cancelled):
+        """Keep transport, mutable budgets and callbacks private to one player."""
+        child = copy.copy(self)
+        child.config = copy.deepcopy(self.config)
+        child.credentials = copy.deepcopy(self.credentials)
+        child.group_cancelled = cancelled
+        child.opener = client_opener()
+        return child
 
     def api(self, path, payload=None, timeout=None, *, raw=False, timeout_cap=10):
         # Only explicitly opted-in endpoints may wait longer than the normal
         # ten-second request cap. The total wall deadline still bounds them.
         if type(timeout_cap) not in (int, float) or not 1 <= timeout_cap <= 120 or not math.isfinite(timeout_cap):
             raise Error("HTTP timeout cap must be between 1 and 120 seconds")
+        group_cancelled = getattr(self, "group_cancelled", None)
+        if group_cancelled is not None and group_cancelled.is_set():
+            raise KeyboardInterrupt
         budget = min(timeout_cap, self.timeout if timeout is None else timeout)
         deadline = time.monotonic() + budget
         cancelled = threading.Event()
@@ -1064,7 +1081,17 @@ class Client:
         # exceed them. Bound the caller separately and never replay this POST.
         threading.Thread(target=perform, name="ottplay-http", daemon=True).start()
         try:
-            ok, value = outcome.get(timeout=max(0, deadline - time.monotonic()))
+            while True:
+                if group_cancelled is not None and group_cancelled.is_set():
+                    cancelled.set()
+                    raise KeyboardInterrupt
+                remaining = max(0, deadline - time.monotonic())
+                try:
+                    ok, value = outcome.get(timeout=min(.1, remaining) if group_cancelled is not None else remaining)
+                    break
+                except queue.Empty:
+                    if group_cancelled is None or time.monotonic() >= deadline:
+                        raise
         except queue.Empty:
             cancelled.set()
             raise TransportError("Timed out waiting for the server response", "deadline") from None
@@ -1091,7 +1118,9 @@ class Client:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(self.server + path, data=body, headers=headers)
         try:
-            if cancelled.is_set() or time.monotonic() >= deadline:
+            group_cancelled = getattr(self, "group_cancelled", None)
+            if (cancelled.is_set() or time.monotonic() >= deadline or
+                    (group_cancelled is not None and group_cancelled.is_set())):
                 raise TransportError("Timed out waiting for the server response", "deadline")
             with self.opener.open(request, timeout=budget) as response:
                 body = bytearray()
@@ -1138,6 +1167,9 @@ class Client:
 
     def call_receipt(self, device, action, params, idempotency_key=None):
         """Submit once and retain the request identity, including read failures."""
+        group_cancelled = getattr(self, "group_cancelled", None)
+        if group_cancelled is not None and group_cancelled.is_set():
+            raise KeyboardInterrupt
         request_id = None
         status = "unknown"
         try:
@@ -1200,11 +1232,17 @@ class Client:
         pending_confirmed = False
         backoff = 0 if wait_ms else 0.8
         while True:
+            group_cancelled = getattr(self, "group_cancelled", None)
+            if group_cancelled is not None and group_cancelled.is_set():
+                raise KeyboardInterrupt
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             if backoff:
-                time.sleep(min(backoff, remaining))
+                if group_cancelled is None:
+                    time.sleep(min(backoff, remaining))
+                elif group_cancelled.wait(min(backoff, remaining)):
+                    raise KeyboardInterrupt
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -3094,12 +3132,20 @@ def favorites_profile_dependencies():
             "store_factory": storage.Store, "storage_errors": (storage.StorageError,)}
 
 
+FAVORITES_MODULE_LOCK = threading.RLock()
+
+
 def favorites_module(name):
     """Load actual sibling module names from this CLI revision, in dependency order.
 
     Protocol result classes must be shared by the host, transport and private
-    ContextStore. Never substitute similarly named modules from another path.
+    ContextStore. Concurrent groups must never observe a partially loaded module.
     """
+    with FAVORITES_MODULE_LOCK:
+        return _load_favorites_module(name)
+
+
+def _load_favorites_module(name):
     names = ("favorites_document", "preset_favorites", "favorites_transfer", "favorites_protocol",
              "favorites_remote", "favorites_operations", "favorites_commands", "global_favorites_document",
              "preset_global_favorites", "global_favorites_protocol", "global_favorites_remote", "global_favorites_recovery",
@@ -3121,9 +3167,11 @@ def favorites_module(name):
         sys.modules[current] = module
         try:
             spec.loader.exec_module(module)
-        except Exception:  # noqa: BLE001 - installation failures must not expose private environment values
+        except BaseException as exc:
             if sys.modules.get(current) is module:
                 del sys.modules[current]
+            if not isinstance(exc, Exception):
+                raise
             raise Error("Could not load favorites modules; install all CLI files from the same revision") from None
     return sys.modules[name]
 
@@ -6666,13 +6714,81 @@ def group_output_preflight(plans):
 GROUP_OUTPUT_LIMIT = 4 * 1024 * 1024
 GROUP_DIAGNOSTIC_LIMIT = 256 * 1024
 GROUP_AGGREGATE_LIMIT = 16 * 1024 * 1024
+GROUP_WORKERS = 8
+
+
+class GroupOutputBudget:
+    def __init__(self):
+        self.remaining = GROUP_AGGREGATE_LIMIT
+        self.lock = threading.Lock()
+
+    def retain(self, encoded):
+        with self.lock:
+            retained = encoded[:self.remaining].decode("utf-8", errors="ignore")
+            self.remaining -= len(retained.encode("utf-8"))
+            return retained
+
+
+class GroupStream:
+    """One process-wide router, with a separate destination for each worker."""
+    def __init__(self, original):
+        self.original = original
+        self.local = threading.local()
+
+    def write(self, value):
+        return getattr(self.local, "stream", self.original).write(value)
+
+    def flush(self):
+        return getattr(self.local, "stream", self.original).flush()
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+    @contextlib.contextmanager
+    def to(self, stream):
+        previous = getattr(self.local, "stream", self.original)
+        self.local.stream = stream
+        try:
+            yield
+        finally:
+            self.local.stream = previous
+
+
+class GroupLiveOutput:
+    """Serialize complete progress/receipt lines, including heartbeat threads."""
+    def __init__(self, original):
+        self.original = original
+        self.local = threading.local()
+        self.lock = threading.RLock()
+
+    def write(self, value):
+        buffered = getattr(self.local, "pending", "") + value
+        lines = buffered.split("\n")
+        self.local.pending = lines.pop()
+        if lines:
+            with self.lock:
+                self.original.write("\n".join(lines) + "\n")
+                self.original.flush()
+        return len(value)
+
+    def flush(self):
+        with self.lock:
+            pending = getattr(self.local, "pending", "")
+            if pending:
+                self.original.write(pending)
+                self.local.pending = ""
+            self.original.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
 
 
 class GroupOutput(io.StringIO):
     """Bound buffered output without interrupting an already dispatched change."""
-    def __init__(self, limit):
+    def __init__(self, limit, budget=None):
         super().__init__()
         self.limit, self.size, self.exceeded = limit, 0, False
+        self.budget = budget
 
     def write(self, value):
         encoded = value.encode("utf-8")
@@ -6680,6 +6796,10 @@ class GroupOutput(io.StringIO):
         if len(encoded) > available:
             self.exceeded = True
         retained = encoded[:available].decode("utf-8", errors="ignore")
+        if self.budget is not None:
+            retained = self.budget.retain(retained.encode("utf-8"))
+            if len(retained.encode("utf-8")) < min(len(encoded), available):
+                self.exceeded = True
         self.size += len(retained.encode("utf-8"))
         super().write(retained)
         return len(value)
@@ -6715,95 +6835,150 @@ def player_group_command(client, config, targets, args, argv):
     plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
     group_output_preflight(plans)
     json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))
-    results, codes = [], []
-    on_receipt, stderr, previous_timeout = client.on_receipt, sys.stderr, client.timeout
-    interrupted, retained_bytes = False, 0
-    for (name, device), (local_words, local_prepared, _) in zip(targets, plans):
+    outcomes = [None] * len(targets)
+    reported = set()
+    on_receipt = client.on_receipt
+    cancelled = threading.Event()
+    budget = GroupOutputBudget()
+    stdout, stderr = GroupStream(sys.stdout), GroupStream(sys.stderr)
+    live = GroupLiveOutput(sys.stderr)
+
+    def not_started(index):
+        row = {"player": targets[index][0], "ok": False,
+               "error": "Not started: group execution was interrupted"}
+        if action not in ("provider", "notifications"):
+            row["exit_code"] = 130
+        return row, 130, "", ""
+
+    def execute(index):
+        if cancelled.is_set():
+            return not_started(index)
+        name, device = targets[index]
+        local_words, local_prepared, _ = plans[index]
         row = {"player": name, "ok": False}
-        output, errors = GroupOutput(GROUP_OUTPUT_LIMIT), GroupOutput(GROUP_DIAGNOSTIC_LIMIT)
-        code = 130 if interrupted else 1
-        if interrupted:
-            row["error"] = "Not started: group execution was interrupted"
+        output = GroupOutput(GROUP_OUTPUT_LIMIT, budget)
+        errors = GroupOutput(GROUP_DIAGNOSTIC_LIMIT, budget)
+        local_args = SimpleNamespace(**vars(args))
+        local_args.words = [name, *local_words]
+        local_args.json = json_output or action == "provider"
+        code = 1
+        try:
+            local_client = client.for_group(cancelled)
+            if callable(on_receipt):
+                def receipt(item):
+                    with live.lock, stderr.to(live):
+                        on_receipt({**item, "player": name})
+                local_client.on_receipt = receipt
+            with stdout.to(output), stderr.to(errors):
+                if cancelled.is_set():
+                    return not_started(index)
+                code = execute_player_command(local_client, local_client.config, local_args, argv, device,
+                                              prepared=local_prepared, grouped=True, progress_stream=live)
+        except (PlayerRejected, PlayerUnsupported) as exc:
+            reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
+            row["error"] = "The " + action + " request was " + reason + "; inspect this player before another change. The request was not repeated."
+        except Error as exc:
+            row["error"] = clean(str(exc))
+            if isinstance(exc, RequestError):
+                row["request"] = request_error_metadata(exc)
+        except Exception:
+            row["error"] = "Check the configuration; the operation did not complete. The request was not repeated."
+        except SystemExit as exc:
+            code = exc.code if type(exc.code) is int else 1
+            if code:
+                row["error"] = "Invalid player command arguments; no command was retried"
+        except KeyboardInterrupt:
+            code = 130
+            row["error"] = "Interrupted; a request may have executed. Inspect this player before retrying"
+        if code == 130:
+            cancelled.set()
+        if output.exceeded or errors.exceeded:
+            code = 130 if code == 130 else 1
+            row["error"] = "Group output limit exceeded; the result is incomplete. The command may have executed and was not repeated."
+            raw, warnings = "", ""
         else:
-            local_args = SimpleNamespace(**vars(args))
-            local_args.words = [name, *local_words]
-            local_args.json = json_output or action == "provider"
+            raw, warnings = output.getvalue(), errors.getvalue()
+        if local_args.json and raw.strip():
             try:
-                if callable(on_receipt):
-                    def receipt(item, name=name):
-                        # Keep JSON receipts on the original stderr.
-                        with contextlib.redirect_stderr(stderr):
-                            on_receipt({**item, "player": name})
-                    client.on_receipt = receipt
-                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-                    code = execute_player_command(client, config, local_args, argv, device,
-                                                  prepared=local_prepared, grouped=True, progress_stream=stderr)
-            except (PlayerRejected, PlayerUnsupported) as exc:
-                reason = "unsupported by this player" if isinstance(exc, PlayerUnsupported) else "rejected by the player"
-                row["error"] = "The " + action + " request was " + reason + "; inspect this player before another change. The request was not repeated."
-            except Error as exc:
-                row["error"] = clean(str(exc))
-                if isinstance(exc, RequestError):
-                    row["request"] = request_error_metadata(exc)
-            except Exception:
-                row["error"] = "Check the configuration; the operation did not complete. The request was not repeated."
-            except SystemExit as exc:
-                code = exc.code if type(exc.code) is int else 1
-                if code:
-                    row["error"] = "Invalid player command arguments; no command was retried"
-            except KeyboardInterrupt:
-                code = 130
-                row["error"] = "Interrupted; a request may have executed. Inspect this player before retrying"
-            finally:
-                client.on_receipt, client.timeout = on_receipt, previous_timeout
-            size = output.size + errors.size
-            if output.exceeded or errors.exceeded or retained_bytes + size > GROUP_AGGREGATE_LIMIT:
-                code = 130 if code == 130 else 1
-                row["error"] = "Group output limit exceeded; the result is incomplete. The command may have executed and was not repeated."
-                output = GroupOutput(GROUP_OUTPUT_LIMIT)
-                errors = GroupOutput(GROUP_DIAGNOSTIC_LIMIT)
-            else:
-                retained_bytes += size
-            raw = output.getvalue()
-            if local_args.json and raw.strip():
-                try:
-                    row["data"] = json.loads(raw)
-                except ValueError:
-                    # Help is plain text even with --json; retain it as such.
-                    row["output"] = raw.rstrip()
-            if errors.getvalue().strip():
-                if json_output:
-                    row["warnings"] = [clean(line) for line in errors.getvalue().splitlines()]
-                else:
-                    for line in errors.getvalue().splitlines():
-                        print(clean(name) + ": " + clean(line), file=stderr, flush=True)
+                row["data"] = json.loads(raw)
+            except ValueError:
+                # Help is plain text even with --json; retain it as such.
+                row["output"] = raw.rstrip()
+        if json_output and warnings.strip():
+            row["warnings"] = [clean(line) for line in warnings.splitlines()]
         row["ok"] = code == 0 and "error" not in row
         if not row["ok"] and "error" not in row:
             row["error"] = "Command completed with exit status " + str(code) + "; inspect its result before retrying"
         if action not in ("provider", "notifications"):
             row["exit_code"] = code
-        results.append(row)
-        codes.append(code)
-        interrupted = interrupted or code == 130
-        if not json_output:
-            if action == "provider":
-                data = row.get("data", {})
-                if "playback" in data:
-                    message = "Provider switch acknowledged: " + data["provider"] + "; "
-                    message += ("channel requested: " + clean(data["playback"]["channel"]["name"]) if row["ok"] else "Error: " + row["error"])
-                else:
-                    message = "Provider switch requested: " + data["provider"] if row["ok"] else "Error: " + row["error"]
-                print(clean(name) + ": " + message, flush=True)
+        return row, code, raw, warnings
+
+    def completed(index, result):
+        if index in reported:
+            return
+        reported.add(index)
+        row, code, raw, warnings = result
+        if json_output:
+            return
+        name = clean(row["player"])
+        for line in warnings.splitlines():
+            print(name + ": " + clean(line), file=live, flush=True)
+        if action == "provider":
+            data = row.get("data", {})
+            if "playback" in data:
+                message = "Provider switch acknowledged: " + data["provider"] + "; "
+                message += ("channel requested: " + clean(data["playback"]["channel"]["name"]) if row["ok"] else "Error: " + row["error"])
             else:
-                for line in output.getvalue().splitlines():
-                    print(clean(name) + ": " + line, flush=True)
-                if not row["ok"]:
-                    print(clean(name) + ": Error: " + row["error"], flush=True)
+                message = "Provider switch requested: " + data["provider"] if row["ok"] else "Error: " + row["error"]
+            print(name + ": " + message, flush=True)
+        else:
+            for line in raw.splitlines():
+                print(name + ": " + line, flush=True)
+            if not row["ok"]:
+                print(name + ": Error: " + row["error"], flush=True)
+
+    def run(index):
+        result = execute(index)
+        # Worker threads do not receive the main thread's KeyboardInterrupt.
+        # Retain their outcome even if collection or submission is interrupted.
+        outcomes[index] = result
+        return result
+
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with ThreadPoolExecutor(max_workers=min(GROUP_WORKERS, len(targets)), thread_name_prefix="ott-group") as pool:
+            pending = {}
+            try:
+                for index in range(len(targets)):
+                    if cancelled.is_set():
+                        break
+                    pending[pool.submit(run, index)] = index
+            except KeyboardInterrupt:
+                cancelled.set()
+            while pending:
+                try:
+                    done, _ = wait(pending, timeout=.1, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        index = pending[future]
+                        result = not_started(index) if future.cancelled() else future.result()
+                        outcomes[index] = result
+                        completed(index, result)
+                        pending.pop(future)
+                except KeyboardInterrupt:
+                    cancelled.set()
+                if cancelled.is_set():
+                    for future in pending:
+                        future.cancel()
+        for index, result in enumerate(outcomes):
+            if result is None:
+                outcomes[index] = not_started(index)
+            completed(index, outcomes[index])
+    results = [result[0] for result in outcomes]
+    codes = [result[1] for result in outcomes]
     succeeded = sum(row["ok"] for row in results)
     if json_output:
         print(json.dumps({"action": action, "results": results, "succeeded": succeeded,
                           "failed": len(results) - succeeded}, ensure_ascii=False, indent=2))
-    if interrupted:
+    if cancelled.is_set():
         return 130
     return next((code for code in (1, 2, 3) if code in codes), 0 if succeeded == len(results) else 1)
 

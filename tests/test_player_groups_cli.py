@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -16,6 +17,15 @@ spec.loader.exec_module(ott)
 
 
 class PlayerGroupsTest(unittest.TestCase):
+    def assert_device_calls(self, calls, expected):
+        """Interleave players freely, preserving every request within a player."""
+        self.assertEqual(len(calls), len(expected))
+        devices = {call.args[0] for call in expected}
+        self.assertEqual({call.args[0] for call in calls}, devices)
+        for device in devices:
+            self.assertEqual([call for call in calls if call.args[0] == device],
+                             [call for call in expected if call.args[0] == device])
+
     def client(self, aliases=None):
         client = ott.Client.__new__(ott.Client)
         client.config = {'players': aliases or {f't{i}': f'dev_{i}' for i in range(1, 5)}}
@@ -71,7 +81,7 @@ class PlayerGroupsTest(unittest.TestCase):
             data = json.loads(out)
             self.assertEqual((data['succeeded'], data['failed']), (4, 0))
             self.assertEqual([row['data']['channel']['id'] for row in data['results']], [f'dev_{i}' for i in range(1, 5)])
-            self.assertEqual(client.call.call_args_list, [call for i in range(1, 5) for call in (
+            self.assert_device_calls(client.call.call_args_list, [call for i in range(1, 5) for call in (
                 mock.call(f'dev_{i}', 'capabilities', {}),
                 mock.call(f'dev_{i}', 'categories', {'op': 'list', 'runtime': f'dev-{i}', 'offset': 0, 'limit': 200}),
                 mock.call(f'dev_{i}', 'play_catalog', {'catalog': f'catalog-dev_{i}', 'random': {}}))])
@@ -85,7 +95,7 @@ class PlayerGroupsTest(unittest.TestCase):
                 self.assertEqual((single[0], group[0], group[2]), (0, 0, ''))
                 original = single[3].call.call_args_list
                 expected = original + [mock.call('dev_2', *call.args[1:]) for call in original]
-                self.assertEqual(group[3].call.call_args_list, expected)
+                self.assert_device_calls(group[3].call.call_args_list, expected)
                 self.assertEqual(json.loads(group[1])['results'][0]['data'], json.loads(single[1]))
                 self.assertNotIn('never-print', group[1])
 
@@ -114,7 +124,13 @@ class PlayerGroupsTest(unittest.TestCase):
         for failure in (ott.PlayerRejected('never-print', {}), ott.TransportError('Request may have executed'),
                         RuntimeError('never-print'), {'accepted': True}):
             client = self.client()
-            client.call.side_effect = [failure, self.reply('dev_2', 'lifecycle', {'operation': 'wake'})]
+            def reply(device, action, params):
+                if device == 'dev_1':
+                    if isinstance(failure, Exception):
+                        raise failure
+                    return failure
+                return self.reply(device, action, params)
+            client.call.side_effect = reply
             code, out, err, client = self.run_cli(['-j', 't1,t2', 'go'], client)
             data = json.loads(out)
             self.assertEqual((code, err, data['succeeded'], data['failed'], client.call.call_count), (1, '', 1, 1, 2))
@@ -123,25 +139,55 @@ class PlayerGroupsTest(unittest.TestCase):
 
     def test_generic_receipts_are_immediate_tagged_json_and_callback_restored(self):
         client = self.client()
-        def call(device, action, params):
-            client.on_receipt({'action': action, 'status': 'ok', 'request_id': 'a' * 32})
+        def call(worker, device, action, params):
+            worker.on_receipt({'action': action, 'status': 'ok', 'request_id': 'a' * 32})
             return self.reply(device, action, params)
-        client.call.side_effect = call
-        code, out, err, _ = self.run_cli(['-j', '--receipt', 't1,t2', 'go'], client)
+        del client.call
+        with mock.patch.object(type(client), 'call', new=call):
+            code, out, err, _ = self.run_cli(['-j', '--receipt', 't1,t2', 'go'], client)
         self.assertEqual(code, 0)
-        self.assertEqual([json.loads(line)['player'] for line in err.splitlines()], ['t1', 't2'])
+        self.assertCountEqual([json.loads(line)['player'] for line in err.splitlines()], ['t1', 't2'])
         self.assertEqual(json.loads(out)['succeeded'], 2)
         self.assertIs(client.on_receipt, ott.print_request_receipt)
 
     def test_keyboard_interrupt_stops_remaining_targets_and_retains_results(self):
         client = self.client()
         client.call.side_effect = [self.reply('dev_1', 'lifecycle', {'operation': 'wake'}), KeyboardInterrupt()]
-        code, out, err, client = self.run_cli(['-j', 't1,t2,t3,t4', 'go'], client)
+        with mock.patch.object(ott, 'GROUP_WORKERS', 1):
+            code, out, err, client = self.run_cli(['-j', 't1,t2,t3,t4', 'go'], client)
         self.assertEqual((code, err, client.call.call_count), (130, '', 2))
         rows = json.loads(out)['results']
         self.assertEqual([row['exit_code'] for row in rows], [0, 130, 130, 130])
         self.assertTrue(rows[0]['ok'])
         self.assertIn('Not started', rows[-1]['error'])
+
+    def test_interrupt_distinguishes_active_peers_from_not_started_players(self):
+        client = self.client()
+        del client.call
+        second_started = threading.Event()
+        called = []
+        def call(worker, device, action, params):
+            called.append(device)
+            if device == 'dev_1':
+                self.assertTrue(second_started.wait(5), 'second worker never started')
+                raise KeyboardInterrupt
+            if device == 'dev_2':
+                second_started.set()
+                self.assertTrue(worker.group_cancelled.wait(5), 'cancellation was not shared')
+                raise KeyboardInterrupt
+            self.fail('a queued player started after cancellation')
+        with mock.patch.object(type(client), 'call', new=call), \
+                mock.patch.object(ott, 'GROUP_WORKERS', 2):
+            code, out, err, _ = self.run_cli(['-j', 't1,t2,t3,t4', 'go'], client)
+        self.assertEqual((code, err), (130, ''))
+        self.assertCountEqual(called, ['dev_1', 'dev_2'])
+        rows = json.loads(out)['results']
+        self.assertEqual([row['exit_code'] for row in rows], [130] * 4)
+        for row in rows[:2]:
+            self.assertIn('may have executed', row['error'])
+            self.assertNotIn('Not started', row['error'])
+        for row in rows[2:]:
+            self.assertIn('Not started', row['error'])
 
     def test_plex_hidden_token_is_requested_once_before_capture_and_not_printed(self):
         client = self.client()
@@ -173,22 +219,52 @@ class PlayerGroupsTest(unittest.TestCase):
             with self.subTest(words=words):
                 code, out, err, _ = self.module_cli(['-j', 't1,t2', *words], run)
                 self.assertEqual((code, err, json.loads(out)['succeeded']), (0, '', 2))
-                self.assertEqual([item[0] for item in calls], ['dev_1', 'dev_2'])
-                self.assertEqual(calls[0][1], words[1:] if words[0] == 'perf' else words)
+                self.assertCountEqual([item[0] for item in calls], ['dev_1', 'dev_2'])
+                for item in calls:
+                    self.assertEqual(item[1], words[1:] if words[0] == 'perf' else words)
 
     def test_real_local_workbench_command_accepts_module_json_flag(self):
         code, out, err, client = self.run_cli(['t1,t2', 'test', 'list', '--json'])
         self.assertEqual((code, err, client.call.call_count), (0, '', 0))
         self.assertEqual([row['data']['command'] for row in json.loads(out)['results']], ['test', 'test'])
 
+    def test_worker_budgets_configs_and_output_do_not_leak_between_players(self):
+        original = self.client()
+        original.config['nested'] = {'owner': 'original'}
+        original.credentials['nested'] = {'owner': 'original'}
+        rendezvous = threading.Barrier(2, timeout=5)
+        workers = []
+        def run(api, worker, device, *args):
+            workers.append(worker)
+            worker.timeout = int(device[-1])
+            worker.config['nested']['owner'] = device
+            worker.credentials['nested']['owner'] = device
+            rendezvous.wait()
+            self.assertEqual(worker.timeout, int(device[-1]))
+            self.assertEqual(worker.config['nested']['owner'], device)
+            self.assertEqual(worker.credentials['nested']['owner'], device)
+            print(json.dumps({'device': device, 'timeout': worker.timeout}))
+            print('warning for ' + device, file=api.sys.stderr)
+            return 0
+        code, out, err, _ = self.module_cli(['-j', 't1,t2', 'doctor'], run, original)
+        self.assertEqual((code, err), (0, ''))
+        rows = json.loads(out)['results']
+        for index, row in enumerate(rows, 1):
+            self.assertEqual(row['data'], {'device': f'dev_{index}', 'timeout': index})
+            self.assertEqual(row['warnings'], [f'warning for dev_{index}'])
+        self.assertEqual(original.config['nested']['owner'], 'original')
+        self.assertEqual(original.credentials['nested']['owner'], 'original')
+        self.assertEqual(len({id(worker.opener) for worker in workers}), 2)
+
     def test_module_return_codes_help_and_interrupt_are_preserved(self):
         for codes, expected, count in (([3, 0], 3, 2), ([2, 3], 2, 2), ([1, 2], 1, 2), ([130], 130, 1)):
-            values, called = iter(codes), []
+            called = []
             def run(api, client, device, *args):
                 called.append(device)
                 print(json.dumps({'device': device}))
-                return next(values)
-            code, out, _, _ = self.module_cli(['-j', 't1,t2', 'doctor'], run)
+                return codes[int(device[-1]) - 1]
+            with mock.patch.object(ott, 'GROUP_WORKERS', 1 if len(codes) == 1 else 2):
+                code, out, _, _ = self.module_cli(['-j', 't1,t2', 'doctor'], run)
             self.assertEqual((code, len(called)), (expected, count))
             self.assertEqual(json.loads(out)['results'][0]['exit_code'], codes[0])
         def help_runner(*args):
@@ -222,15 +298,16 @@ class PlayerGroupsTest(unittest.TestCase):
                                [flag[:3], temporary + '/evidence']):
                     calls = []
                     def run(api, client, device, tail, *args):
-                        calls.append(tail)
+                        calls.append((device, tail))
                         print(json.dumps({'device': device}))
                         return 0
                     code, _, err, _ = self.module_cli(['-j', 't1,t2', *words, *option], run)
                     self.assertEqual((code, err), (0, ''))
-                    for index, call in enumerate(calls, 1):
+                    self.assertCountEqual([device for device, _ in calls], ['dev_1', 'dev_2'])
+                    for device, call in calls:
                         argument = call[-1]
                         value = argument.split('=', 1)[1] if argument.startswith('--') and '=' in argument else argument
-                        self.assertEqual(Path(value), Path(temporary) / f'evidence.t{index}')
+                        self.assertEqual(Path(value), Path(temporary) / f'evidence.t{device[-1]}')
 
     def test_output_mapping_covers_profile_native_and_checkpoint_but_never_inputs(self):
         cases = [(['prof', 'export', '1', 'movies.json'], 'movies.t1.json'),
@@ -269,9 +346,16 @@ class PlayerGroupsTest(unittest.TestCase):
         with mock.patch.object(ott, 'android_command', return_value={'observed': True}) as native:
             code, out, err, client = self.run_cli(['-j', 't1,t2', 'android', 'go'])
         self.assertEqual((code, err, json.loads(out)['succeeded']), (0, '', 2))
-        self.assertEqual([(call.args[2], call.args[3], call.args[4]) for call in native.call_args_list],
+        self.assertCountEqual([(call.args[2], call.args[3], call.args[4]) for call in native.call_args_list],
                          [('dev_1', 't1', ['go']), ('dev_2', 't2', ['go'])])
-        self.assertTrue(all(call.args[0] is client for call in native.call_args_list))
+        workers = [call.args[0] for call in native.call_args_list]
+        self.assertEqual(len({id(worker) for worker in workers}), 2)
+        for worker in workers:
+            self.assertIsNot(worker, client)
+            self.assertEqual(worker.config, client.config)
+            self.assertIsNot(worker.config, client.config)
+            self.assertEqual(worker.credentials, client.credentials)
+            self.assertIsNot(worker.credentials, client.credentials)
 
     def test_presets_reuse_resolved_connection_for_legacy_load_and_session_plan(self):
         client = self.client()
@@ -284,8 +368,11 @@ class PlayerGroupsTest(unittest.TestCase):
             code, out, err, _ = self.run_cli(['-j', 't1,t2', 'load', 'Home'], client)
         self.assertEqual((code, err, json.loads(out)['succeeded']), (0, '', 2))
         self.assertEqual(resolutions, ['t1', 't2'])
-        self.assertEqual([call.args[1] for call in load.call_args_list], ['dev_1', 'dev_2'])
-        self.assertTrue(all(call.args[0] is client for call in load.call_args_list))
+        self.assertCountEqual([call.args[1] for call in load.call_args_list], ['dev_1', 'dev_2'])
+        for call in load.call_args_list:
+            self.assertIsNot(call.args[0], client)
+            self.assertEqual(call.args[0].config, client.config)
+            self.assertIsNot(call.args[0].config, client.config)
         resolutions.clear()
         code, out, err, _ = self.run_cli(['-j', 't1,t2', 'load', 'Home', 'plan'], client)
         self.assertEqual((code, err, resolutions, client.call.call_count), (0, '', ['t1', 't2'], 0))
@@ -313,11 +400,14 @@ class PlayerGroupsTest(unittest.TestCase):
             with mock.patch.object(ott, 'GROUP_OUTPUT_LIMIT', output_limit), \
                     mock.patch.object(ott, 'GROUP_AGGREGATE_LIMIT', aggregate_limit):
                 code, out, _, _ = self.module_cli(['-j', 't1,t2', 'doctor'], run)
-            self.assertEqual((code, calls), (1, ['dev_1', 'dev_2']))
+            self.assertEqual(code, 1)
+            self.assertCountEqual(calls, ['dev_1', 'dev_2'])
             rows = json.loads(out)['results']
-            self.assertEqual([row['ok'] for row in rows], expected)
-            self.assertIn('may have executed', rows[-1]['error'])
-            self.assertNotIn('data', rows[-1])
+            self.assertCountEqual([row['ok'] for row in rows], expected)
+            for row in rows:
+                if not row['ok']:
+                    self.assertIn('may have executed', row['error'])
+                    self.assertNotIn('data', row)
 
 
 if __name__ == '__main__':
