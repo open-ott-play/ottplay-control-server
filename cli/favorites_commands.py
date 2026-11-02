@@ -158,11 +158,18 @@ class _Target:
         return value
 
     def wait(self, until):
+        cancelled = getattr(self.client, "group_cancelled", None)
+        if cancelled is not None and cancelled.is_set():
+            raise KeyboardInterrupt
         if until >= self.deadline:
             raise CommandError("deadline_exceeded")
         while self.now() < until:
             before = self.now()
-            self.sleep(min(5, until - before))
+            delay = min(5, until - before)
+            if cancelled is None:
+                self.sleep(delay)
+            elif cancelled.wait(delay):
+                raise KeyboardInterrupt
             if self.now() <= before:
                 raise CommandError("invalid_clock")
 

@@ -122,7 +122,9 @@ class ArchiveTransientError(SearchError):
     pass
 
 
-def _remaining(deadline=None, maximum=None, cancelled=None):
+def _remaining(deadline=None, maximum=None, cancelled=None, *, group_cancelled=None):
+    if group_cancelled is not None and group_cancelled.is_set():
+        raise KeyboardInterrupt
     if cancelled is not None and cancelled.is_set():
         raise SearchTimeout("Archive search timed out; no playback was requested")
     remaining = None if deadline is None else deadline - time.monotonic()
@@ -131,28 +133,58 @@ def _remaining(deadline=None, maximum=None, cancelled=None):
     return maximum if remaining is None else remaining if maximum is None else min(maximum, remaining)
 
 
-def _bounded_read(action, deadline):
+class _ReadCancellation:
+    """Expose both stop signals to HTTP workers without raising KeyboardInterrupt."""
+    def __init__(self, group_cancelled):
+        self.local = threading.Event()
+        self.group = group_cancelled
+
+    def set(self):
+        self.local.set()
+
+    def is_set(self):
+        return self.local.is_set() or self.group is not None and self.group.is_set()
+
+    def wait(self, timeout):
+        if self.group is None:
+            return self.local.wait(timeout)
+        deadline = time.monotonic() + timeout
+        while not self.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.local.wait(min(.1, remaining))
+        return True
+
+
+def _bounded_read(action, deadline, group_cancelled=None):
     """Bound the caller even when a peer keeps an individual socket read alive."""
-    if deadline is None:
+    _remaining(deadline, group_cancelled=group_cancelled)
+    if deadline is None and group_cancelled is None:
         return action(None)
-    cancelled, outcome = threading.Event(), queue.Queue(maxsize=1)
+    cancelled, outcome = _ReadCancellation(group_cancelled), queue.Queue(maxsize=1)
     def run():
         try:
+            _remaining(deadline, cancelled=cancelled)
             outcome.put((True, action(cancelled)))
         except Exception as exc:
             if cancelled.is_set() and isinstance(exc, HTTPError):
                 exc.close()
             outcome.put((False, exc))
-    _remaining(deadline)
     threading.Thread(target=run, name="ottplay-archive-http", daemon=True).start()
     try:
-        ok, value = outcome.get(timeout=_remaining(deadline))
-    except queue.Empty:
+        while True:
+            remaining = _remaining(deadline, .1 if group_cancelled is not None else None,
+                                   group_cancelled=group_cancelled)
+            try:
+                ok, value = outcome.get(timeout=remaining)
+                break
+            except queue.Empty:
+                _remaining(deadline, group_cancelled=group_cancelled)
+        _remaining(deadline, group_cancelled=group_cancelled)
+    except BaseException:
         cancelled.set()
-        raise SearchTimeout("Archive search timed out; no playback was requested") from None
-    if time.monotonic() >= deadline:
-        cancelled.set()
-        raise SearchTimeout("Archive search timed out; no playback was requested")
+        raise
     if not ok:
         raise value
     return value
@@ -223,8 +255,9 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def epg_request(base, path, payload=None, attempts=1, *, deadline=None):
-    return _bounded_read(lambda cancelled: _epg_request(base, path, payload, attempts, deadline, cancelled), deadline)
+def epg_request(base, path, payload=None, attempts=1, *, deadline=None, group_cancelled=None):
+    return _bounded_read(lambda cancelled: _epg_request(base, path, payload, attempts, deadline, cancelled),
+                         deadline, group_cancelled)
 
 
 def _epg_request(base, path, payload, attempts, deadline, cancelled):
@@ -334,7 +367,8 @@ def valid_candidates(rows, channels, now):
     return True
 
 
-def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts=1, *, progress=None, deadline=None):
+def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts=1, *,
+              progress=None, deadline=None, group_cancelled=None):
     read = cached if cache is None else cache.read
     write = remember if cache is None else cache.write
     lifetime = max(1, ttl)
@@ -343,11 +377,13 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
         options["attempts"] = attempts
     if deadline is not None:
         options["deadline"] = deadline
+    if group_cancelled is not None:
+        options["group_cancelled"] = group_cancelled
     request = epg_request if not options else lambda *args: epg_request(*args, **options)
     metadata = [{k: c[k] for k in ("id", "name", "tvgId", "tvgName")} for c in channels]
     for attempt in range(2):
         try:
-            _remaining(deadline)
+            _remaining(deadline, group_cancelled=group_cancelled)
             clock = time.time()
             key = [base, metadata]
             _progress(progress, "Reading cached channel mappings")
@@ -356,7 +392,7 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                 generation, mappings = None, {}
                 _progress(progress, "Matching archive channels", 0, len(metadata))
                 for start in range(0, len(metadata), 100):
-                    _remaining(deadline)
+                    _remaining(deadline, group_cancelled=group_cancelled)
                     batch = metadata[start:start + 100]
                     response = request(base, "/match", {"version": 1, "source": "epg-one", "channels": batch})
                     if generation is not None and generation != response["generation"]:
@@ -380,7 +416,7 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                 ids[channel["id"]] = (match["channelId"], match["shift"])
 
             def fetch(key):
-                _remaining(deadline)
+                _remaining(deadline, group_cancelled=group_cancelled)
                 cache_key = [base, mapping["generation"], key]
                 saved = read("guide", cache_key, ttl, refresh)
                 clock = time.time()
@@ -397,7 +433,7 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                         raise GenerationChanged("EPG history changed")
                     rows = clean_rows(response.get("rows"))
                     saved = {"rows": rows, "until": clock + lifetime}
-                    _remaining(deadline)
+                    _remaining(deadline, group_cancelled=group_cancelled)
                     write("guide", cache_key, saved)
                 return key, rows, saved["until"]
 
@@ -409,13 +445,15 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                 def submit_next():
                     key = next(remaining_keys, None)
                     if key is not None:
-                        _remaining(deadline)
+                        _remaining(deadline, group_cancelled=group_cancelled)
                         pending.add(pool.submit(fetch, key))
                 for _ in range(4):
                     submit_next()
                 while pending:
-                    done, _ = wait(pending, timeout=_remaining(deadline), return_when=FIRST_COMPLETED)
-                    _remaining(deadline)
+                    done, _ = wait(pending, timeout=_remaining(
+                        deadline, .1 if group_cancelled is not None else None, group_cancelled=group_cancelled),
+                        return_when=FIRST_COMPLETED)
+                    _remaining(deadline, group_cancelled=group_cancelled)
                     for task in done:
                         pending.remove(task)
                         key, rows, expires = task.result()
@@ -428,7 +466,7 @@ def schedules(base, channels, refresh=False, cache=None, ttl=GUIDE_TTL, attempts
                     task.cancel()
                 # Deadline-aware reads release workers without waiting for unrelated
                 # queued histories; no additional work is scheduled after expiry.
-                pool.shutdown(wait=deadline is None, cancel_futures=True)
+                pool.shutdown(wait=deadline is None and group_cancelled is None, cancel_futures=True)
             return [(channel, [{**row, "time": row["time"] + channel["shift"],
                                 "time_to": row["time_to"] + channel["shift"]} for row in guides[ids[channel["id"]]]])
                     for channel in channels if channel["id"] in ids], until
@@ -477,8 +515,8 @@ def _validate_guide(guide):
     return result
 
 
-def _select_chains(current, chains, verify, *, fast=False, deadline=None):
-    _remaining(deadline)
+def _select_chains(current, chains, verify, *, fast=False, deadline=None, group_cancelled=None):
+    _remaining(deadline, group_cancelled=group_cancelled)
     selected = current(time.time())
     if not selected:
         candidates = list(chains)
@@ -487,13 +525,13 @@ def _select_chains(current, chains, verify, *, fast=False, deadline=None):
             # Under stable availability, the first playable chain is uniform.
             secrets.SystemRandom().shuffle(candidates)
         for channel, chain in candidates:
-            _remaining(deadline)
+            _remaining(deadline, group_cancelled=group_cancelled)
             for index, row in enumerate(chain):
-                _remaining(deadline)
+                _remaining(deadline, group_cancelled=group_cancelled)
                 if row["time"] < time.time() - min(144, channel["archiveHours"]) * 3600:
                     continue
                 if verify(channel, row):
-                    _remaining(deadline)
+                    _remaining(deadline, group_cancelled=group_cancelled)
                     if row["time"] < time.time() - min(144, channel["archiveHours"]) * 3600:
                         continue
                     selected.append((channel, row, "archive", len(chain) - index))
@@ -501,10 +539,10 @@ def _select_chains(current, chains, verify, *, fast=False, deadline=None):
             if fast and selected:
                 break
     # Availability probes can cross a programme boundary or retention cutoff.
-    _remaining(deadline)
+    _remaining(deadline, group_cancelled=group_cancelled)
     now = time.time()
     live = current(now)
-    _remaining(deadline)
+    _remaining(deadline, group_cancelled=group_cancelled)
     now = time.time()
     return live or [item for item in selected if item[2] == "archive"
                    and item[1]["time"] >= now - min(144, item[0]["archiveHours"]) * 3600]
@@ -515,7 +553,7 @@ def _current_from_schedules(guide, query, now):
             if row["time"] <= now < row["time_to"] and matches(row["name"], query)]
 
 
-def select_from_schedules(guide, query, verify, *, fast=False, deadline=None):
+def select_from_schedules(guide, query, verify, *, fast=False, deadline=None, group_cancelled=None):
     """Select live broadcasts or each earliest playable contiguous archive chain.
 
     Sources supply only the private archive resolver/probe. Matching, retention,
@@ -529,7 +567,8 @@ def select_from_schedules(guide, query, verify, *, fast=False, deadline=None):
     now = time.time()
     chains = [(channel, chain) for channel, rows in guide
               for chain in archive_chains(rows, query, now, channel["archiveHours"])]
-    selected = _select_chains(current, chains, verify, fast=fast, deadline=deadline)
+    selected = _select_chains(current, chains, verify, fast=fast, deadline=deadline,
+                              group_cancelled=group_cancelled)
     now = time.time()
     boundaries = [stamp for _, rows in guide for row in rows if matches(row["name"], query)
                   for stamp in (row["time"], row["time_to"]) if stamp > now]
@@ -611,7 +650,8 @@ def same_origin_opener(expected):
     return build_opener(SameOriginRedirect(), https_handler())
 
 
-def archive_available(url, start, require_hls=False, allow_redirects=False, *, deadline=None, strict=False):
+def archive_available(url, start, require_hls=False, allow_redirects=False, *,
+                      deadline=None, strict=False, group_cancelled=None):
     """Check media reachability, rejecting a contradictory HLS wall-clock stamp.
 
     Unstamped HLS/TS does not prove an archive timeline: providers may return
@@ -623,7 +663,7 @@ def archive_available(url, start, require_hls=False, allow_redirects=False, *, d
         end = min(end, deadline)
     try:
         return _bounded_read(lambda cancelled: _archive_available(
-            url, start, require_hls, allow_redirects, end, cancelled), end)
+            url, start, require_hls, allow_redirects, end, cancelled), end, group_cancelled)
     except SearchTimeout:
         if strict:
             if deadline is not None and time.monotonic() >= deadline:
@@ -680,9 +720,10 @@ def _archive_available(url, start, require_hls, allow_redirects, deadline, cance
     return False
 
 def search_archives(client, device, settings, snapshot, query, refresh=False, catalog_expired=None, *,
-                    progress=None, fast=False, deadline=None, prepared=None, refresh_current=None):
+                    progress=None, fast=False, deadline=None, prepared=None, refresh_current=None,
+                    group_cancelled=None):
     probe_origins = archive_probe_origins(settings)
-    _remaining(deadline)
+    _remaining(deadline, group_cancelled=group_cancelled)
     capability = snapshot.get("archive")
     if (not isinstance(capability, dict) or capability.get("version") != 1
             or not isinstance(capability.get("revision"), str) or not 1 <= len(capability["revision"]) <= 128):
@@ -712,13 +753,16 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
     checked_at = time.monotonic()
 
     def call(action, params):
+        _remaining(deadline, group_cancelled=group_cancelled)
         if deadline is None:
-            return client.call(device, action, params)
+            response = client.call(device, action, params)
+            _remaining(deadline, group_cancelled=group_cancelled)
+            return response
         previous_timeout = client.timeout
-        client.timeout = min(previous_timeout, _remaining(deadline))
+        client.timeout = min(previous_timeout, _remaining(deadline, group_cancelled=group_cancelled))
         try:
             response = client.call(device, action, params)
-            _remaining(deadline)
+            _remaining(deadline, group_cancelled=group_cancelled)
             return response
         finally:
             client.timeout = previous_timeout
@@ -748,6 +792,8 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
             options = {"progress": progress}
             if deadline is not None:
                 options["deadline"] = deadline
+            if group_cancelled is not None:
+                options["group_cancelled"] = group_cancelled
             guide, until = schedules(base, channels, refresh, **options)
             if fast:
                 guide = _validate_guide(guide)
@@ -762,7 +808,7 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
 
         def verify(channel, row):
             nonlocal checked_candidates
-            _remaining(deadline)
+            _remaining(deadline, group_cancelled=group_cancelled)
             archive_key = [identity, channel["id"], row["time"]]
             verified = not probe_origins and cached("archive", archive_key, ARCHIVE_TTL, refresh) is True
             if not verified:
@@ -791,9 +837,11 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                 options = {"strict": True} if fast or deadline is not None else {}
                 if deadline is not None:
                     options["deadline"] = deadline
+                if group_cancelled is not None:
+                    options["group_cancelled"] = group_cancelled
                 verified = archive_available(response.get("url"), row["time"], **options)
                 if verified:
-                    _remaining(deadline)
+                    _remaining(deadline, group_cancelled=group_cancelled)
                     remember("archive", archive_key, True)
             else:
                 _progress(progress, "Using cached archive availability", checked_candidates)
@@ -808,6 +856,8 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                 options["fast"] = True
             if deadline is not None:
                 options["deadline"] = deadline
+            if group_cancelled is not None:
+                options["group_cancelled"] = group_cancelled
             choices, boundary = select_from_schedules(guide, query, verify, **options)
             recheck_current = lambda now: _current_from_schedules(guide, query, now)
         else:
@@ -818,14 +868,15 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
                 if checks:
                     _progress(progress, "Rechecking current programmes")
                     rows = refresh_current()
-                    _remaining(deadline)
+                    _remaining(deadline, group_cancelled=group_cancelled)
                     rows, _, _ = _prepared_candidates(
                         {"current": rows, "chains": [], "until": time.time() + 1}, channels, query)
                     now = time.time()
                 checks += 1
                 return [(channel, row, "live", 1) for channel, row in rows
                         if row["time"] <= now < row["time_to"]]
-            choices = _select_chains(current, chains, verify, fast=fast, deadline=deadline)
+            choices = _select_chains(current, chains, verify, fast=fast, deadline=deadline,
+                                     group_cancelled=group_cancelled)
             recheck_current = current
             boundary = until
         selected = [result(*choice) for choice in choices]
@@ -837,7 +888,7 @@ def search_archives(client, device, settings, snapshot, query, refresh=False, ca
     # retention cutoff too. Never let its latency revive an ended live choice.
     had_selection = bool(selected)
     live = recheck_current(time.time()) if recheck_current is not None else []
-    _remaining(deadline)
+    _remaining(deadline, group_cancelled=group_cancelled)
     now = time.time()
     live = [item for item in live if item[1]["time"] <= now < item[1]["time_to"]]
     if live:

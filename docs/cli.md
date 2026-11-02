@@ -1071,10 +1071,17 @@ acknowledgement does not prove visible playback or completed application restart
 The aggregate exit code uses this precedence: `130` (interrupted), `1` (error),
 `2` (failed diagnostic check), `3` (partial or unknown result), then `0` (all
 succeeded). Consult each result for its command-specific meaning. Ctrl-C cancels
-queued workers and stops further requests from active workers. Unstarted targets
+queued workers, interrupts diagnostic sampling and rate-limit waits, and stops
+further ordinary requests from active workers. Unstarted targets
 are identified separately from interrupted targets whose command may have executed.
 It cannot recall a command already accepted by a player. Inspect uncertain
 outcomes before explicitly retrying only the affected targets.
+
+A running notification performance trial may use up to 15 seconds of its remaining
+timeout for cleanup. Only its confirmed policy revision can be restored, and only
+the capture session it started can be stopped. Cleanup requests are not retried;
+the report distinguishes confirmed restoration from an uncertain outcome. Other
+group commands remain cancelled during that cleanup.
 
 Group capture retains at most 4 MiB of stdout and 256 KiB of stderr per player,
 and 16 MiB of captured output across the group. Overflow is reported as incomplete

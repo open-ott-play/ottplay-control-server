@@ -217,13 +217,20 @@ class _RequestTransport:
         return float(value)
 
     def _wait(self, target, deadline):
+        cancelled = getattr(self.client, "group_cancelled", None)
         while True:
+            if cancelled is not None and cancelled.is_set():
+                raise KeyboardInterrupt
             now = self._now()
             if now >= deadline or target >= deadline:
                 raise RemoteError("deadline")
             if now >= target:
                 return
-            self.sleep(min(5, target - now))
+            delay = min(5, target - now)
+            if cancelled is None:
+                self.sleep(delay)
+            elif cancelled.wait(delay):
+                raise KeyboardInterrupt
             if self._now() <= now:
                 raise RemoteError("clock_invalid")
 

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import threading
 import time
 
 SAFE = 9007199254740991
@@ -376,6 +377,9 @@ class Capture:
 
     def rpc(self, action, params, validator):
         self.last_attempted = False
+        cancelled = getattr(self.client, "group_cancelled", None)
+        if cancelled is not None and cancelled.is_set():
+            raise KeyboardInterrupt
         remaining = self.deadline - time.monotonic()
         check(remaining > 0, "deadline_exceeded")
         check(len(self.receipts) < 96, "request_limit")
@@ -624,8 +628,15 @@ class Trial:
     def wait(self, seconds):
         end = time.monotonic() + seconds
         check(end <= self.capture.deadline, "deadline_exceeded")
+        cancelled = getattr(self.capture.client, "group_cancelled", None)
+        if cancelled is not None and cancelled.is_set():
+            raise KeyboardInterrupt
         while time.monotonic() < end:
-            time.sleep(min(0.5, max(0, end - time.monotonic())))
+            remaining = min(0.5, max(0, end - time.monotonic()))
+            if cancelled is None:
+                time.sleep(remaining)
+            elif cancelled.wait(remaining):
+                raise KeyboardInterrupt
 
     def observe_context(self):
         params = {"version": 1, "runtime": self.capture.runtime, "section": "snapshot"}
@@ -713,18 +724,77 @@ class Trial:
             self.restore()
         finally:
             self.capture.deadline = self.deadline
+            previous_client = self.capture.client
+            cancelled = getattr(previous_client, "group_cancelled", None)
+            cleanup = None
+            if cancelled is not None:
+                # Prepare finite cleanup authority even before cancellation: it
+                # can arrive between this point and either cleanup request.
+                cleanup = self.cleanup_requests()
             try:
+                if cleanup:
+                    self.capture.deadline = min(self.deadline, time.monotonic() + 15)
+                    if self.capture.deadline <= time.monotonic():
+                        self.result["cleanup_error"] = "cleanup_deadline_exceeded"
+                    else:
+                        try:
+                            self.capture.client = _TrialCleanupClient(previous_client, self.capture.device,
+                                                                      self.capture.deadline, cleanup)
+                        except (Exception, KeyboardInterrupt, SystemExit):
+                            self.result["cleanup_error"] = "cleanup_client_unavailable"
                 if self.owned is not None and self.result.get("policy_restored") is not True:
-                    self.restore()
-            except (Exception, KeyboardInterrupt, SystemExit):
-                self.result["policy_restored"] = None
-                self.result["restore_error"] = "restore_not_confirmed"
-            if self.started:
-                self.stop_attempted = True
-                try:
-                    self.result["stop"] = self.capture.call("stop", session_id=self.session_id)
-                except (Exception, KeyboardInterrupt, SystemExit):
-                    self.result["stop_error"] = "stop_not_confirmed_ttl_applies"
+                    try:
+                        self.restore()
+                    except (Exception, KeyboardInterrupt, SystemExit):
+                        self.result["policy_restored"] = None
+                        self.result["restore_error"] = "restore_not_confirmed"
+                if self.started:
+                    self.stop_attempted = True
+                    try:
+                        self.result["stop"] = self.capture.call("stop", session_id=self.session_id)
+                    except (Exception, KeyboardInterrupt, SystemExit):
+                        self.result["stop_error"] = "stop_not_confirmed_ttl_applies"
+            finally:
+                self.capture.client = previous_client
+                self.capture.deadline = self.deadline
+
+    def cleanup_requests(self):
+        """Authorize only cleanup supported by this trial's confirmed ownership."""
+        requests = []
+        if self.owned is not None and self.result.get("policy_restored") is not True:
+            if self.owned["setting"]["value"] != self.original["setting"]["value"]:
+                requests.append(("player_settings", {"op": "set", "runtime": self.capture.runtime,
+                    "id": "notificationsEnabled", "context": self.owned["context"]["token"],
+                    "revision": self.owned["setting"]["revision"], "value": self.original["setting"]["value"]}))
+            requests.append(("player_settings", {"op": "get", "runtime": self.capture.runtime,
+                                                "id": "notificationsEnabled"}))
+        if self.started:
+            requests.append(("perf_capture", {"version": self.capture.version, "op": "stop",
+                                              "runtime": self.capture.runtime, "session_id": self.session_id}))
+        return requests
+
+
+class _TrialCleanupClient:
+    """Finite cleanup authority; cancellation remains active on the group client."""
+    def __init__(self, client, device, deadline, requests):
+        self._client = client.for_group(threading.Event())
+        self._device, self._deadline = device, deadline
+        self._requests = [(action, dict(params)) for action, params in requests]
+        self.timeout = 5
+
+    def call_receipt(self, device, action, params):
+        match = next((index for index, (allowed_action, allowed_params) in enumerate(self._requests)
+                      if device == self._device and action == allowed_action and params == allowed_params), None)
+        check(match is not None, "cleanup_request_not_authorized")
+        # An uncertain cleanup is never repeated, even with the same request.
+        self._requests.pop(match)
+        remaining = self._deadline - time.monotonic()
+        # Leave the final five seconds for the exact capture we started.
+        reserve = 5 if any(kind == "perf_capture" for kind, _ in self._requests) else 0
+        budget = min(5, self.timeout, remaining - reserve)
+        check(budget > 0, "cleanup_deadline_exceeded")
+        self._client.timeout = budget
+        return self._client.call_receipt(device, action, params)
 
 
 def measured_summary(values):

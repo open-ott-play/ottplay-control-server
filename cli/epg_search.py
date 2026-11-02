@@ -189,6 +189,7 @@ def run(host, client, device, settings, snapshot, query, deadline, progress=None
         return {'as_of': time.time(), 'checked': 0, 'total': 0, 'partial': False, 'programs': []}, {}
     history = _history_module()
     epg = host.EpgClient(settings, _remaining(host, deadline), operation='search')
+    epg.group_cancelled = vars(client).get('group_cancelled')
     split_count = 0
 
     def collect(expected):
@@ -259,9 +260,12 @@ def run(host, client, device, settings, snapshot, query, deadline, progress=None
     if progress:
         progress('Checking compact archive candidates', 0, len(prepared['chains']))
     try:
+        options = {}
+        if epg.group_cancelled is not None:
+            options['group_cancelled'] = epg.group_cancelled
         return history.search_archives(client, device, settings, snapshot, query, refresh,
                                        catalog_expired=host.expired_epg_catalog, progress=progress,
                                        fast=fast, deadline=deadline, prepared=prepared,
-                                       refresh_current=refresh_current)
+                                       refresh_current=refresh_current, **options)
     except history.SearchError as error:
         raise host.Error(str(error)) from None

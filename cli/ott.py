@@ -670,6 +670,7 @@ class SearchProgress:
 class EpgClient:
     """Public EPG transport, deliberately independent of controller credentials."""
     def __init__(self, settings, timeout, operation="current"):
+        self.group_cancelled = None
         if operation not in ("current", "search"):
             raise Error("Invalid EPG operation")
         if (not isinstance(settings, dict) or not {"url", "source"}.issubset(settings)
@@ -713,6 +714,9 @@ class EpgClient:
         return self._request(payload)
 
     def _request(self, payload):
+        group_cancelled = self.group_cancelled
+        if group_cancelled is not None and group_cancelled.is_set():
+            raise KeyboardInterrupt
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(body) > 512 * 1024:
             raise Error("EPG catalogue exceeds the request size limit; no playback was requested")
@@ -726,7 +730,19 @@ class EpgClient:
                 outcome.put((False, exc))
         threading.Thread(target=perform, name="ottplay-epg-http", daemon=True).start()
         try:
-            ok, value = outcome.get(timeout=max(0, deadline - time.monotonic()))
+            while True:
+                if group_cancelled is not None and group_cancelled.is_set():
+                    raise KeyboardInterrupt
+                remaining = max(0, deadline - time.monotonic())
+                try:
+                    ok, value = outcome.get(timeout=min(.1, remaining) if group_cancelled is not None else remaining)
+                    break
+                except queue.Empty:
+                    if group_cancelled is None or time.monotonic() >= deadline:
+                        raise
+        except KeyboardInterrupt:
+            cancelled.set()
+            raise
         except queue.Empty:
             cancelled.set()
             raise EpgTransportError("EPG service timed out; no player EPG scan or playback was requested") from None
@@ -741,7 +757,8 @@ class EpgClient:
         request = urllib.request.Request(self.url, data=body, headers={
             "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "ottplay-cli/1.0"})
         try:
-            if cancelled.is_set() or time.monotonic() >= deadline:
+            if (cancelled.is_set() or time.monotonic() >= deadline or
+                    self.group_cancelled is not None and self.group_cancelled.is_set()):
                 raise EpgTransportError("EPG service timed out")
             with self.opener.open(request, timeout=self.timeout) as response:
                 if response.status != 200:
@@ -830,6 +847,7 @@ def server_programs(client, device, settings, search, refresh=False, progress=No
 
 def _server_programs(client, device, settings, search, refresh, progress, fast, deadline):
     epg = EpgClient(settings, min(client.timeout, max(0, deadline - time.monotonic())))
+    epg.group_cancelled = vars(client).get("group_cancelled")
     if not epg_text(search, 1024, "utf-8"):
         raise Error("Programme search must contain at most 1024 UTF-8 bytes")
     if progress:
@@ -944,6 +962,8 @@ def _server_programs(client, device, settings, search, refresh, progress, fast, 
         spec.loader.exec_module(history)
         try:
             options = {"progress": progress, "fast": fast, "deadline": deadline}
+            if epg.group_cancelled is not None:
+                options["group_cancelled"] = epg.group_cancelled
             return history.search_archives(client, device, settings, snapshot, search, refresh,
                                            catalog_expired=expired_epg_catalog, **options)
         except history.EpgAvailabilityError as exc:
@@ -3830,7 +3850,11 @@ def media_call(client, device, action, params, deadline):
                 raise
             remaining = deadline - time.monotonic()
             if remaining > 0:
-                time.sleep(min(delay, remaining))
+                cancelled = getattr(client, "group_cancelled", None)
+                if cancelled is None:
+                    time.sleep(min(delay, remaining))
+                elif cancelled.wait(min(delay, remaining)):
+                    raise KeyboardInterrupt
                 delay = min(delay * 2, 8)
 
 
