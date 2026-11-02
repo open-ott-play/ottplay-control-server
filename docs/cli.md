@@ -160,7 +160,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`7a8325cd41f4a46e14fe439e1fea2d390202a7f3`](https://github.com/open-ott-play/ottplay-control-server/commit/7a8325cd41f4a46e14fe439e1fea2d390202a7f3).
+[`4424d87af28847ed62e8d1a12674ec0de5cb43c0`](https://github.com/open-ott-play/ottplay-control-server/commit/4424d87af28847ed62e8d1a12674ec0de5cb43c0).
 This is an exact source pin, not a claim about the latest published release.
 It includes [direct LG television controls](television.md), named app launches
 such as `ott -t 90 lg2 tv go plex`, and the optional
@@ -189,7 +189,10 @@ Jackett and Prowlarr, with private key input and opaque prepared sources.
 It also includes [saved player groups](#saved-player-groups), including offline
 `group add/set/show/remove` management and group selectors in player commands.
 It also includes signed seek times and unit shorthand such as `seek -1:30` and
-`+10s`; relative seeking also requires matching controller and player support.
+`+10s`, including explicit archive timelines. Archive seeking uses the broadcast
+timestamp and reopens the provider archive URL; it preserves pause and stays
+within retained history. Relative seeking requires matching controller and player
+support; update all three components before using this feature.
 The examples retain this reviewed source commit; a server release does
 not install the Python CLI or player. Matching controller and player support is
 required for each optional operation.
@@ -249,8 +252,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=7a8325cd41f4a46e14fe439e1fea2d390202a7f3
-  ott_source="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8"
+  ott_ref=4424d87af28847ed62e8d1a12674ec0de5cb43c0
+  ott_source="$HOME/.local/share/ottplay-control-server-4424d87af288"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -273,7 +276,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -287,7 +290,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -309,8 +312,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '7a8325cd41f4a46e14fe439e1fea2d390202a7f3'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8'
+$ottRef = '4424d87af28847ed62e8d1a12674ec0de5cb43c0'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-4424d87af288'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -357,12 +360,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-4424d87af288\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -405,7 +408,7 @@ import sys
 launcher = Path.home() / ".local/bin/ott"
 backup = launcher.with_name("ott.before-local-c76cb9b728b8")
 staged = launcher.with_name("ott.switch-local-c76cb9b728b8")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
+reviewed = Path.home() / ".local/share/ottplay-control-server-4424d87af288/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
