@@ -53,6 +53,12 @@ base-branch filters, draft settings and review tier. The dashboard currently
 excludes `californiantiramisu` as an author. If a review does not appear, check
 those settings, repository access and the app's status comment first.
 
+To verify automatic review, open an eligible non-draft pull request and confirm
+that the `Greptile Review` check comes from `greptile-apps` and completes for the
+pull request's latest head SHA. Push a follow-up commit and repeat this check;
+a completed review of an earlier SHA does not cover the updated diff. Verify
+these events without manually requesting a review.
+
 The Greptile check is advisory, not a required merge check. Completion does not
 mean there are no findings: read its review and resolve applicable feedback.
 The existing CI and independent-review requirements still apply.
