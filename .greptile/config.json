@@ -1,0 +1,6 @@
+{
+  "autoReview": ["open", "push", "rebase"],
+  "statusCheck": true,
+  "statusCommentsEnabled": true,
+  "shouldUpdateDescription": false
+}

@@ -40,6 +40,23 @@ warning with its reason and scope. Do not suppress a real security finding to
 obtain a passing check. Wait for required checks and independent review before
 merging; do not use an administrator bypass.
 
+### Automatic pull request reviews
+
+The installed Greptile GitHub App reviews eligible pull requests when opened,
+updated with new commits, or rebased. The repository policy lives in
+[`.greptile/config.json`](.greptile/config.json); it enables review checks and
+status comments and keeps the pull request description unchanged. This native
+integration requires no GitHub Actions workflow or API secret.
+
+Review eligibility still inherits the Greptile dashboard's author, label and
+base-branch filters, draft settings and review tier. The dashboard currently
+excludes `californiantiramisu` as an author. If a review does not appear, check
+those settings, repository access and the app's status comment first.
+
+The Greptile check is advisory, not a required merge check. Completion does not
+mean there are no findings: read its review and resolve applicable feedback.
+The existing CI and independent-review requirements still apply.
+
 ## Workflow validator dependency
 
 The workflow validator installs PyYAML from
