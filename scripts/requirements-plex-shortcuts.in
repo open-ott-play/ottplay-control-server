@@ -1,0 +1,3 @@
+# Keep the native Companion adapter aligned with the tested Home Assistant runtime.
+PlexAPI==4.18.2
+requests==2.34.2

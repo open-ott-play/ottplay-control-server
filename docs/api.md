@@ -51,6 +51,60 @@ enqueuing a player command. See the [player-state API and retention contract](pl
 
 `GET /healthz` and `GET /readyz` require no token and expose only process readiness. They do not probe a TV or provider. `ottplay-control-server healthcheck --url http://127.0.0.1:8081/readyz` supplies the container probe without a shell or curl.
 
+## Physical television control
+
+`/api/televisions` is an **administrator-only** control path for explicitly
+configured physical TVs. Player and scoped-operator credentials are rejected.
+The `device_id` must identify an active controller registration, but its player
+page need not be connected. Operations do not enter the player command queue or
+change player capabilities. Existing origin and administrator rate limits apply.
+
+`GET /api/televisions?device_id=ID` reads binding metadata without contacting the
+TV. It accepts only that query parameter and no body. Its version-1 response
+contains `device_id`, boolean `configured`, `paired`, `fallback_configured`,
+and a `capabilities` array of supported action names. Addresses and credentials
+are omitted; `paired` describes stored credentials, not current reachability.
+
+`POST /api/televisions` accepts no query parameters and at most 2048 JSON bytes:
+
+```json
+{"device_id":"living-room-player","action":"volume","delta":5,"timeout_ms":9000}
+```
+
+Required fields are `device_id` and `action`. Actions are `status`, `volume`,
+`mute`, `on`, `off`, `launch`, `go`, `apps`, and `pair`. For `volume`, specify
+either integer `volume` (0–100) or nonzero integer `delta` (-100–100), or omit
+both to read volume. `mute` requires boolean `muted`. Other actions accept no
+volume/mute fields. `launch` and `go` also accept optional `app`, a configured
+alias such as `"plex"` from that television's administrator-owned `app_aliases`.
+Raw application IDs and URLs are not accepted in this field; unknown aliases
+fail before any wake or launch. Omitting it retains the default OttPlay target.
+Optional integer `timeout_ms` is 1–120000, default 10000;
+the overall operation is bounded to 120 seconds. Allow a response
+margin within the caller's deadline. Null, duplicate and unknown fields are
+rejected. Four operations may be in flight globally; each TV serializes its
+operations. Capacity exhaustion returns HTTP 503.
+
+Successful responses contain `version:1`, matching `device_id` and `action`,
+`transport` (`webos`, `wake_on_lan`, or `home_assistant`), and `outcome`:
+`confirmed` means observed evidence, `accepted` means submitted without final
+confirmation, and `uncertain` means the final effect could not be established.
+Optional `state` contains `power` (`on`, `off`, `unknown`), integer `volume`,
+boolean `muted`, and `app_id` when observed. Pairing returns
+`pairing:{"paired":true}`; app discovery returns `apps:[{"id":"…","title":"…"}]`
+(at most 512 entries, IDs up to 256 bytes and titles up to 160 bytes); other
+actions may return `apps:null`.
+
+Logical operation failures use HTTP 200 with `version`, `device_id`, `action`,
+a stable `code` and boolean `uncertain`; they are not successful receipts.
+Authentication, invalid envelopes and missing registrations use HTTP errors.
+Never automatically replay a timed-out or uncertain mutation. HA fallback
+does not replay a potentially applied webOS command. Neither a wake
+packet nor app-launch acknowledgement proves playback started. Pairing is
+explicit and may require accepting the prompt on the physical TV. See
+[native TV setup and CLI examples](television.md) for bindings, secure key
+storage, wake networking, certificate recovery and fallback configuration.
+
 ## Home Assistant event banners
 
 The optional [Home Assistant bridge](home-assistant.md) has a separate,
@@ -202,7 +256,13 @@ CORS is a browser boundary, not authentication. Keep administrator access separa
 
 ## Request/response extension (protocol 1)
 
-`POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
+`POST /api/requests?device_id=ID` (administrator) accepts `{"action":"status","params":{}}` and returns HTTP 202 with a random request `id`. New servers also return `receipt_wait_ms: "1000"`. When advertised, callers may add
+`wait_ms=1..1000` to the receipt GET to wait briefly for a result. This is optional,
+strictly bounded, and read-only; it never resubmits a command. The server permits
+at most eight waiting receipts per device; excess readers receive immediate
+pending status. Cancellation releases the slot. Legacy callers omit the field.
+
+Poll `GET /api/requests?device_id=ID&id=ID` with the administrator token: 202 means pending, 200 returns `{id,status,data}`, and 404 means expired/missing. Actions: `status`, `providers`, `channels`/`programs` with optional `search`, `play`/`provider` with a string `query`, `command` with a validated legacy command object, and `provider_settings` with `{provider,settings}`. Provider settings are schema-checked by the active player's supported driver and never appear in read results.
 
 The `kiosk` action uses the same authenticated request route with
 `params: {"mode":"status|on|set|off"}`. `on` optionally accepts a string `query`;

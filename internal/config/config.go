@@ -39,6 +39,7 @@ type Config struct {
 	Operators           []CommandOperator `json:"operators,omitempty"`
 	Journal             *CommandJournal   `json:"journal,omitempty"`
 	HomeAssistant       *HomeAssistant    `json:"home_assistant,omitempty"`
+	Televisions         []Television      `json:"televisions,omitempty"`
 	DeviceRegistry      *DeviceRegistry   `json:"device_registry,omitempty"`
 }
 
@@ -46,6 +47,9 @@ var deviceID = regexp.MustCompile(wire.DeviceIdPattern)
 var token = regexp.MustCompile(wire.TokenPattern)
 
 func (c *Config) Defaults() {
+	for i := range c.Televisions {
+		c.Televisions[i].Defaults()
+	}
 	if c.HomeAssistant != nil {
 		c.HomeAssistant.Defaults()
 	}
@@ -70,6 +74,9 @@ func (c *Config) Defaults() {
 }
 
 func (c Config) Validate() error {
+	if err := c.validateTelevisions(); err != nil {
+		return err
+	}
 	if c.PlayerState != nil {
 		if err := c.PlayerState.Validate(); err != nil {
 			return err
@@ -202,6 +209,15 @@ func Load(path string) (Config, error) {
 		return c, errors.New("configuration must contain one JSON object")
 	}
 	c.Defaults()
+	configurationPath, err := filepath.Abs(path)
+	if err != nil {
+		return c, errors.New("cannot resolve configuration path")
+	}
+	for _, tv := range c.Televisions {
+		if tv.ClientKeyFile == configurationPath {
+			return c, errors.New("television key file must not replace the server configuration")
+		}
+	}
 	return c, c.Validate()
 }
 

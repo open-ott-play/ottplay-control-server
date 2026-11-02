@@ -126,11 +126,23 @@ Use the Python CLI for player aliases, live volume, channel search, current EPG,
 provider selection and supported provider configuration: [CLI guide](docs/cli.md).
 Both server and player must include the request/response extension.
 
+For physical LG television power, system volume and app launch, use the separate
+[native TV controls](docs/television.md): `ott l tv volume 25`, `ott l tv off`
+or `ott -t 60 l tv go`. They work while the player page is closed, prefer direct
+webOS control and use Home Assistant only as a configured fallback.
+Configured app aliases also support `ott -t 90 lg2 tv go plex` without changing
+the default OttPlay app. The [Bash startup shortcuts](docs/shell-shortcuts.md)
+provide `coco` for OttPlay and `cocop` for native Plex, with bounded readiness
+checks and playback confirmation. Native Plex remains subject to its own
+authorization and Remote Watch Pass requirements.
+
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
 cover macOS/Linux and Windows, Python/PATH setup and the required CLI modules.
 They pin a reviewed source commit containing Local source commands, preset
-bindings, workbench and offline verification; stable CLI v0.1.0 and native server
+bindings, workbench, offline verification, [local EPG fallback](docs/local-epg.md)
+and the explicit [stateful archive proxy policy](docs/cli.md#stateful-archive-proxies);
+stable CLI v0.1.0 and native server
 archives do not include those commands. [Update or roll back the CLI](docs/cli.md#update-select-or-roll-back-the-cli)
 without replacing an existing checkout, launcher or private configuration.
 Local launchers can use the read-only [playlist resolver](docs/cli.md#local-playlist-resolver)

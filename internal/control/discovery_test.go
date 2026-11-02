@@ -286,14 +286,24 @@ func TestDNSInstanceAndAnswerBounds(t *testing.T) {
 }
 
 func TestDNSTruncationUsesTCPAndHonorsTTL(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// TCP and UDP have independent allocations and excluded port ranges on
+	// Windows. Keep both sockets reserved only after finding a usable pair.
+	var listener net.Listener
+	var packet net.PacketConn
+	var err error
+	for attempt := 0; attempt < 32; attempt++ {
+		packet, err = net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listener, err = net.Listen("tcp", packet.LocalAddr().String())
+		if err == nil {
+			break
+		}
+		_ = packet.Close()
 	}
-	packet, err := net.ListenPacket("udp", listener.Addr().String())
 	if err != nil {
-		listener.Close()
-		t.Fatal(err)
+		t.Fatalf("reserve matching UDP/TCP DNS fixture sockets: %v", err)
 	}
 	var udpCount, tcpCount atomic.Int32
 	handler := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {

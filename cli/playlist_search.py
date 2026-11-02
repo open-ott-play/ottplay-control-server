@@ -39,11 +39,12 @@ def number(value, minimum, maximum):
 
 def validate_request(request):
     fields = {"version", "query", "playlist_url", "epg_url", "refresh", "cache_seconds",
-              "playlist_cache_seconds", "archive_cache_seconds", "cache_dir"}
+              "playlist_cache_seconds", "archive_cache_seconds", "cache_dir", "stateful_archive_origins"}
     if (not isinstance(request, dict) or set(request) - fields
             or type(request.get("version")) is not int or request["version"] != 1
             or not isinstance(request.get("query"), str)):
         raise SearchError("Invalid playlist resolver request")
+    history.archive_probe_origins(request)
     try:
         if not history.text_key(request["query"]) or len(request["query"].encode("utf-8")) > 1024:
             raise ValueError()
@@ -209,6 +210,7 @@ def cached_choices(value, entries, now, ttl):
 
 def resolve(request):
     validate_request(request)
+    probe_origins = history.archive_probe_origins(request)
     cache = Cache(request)
     entries = load_playlist(request, cache)
     query = request["query"]
@@ -219,7 +221,8 @@ def resolve(request):
     if not base:
         raise SearchError("Configure an EPG address for programme search")
     key = [base, history.text_key(query), entries]
-    matches = cached_choices(cache.read("playlist-query", key), entries, time.time(), cache.guide_ttl)
+    matches = (cached_choices(cache.read("playlist-query", key), entries, time.time(), cache.guide_ttl)
+               if not probe_origins else None)
     if matches:
         return {"version": 1, "kind": matches[0]["mode"], "matches": matches}
     channels = [{"id": str(index), "name": entry["name"][:256], "tvgId": entry["tvg_id"][:256],
@@ -228,22 +231,32 @@ def resolve(request):
                 for index, entry in enumerate(entries)]
     guide, until = history.schedules(base, channels, request.get("refresh", False),
                                      cache=cache, ttl=cache.guide_ttl, attempts=3)
+    deferred = set()
 
     def verify(channel, row):
         entry = entries[channel["index"]]
         archive_key = [channel_key(entry), row["time"]]
-        if cache.read("playlist-archive", archive_key) is True:
+        if not probe_origins and cache.read("playlist-archive", archive_key) is True:
             return True
         url = archive_url(entry, row["time"], time.time())
+        if probe_origins and history.defer_archive_probe(url, probe_origins):
+            if not deferred:
+                history.deferred_archive_notice()
+            deferred.add((channel["index"], row["time"], row["time_to"], row["name"]))
+            return True
         if history.archive_available(url, row["time"], require_hls=True, allow_redirects=True):
             cache.write("playlist-archive", archive_key, True)
             return True
         return False
 
     selected, boundary = history.select_from_schedules(guide, query, verify)
-    matches = [programme_entry(entries[channel["index"]], row, mode, count)
-               for channel, row, mode, count in selected]
-    if selected:
+    matches = []
+    for channel, row, mode, count in selected:
+        match = programme_entry(entries[channel["index"]], row, mode, count)
+        if mode == "archive" and (channel["index"], row["time"], row["time_to"], row["name"]) in deferred:
+            match["availability"] = "deferred"
+        matches.append(match)
+    if selected and not probe_origins:
         choices = [{"index": channel["index"], "title": row["name"], "start": row["time"],
                     "end": row["time_to"], "mode": mode, "count": count}
                    for channel, row, mode, count in selected]

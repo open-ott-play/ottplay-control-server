@@ -61,6 +61,12 @@ class ResolveCliTest(unittest.TestCase):
         self.assertEqual(errors, "")
         module.resolve.assert_called_once_with(REQUEST)
 
+    def test_explicit_origin_policy_reaches_the_private_resolver_unchanged(self):
+        request = dict(REQUEST, stateful_archive_origins=["https://proxy.example"])
+        status, _, _, module = self.invoke(raw=json.dumps(request))
+        self.assertEqual(status, 0)
+        module.resolve.assert_called_once_with(request)
+
     def test_sensitive_result_is_never_written_to_a_terminal(self):
         status, output, errors, module = self.invoke(tty=True)
         self.assertEqual(status, 1)
@@ -188,6 +194,19 @@ class ResolveCliTest(unittest.TestCase):
                                  f"http://127.0.0.1:{server.server_port}/private-token/live.m3u8")
                 self.assertEqual(requests, ["/playlist.m3u"])
                 self.assertNotIn(b"private-token", completed.stderr)
+                # The optional policy module must not become a hidden default dependency.
+                request["stateful_archive_origins"] = []
+                completed = subprocess.run([sys.executable, str(link), "resolve", "--request-stdin"],
+                                           input=json.dumps(request).encode(), capture_output=True, timeout=10, cwd=root)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                request["stateful_archive_origins"] = [f"http://127.0.0.1:{server.server_port}"]
+                completed = subprocess.run([sys.executable, str(link), "resolve", "--request-stdin"],
+                                           input=json.dumps(request).encode(), capture_output=True, timeout=10, cwd=root)
+                self.assertEqual(completed.returncode, 1)
+                error = json.loads(completed.stdout)["error"]
+                self.assertEqual(error["code"], "resolver_unavailable")
+                self.assertIn("epg_fallback.py", error["message"])
+                self.assertEqual(requests, ["/playlist.m3u"])
         finally:
             server.shutdown()
             server.server_close()

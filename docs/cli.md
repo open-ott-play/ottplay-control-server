@@ -1,7 +1,7 @@
 # Control players from the terminal
 
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
-Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `playlist_search.py`,
+Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `epg_search.py`, `epg_fallback.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `report_verify.py`, `preset_session.py`,
 `player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`, `player_groups.py`, `playback_status.py`,
 `favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
@@ -9,7 +9,7 @@ Keep all files from the same `cli/` revision together: `ott.py`, `programme_sear
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
 `global_favorites_remote.py`, `global_favorites_recovery.py`, `global_favorites_operations.py`,
 `global_favorites_commands.py`, `global_favorites_items.py`, `global_favorites_items_commands.py`,
-`torrent_catalog.py`, `torrent_document.py` and `torrent_indexer.py`.
+`torrent_catalog.py`, `torrent_document.py`, `torrent_indexer.py` and `television.py`.
 Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
@@ -60,6 +60,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Restarts](#restarting-playback-or-the-player), [input and playback controls](#capabilities-input-and-playback-control), [screenshots](#remote-screenshots), [kiosk mode](#kiosk-mode)
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
 - [Home Assistant connection and event delivery status](#home-assistant-event-status), [per-player notification preference](#per-player-notification-preference)
+- [Direct LG television power, system volume and app launch](television.md)
 - [Read-only doctor, inspect, debug, bundles and test scenarios](workbench.md)
 - [Monitor one player or a group and diagnose failures](monitoring-runbook.md)
 - [Verify saved reports offline](workbench.md#verify-saved-evidence-offline)
@@ -159,8 +160,22 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`e5ec75b5a84c5e3b4c12a3eceaba4aa9311f9855`](https://github.com/open-ott-play/ottplay-control-server/commit/e5ec75b5a84c5e3b4c12a3eceaba4aa9311f9855).
+[`7a8325cd41f4a46e14fe439e1fea2d390202a7f3`](https://github.com/open-ott-play/ottplay-control-server/commit/7a8325cd41f4a46e14fe439e1fea2d390202a7f3).
 This is an exact source pin, not a claim about the latest published release.
+It includes [direct LG television controls](television.md), named app launches
+such as `ott -t 90 lg2 tv go plex`, and the optional
+[`coco` / `cocop` Bash startup helpers](shell-shortcuts.md). The helpers have a
+separate installation and native Plex dependencies. Keep all 37 Python
+modules together, including `television.py`; updating the Go server alone does
+not add `tv` commands to an older local CLI. The installation checks below include
+`tv --help`, which runs without configuration or contacting a television.
+It includes [bounded EPG search batches](#programme-search-configuration-and-archives),
+compact guide search and a [local native EPG fallback](local-epg.md), with
+server/gateway error diagnostics for large channel catalogues. The explicit
+[stateful archive proxy policy](#stateful-archive-proxies) avoids media probes
+that could replace a shared proxy session; those candidates are labeled as
+deferred rather than verified playable. The pin also preserves pending command
+receipts when the controller has not yet confirmed the player's result.
 This source includes [Torrent catalog control](torrent-catalog.md) and automatic
 [playback-state reporting](player-state.md), with retained state/history reads.
 It also validates and compacts private JSON files for the
@@ -202,7 +217,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 33 Python modules, including
+The current CLI contains 37 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -234,8 +249,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=e5ec75b5a84c5e3b4c12a3eceaba4aa9311f9855
-  ott_source="$HOME/.local/share/ottplay-control-server-local-e5ec75b5a84c"
+  ott_ref=7a8325cd41f4a46e14fe439e1fea2d390202a7f3
+  ott_source="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -251,13 +266,14 @@ contacting a controller:
   python3 "$ott_source/cli/ott.py" diagnostics --help
   python3 "$ott_source/cli/ott.py" report verify --help
   python3 "$ott_source/cli/ott.py" t1 perf start --help
+  python3 "$ott_source/cli/ott.py" l tv --help
 )
 ```
 
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-e5ec75b5a84c/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -271,7 +287,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-e5ec75b5a84c/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -293,8 +309,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'e5ec75b5a84c5e3b4c12a3eceaba4aa9311f9855'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-e5ec75b5a84c'
+$ottRef = '7a8325cd41f4a46e14fe439e1fea2d390202a7f3'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -315,6 +331,7 @@ py -3 $ottScript --help
 py -3 $ottScript diagnostics --help
 py -3 $ottScript report verify --help
 py -3 $ottScript t1 perf start --help
+py -3 $ottScript l tv --help
 ```
 
 In the remaining examples replace `ott` with `py -3 $ottScript`, for example
@@ -340,12 +357,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-e5ec75b5a84c/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-e5ec75b5a84c\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -374,7 +391,7 @@ for an existing one, continue with the [workbench quick start](workbench.md#quic
 
 After checking the new CLI directly, this optional block replaces only the
 `~/.local/bin/ott` symlink. It preserves the previous link as
-`ott.before-local-e5ec75b5a84c`, stages the replacement beside it, then switches atomically.
+`ott.before-local-c76cb9b728b8`, stages the replacement beside it, then switches atomically.
 It refuses a regular launcher file, a directory and occupied staging/backup paths;
 inspect a custom launcher separately. Close other installer/update processes
 before running it. This changes no configuration or running service.
@@ -386,9 +403,9 @@ from pathlib import Path
 import sys
 
 launcher = Path.home() / ".local/bin/ott"
-backup = launcher.with_name("ott.before-local-e5ec75b5a84c")
-staged = launcher.with_name("ott.switch-local-e5ec75b5a84c")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-e5ec75b5a84c/cli/ott.py"
+backup = launcher.with_name("ott.before-local-c76cb9b728b8")
+staged = launcher.with_name("ott.switch-local-c76cb9b728b8")
+reviewed = Path.home() / ".local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -1009,8 +1026,11 @@ Reasons are `controller_unavailable`, `controller_http_error`, `invalid_response
 `deadline`, `dns`, `tls`, `socket`, `protocol`, `truncated`, or `unknown`.
 `deadline` means the CLI's local deadline expired; a socket timeout is classified
 as `socket`. These categories describe the observed transport failure; they do
-not identify an outage's cause or prove that the player is offline. A timed-out
-mutation can still execute before its server-side TTL expires. When an ID is
+not identify an outage's cause or prove that the player is offline. Healthy
+`pending` receipts followed by the final poll reaching the command deadline
+report `request_pending_timeout`: the player has not acknowledged yet. An
+earlier unresolved connection failure still reports `controller_unavailable`.
+A timed-out mutation can still execute before its server-side TTL expires. When an ID is
 available, read the retained controller receipt with an authenticated request,
 without resubmitting the original command:
 
@@ -1474,20 +1494,25 @@ To search current programmes on the shared EPG service, add this optional field
 to the same CLI configuration:
 
 ```json
-"epg": {"url": "https://epg.2560801.xyz/epg/v1", "source": "epg-one"}
+"epg": {"url": "https://ottplay-epg-api.igw-2560801.workers.dev/epg/v1", "source": "epg-one"}
 ```
 
 With `epg` configured, all `p` commands ask the player only for its channel
-metadata and catalogue identity. The CLI sends that metadata to `/current` on
-the configured EPG service and receives current titles. It sends no controller
+metadata and catalogue identity. The CLI checks `/current` on the configured
+EPG service. When it advertises `searchVersion: 1`, nonempty queries use
+`/search` for compact current matches and complete archive candidate chains;
+older services retain the `/current`, `/match` and `/programmes` path. It sends no controller
 token, provider credentials, playlist URLs or stream URLs to that service.
 The service URL must be HTTP(S) without credentials, a query or a fragment;
 redirects are refused. Use HTTPS outside a trusted local network.
 
 The player must support `epg_catalog` and `play_catalog`. Catalogue metadata is
 limited to 10,000 channels. The CLI searches the entire catalogue in batches of
-at most 2048 channels, leaving space within the service's 512 KiB request limit
-even for multibyte names. Every batch must use the same guide generation; missing
+at most 256 channels sequentially, leaving room within the server's eight-second
+matching deadline for expensive unmatched names. The API's 2048-channel limit is
+a request size limit, not a throughput guarantee. Batches also stay within the
+512 KiB request limit even for multibyte names. Every channel is searched; the
+batch size does not truncate the catalogue. Every batch must use the same guide generation; missing
 or invalid later batches reject the entire query without playback. The service must return a complete,
 fresh result for the fixed public `epg-one` source; the service and CLI clocks
 must be within one minute. Other `epg.source` values are rejected. Selecting
@@ -1496,14 +1521,85 @@ guide; those sources are neither used nor uploaded. An unsupported player,
 stale result or service failure exits with an error. It never falls back to scanning
 every channel's EPG on the player. Current-programme HTTP requests are limited
 to ten seconds (or the smaller remaining budget) and 2 MiB of response data;
-all current-programme batches together share the `--timeout` budget. Archive
-history requests allow twenty seconds and 16 MiB per response.
+the catalogue read, guide batches, archive probes and optional local fallback
+share one `--timeout` search budget. Legacy archive history requests allow at
+most twenty seconds and 16 MiB per response, also within that budget. Compact
+search responses are limited to 2 MiB each and 10,000 candidate rows/16 MiB
+across the complete query.
 
-With this optional EPG service configured, title launch follows this order:
+For an HTTP failure, the CLI accepts only a JSON error envelope of at most 4 KiB,
+read within the same request deadline, and reports only a verified, known code. It never
+prints the service's message, response body or private configuration. `EPG_TIMEOUT`
+with HTTP 504 means the EPG server's matching deadline expired; `EPG_RELAY` identifies
+the fixed gateway. HTTP 504 with `no verified EPG error code` has no trusted
+service diagnosis, so inspect the gateway and server separately. For a verified
+`EPG_TIMEOUT`, the CLI divides only the failed metadata batch in half and searches
+both halves in order. At most four such divisions are allowed per query, all
+within the original current-programme deadline. A single-channel timeout fails.
+Other HTTP and transport errors do not replay the request. If an optional
+[local native fallback](local-epg.md) is configured, a classified guide
+availability failure restarts the whole read-only search there, within the same
+deadline. Authentication, invalid/stale data and player failures never trigger
+that switch. Failed or incomplete searches
+never trigger a player-wide EPG scan or playback.
+Use the gateway URL above; the legacy `epg.2560801.xyz` route has separate access
+rules and is not the recommended CLI endpoint.
+
+With a TV provider active and this optional EPG service configured, title launch
+follows this order:
 `ott PLAYER TITLE` searches channel names first, then current programme titles,
 then available archive programmes. `ott PLAYER p TITLE` starts at the programme
-step. Both list the matches and choose one randomly when several match.
-`p --list TITLE` searches without launching playback.
+step. Current matches take priority. For archive playback, the CLI shuffles complete
+candidate chains, checks their earliest available member and stops after the
+first playable chain; it does not probe every result before starting one.
+`p --list TITLE` verifies and lists all matches without launching playback.
+Fast selection is never written into the cache as a complete result list.
+For explicitly configured [stateful archive proxies](#stateful-archive-proxies),
+media checks are deferred and candidates are labelled accordingly.
+
+Plex and VPortal title searches stay within their selected media catalogue; an
+empty movie or episode result does not switch providers or search the TV guide.
+For a TV/EPG search, select the TV provider first:
+
+```sh
+ott t1 provider m3u
+ott -t 45 t1 "Три кота"
+```
+
+For `ott PLAYER TITLE`, channel discovery, EPG lookup and playback dispatch share
+one `--timeout` budget. A validated stale-catalogue response during read-only
+name lookup triggers one fresh discovery within that budget. A catalogue still
+loading is reported before attempting name-based playback. An uncertain transport
+failure is not replayed, and playback commands are never automatically repeated.
+
+Search progress is written to **stderr** and flushed immediately, including with
+`--json`; stdout retains only the command's result. Messages identify the player,
+current stage, completed/total work when known, and elapsed seconds. Long requests
+emit a `Still working` message every five seconds without changing the request's
+timeout or repeating it. Player groups emit these messages live for each member.
+
+```text
+[search l] Searching player channel names [0.0s]
+[search l] Reading player channel catalogue [0.4s]
+[search l] Searching current EPG channels 1536/2029 [6.2s]
+[search l] No current matches; searching available archives [12.1s]
+[search l] Loading programme history 240/816 [18.2s]
+[search l] Checking archive media 3 [25.1s]
+[search l] Still working: Checking archive media 3 [30.1s]
+```
+
+Archive stages distinguish cached results/mappings, history loading, candidate
+resolution on the player, and checking the initial media bytes. A counter without
+a total reports checked candidates rather than an estimated percentage. A slow
+archive search stays within the overall search budget even when individual
+requests make slow progress. Increase `-t` for a cold guide if necessary, or use
+`Ctrl-C` to interrupt a search.
+
+```sh
+ott -t 45 l три кота 2>search.log
+ott -j l p --list "три кота" >results.json 2>search.log
+ott t1,t2 p --list "news" 2>search.log
+```
 
 Archive lookup uses `/match` and `/programmes` on the same EPG service. Only
 channels advertising archive support are eligible, within the smaller of their
@@ -1529,6 +1625,47 @@ FOSS client used by web, Tauri desktop, Capacitor/iOS and packaged TV players.
 Old installations retain live searches and report the needed update if an
 archive fallback is required. Local validation of shared code does not install
 new packages on offline TVs or phones.
+
+### Stateful archive proxies
+
+Some proxies create, replace or stop a shared streaming session when an archive
+URL is fetched. Probing several candidates can therefore interrupt playback
+even before the CLI sends a play command. For a proxy known to behave this way,
+add its exact origin to the optional local CLI policy:
+
+```json
+"epg": {
+  "url": "https://ottplay-epg-api.igw-2560801.workers.dev/epg/v1",
+  "source": "epg-one",
+  "fallback_url": "http://127.0.0.1:18792/epg/v1",
+  "stateful_archive_origins": ["http://localhost:8090"]
+}
+```
+
+An origin is a scheme, hostname and optional port. Up to 32 entries are allowed;
+credentials, paths other than `/`, queries, fragments and whitespace are rejected
+before search I/O. Scheme/hostname case, default ports and IPv6 spelling are
+normalized. Different schemes, non-default ports and hostnames remain distinct:
+`localhost` does not match `127.0.0.1`. There is no automatic proxy detection.
+Use the origin returned in the player's archive address, not the EPG endpoint.
+
+For matching origins, the CLI still resolves each candidate through the player
+and checks the catalogue, access restrictions, programme times and retention.
+It makes **no manifest or segment request** for that candidate. The earliest
+eligible programme in each chain can be selected, but media availability is
+deferred to playback. Stderr reports this decision; JSON rows include
+`"availability": "deferred"`, with `"verified_all": false`. Fast archive selection
+uses `"selection": "random_first_eligible"` instead of claiming availability.
+This does not guarantee the provider has the requested recording. A failed
+playback request is not automatically repeated with another candidate.
+
+A nonempty policy bypasses old query-result and archive-availability caches so
+previous positive checks cannot skip origin classification. Deferred results
+are never cached as verified; complete query results are not cached while this
+policy is active. Guide metadata caches continue to work, and unmatched origins
+retain their existing media checks and error handling. The policy survives an
+EPG fallback but is never sent to the public guide service. Remove the setting,
+or use an empty list, to restore ordinary probing.
 
 ## Local playlist resolver
 
@@ -1563,6 +1700,18 @@ An optional `cache_dir` selects a private
 local cache directory. `refresh: true` bypasses caches for this request. Private
 provider URLs belong in this stdin object, never in command-line arguments or
 shared logs. A launcher should use a subprocess argument list and capture stdout.
+
+The same stateful-proxy policy is available as the optional top-level
+`"stateful_archive_origins": ["https://proxy.example"]` request field. The launcher
+must supply it explicitly: this command never imports `epg` or any other setting
+from `cli.json`. Matching archive rows return `"availability": "deferred"` and a
+stderr notice, with no media probing or verified-result caching. Playlist and
+EPG metadata requests still run. A launcher must not describe deferred rows as
+verified playable recordings. Minimal resolver-only installations must add
+`epg_fallback.py` from the same revision to use a nonempty origin list. Existing
+three-file installations (`ott.py`, `programme_search.py`, `playlist_search.py`)
+continue to work with the policy absent or empty; full CLI installations already
+include the policy module.
 
 Search order is playlist title, currently airing programme, then playable
 archive within the channel's retention and 144 hours. Only named HTTP(S)
@@ -2987,6 +3136,31 @@ Local videos profile import/export commands still describe a saved selection
 and its private binding; assigning a profile the name `Movies` does not select
 or grant access to a folder with that name.
 
+## Physical television controls
+
+A configured LG television has a separate `tv` control path that works even
+when its OttPlay page is closed. It uses direct webOS control first and an
+explicitly configured Home Assistant fallback when needed. This lane requires
+the controller's `admin_token` in the CLI's private `server_config`; scoped
+operator and player tokens cannot control the physical TV.
+
+```sh
+ott l tv status
+ott l tv volume 25              # system volume; ordinary `v` remains player volume
+ott l tv volume -5
+ott l tv mute off
+ott -t 60 l tv go               # wake the TV and open its configured OttPlay app/URL
+ott l tv off                   # physical TV power-off; ordinary standby stops the player
+ott l,lg2 tv volume 20          # ordinary lists and named groups are supported
+ott -t 60 l tv pair             # pair one TV; accept the prompt on its screen
+```
+
+`tv on` wakes without launching an app, and `tv launch` opens the app on an
+already awake TV. Output distinguishes the selected transport and whether the
+result is confirmed, merely accepted, or uncertain. Mutations are never blindly
+repeated after a timeout. See [direct LG television control](television.md) for
+configuration, all aliases, pairing, Wake-on-LAN and troubleshooting.
+
 ## Restarting playback or the player
 
 `ott tv restart` requests a full player reload. `ott tv restart player` and
@@ -4030,3 +4204,23 @@ Current Android builds use the system file/folder picker and persisted read-only
 access to the originals. The files and bundled player must be available on the
 device; remote commands still need a connection. Per-device offline startup and
 playback acceptance remain separate from implementation support.
+
+### Archive dispatch and acknowledgement
+
+Archive selection keeps the exact channel, title, start and end together. It
+never falls back to an ordinary live-channel command when that target is missing.
+Programme timing is checked again after the final catalogue response and before
+live dispatch. An expired selection requires a new query; it cannot silently
+start the next programme on that channel.
+The terminal reports `Archive playback requested` with the selected programme
+and local start time. Updated players use the already resolved archive URL and
+acknowledge only after their archive state accepts backend dispatch; rejected
+state transitions and deferred authorization are not reported as success.
+This acknowledgement is not proof that a provider served the correct content:
+some providers can return live media for an archive URL. Check the visible
+programme and player state if the content differs.
+
+Updated controllers advertise bounded receipt waiting. The CLI reads results
+immediately with an optional wait of up to one second; legacy controllers keep
+the existing polling behavior. This reduces serial archive-resolution overhead
+without resending commands.
