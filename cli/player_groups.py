@@ -24,7 +24,8 @@ Groups are saved in the selected CLI configuration. Management is local and
 does not contact players. Names are case-insensitive. Members must be saved
 player aliases or their configured device IDs; nested groups are not supported.
 Up to 64 members may be expanded per command. Each distinct device receives
-the command once, in first-occurrence order. Per-player restrictions still apply.
+the command once, with up to 8 players running concurrently. Text results appear
+as players finish; JSON results retain group order. Per-player restrictions apply.
 """
 NAME = re.compile(r"[a-zA-Z0-9а-яА-ЯёЁ_-]{1,32}\Z")
 

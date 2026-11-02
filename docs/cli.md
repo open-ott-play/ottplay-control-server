@@ -160,7 +160,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`4424d87af28847ed62e8d1a12674ec0de5cb43c0`](https://github.com/open-ott-play/ottplay-control-server/commit/4424d87af28847ed62e8d1a12674ec0de5cb43c0).
+[`e3b3b4fd01abb88b5178a007073086a5162701fa`](https://github.com/open-ott-play/ottplay-control-server/commit/e3b3b4fd01abb88b5178a007073086a5162701fa).
 This is an exact source pin, not a claim about the latest published release.
 It includes [direct LG television controls](television.md), named app launches
 such as `ott -t 90 lg2 tv go plex`, and the optional
@@ -188,6 +188,8 @@ It also includes [local Torrent indexers](torrent-indexer.md) for Torznab,
 Jackett and Prowlarr, with private key input and opaque prepared sources.
 It also includes [saved player groups](#saved-player-groups), including offline
 `group add/set/show/remove` management and group selectors in player commands.
+Group commands run up to eight players concurrently, with isolated budgets and
+receipts; text results appear as players finish and JSON retains group order.
 It also includes signed seek times and unit shorthand such as `seek -1:30` and
 `+10s`, including explicit archive timelines. Archive seeking uses the broadcast
 timestamp and reopens the provider archive URL; it preserves pause and stays
@@ -252,8 +254,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=4424d87af28847ed62e8d1a12674ec0de5cb43c0
-  ott_source="$HOME/.local/share/ottplay-control-server-4424d87af288"
+  ott_ref=e3b3b4fd01abb88b5178a007073086a5162701fa
+  ott_source="$HOME/.local/share/ottplay-control-server-e3b3b4fd01ab"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -276,7 +278,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-e3b3b4fd01ab/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -290,7 +292,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-e3b3b4fd01ab/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -312,8 +314,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '4424d87af28847ed62e8d1a12674ec0de5cb43c0'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-4424d87af288'
+$ottRef = 'e3b3b4fd01abb88b5178a007073086a5162701fa'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e3b3b4fd01ab'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -360,12 +362,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-e3b3b4fd01ab/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-4424d87af288\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e3b3b4fd01ab\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -408,7 +410,7 @@ import sys
 launcher = Path.home() / ".local/bin/ott"
 backup = launcher.with_name("ott.before-local-c76cb9b728b8")
 staged = launcher.with_name("ott.switch-local-c76cb9b728b8")
-reviewed = Path.home() / ".local/share/ottplay-control-server-4424d87af288/cli/ott.py"
+reviewed = Path.home() / ".local/share/ottplay-control-server-e3b3b4fd01ab/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -887,6 +889,8 @@ ott tt                             # controls and status for each member
 ott tt R                           # each player chooses its own random channel
 ott oo provider m3u
 ott tt provider m3u 1
+ott tt local shuffle ~/v/data/Movies/ # start each player independently, in parallel
+ott tt local shuffle Movies         # use each player's configured Local source
 ott tt +10s                        # relative seek on each player's current VOD/archive
 ott tt standby
 ott tt go
@@ -909,7 +913,8 @@ The configuration stores a flat list of names, for example:
 Group names are case-insensitive, up to 32 letters/digits/underscores/hyphens,
 and cannot collide with player aliases, device IDs or top-level CLI commands.
 Nested groups are not supported. Each command may expand up to 64 member names;
-duplicate device identities are executed once in first-occurrence order.
+duplicate device identities are executed once. Results retain first-occurrence
+order in JSON; commands run concurrently as described below.
 Every name is resolved before any player request. If a saved member is removed
 or renamed, update the group with `group set`; an unknown member prevents the
 entire command from being sent. A group with a malformed member list can be deleted
@@ -959,14 +964,20 @@ Aliases for the same UUID are deduplicated, retaining the first name and list
 order. An exact existing alias or UUID containing a comma keeps its single-player
 meaning; use different aliases to express a list.
 
-Commands run in order. A failure on one player does not prevent execution on the
-remaining players. There is no group rollback or automatic replay of failed or
-uncertain requests. Each command retains its normal per-player timeout and any
-specific options such as update `--wait`; a group can therefore take longer than
-one timeout. For example, `ott -t 30 t1,t2,t3,t4 local shuffle Movies` gives each
-target a separate 30-second capability-and-command budget, in sequence. Three
-exhausted budgets followed by one quick response can take about 92 seconds.
-This is not a 30-second deadline for the whole group. The CLI timeout does not
+Commands run concurrently, with at most eight active players. Capability discovery,
+command submission and result waiting are independent for each player. A slow or
+unreachable T1 therefore does not delay T2–T4. Each player keeps its own ordered
+command steps, timeout, connection and receipt callback. Groups larger than eight
+start another member when a worker becomes free.
+
+A failure on one player does not prevent execution on the remaining players.
+There is no group rollback or automatic replay of failed or uncertain requests.
+Each command retains its normal per-player timeout and any specific options such
+as update `--wait`. For example, `ott -t 30 tt local shuffle Movies` gives each of
+the four targets a separate 30-second capability-and-command budget concurrently,
+rather than adding those four budgets together. This is not a fixed 30-second
+deadline for the whole group, especially for larger groups or commands with their
+own wait options. The CLI timeout does not
 cancel an accepted request or extend its independent server-side TTL.
 Capabilities, settings locks, native bindings and local permission
 requirements are checked independently by the existing command. Random choices
@@ -981,7 +992,10 @@ or another appropriate read command to inspect individual outcomes.
 
 ### Group results and interruption
 
-Text output labels each player's result. `-j` / `--json` emits one aggregate
+Text output labels each player's result and emits it as that player finishes;
+T2 can report success while T1 is still waiting. Live search progress and
+`--receipt` diagnostics remain on stderr, tagged with the player name.
+`-j` / `--json` emits one aggregate
 object containing `action`, ordered `results`, `succeeded` and `failed`. Every
 result has `player` and `ok`; it can also contain `data`, `error`, `warnings` or
 `output`. General group commands include the original handler's `exit_code`.
@@ -1056,10 +1070,18 @@ acknowledgement does not prove visible playback or completed application restart
 
 The aggregate exit code uses this precedence: `130` (interrupted), `1` (error),
 `2` (failed diagnostic check), `3` (partial or unknown result), then `0` (all
-succeeded). Consult each result for its command-specific meaning. Ctrl-C stops
-the remaining player commands; unstarted targets are reported as interrupted.
+succeeded). Consult each result for its command-specific meaning. Ctrl-C cancels
+queued workers, interrupts diagnostic sampling and rate-limit waits, and stops
+further ordinary requests from active workers. Unstarted targets
+are identified separately from interrupted targets whose command may have executed.
 It cannot recall a command already accepted by a player. Inspect uncertain
 outcomes before explicitly retrying only the affected targets.
+
+A running notification performance trial may use up to 15 seconds of its remaining
+timeout for cleanup. Only its confirmed policy revision can be restored, and only
+the capture session it started can be stopped. Cleanup requests are not retried;
+the report distinguishes confirmed restoration from an uncertain outcome. Other
+group commands remain cancelled during that cleanup.
 
 Group capture retains at most 4 MiB of stdout and 256 KiB of stderr per player,
 and 16 MiB of captured output across the group. Overflow is reported as incomplete

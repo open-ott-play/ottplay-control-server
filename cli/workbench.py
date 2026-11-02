@@ -888,7 +888,12 @@ def run(api, client, device, words, timeout, json_output=False):
                 before = bench.observe(args.lane)
                 first_finished = time.monotonic()
                 bench.deadline = final_deadline
-                time.sleep(min(args.duration, max(0, bench.deadline - time.monotonic())))
+                delay = min(args.duration, max(0, bench.deadline - time.monotonic()))
+                cancelled = getattr(client, "group_cancelled", None)
+                if cancelled is None:
+                    time.sleep(delay)
+                elif cancelled.wait(delay):
+                    raise KeyboardInterrupt
                 second_started = time.monotonic()
                 after = bench.observe(args.lane)
                 second_finished = time.monotonic()

@@ -473,7 +473,9 @@ class LocalMediaTest(unittest.TestCase):
             self.assertEqual((code, err.getvalue()), (1, ''))
             mutations = [c for c in client.call.call_args_list if c.args[1] == 'local_media']
             self.assertEqual(len(mutations), 2)
-            for index, call in zip((1, 4), mutations):
+            self.assertCountEqual([call.args[0] for call in mutations], ['dev_1', 'dev_4'])
+            for call in mutations:
+                index = int(call.args[0][-1])
                 expected = {'op': 'shuffle', 'source': selector, 'runtime': f'dev-{index}', 'session': True}
                 if index == 1:
                     expected['progressive'] = True
@@ -516,8 +518,11 @@ class LocalMediaTest(unittest.TestCase):
         self.assertEqual((code, err.getvalue()), (0, ''))
         self.assertEqual(json.loads(out.getvalue())['succeeded'], 2)
         mutations = [c for c in client.call.call_args_list if c.args[1] == 'local_media']
-        self.assertEqual(mutations, [mock.call('dev_1', 'local_media', {'op': 'shuffle', 'source': 'Movies', 'runtime': 'dev-1', 'session': True}),
+        self.assertCountEqual(mutations, [mock.call('dev_1', 'local_media', {'op': 'shuffle', 'source': 'Movies', 'runtime': 'dev-1', 'session': True}),
                                      mock.call('dev_2', 'local_media', {'op': 'shuffle', 'source': 'Movies', 'runtime': 'dev-2', 'session': True})])
+        for device in ('dev_1', 'dev_2'):
+            self.assertEqual([call.args[1] for call in client.call.call_args_list if call.args[0] == device],
+                             ['capabilities', 'local_media'])
 
 
 if __name__ == '__main__':

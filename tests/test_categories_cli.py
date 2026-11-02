@@ -48,7 +48,7 @@ def selected(category='folder-42'):
 
 class CategoriesCliTest(unittest.TestCase):
     def run_cli(self, words, replies, machine=False, timeout=45, player='tv'):
-        client = mock.Mock(timeout=timeout)
+        client = mock.Mock(group_cancelled=None, timeout=timeout)
         client.device.return_value = 'dev_tv'
         client.call.side_effect = replies
         out, err = io.StringIO(), io.StringIO()
@@ -224,7 +224,7 @@ class CategoriesCliTest(unittest.TestCase):
         self.assertIn('may have executed', err)
 
     def test_total_deadline_covers_discovery_pages_and_selection_without_retries(self):
-        client = mock.Mock(timeout=45)
+        client = mock.Mock(group_cancelled=None, timeout=45)
         client.call.return_value = capabilities()
         with mock.patch.object(ott.time, 'monotonic', side_effect=[0, 0, 46]), \
                 self.assertRaisesRegex(ott.Error, 'no further request'):
@@ -400,7 +400,7 @@ class CategoriesCliTest(unittest.TestCase):
     def test_capability_retry_preserves_rejection_and_total_deadline(self):
         for outcome, expected_calls, elapsed in ((ott.HTTPError(429), 2, 2.5),
                                                  (ott.PlayerRejected('denied', {}), 2, 1)):
-            client = mock.Mock(timeout=2.5)
+            client = mock.Mock(group_cancelled=None, timeout=2.5)
             client.call.side_effect = [ott.HTTPError(429), outcome]
             clock = [0]
             def sleep(seconds):
@@ -427,7 +427,7 @@ class CategoriesCliTest(unittest.TestCase):
     def test_read_429_retry_keeps_parameters_and_shared_deadline(self):
         for action, params in (('categories', {'op': 'list', 'catalog': 'pinned'}),
                                ('channels', {'catalog': 'pinned', 'offset': 200})):
-            client = mock.Mock(timeout=45)
+            client = mock.Mock(group_cancelled=None, timeout=45)
             clock = [0]
             def sleep(seconds):
                 clock[0] += seconds
@@ -440,7 +440,7 @@ class CategoriesCliTest(unittest.TestCase):
             self.assertEqual(client.timeout, 7)
 
     def test_read_429_retry_stops_at_deadline_without_further_requests(self):
-        client = mock.Mock(timeout=45)
+        client = mock.Mock(group_cancelled=None, timeout=45)
         client.call.side_effect = ott.HTTPError(429)
         clock = [0]
         def sleep(seconds):
@@ -460,7 +460,7 @@ class CategoriesCliTest(unittest.TestCase):
                 ('channels', {}, ott.HTTPError(503)),
                 ('categories', {'op': 'list'}, ott.TransportError('lost response'))):
             with self.subTest(action=action, error=error):
-                client = mock.Mock(timeout=45)
+                client = mock.Mock(group_cancelled=None, timeout=45)
                 client.call.side_effect = error
                 with mock.patch.object(ott.time, 'monotonic', return_value=0), \
                         mock.patch.object(ott.time, 'sleep') as wait:

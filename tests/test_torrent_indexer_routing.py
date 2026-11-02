@@ -4,7 +4,6 @@ import importlib.util
 import io
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -55,9 +54,10 @@ class IndexerRoutingTest(unittest.TestCase):
 
     def test_group_dispatches_indexer_once_per_target(self):
         config = {"players": {"t1": "dev1", "t2": "dev2"}}
-        client = SimpleNamespace(config=config, server="https://controller.example", timeout=45, on_receipt=None,
-                                 credentials={"devices": [{"id": value} for value in config["players"].values()]},
-                                 device=lambda name: config["players"][name])
+        client = ott.Client.__new__(ott.Client)
+        client.config, client.server = config, "https://controller.example"
+        client.timeout, client.on_receipt = 45, None
+        client.credentials = {"devices": [{"id": value} for value in config["players"].values()]}
         module = ott.torrent_indexer_module()
         calls = []
 
@@ -71,7 +71,7 @@ class IndexerRoutingTest(unittest.TestCase):
             code, out, err, _ = self.invoke(["-j", "-t", "45", "t1,t2", "torrent", "indexer", "list"], config, client)
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(json.loads(out)["succeeded"], 2)
-        self.assertEqual(calls, [("dev1", ["list"], 45, True), ("dev2", ["list"], 45, True)])
+        self.assertCountEqual(calls, [("dev1", ["list"], 45, True), ("dev2", ["list"], 45, True)])
 
     def test_only_exact_local_source_uri_is_accepted(self):
         doc = ott.torrent_module().doc

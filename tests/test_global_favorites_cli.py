@@ -106,10 +106,13 @@ class GlobalFavoritesCLITests(unittest.TestCase):
     def test_group_exports_get_distinct_names_and_all_destinations_preflight(self):
         path = self.directory / "favorites.json"
         host = mock.Mock(return_value={"op": "export", "status": "exported", "entries": 1})
-        code, _, err = self.cli(["-j", "t1,t2", "fav", "global", "export", str(path)], host=host)
+        code, out, err = self.cli(["-j", "t1,t2", "fav", "global", "export", str(path)], host=host)
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual([call.args[5]["path"] for call in host.call_args_list],
-                         [str(self.directory / "favorites.t1.json"), str(self.directory / "favorites.t2.json")])
+        self.assertEqual(host.call_count, 2)
+        self.assertEqual({tuple(call.args[4]): call.args[5]["path"] for call in host.call_args_list},
+                         {(("t1", "one"),): str(self.directory / "favorites.t1.json"),
+                          (("t2", "two"),): str(self.directory / "favorites.t2.json")})
+        self.assertEqual([row["player"] for row in json.loads(out)["results"]], ["t1", "t2"])
         blocked = self.directory / "favorites.t2.json"
         blocked.write_bytes(b"preserve existing export")
         host.reset_mock()

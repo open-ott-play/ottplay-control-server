@@ -19,26 +19,66 @@ PRIVATE = 'https://private.example/?token=never-project-this'
 
 class GroupRequestDiagnosticsTest(unittest.TestCase):
     def setUp(self):
-        self.now = 0
+        self.clock_state = threading.local()
+        self.elapsed_by_device = {}
+        self.api_lock = threading.RLock()
         self.posts, self.requests, self.failures, self.reads = [], {}, {}, {}
         self.client = object.__new__(ott.Client)
         self.client.config = {'players': {f't{i}': f'dev_{i}' for i in range(1, 5)}}
         self.client.credentials = {'devices': []}
         self.client.timeout, self.client.on_receipt = 30, None
         self.client.api = mock.Mock(side_effect=self.api)
-        self.clock = mock.patch.object(ott.time, 'monotonic', side_effect=lambda: self.now)
+        self.clock = mock.patch.object(ott.time, 'monotonic', side_effect=self.now)
         self.sleep = mock.patch.object(ott.time, 'sleep', side_effect=self.advance)
+        original_fork = type(self.client).for_group
+        advance = self.advance
+        class VirtualCancellation:
+            """Advance only this worker's clock while preserving shared cancellation."""
+            def __init__(self, event):
+                self.event = event
+
+            def is_set(self):
+                return self.event.is_set()
+
+            def wait(self, duration):
+                if not self.event.is_set():
+                    advance(duration)
+                return self.event.is_set()
+
+        def fork(client, event):
+            # An executor may reuse a thread for a later player.
+            self.clock_state.now = 0
+            self.clock_state.device = None
+            child = original_fork(client, event)
+            child.group_cancelled = VirtualCancellation(event)
+            return child
+
+        self.fork = mock.patch.object(type(self.client), 'for_group', new=fork)
         self.clock.start()
         self.sleep.start()
+        self.fork.start()
         self.addCleanup(self.clock.stop)
         self.addCleanup(self.sleep.stop)
+        self.addCleanup(self.fork.stop)
+
+    def now(self):
+        return getattr(self.clock_state, 'now', 0)
 
     def advance(self, duration):
-        self.now += duration
+        self.clock_state.now = self.now() + duration
+        device = getattr(self.clock_state, 'device', None)
+        if device is not None:
+            with self.api_lock:
+                self.elapsed_by_device[device] = self.now()
 
     def api(self, path, payload=None, timeout=None):
+        with self.api_lock:
+            return self.locked_api(path, payload, timeout)
+
+    def locked_api(self, path, payload, timeout):
         query = ott.urllib.parse.parse_qs(ott.urllib.parse.urlsplit(path).query)
         device = query['device_id'][0]
+        self.clock_state.device = device
         if payload is not None:
             self.posts.append((device, payload['action'], payload['params']))
             if self.failures.get((device, payload['action'])) == 'enqueue_dns':
@@ -77,6 +117,9 @@ class GroupRequestDiagnosticsTest(unittest.TestCase):
         return 200, {'id': request_id, 'status': 'ok', 'data': data}
 
     def run_cli(self, selector='t1,t2,t3,t4'):
+        self.clock_state.now = 0
+        self.clock_state.device = None
+        self.elapsed_by_device.clear()
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'read_json', return_value=self.client.config), \
                 mock.patch.object(ott, 'Client', return_value=self.client), \
@@ -85,6 +128,20 @@ class GroupRequestDiagnosticsTest(unittest.TestCase):
         self.assertEqual(self.client.timeout, 30)
         self.assertIsNone(self.client.on_receipt)
         return code, out.getvalue(), err.getvalue()
+
+    def request_id_for(self, device, action, previous=()):
+        identifiers = [key for key, row in self.requests.items()
+                       if key not in previous and row[:2] == (device, action)]
+        self.assertEqual(len(identifiers), 1)
+        return identifiers[0]
+
+    def assert_posts(self, expected, posts=None):
+        actual = [(device, action) for device, action, _ in (self.posts if posts is None else posts)]
+        self.assertEqual(len(actual), len(expected))
+        self.assertEqual({device for device, _ in actual}, {device for device, _ in expected})
+        for device in {device for device, _ in expected}:
+            self.assertEqual([row for row in actual if row[0] == device],
+                             [row for row in expected if row[0] == device])
 
     def test_group_retains_actual_rpc_without_receipt_flag_and_continues_once(self):
         self.failures = {('dev_1', 'capabilities'): 'pending',
@@ -95,9 +152,9 @@ class GroupRequestDiagnosticsTest(unittest.TestCase):
         self.assertEqual((code, err, result['action'], result['succeeded'], result['failed']),
                          (1, '', 'local_media', 1, 3))
         rows = result['results']
-        self.assertEqual(rows[0]['request'], {'action': 'capabilities', 'request_id': f'{1:032x}',
+        self.assertEqual(rows[0]['request'], {'action': 'capabilities', 'request_id': self.request_id_for('dev_1', 'capabilities'),
                                             'stage': 'receipt', 'reason': 'request_pending_timeout'})
-        self.assertEqual(rows[1]['request'], {'action': 'local_media', 'request_id': f'{3:032x}',
+        self.assertEqual(rows[1]['request'], {'action': 'local_media', 'request_id': self.request_id_for('dev_2', 'local_media'),
                                             'stage': 'receipt', 'reason': 'controller_unavailable',
                                             'transport_category': 'deadline'})
         self.assertEqual(rows[2]['request'], {'action': 'capabilities', 'request_id': None,
@@ -105,13 +162,15 @@ class GroupRequestDiagnosticsTest(unittest.TestCase):
                                             'transport_category': 'dns'})
         self.assertNotIn('request', rows[3])
         self.assertTrue(rows[3]['ok'])
-        self.assertEqual([(device, action) for device, action, _ in self.posts],
-                         [('dev_1', 'capabilities'), ('dev_2', 'capabilities'), ('dev_2', 'local_media'),
-                          ('dev_3', 'capabilities'), ('dev_4', 'capabilities'), ('dev_4', 'local_media')])
+        self.assert_posts([('dev_1', 'capabilities'), ('dev_2', 'capabilities'), ('dev_2', 'local_media'),
+                           ('dev_3', 'capabilities'), ('dev_4', 'capabilities'), ('dev_4', 'local_media')])
         self.assertTrue(all(params == SESSION_CONTRACT['probe_request']['params']
                             for _, action, params in self.posts if action == 'capabilities'))
         self.assertNotIn(PRIVATE, out + err)
-        self.assertAlmostEqual(self.now, 11.6)
+        self.assertAlmostEqual(self.elapsed_by_device['dev_1'], 5)
+        self.assertAlmostEqual(self.elapsed_by_device['dev_2'], 5)
+        self.assertAlmostEqual(self.elapsed_by_device['dev_4'], 1.6)
+        self.assertEqual(self.elapsed_by_device.get('dev_3', 0), 0)
 
     def test_pending_and_http_recovery_clear_previous_transport_category(self):
         for mode, reason, category in (('dns_then_pending', 'request_pending_timeout', None),
@@ -130,15 +189,15 @@ class GroupRequestDiagnosticsTest(unittest.TestCase):
                              ('receipt_missing', 'receipt_missing'), ('invalid_response', 'invalid_response')):
             with self.subTest(mode=mode):
                 self.failures[('dev_1', 'capabilities')] = mode
-                first_id = f'{len(self.requests) + 1:032x}'
+                previous = set(self.requests)
                 before = len(self.posts)
                 code, out, err = self.run_cli('t1,t2')
                 first, second = json.loads(out)['results']
                 self.assertEqual((code, err, second['ok']), (1, '', True))
-                self.assertEqual(first['request'], {'action': 'capabilities', 'request_id': first_id,
+                self.assertEqual(first['request'], {'action': 'capabilities', 'request_id': self.request_id_for('dev_1', 'capabilities', previous),
                                                    'stage': 'receipt', 'reason': reason})
-                self.assertEqual([(d, a) for d, a, _ in self.posts[before:]],
-                                 [('dev_1', 'capabilities'), ('dev_2', 'capabilities'), ('dev_2', 'local_media')])
+                self.assert_posts([('dev_1', 'capabilities'), ('dev_2', 'capabilities'), ('dev_2', 'local_media')],
+                                  self.posts[before:])
 
     def test_single_player_json_failure_behavior_is_unchanged(self):
         self.failures[('dev_1', 'capabilities')] = 'pending'

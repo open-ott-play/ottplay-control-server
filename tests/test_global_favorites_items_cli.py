@@ -154,7 +154,14 @@ class GlobalItemsCLITests(unittest.TestCase):
         client = ott.Client.__new__(ott.Client)
         client.config, client.credentials = config, {"devices": [{"id": "one"}, {"id": "two"}]}
         client.timeout, client.server, client.on_receipt = 45, "https://fixture.invalid", None
-        client.call = mock.Mock(side_effect=[caps(), caps(False), LEGACY["list_result"]])
+        def reply(device, action, params):
+            self.assertIn(device, ('one', 'two'))
+            if action == 'capabilities':
+                return caps(device == 'one')
+            self.assertEqual((device, action), ('two', 'favorites'))
+            self.assertEqual(params, {'op': 'list', 'runtime': 'page-123'})
+            return LEGACY['list_result']
+        client.call = mock.Mock(side_effect=reply)
         result = {"collection": "global", "op": "list", "status": "ready", "total": 0,
                   "entries": [], "unresolved_legacy_count": 0}
         out, err = io.StringIO(), io.StringIO()
@@ -163,8 +170,14 @@ class GlobalItemsCLITests(unittest.TestCase):
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = ott.main(["-j", "t1,t2", "fav"])
         self.assertEqual((code, json.loads(out.getvalue())["succeeded"], host.call_count), (0, 2, 1))
-        self.assertEqual(client.call.call_args_list, [mock.call("one", "capabilities", {}),
-            mock.call("two", "capabilities", {}), mock.call("two", "favorites", {"op": "list", "runtime": "page-123"})])
+        self.assertEqual(client.call.call_count, 3)
+        self.assertEqual([call for call in client.call.call_args_list if call.args[0] == 'one'],
+                         [mock.call('one', 'capabilities', {})])
+        self.assertEqual([call for call in client.call.call_args_list if call.args[0] == 'two'],
+                         [mock.call('two', 'capabilities', {}),
+                          mock.call('two', 'favorites', {'op': 'list', 'runtime': 'page-123'})])
+        self.assertEqual(host.call_args.args[2], 'one')
+        self.assertEqual([row['player'] for row in json.loads(out.getvalue())['results']], ['t1', 't2'])
 
 
 if __name__ == "__main__":

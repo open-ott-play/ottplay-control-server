@@ -69,8 +69,10 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, response, code, message, headers, new_url)
 
 
-def request_json(url, error, limit=1024 * 1024, deadline=None):
+def request_json(url, error, limit=1024 * 1024, deadline=None, *, group_cancelled=None):
     """Public GitHub requests never receive controller credentials."""
+    if group_cancelled is not None and group_cancelled.is_set():
+        raise KeyboardInterrupt
     budget = min(15, (deadline - time.monotonic()) if deadline is not None else 15)
     if budget <= 0:
         raise error("Update deadline expired while reading official release metadata")
@@ -78,6 +80,8 @@ def request_json(url, error, limit=1024 * 1024, deadline=None):
     cancelled = threading.Event()
     def read():
         try:
+            if cancelled.is_set() or group_cancelled is not None and group_cancelled.is_set():
+                return
             request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "ott-cli-android-update"})
             with urllib.request.build_opener(SafeRedirect()).open(request, timeout=budget) as response:
                 raw = bytearray()
@@ -102,7 +106,22 @@ def request_json(url, error, limit=1024 * 1024, deadline=None):
             finished.put((False, None))
     threading.Thread(target=read, daemon=True).start()
     try:
-        valid, result = finished.get(timeout=budget)
+        cutoff = time.monotonic() + budget
+        while True:
+            if group_cancelled is not None and group_cancelled.is_set():
+                raise KeyboardInterrupt
+            try:
+                valid, result = finished.get(timeout=budget if group_cancelled is None else
+                                            max(0, min(0.1, cutoff - time.monotonic())))
+                break
+            except queue.Empty:
+                if group_cancelled is None or time.monotonic() >= cutoff:
+                    raise
+        if group_cancelled is not None and group_cancelled.is_set():
+            raise KeyboardInterrupt
+    except KeyboardInterrupt:
+        cancelled.set()
+        raise
     except queue.Empty:
         cancelled.set()
         raise error("Official release metadata timed out; no update was requested") from None
@@ -111,9 +130,10 @@ def request_json(url, error, limit=1024 * 1024, deadline=None):
     return result
 
 
-def release_target(opts, error, deadline=None):
+def release_target(opts, error, deadline=None, *, group_cancelled=None):
     def fetch(url, limit=1024 * 1024):
-        return request_json(url, error, limit, deadline)
+        cancellation = {} if group_cancelled is None else {"group_cancelled": group_cancelled}
+        return request_json(url, error, limit, deadline, **cancellation)
     tag = opts["version"]
     if tag:
         release = fetch(API + "/releases/tags/" + tag)
@@ -267,7 +287,9 @@ def update(client, device, opts, runtime):
                 "user_confirmation_required": True}
     try:
         state = call("status")
-        target = release_target(opts, error, deadline)
+        group_cancelled = getattr(client, "group_cancelled", None)
+        cancellation = {} if group_cancelled is None else {"group_cancelled": group_cancelled}
+        target = release_target(opts, error, deadline, **cancellation)
         if state["installed_code"] > target["version_code"]:
             if opts["version"]:
                 raise error("Selected release is older than the installed Android versionCode. In-place OTA downgrades are not supported; no uninstall or update was requested.")

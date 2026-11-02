@@ -237,17 +237,28 @@ class TorrentSettingsCliTests(unittest.TestCase):
         self.assertIn("concurrently", err)
 
     def test_group_uses_the_same_private_input_file_and_redacts_each_result(self):
+        def reply(device, action, params):
+            self.assertIn(device, ('device-1', 'device-2'))
+            if action == 'capabilities':
+                return caps()
+            self.assertEqual(action, 'player_settings')
+            self.assertIn(params['op'], ('get', 'set'))
+            return result(params['op'])
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "private.json"
             path.write_text(json.dumps([MANIFEST, "http://localhost:8080/manifest.json"], indent=2))
             code, out, err, client = self.run_cli(
                 ["-j", "t1,t2", "setting", "torrentStreamAddons", "--value-file", str(path)],
-                [caps(), result("get"), result("set"), caps(), result("get"), result("set")])
+                reply)
         self.assertEqual((code, err, client.call.call_count), (0, "", 6))
         self.assertEqual(json.loads(out)["succeeded"], 2)
         writes = [call for call in client.call.call_args_list if call.args[2].get("op") == "set"]
-        self.assertEqual([call.args[0] for call in writes], ["device-1", "device-2"])
+        self.assertCountEqual([call.args[0] for call in writes], ["device-1", "device-2"])
         self.assertEqual(writes[0].args[2]["value"], writes[1].args[2]["value"])
+        for device in ('device-1', 'device-2'):
+            calls = [call for call in client.call.call_args_list if call.args[0] == device]
+            self.assertEqual([(call.args[1], call.args[2].get('op')) for call in calls],
+                             [('capabilities', None), ('player_settings', 'get'), ('player_settings', 'set')])
 
 
 if __name__ == "__main__":

@@ -97,8 +97,11 @@ class SearchProgressTest(unittest.TestCase):
 
     def test_group_progress_is_live_and_json_contains_only_final_results(self):
         errors, output = io.StringIO(), io.StringIO()
-        client = mock.Mock(timeout=45, on_receipt=None)
         config = {'epg': {'url': 'https://epg.example/epg/v1', 'source': 'epg-one'}}
+        client = ott.Client.__new__(ott.Client)
+        client.config, client.credentials = config, {'devices': []}
+        client.timeout, client.on_receipt = 45, None
+        client.call = mock.Mock()
         args = SimpleNamespace(words=['t1,t2', 'p', '--list', 'cats'], json=True,
                                timeout=45, refresh=False, config='/unused')
         visited = []
@@ -106,13 +109,13 @@ class SearchProgressTest(unittest.TestCase):
         def search(client, device, settings, query, refresh=False, progress=None, fast=False):
             self.assertFalse(fast)
             self.assertIsNotNone(progress)
-            self.assertIs(progress.stream, errors)
+            # A concurrency wrapper may serialize lines; observe the destination below.
             self.assertIsNot(ott.sys.stderr, errors)
             progress('Searching current EPG channels', 0, 2)
             # Assert during the operation, before group output is collected.
             name = {'device1': 't1', 'device2': 't2'}[device]
             self.assertIn('[search ' + name + '] Searching current EPG channels 0/2', errors.getvalue())
-            self.assertEqual(ott.sys.stderr.getvalue(), '')
+            self.assertEqual(output.getvalue(), '')
             visited.append(device)
             progress('Searching current EPG channels', 2, 2)
             return {'as_of': 123, 'checked': 2, 'total': 2, 'partial': False, 'programs': []}, {}
@@ -122,7 +125,7 @@ class SearchProgressTest(unittest.TestCase):
             status = ott.player_group_command(client, config,
                                               [('t1', 'device1'), ('t2', 'device2')], args, [])
         self.assertEqual(status, 0)
-        self.assertEqual(visited, ['device1', 'device2'])
+        self.assertCountEqual(visited, ['device1', 'device2'])
         result = json.loads(output.getvalue())
         self.assertEqual((result['succeeded'], result['failed']), (2, 0))
         self.assertTrue(all('warnings' not in row for row in result['results']))

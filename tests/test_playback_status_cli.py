@@ -203,10 +203,12 @@ class PlaybackProtocolTest(unittest.TestCase):
 
 class PlaybackCliTest(unittest.TestCase):
     def client(self):
-        client = mock.Mock(timeout=45)
+        client = ott.Client.__new__(ott.Client)
+        client.timeout, client.on_receipt = 45, None
+        client.server = "https://controller.example"
         client.config = {"players": {"one": "dev_one", "two": "dev_two"}, "groups": {"both": ["one", "two"]}}
         client.credentials = {"devices": []}
-        client.device.side_effect = lambda name: client.config["players"][name]
+        client.call, client.call_receipt = mock.Mock(), mock.Mock()
 
         def read(path, timeout=None):
             query = ott.urllib.parse.parse_qs(ott.urllib.parse.urlsplit(path).query)
@@ -215,7 +217,7 @@ class PlaybackCliTest(unittest.TestCase):
             if query["limit"] != ["0"]:
                 raw["history"] = [event(raw["runtimes"][0])]
             return 200, json.dumps(raw).encode()
-        client.api_raw.side_effect = read
+        client.api_raw = mock.Mock(side_effect=read)
         return client
 
     def run_cli(self, words, client=None):
@@ -341,8 +343,15 @@ class PlaybackCliTest(unittest.TestCase):
 
     def test_group_bad_report_is_not_retried_and_next_player_is_still_read(self):
         client = self.client()
-        client.api_raw.side_effect = [(200, b'{"unexpected":"private-token"}'),
-                                      (200, json.dumps(fixture("dev_two")).encode())]
+        def read(path, timeout=None):
+            query = ott.urllib.parse.parse_qs(ott.urllib.parse.urlsplit(path).query)
+            self.assertEqual(ott.urllib.parse.urlsplit(path).path, "/api/player-state")
+            self.assertEqual(query["limit"], ["0"])
+            if query["device_id"] == ["dev_one"]:
+                return 200, b'{"unexpected":"private-token"}'
+            self.assertEqual(query["device_id"], ["dev_two"])
+            return 200, json.dumps(fixture("dev_two")).encode()
+        client.api_raw.side_effect = read
         code, out, err, _ = self.run_cli(["-j", "both", "state"], client)
         result = json.loads(out)
         self.assertEqual((code, err, result["succeeded"], result["failed"]), (1, "", 1, 1))
