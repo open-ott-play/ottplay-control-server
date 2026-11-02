@@ -1,9 +1,11 @@
 """Real Helm renders accept private registry ports without accepting URL syntax."""
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 import unittest
 
 
@@ -25,10 +27,16 @@ class PortRangeTest(unittest.TestCase):
 @unittest.skipUnless(shutil.which('helm'), 'Helm is required to validate rendered image references')
 class RepositorySchemaTest(unittest.TestCase):
     def render(self, repository):
-        return subprocess.run(
+        # Allow bounded extra startup time for Helm on Windows.
+        # Keep the overall CI deadline and every positive/negative assertion.
+        started = time.monotonic()
+        result = subprocess.run(
             ['helm', 'template', 'control', str(CHART), '--values', '-'],
             input=json.dumps({'image': {'repository': repository, 'tag': 'v0.1.0'}}),
-            text=True, capture_output=True, timeout=15, check=False)
+            text=True, capture_output=True, timeout=60 if os.name == 'nt' else 15, check=False)
+        if repository == '':
+            print(f'Initial Helm schema render completed in {time.monotonic() - started:.3f}s', flush=True)
+        return result
 
     def test_valid_repositories_and_registry_ports_reach_rendered_image(self):
         for repository in (
