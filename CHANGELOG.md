@@ -131,6 +131,43 @@
   explicit uncertainty recovery. Source examples do not establish that matching
   CLI, controller and player components are installed.
 
+## [0.1.7] - 2026-11-02
+
+### Added
+
+- Negotiate relative seeking in TV archives with `ott PLAYER +1m`, `-10s` and
+  signed `seek` commands. Validate broadcast timestamps and retention bounds
+  against the request; preserve the existing VOD protocol and channel offsets.
+  Compatible players preserve pause, stay within retained history and reopen
+  the archive at the requested time without silently switching to live TV.
+- Document archive capability checks, conditional playback examples, readable
+  local timestamps and numeric Unix timestamps in JSON output.
+
+### Fixed
+
+- Keep retained `state` and `history` request timeouts within the original
+  budget when floating-point subtraction rounds the remaining time upward.
+  A deterministic regression test covers the Windows CI failure.
+
+### Upgrade
+
+- Update the controller, the participating player and all 37 Python modules in
+  the local CLI together. Archive seeking requires the player's
+  `playback_seek_archive_relative` capability; older components retain their
+  existing VOD behavior. See the [CLI installation and seek guide](docs/cli.md).
+- Preserve device registrations, controller configuration and player profiles.
+  No configuration or persistent-state migration is required for this release.
+  A command acknowledgement reports dispatch, not observed decoder progress.
+
+### Security
+
+- Keep restricted operators scoped to `capabilities` and
+  `playback.seek_relative`. Archive seeking uses the existing permission;
+  it does not grant new controls or bypass standby, kiosk or parental checks.
+- Cross-timeline and malformed receipts are rejected. Uncertain or expired
+  playback changes are not automatically repeated; check current player state
+  before issuing another change.
+
 ## [0.1.6] - 2026-10-24
 
 ### Changes
