@@ -442,6 +442,33 @@ its timeout, without a status-plus-absolute-seek fallback or automatic replay.
 Unsupported players fail explicitly. Unsigned CLI times continue to use the
 existing absolute `seek` operation.
 
+### Relative archive seek
+
+An updated player advertises `playback_seek_archive_relative:{version:1}` only
+when its current TV archive can be moved. Submit:
+
+```json
+{"action":"playback","params":{"operation":"seek_relative","offset":60,"timeline":"archive"}}
+```
+
+The exact success fields are `operation`, `dispatched`, `offset`, `timeline`,
+`from`, `position`, `earliest`, `latest`, and `clamped`. `timeline` is `"archive"`;
+`from` is the sampled broadcast Unix timestamp. Bounds and target are whole-second
+Unix timestamps. The player first rounds `from + offset` down to a second, then
+clamps to the inclusive bounds. `clamped` reports that boundary clamp rather than
+rounding. `earliest` is rounded up inside retention; `latest` is at least one
+second before the sampled live edge. The relay validates this exact calculation,
+the echoed offset and timeline against the retained request, including duplicates.
+The old six-field VOD receipt cannot satisfy an archive request or vice versa.
+
+The player rebuilds the provider's archive URL at the destination. Programme
+boundaries and guide gaps do not turn a seek into live playback. Pause intent is
+attached to the new decoder before it starts. Expiry, source replacement, standby,
+kiosk, PIN restrictions and unsupported archive resolution cause an explicit
+refusal. Deferred authorization/resolution cannot resume a refused request later.
+The permission remains `playback.seek_relative`. Upgrade the relay, player and
+CLI together; older relays reject the extra request field without queueing it.
+
 ### Player standby and wake
 
 Player standby uses the existing lifecycle request. For example, submit

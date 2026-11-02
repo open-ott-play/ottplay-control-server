@@ -884,7 +884,7 @@ ott tt                             # controls and status for each member
 ott tt R                           # each player chooses its own random channel
 ott oo provider m3u
 ott tt provider m3u 1
-ott tt +10s                        # relative seek on each player's current VOD
+ott tt +10s                        # relative seek on each player's current VOD/archive
 ott tt standby
 ott tt go
 ott tt restart stream
@@ -1205,7 +1205,7 @@ Times accept decimal seconds, ordered nonrepeated `h`/`m`/`s` units, or
 after a colon must be below 60. Relative offsets must be nonzero; all times
 must fit 9,007,199,254,740,991 seconds. Exponents and nonfinite values are rejected.
 
-Relative seeking requires the separate `playback_seek_relative` capability on
+VOD relative seeking requires the separate `playback_seek_relative` capability on
 an updated player and controller. The player samples and seeks its current
 decoder atomically, clamping to the start or just before the media end. It
 rejects unready playback, unknown duration and local policy restrictions.
@@ -1214,6 +1214,28 @@ Restricted operator credentials need `capabilities` and the exact
 The CLI never substitutes an absolute seek or retries an uncertain request.
 For a group such as `ott t1,t2 seek -10s`, each player uses its own current
 position and reports its own result; the group is not a synchronized seek.
+
+TV archives use the separately advertised `playback_seek_archive_relative`
+capability. The same commands work after an archive search:
+
+```sh
+ott l "Три кота"            # start a matching live programme or available archive
+ott l +1m                  # advance the playing archive by one minute
+ott l -10s                 # rewind ten seconds
+ott l seek +3m             # advance three minutes
+```
+
+Archive replies print broadcast dates and times in the CLI's local timezone.
+Targets use whole-second precision, rounded down, and stay inside the retained
+archive window and behind live TV. A large offset clamps to that window; it does
+not switch channels or silently return to live. Paused archives remain paused.
+A supported archive does not need a finite decoder duration or local seekable
+buffer because the player resolves its provider URL at the destination.
+Install the updated player, relay and CLI for this extension. If `+1m` reports
+that relative seeking is not advertised while an archive is playing, inspect
+`ott l caps` for `playback_seek_archive_relative`, update/reload the player, and
+check standby, kiosk and PIN restrictions. Do not repeatedly submit a command
+whose result is uncertain.
 
 Short and full command names share the same dispatch and output behavior:
 
@@ -3570,8 +3592,9 @@ its separate programme timeline. Live streams do not advertise these operations.
 Unsigned times such as `seek 90`, `seek 1m30s` and `seek 01:30` are absolute.
 An explicit sign makes the time relative: `seek +5`, `seek +1m` or `seek -1:30`.
 Signed unit shorthand such as `+5s` also seeks, while bare `+5` still changes
-channels. Relative seeking uses the separate `playback_seek_relative` capability
-and one atomic player operation; it never reads status and calculates an absolute
+channels. VOD uses `playback_seek_relative`; archives use
+`playback_seek_archive_relative` with an explicit archive timeline and broadcast
+timestamps. Both use one player operation; it never reads status and calculates an absolute
 seek in the CLI. The separate `android seek SECONDS` API remains absolute.
 
 The CLI validates the returned operation and target before reporting dispatch.

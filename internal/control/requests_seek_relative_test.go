@@ -2,10 +2,64 @@ package control
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
 )
+
+func TestArchiveRelativeSeekCorrelationAndBounds(t *testing.T) {
+	for _, offset := range []float64{60, -10, 0.5, -0.5, 9007199254740991, -9007199254740991} {
+		s := newTestServer(t)
+		params, _ := json.Marshal(map[string]any{"operation": "seek_relative", "timeline": "archive", "offset": offset})
+		id := rpcID(t, s, `{"action":"playback","params":`+string(params)+`}`)
+		expected := s.devices[0].queue[0].relativeSeek
+		if expected == nil || !expected.Archive || expected.Offset != offset {
+			t.Fatal("lost archive contract")
+		}
+		from := 1793581200.75
+		rounded := math.Floor(from + offset)
+		position := math.Max(1793500000, math.Min(1793590000, rounded))
+		data := map[string]any{"operation": "seek_relative", "timeline": "archive", "dispatched": true,
+			"offset": offset, "from": from, "position": position, "earliest": 1793500000, "latest": 1793590000,
+			"clamped": position != rounded}
+		raw, _ := json.Marshal(data)
+		for range 2 {
+			expect(t, request(s, "POST", "/api/responses", firstToken, `{"id":"`+id+`","status":"ok","data":`+string(raw)+`}`, nil), 200)
+		}
+		if len(s.devices[0].queue) != 0 || !s.devices[0].results[id].relativeSeek.Archive {
+			t.Fatal("lost retained archive correlation")
+		}
+		if validRelativeSeekResult(raw, "ok", &relativeSeekRequest{Offset: offset}) {
+			t.Fatal("archive accepted as VOD")
+		}
+		for key, bad := range map[string]any{"timeline": "vod", "position": position + 0.5, "earliest": true,
+			"latest": 253402300800.0, "from": 1, "offset": 0, "clamped": position == rounded, "extra": "hidden"} {
+			original, exists := data[key]
+			data[key] = bad
+			mutated, _ := json.Marshal(data)
+			if validRelativeSeekResult(mutated, "ok", expected) {
+				t.Fatalf("invalid archive field accepted: %s", key)
+			}
+			if exists {
+				data[key] = original
+			} else {
+				delete(data, key)
+			}
+		}
+	}
+}
+
+func TestArchiveRelativeSeekRejectsMalformedTimeline(t *testing.T) {
+	for _, timeline := range []string{`null`, `true`, `"vod"`, `"live"`, `1`, `{}`} {
+		s := newTestServer(t)
+		expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken,
+			`{"action":"playback","params":{"operation":"seek_relative","offset":60,"timeline":`+timeline+`}}`, nil), 400)
+		if len(s.devices[0].queue) != 0 {
+			t.Fatal("malformed archive request queued")
+		}
+	}
+}
 
 func TestRelativeSeekRoundTripAndRetainedCorrelation(t *testing.T) {
 	for _, offset := range []string{"10", "-10", "0.25", "-0.25", "9007199254740991", "-9007199254740991"} {
