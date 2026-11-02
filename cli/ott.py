@@ -4646,11 +4646,12 @@ def capabilities_metadata(data):
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
             raise Error(invalid)
         result["torrent_indexer"] = {"version": 1}
-    if "playback_seek_relative" in data:
-        marker = data["playback_seek_relative"]
-        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
-            raise Error(invalid)
-        result["playback_seek_relative"] = {"version": 1}
+    for key in ("playback_seek_relative", "playback_seek_archive_relative"):
+        if key in data:
+            marker = data[key]
+            if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+                raise Error(invalid)
+            result[key] = {"version": 1}
     if "favorites_global_items" in data:
         try:
             result["favorites_global_items"] = favorites_module("global_favorites_items").validate_capability(data["favorites_global_items"])
@@ -5060,7 +5061,7 @@ def print_player_help(data, name):
             continue
         command = {"seek": "seek TIME", "previous_channel": "prev", "next_channel": "next"}.get(operation, operation)
         print(f"  {prefix} {command}")
-    if "playback_seek_relative" in controls:
+    if "playback_seek_relative" in controls or "playback_seek_archive_relative" in controls:
         print(f"  {prefix} seek +10s / seek -1m / +10s  — seek relative to the current position")
     if "random" in controls:
         print(f"  {prefix} R / random  — safe random channel from All; prefer numbers 1–1000")
@@ -5184,7 +5185,7 @@ def print_player_help(data, name):
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
             and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
-            and not any(key in controls for key in ("playback_seek_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
+            and not any(key in controls for key in ("playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls or "provider_diagnostics" in controls:
@@ -5293,14 +5294,17 @@ def relative_seek_command(client, device, params, timeout):
     try:
         client.timeout = timeout
         controls = capabilities_metadata(client.call(device, "capabilities", {}))
-        if "playback_seek_relative" not in controls:
-            raise Error("Relative seek is not advertised: older players need an update; updated players need ready seekable VOD and permitted local controls. No seek was sent")
+        wire_params = dict(params)
+        if "playback_seek_archive_relative" in controls:
+            wire_params["timeline"] = "archive"
+        elif "playback_seek_relative" not in controls:
+            raise Error("Relative seek is not advertised: update older players; a ready seekable VOD or supported archive and permitted local controls are required. No seek was sent")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Relative seek capability check exceeded --timeout; no seek was sent")
         client.timeout = remaining
         sent = True
-        return client.call(device, "playback", params)
+        return client.call(device, "playback", wire_params), wire_params
     except (PlayerRejected, PlayerUnsupported) as exc:
         reason = "unsupported" if isinstance(exc, PlayerUnsupported) else "rejected"
         outcome = "The request was not repeated" if sent else "No seek was sent"
@@ -5315,7 +5319,11 @@ def playback_metadata(data, params):
         raise Error(invalid)
     result = {"operation": params["operation"], "dispatched": True}
     if params["operation"] == "seek_relative":
-        if (set(data) != {"operation", "dispatched", "offset", "from", "position", "clamped"}
+        archive = params.get("timeline") == "archive"
+        fields = {"operation", "dispatched", "offset", "from", "position", "clamped"}
+        if archive:
+            fields |= {"timeline", "earliest", "latest"}
+        if (set(data) != fields
                 or any(type(data[k]) not in (int, float) for k in ("offset", "from", "position"))
                 or data["offset"] != params["offset"] or data["offset"] == 0
                 or not -9007199254740991 <= data["offset"] <= 9007199254740991
@@ -5323,6 +5331,17 @@ def playback_metadata(data, params):
                 or type(data["clamped"]) is not bool):
             raise Error(invalid)
         target = data["from"] + data["offset"]
+        if archive:
+            if (data["timeline"] != "archive"
+                    or any(type(data[k]) not in (int, float) or not 1 <= data[k] <= 253402300799
+                           or data[k] % 1 != 0 for k in ("earliest", "latest"))
+                    or not data["earliest"] <= data["from"] <= data["latest"]):
+                raise Error(invalid)
+            rounded = target // 1
+            bounded = max(data["earliest"], min(data["latest"], rounded))
+            if data["position"] != bounded or data["clamped"] != (bounded != rounded):
+                raise Error(invalid)
+            return {key: data[key] for key in fields}
         if ((not data["clamped"] and data["position"] != target)
                 or (data["clamped"] and (data["position"] != 0 if target < 0 else data["position"] >= target))):
             raise Error(invalid)
@@ -6897,7 +6916,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh,
                                                 progress=progress, fast=not listing_option(words))
     elif action == "playback" and params.get("operation") == "seek_relative":
-        data = relative_seek_command(client, device, params, args.timeout)
+        data, params = relative_seek_command(client, device, params, args.timeout)
     elif action == "play":
         searching = "epg" in config and bool(params["query"].strip()) and not re.fullmatch(NUMERIC_CHANNEL_QUERY, params["query"].strip())
         implicit_search_deadline = time.monotonic() + args.timeout if searching else None
@@ -7111,7 +7130,12 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "playback":
         if data.get("operation") == "seek_relative":
             suffix = " (clamped to the media boundary)" if data["clamped"] else ""
-            print(f"Seek requested: {data['from']:g}s → {data['position']:g}s ({data['offset']:+g}s){suffix}")
+            if data.get("timeline") == "archive":
+                before = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(data["from"]))
+                after = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(data["position"]))
+                print(f"Archive seek requested: {before} → {after} ({data['offset']:+g}s){suffix}")
+            else:
+                print(f"Seek requested: {data['from']:g}s → {data['position']:g}s ({data['offset']:+g}s){suffix}")
         elif "plex_queue" in data:
             print_plex_queue(data["plex_queue"])
         elif "channel" in data:

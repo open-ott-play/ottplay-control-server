@@ -1,20 +1,36 @@
 package control
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"math"
+)
 
 type relativeSeekRequest struct {
-	Offset float64
+	Offset  float64
+	Archive bool
 }
 
 func parseRelativeSeekRequest(params map[string]json.RawMessage) *relativeSeekRequest {
 	var operation string
 	var offset float64
-	if len(params) != 2 || json.Unmarshal(params["operation"], &operation) != nil || operation != "seek_relative" ||
+	var timeline string
+	archive := false
+	if raw, exists := params["timeline"]; exists {
+		if json.Unmarshal(raw, &timeline) != nil || timeline != "archive" {
+			return nil
+		}
+		archive = true
+	}
+	fields := 2
+	if archive {
+		fields++
+	}
+	if len(params) != fields || json.Unmarshal(params["operation"], &operation) != nil || operation != "seek_relative" ||
 		!numberValue(params["offset"], -9007199254740991, 9007199254740991, false) ||
 		json.Unmarshal(params["offset"], &offset) != nil || offset == 0 {
 		return nil
 	}
-	return &relativeSeekRequest{Offset: offset}
+	return &relativeSeekRequest{Offset: offset, Archive: archive}
 }
 
 func validRelativeSeekResult(raw json.RawMessage, status string, expected *relativeSeekRequest) bool {
@@ -25,7 +41,11 @@ func validRelativeSeekResult(raw json.RawMessage, status string, expected *relat
 		return status == "rejected" || status == "unsupported"
 	}
 	m, err := decodeObject(raw)
-	if err != nil || len(m) != 6 {
+	fields := 6
+	if expected.Archive {
+		fields = 9
+	}
+	if err != nil || len(m) != fields {
 		return false
 	}
 	var operation string
@@ -42,6 +62,20 @@ func validRelativeSeekResult(raw json.RawMessage, status string, expected *relat
 		return false
 	}
 	target := from + offset
+	if expected.Archive {
+		var timeline string
+		var earliest, latest float64
+		if json.Unmarshal(m["timeline"], &timeline) != nil || timeline != "archive" ||
+			!numberValue(m["earliest"], 1, 253402300799, true) ||
+			!numberValue(m["latest"], 1, 253402300799, true) ||
+			json.Unmarshal(m["earliest"], &earliest) != nil || json.Unmarshal(m["latest"], &latest) != nil ||
+			latest < earliest || from < earliest || from > latest || position != math.Floor(position) {
+			return false
+		}
+		rounded := math.Floor(target)
+		bounded := math.Max(earliest, math.Min(latest, rounded))
+		return position == bounded && *clamped == (bounded != rounded)
+	}
 	if !*clamped {
 		return position == target
 	}

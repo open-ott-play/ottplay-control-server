@@ -199,4 +199,68 @@ class RelativeSeekTest(unittest.TestCase):
             self.assertEqual('No controls are currently advertised' in out.getvalue(), not supported)
 
 
+class ArchiveRelativeSeekTest(unittest.TestCase):
+    run_cli = RelativeSeekTest.run_cli
+
+    @staticmethod
+    def archive_caps():
+        return dict(caps(False), playback=[], playback_seek_archive_relative={'version': 1})
+
+    @staticmethod
+    def archive_receipt(offset=60, start=1793581200.75, position=1793581260, clamped=False):
+        return dict(receipt(offset, start, position, clamped), timeline='archive',
+                    earliest=1793500000, latest=1793590000)
+
+    def test_archive_negotiates_explicit_timeline_and_prints_dates(self):
+        for text, offset in [('+1m', 60), ('-10s', -10), ('+3m', 180), ('+.5s', .5)]:
+            ack = self.archive_receipt(offset, position=int(1793581200.75 + offset))
+            for machine in [True, False]:
+                code, out, err, client = self.run_cli([text], [self.archive_caps(), ack], machine=machine)
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}),
+                    mock.call('dev_tv', 'playback', {'operation': 'seek_relative', 'offset': offset, 'timeline': 'archive'})])
+                if machine:
+                    self.assertEqual(json.loads(out), ack)
+                else:
+                    self.assertIn('Archive seek requested:', out)
+                    self.assertIn('2026-', out)
+
+    def test_archive_boundaries_and_malformed_receipts(self):
+        for offset, position in [(-9007199254740991, 1793500000), (9007199254740991, 1793590000)]:
+            ack = self.archive_receipt(offset, position=position, clamped=True)
+            code, _, err, _ = self.run_cli(['seek', f'{offset:+d}'], [self.archive_caps(), ack])
+            self.assertEqual((code, err), (0, ''))
+        for change in [{'timeline': 'vod'}, {'earliest': True}, {'latest': None},
+                       {'earliest': 1793581300}, {'latest': 1793581000},
+                       {'position': 1793581260.5}, {'clamped': True}, {'offset': 59},
+                       {'secret': 'hidden'}, {'latest': 253402300800}]:
+            ack = dict(self.archive_receipt(), **change)
+            code, out, err, client = self.run_cli(['+1m'], [self.archive_caps(), ack])
+            self.assertEqual((code, out, client.call.call_count), (1, '', 2))
+            self.assertNotIn('hidden', err)
+        for capability, ack in [(self.archive_caps(), receipt(60)), (caps(), self.archive_receipt())]:
+            code, _, _, client = self.run_cli(['+1m'], [capability, ack])
+            self.assertEqual((code, client.call.call_count), (1, 2), 'no cross-timeline receipt or retry')
+
+    def test_archive_capability_help_and_strict_version(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ott.print_player_help({'capabilities': ott.capabilities_metadata(self.archive_caps())}, 'tv')
+        self.assertIn('seek +10s', out.getvalue())
+        self.assertNotIn('No controls are currently advertised', out.getvalue())
+        for marker in [None, {'version': True}, {'version': 2}, {'version': 1, 'extra': 0}]:
+            code, _, _, client = self.run_cli(['+1m'], [dict(self.archive_caps(), playback_seek_archive_relative=marker)])
+            self.assertEqual((code, client.call.call_count), (1, 1))
+
+    def test_archive_negotiation_does_not_mutate_shared_group_params(self):
+        params = {'operation': 'seek_relative', 'offset': 60}
+        client = mock.Mock(timeout=45)
+        client.call.side_effect = [self.archive_caps(), self.archive_receipt(), caps(), receipt(60, 0, 60)]
+        _, archive_params = ott.relative_seek_command(client, 'archive', params, 45)
+        _, vod_params = ott.relative_seek_command(client, 'vod', params, 45)
+        self.assertEqual(archive_params['timeline'], 'archive')
+        self.assertNotIn('timeline', params)
+        self.assertEqual(vod_params, params)
+
+
 if __name__ == '__main__': unittest.main()

@@ -160,7 +160,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`7a8325cd41f4a46e14fe439e1fea2d390202a7f3`](https://github.com/open-ott-play/ottplay-control-server/commit/7a8325cd41f4a46e14fe439e1fea2d390202a7f3).
+[`4424d87af28847ed62e8d1a12674ec0de5cb43c0`](https://github.com/open-ott-play/ottplay-control-server/commit/4424d87af28847ed62e8d1a12674ec0de5cb43c0).
 This is an exact source pin, not a claim about the latest published release.
 It includes [direct LG television controls](television.md), named app launches
 such as `ott -t 90 lg2 tv go plex`, and the optional
@@ -189,7 +189,10 @@ Jackett and Prowlarr, with private key input and opaque prepared sources.
 It also includes [saved player groups](#saved-player-groups), including offline
 `group add/set/show/remove` management and group selectors in player commands.
 It also includes signed seek times and unit shorthand such as `seek -1:30` and
-`+10s`; relative seeking also requires matching controller and player support.
+`+10s`, including explicit archive timelines. Archive seeking uses the broadcast
+timestamp and reopens the provider archive URL; it preserves pause and stays
+within retained history. Relative seeking requires matching controller and player
+support; update all three components before using this feature.
 The examples retain this reviewed source commit; a server release does
 not install the Python CLI or player. Matching controller and player support is
 required for each optional operation.
@@ -249,8 +252,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=7a8325cd41f4a46e14fe439e1fea2d390202a7f3
-  ott_source="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8"
+  ott_ref=4424d87af28847ed62e8d1a12674ec0de5cb43c0
+  ott_source="$HOME/.local/share/ottplay-control-server-4424d87af288"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -273,7 +276,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -287,7 +290,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -309,8 +312,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '7a8325cd41f4a46e14fe439e1fea2d390202a7f3'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8'
+$ottRef = '4424d87af28847ed62e8d1a12674ec0de5cb43c0'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-4424d87af288'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -357,12 +360,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-4424d87af288/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-local-c76cb9b728b8\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-4424d87af288\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -405,7 +408,7 @@ import sys
 launcher = Path.home() / ".local/bin/ott"
 backup = launcher.with_name("ott.before-local-c76cb9b728b8")
 staged = launcher.with_name("ott.switch-local-c76cb9b728b8")
-reviewed = Path.home() / ".local/share/ottplay-control-server-local-c76cb9b728b8/cli/ott.py"
+reviewed = Path.home() / ".local/share/ottplay-control-server-4424d87af288/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -884,7 +887,7 @@ ott tt                             # controls and status for each member
 ott tt R                           # each player chooses its own random channel
 ott oo provider m3u
 ott tt provider m3u 1
-ott tt +10s                        # relative seek on each player's current VOD
+ott tt +10s                        # relative seek on each player's current VOD/archive
 ott tt standby
 ott tt go
 ott tt restart stream
@@ -1205,7 +1208,7 @@ Times accept decimal seconds, ordered nonrepeated `h`/`m`/`s` units, or
 after a colon must be below 60. Relative offsets must be nonzero; all times
 must fit 9,007,199,254,740,991 seconds. Exponents and nonfinite values are rejected.
 
-Relative seeking requires the separate `playback_seek_relative` capability on
+VOD relative seeking requires the separate `playback_seek_relative` capability on
 an updated player and controller. The player samples and seeks its current
 decoder atomically, clamping to the start or just before the media end. It
 rejects unready playback, unknown duration and local policy restrictions.
@@ -1214,6 +1217,31 @@ Restricted operator credentials need `capabilities` and the exact
 The CLI never substitutes an absolute seek or retries an uncertain request.
 For a group such as `ott t1,t2 seek -10s`, each player uses its own current
 position and reports its own result; the group is not a synchronized seek.
+
+TV archives use the separately advertised `playback_seek_archive_relative`
+capability. Use these commands when the selected search result starts an archive:
+
+```sh
+ott l "Три кота"            # start a matching live programme or available archive
+# Continue only if the result starts an archive, not live TV:
+ott l +1m                  # advance the playing archive by one minute
+ott l -10s                 # rewind ten seconds
+ott l seek +3m             # advance three minutes
+```
+
+Human-readable archive output prints broadcast dates and times in the CLI's local
+timezone. With `--json`, `from`, `position`, `earliest` and `latest` remain numeric
+Unix timestamps.
+Targets use whole-second precision, rounded down, and stay inside the retained
+archive window and behind live TV. A large offset clamps to that window; it does
+not switch channels or silently return to live. Paused archives remain paused.
+A supported archive does not need a finite decoder duration or local seekable
+buffer because the player resolves its provider URL at the destination.
+Install the updated player, relay and CLI for this extension. If `+1m` reports
+that relative seeking is not advertised while an archive is playing, inspect
+`ott l caps` for `playback_seek_archive_relative`, update/reload the player, and
+check standby, kiosk and PIN restrictions. Do not repeatedly submit a command
+whose result is uncertain.
 
 Short and full command names share the same dispatch and output behavior:
 
@@ -3570,8 +3598,9 @@ its separate programme timeline. Live streams do not advertise these operations.
 Unsigned times such as `seek 90`, `seek 1m30s` and `seek 01:30` are absolute.
 An explicit sign makes the time relative: `seek +5`, `seek +1m` or `seek -1:30`.
 Signed unit shorthand such as `+5s` also seeks, while bare `+5` still changes
-channels. Relative seeking uses the separate `playback_seek_relative` capability
-and one atomic player operation; it never reads status and calculates an absolute
+channels. VOD uses `playback_seek_relative`; archives use
+`playback_seek_archive_relative` with an explicit archive timeline and broadcast
+timestamps. Both use one player operation; it never reads status and calculates an absolute
 seek in the CLI. The separate `android seek SECONDS` API remains absolute.
 
 The CLI validates the returned operation and target before reporting dispatch.

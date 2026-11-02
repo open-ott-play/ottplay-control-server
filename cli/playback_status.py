@@ -245,7 +245,7 @@ def read(api, client, device, params, timeout):
     deadline = time.monotonic() + timeout
     path = "/api/player-state?" + urllib.parse.urlencode({"device_id": device, "limit": params["limit"]})
     try:
-        remaining = deadline - time.monotonic()
+        remaining = min(timeout, deadline - time.monotonic())
         require(remaining > 0)
         status, raw = client.api_raw(path, timeout=remaining)
         require(time.monotonic() < deadline and status == 200)

@@ -240,6 +240,16 @@ class PlaybackCliTest(unittest.TestCase):
             client.call_receipt.assert_not_called()
             self.assertEqual(client.timeout, 45)
 
+    def test_retained_timeout_does_not_grow_from_float_roundoff(self):
+        client = self.client()
+        # On short-lived runners, (start + timeout) - start can exceed timeout.
+        with mock.patch.object(reports.time, "monotonic", return_value=63.4):
+            value = reports.read(ott, client, "dev_one", {"limit": 0}, 45)
+        self.assertEqual(value["device_id"], "dev_one")
+        self.assertEqual(client.api_raw.call_count, 1)
+        self.assertEqual(client.api_raw.call_args.kwargs["timeout"], 45)
+        client.call.assert_not_called()
+
     def test_bad_grammar_rejected_before_any_target_request(self):
         for words in (["state", "now"], ["state", "--limit", "1"], ["history", "2"], ["history", "--limit"],
                       ["history", "--limit", "0"], ["history", "--limit", "65"], ["history", "--limit", "1.0"],
