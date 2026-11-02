@@ -1219,16 +1219,19 @@ For a group such as `ott t1,t2 seek -10s`, each player uses its own current
 position and reports its own result; the group is not a synchronized seek.
 
 TV archives use the separately advertised `playback_seek_archive_relative`
-capability. The same commands work after an archive search:
+capability. Use these commands when the selected search result starts an archive:
 
 ```sh
 ott l "Три кота"            # start a matching live programme or available archive
+# Continue only if the result starts an archive, not live TV:
 ott l +1m                  # advance the playing archive by one minute
 ott l -10s                 # rewind ten seconds
 ott l seek +3m             # advance three minutes
 ```
 
-Archive replies print broadcast dates and times in the CLI's local timezone.
+Human-readable archive output prints broadcast dates and times in the CLI's local
+timezone. With `--json`, `from`, `position`, `earliest` and `latest` remain numeric
+Unix timestamps.
 Targets use whole-second precision, rounded down, and stay inside the retained
 archive window and behind live TV. A large offset clamps to that window; it does
 not switch channels or silently return to live. Paused archives remain paused.
