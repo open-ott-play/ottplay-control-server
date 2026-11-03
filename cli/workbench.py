@@ -270,6 +270,71 @@ def print_native_playback_summary(data, runtime):
     print("  Runtime-reported measurements; physical display and audio remain unverified.")
 
 
+def local_source_metadata(raw, runtime):
+    """Read only the optional, bounded status projection; never expose raw status."""
+    check(isinstance(raw, dict) and isinstance(runtime, str)
+          and re.fullmatch(r"[a-z0-9-]{1,64}", runtime) is not None)
+    data = raw.get("local_source_diagnostics")
+    try:
+        size = len(json.dumps(data, ensure_ascii=False, allow_nan=False,
+                              separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError, RecursionError, UnicodeEncodeError):
+        raise InvalidData() from None
+    check(size <= 4096)
+
+    def opaque_id(value):
+        check(isinstance(value, str) and REQUEST.fullmatch(value) is not None)
+        return value
+
+    def descriptor(value):
+        row = exact(value, {
+            "kind": enum(["empty", "direct", "compatibility", "blob", "other", "unavailable"]),
+            "itemId": nullable(opaque_id), "sourceId": nullable(opaque_id),
+            "endpointMatch": enum(["match", "mismatch", "unknown", "not_applicable"]),
+        })
+        local = row["kind"] in ("direct", "compatibility")
+        if local:
+            check(row["endpointMatch"] != "not_applicable")
+        else:
+            check(row["endpointMatch"] == ("unknown" if row["kind"] == "unavailable" else "not_applicable"))
+        if not local or row["endpointMatch"] != "match":
+            check(row["itemId"] is None and row["sourceId"] is None)
+        check(row["sourceId"] is None or row["itemId"] is not None)
+        return row
+
+    result = exact(data, {
+        "version": number(1, 1, True), "runtime": enum([runtime]),
+        "capturedAt": number(integral=True), "consistent": boolean,
+        "generation": nullable(number(integral=True)), "handleId": nullable(number(integral=True)),
+        "currentSource": descriptor, "requestedSource": descriptor,
+        "mediaErrorCode": nullable(number(1, 4, True)),
+        "codecs": lambda value: exact(value, {
+            "h264": nullable(enum(["", "maybe", "probably"])),
+            "hevc": nullable(enum(["", "maybe", "probably"])),
+        }),
+    })
+    if not result["consistent"]:
+        check(all(result[key]["kind"] == "unavailable" for key in ("currentSource", "requestedSource")))
+        check(all(result[key] is None for key in ("generation", "handleId", "mediaErrorCode")))
+        check(all(value is None for value in result["codecs"].values()))
+    return result
+
+
+def print_local_source_summary(data):
+    print("Local source runtime: " + data["runtime"])
+    print("  Snapshot: " + ("consistent" if data["consistent"] else "changed while sampling; identity unavailable"))
+    for key, label in (("currentSource", "Attached"), ("requestedSource", "Assigned")):
+        source = data[key]
+        print("  " + label + ": " + source["kind"] + "; endpoint " + source["endpointMatch"])
+        print("    Item: " + (source["itemId"] or "NOT OBSERVED")
+              + "; source: " + (source["sourceId"] or "NOT OBSERVED"))
+    print("  Media error code: " + (str(data["mediaErrorCode"]) if data["mediaErrorCode"] is not None else "NOT OBSERVED"))
+    for key, label in (("h264", "H.264"), ("hevc", "HEVC")):
+        hint = data["codecs"][key]
+        print("  " + label + " capability hint: " + ("NOT OBSERVED" if hint is None else hint or "unsupported"))
+    print("  Capability hints do not confirm that this file can play. No media was fetched.")
+
+
 def snapshot_metadata(raw, runtime, section):
     data = inspection_data(raw, runtime, section)
     result = project(data, SNAPSHOT)
@@ -548,7 +613,8 @@ class Workbench:
                 raw = self.request(self.device, "capabilities", {}, deadline, receipts)
                 caps = self.api.capabilities_metadata(raw)
                 observation["capabilities"] = caps
-                supported = (caps.get("native_playback_diagnostics") == {"version": 1} if section == "native_playback" else
+                supported = (caps.get("local_source_diagnostics") == {"version": 1} if section == "local_source" else
+                             caps.get("native_playback_diagnostics") == {"version": 1} if section == "native_playback" else
                              "provider_diagnostics" in caps if section == "provider" else
                              "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", []))
                 if not supported:
@@ -563,7 +629,10 @@ class Workbench:
                     debug_version = 3
                 if section == "debug" and debug_version == 3 and caps.get("debug_attempts") != {"version": 3}:
                     raise ObservationError("unsupported")
-                if section == "provider":
+                if section == "local_source":
+                    raw = self.request(self.device, "status", {}, deadline, receipts)
+                    data = local_source_metadata(raw, caps["player"]["runtime"])
+                elif section == "provider":
                     raw = self.request(self.device, "status", {}, deadline, receipts)
                     data = provider_status_metadata(raw, caps)
                 else:
@@ -813,6 +882,7 @@ def arguments(words, json_output):
     if command == "debug":
         parser.add_argument("--engine", action="store_true", help="request attached-engine evidence, negotiated v3 attempt counters and cached companion evidence when advertised")
         parser.add_argument("--native-playback", action="store_true", help="read one passive native playback sample with measured counters and event ages")
+        parser.add_argument("--local-source", action="store_true", help="read assigned and attached Local source identity without reading media")
     if command == "inspect":
         parser.add_argument("--view", default="ui,media")
     elif command == "operation":
@@ -826,6 +896,8 @@ def arguments(words, json_output):
         parser.add_argument("--report")
     parsed = parser.parse_args(words[1:])
     if command == "debug" and parsed.native_playback and (parsed.engine or parsed.provider):
+        raise ObservationError("invalid_arguments")
+    if command == "debug" and parsed.local_source and (parsed.engine or parsed.provider or parsed.native_playback):
         raise ObservationError("invalid_arguments")
     if command in ("doctor", "debug") and ((parsed.out and not parsed.provider) or (parsed.provider and parsed.lane == "native")):
         raise ObservationError("invalid_arguments")
@@ -924,11 +996,15 @@ def run(api, client, device, words, timeout, json_output=False):
               "read_only": True, "physical_display_verified": False, "evaluator": "workbench-v2"}
     provider_mode = False
     native_playback_mode = False
+    local_source_mode = False
     try:
         args = arguments([command, *words[1:]], json_output)
         json_output = args.json
         provider_mode = getattr(args, "provider", False)
         native_playback_mode = getattr(args, "native_playback", False)
+        local_source_mode = getattr(args, "local_source", False)
+        if local_source_mode:
+            result["evaluator"] = "local-source-v1"
         result["tooling"] = {"workbench_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                              "cli_sha256": hashlib.sha256(Path(api.__file__).read_bytes()).hexdigest()}
         if command == "test" and args.action == "list":
@@ -980,7 +1056,7 @@ def run(api, client, device, words, timeout, json_output=False):
                 final_deadline = bench.deadline
                 if command == "bundle" and args.lane != "native":
                     bench.deadline = time.monotonic() + max(0, final_deadline - time.monotonic()) * 0.75
-                observations = bench.observe(args.lane, "native_playback" if native_playback_mode else "debug" if command == "debug" else "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
+                observations = bench.observe(args.lane, "local_source" if local_source_mode else "native_playback" if native_playback_mode else "debug" if command == "debug" else "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
                                              logs=command == "bundle", operation_id=args.operation_id if command == "operation" else None,
                                              debug_version=2 if command == "debug" and args.engine else 1)
                 bench.deadline = final_deadline
@@ -997,6 +1073,8 @@ def run(api, client, device, words, timeout, json_output=False):
                     # Keep the engine's negotiation, observations and verdict intact.
                     result["provider_observations"] = bench.observe("web", "provider")
                 verdict = "observed" if any(row["status"] == "observed" for row in observations) else "unknown"
+                if local_source_mode and not any(row["status"] == "observed" and row["data"]["consistent"] for row in observations):
+                    verdict = "unknown"
                 if command == "operation":
                     result["operation_id"] = args.operation_id
                     if observations[0]["status"] == "observed":
@@ -1041,6 +1119,8 @@ def run(api, client, device, words, timeout, json_output=False):
             print("  " + row["lane"] + ": " + row["status"] + (" (" + row["reason"] + ")" if row.get("reason") else ""))
             if native_playback_mode and row["status"] == "observed":
                 print_native_playback_summary(row["data"], row["runtime"])
+            if local_source_mode and row["status"] == "observed":
+                print_local_source_summary(row["data"])
         if "provider_observations" in result and (provider_mode or command == "bundle"):
             print_provider_summary(result)
         elif "provider_observations" in result:
@@ -1061,6 +1141,6 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Report: " + result["report_directory"])
         if result.get("report_error"):
             print("Report error: " + result["report_error"]["reason"])
-        if command in ("doctor", "inspect", "operation", "debug") and not provider_mode and not native_playback_mode:
+        if command in ("doctor", "inspect", "operation", "debug") and not provider_mode and not native_playback_mode and not local_source_mode:
             print(encoded(result).decode("utf-8"), end="")
     return 1 if result.get("report_error") else {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]

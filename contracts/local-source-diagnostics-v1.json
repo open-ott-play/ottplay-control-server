@@ -1,0 +1,157 @@
+{
+  "capability": {
+    "local_source_diagnostics": {
+      "version": 1
+    }
+  },
+  "status_field": "local_source_diagnostics",
+  "example": {
+    "version": 1,
+    "runtime": "page-123",
+    "capturedAt": 1700000000000,
+    "consistent": true,
+    "generation": 7,
+    "handleId": 2,
+    "currentSource": {
+      "kind": "empty",
+      "itemId": null,
+      "sourceId": null,
+      "endpointMatch": "not_applicable"
+    },
+    "requestedSource": {
+      "kind": "direct",
+      "itemId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sourceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "endpointMatch": "match"
+    },
+    "mediaErrorCode": null,
+    "codecs": {
+      "h264": "probably",
+      "hevc": "maybe"
+    }
+  },
+  "invariants": [
+    "IDs are null unless endpointMatch is match; sourceId requires itemId",
+    "empty/blob/other use not_applicable and null IDs; unavailable uses unknown and null IDs",
+    "direct/compatibility endpointMatch is match/mismatch/unknown",
+    "consistent false clears generation,handleId,mediaErrorCode,codecs to null and both descriptors to unavailable/unknown/null IDs",
+    "currentSource is video.currentSrc only; requestedSource is video.src only",
+    "codecs are canPlayType hints, not decoded file codec observations"
+  ],
+  "codec_literals": {
+    "h264": "video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\"",
+    "hevc": "video/mp4; codecs=\"hvc1.1.6.L93.B0, mp4a.40.2\""
+  },
+  "validation": {
+    "max_block_utf8_bytes": 4096,
+    "unknown_object_fields": "rejected at every level of the diagnostics block",
+    "status_outer_fields": "ignored by this diagnostic consumer",
+    "capability": {
+      "exact_keys": [
+        "version"
+      ],
+      "version": {
+        "type": "integer",
+        "enum": [
+          1
+        ]
+      }
+    },
+    "block_exact_keys": [
+      "version",
+      "runtime",
+      "capturedAt",
+      "consistent",
+      "generation",
+      "handleId",
+      "currentSource",
+      "requestedSource",
+      "mediaErrorCode",
+      "codecs"
+    ],
+    "descriptor_exact_keys": [
+      "kind",
+      "itemId",
+      "sourceId",
+      "endpointMatch"
+    ],
+    "codecs_exact_keys": [
+      "h264",
+      "hevc"
+    ],
+    "version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "runtime": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,64}$",
+      "must_equal": "fresh capability player.runtime"
+    },
+    "capturedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "consistent": {
+      "type": "boolean"
+    },
+    "generation_and_handleId": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "independently_nullable": true
+    },
+    "itemId_and_sourceId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "kind": {
+      "enum": [
+        "empty",
+        "direct",
+        "compatibility",
+        "blob",
+        "other",
+        "unavailable"
+      ]
+    },
+    "endpointMatch": {
+      "enum": [
+        "match",
+        "mismatch",
+        "unknown",
+        "not_applicable"
+      ]
+    },
+    "mediaErrorCode": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 4
+    },
+    "h264_and_hevc": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "",
+        "maybe",
+        "probably",
+        null
+      ]
+    },
+    "numeric_tokens": "Booleans, fractional numbers, nonfinite values and floating-point spellings of integer fields are rejected."
+  }
+}

@@ -4739,6 +4739,11 @@ def capabilities_metadata(data):
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
             raise Error(invalid)
         result["provider_diagnostics"] = {"version": 1}
+    if "local_source_diagnostics" in data:
+        marker = data["local_source_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+        result["local_source_diagnostics"] = {"version": 1}
     marker = data.get("companion_diagnostics")
     if (type(marker) is dict and set(marker) == {"version"}
             and type(marker["version"]) is int and marker["version"] == 1):
@@ -5320,7 +5325,7 @@ def print_player_help(data, name):
             and not any(key in controls for key in ("media_tracks", "playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
-    if sections or "debug" in controls or "provider_diagnostics" in controls or "native_playback_diagnostics" in controls:
+    if sections or any(key in controls for key in ("debug", "provider_diagnostics", "native_playback_diagnostics", "local_source_diagnostics")):
         print("\nAvailable diagnostics now:")
         if "provider_diagnostics" in controls:
             print(f"  {prefix} doctor --provider [--out DIR]  — explain provider lookup and correlate runtime evidence")
@@ -5328,6 +5333,8 @@ def print_player_help(data, name):
             print(f"  {prefix} debug  — read bounded runtime and native diagnostics")
         if "native_playback_diagnostics" in controls:
             print(f"  {prefix} debug --native-playback  — read native playback counters and event ages")
+        if "local_source_diagnostics" in controls:
+            print(f"  {prefix} debug --local-source  — compare assigned and attached Local sources without reading media")
         if "doctor" in sections:
             print(f"  {prefix} doctor  — read runtime health and identity")
         if "snapshot" in sections:
