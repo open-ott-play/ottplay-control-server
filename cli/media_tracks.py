@@ -210,7 +210,9 @@ def run(api, client, device, words, timeout, json_output):
         try:
             data = metadata(raw, request, status)
         except InvalidResponse:
-            raise api.Error("The player returned invalid media track metadata. A sent selection may have executed; no request was repeated") from None
+            detail = ("No selection was sent" if request["op"] == "list" else
+                      "A sent selection may have executed; no request was repeated")
+            raise api.Error("The player returned invalid media track metadata. " + detail) from None
         if status != "ok":
             raise api.Error(ERRORS[data["error"]] + ". No request was repeated")
         # Preserve a completed, validated reply even if cancellation or the
