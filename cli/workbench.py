@@ -480,9 +480,9 @@ class Workbench:
             receipt = self.client.call_receipt(target, action, params)
             check(isinstance(receipt, dict) and isinstance(receipt.get("request_id"), str)
                   and REQUEST.fullmatch(receipt["request_id"]) and receipt.get("status") == "ok")
+            receipts.append({"request_id": receipt["request_id"], "action": action, "status": "ok"})
             if action == "inspect" and params.get("section") == "native_playback":
                 check(isinstance(receipt.get("data"), dict) and "error" not in receipt["data"])
-            receipts.append({"request_id": receipt["request_id"], "action": action, "status": "ok"})
             if time.monotonic() >= deadline:
                 raise ObservationError("deadline_exceeded")
             return receipt["data"]

@@ -337,6 +337,35 @@ class NativePlaybackCLITest(unittest.TestCase):
             code, result = self.execute()
             self.assertEqual((code, result["observations"][0]["reason"]), (3, "invalid_response"))
 
+    def test_malformed_native_payload_keeps_valid_transport_receipt(self):
+        original = self.client.call_receipt
+        for case in ("scalar", "missing", "ok_with_error"):
+            with self.subTest(case=case):
+                self.client.calls.clear()
+
+                def malformed(target, action, params):
+                    receipt = original(target, action, params)
+                    if action == "inspect":
+                        if case == "scalar":
+                            receipt["data"] = PRIVATE_URL
+                        elif case == "missing":
+                            receipt.pop("data")
+                        else:
+                            receipt["data"] = {"version": 1, "runtime": NATIVE_RUNTIME,
+                                               "section": "native_playback", "error": "unavailable"}
+                    return receipt
+
+                with mock.patch.object(self.client, "call_receipt", side_effect=malformed):
+                    code, result = self.execute()
+                observed = result["observations"][0]
+                self.assertEqual((code, observed["status"], observed["reason"]), (3, "unknown", "invalid_response"))
+                self.assertNotIn("data", observed)
+                self.assertEqual(observed["requests"], [
+                    {"request_id": format(1, "032x"), "action": "capabilities", "status": "ok"},
+                    {"request_id": format(2, "032x"), "action": "inspect", "status": "ok"}])
+                self.assertEqual([call[1] for call in self.client.calls], ["capabilities", "inspect"])
+                self.assertEqual(self.client.timeout, 20)
+
     def test_native_inner_envelope_limit_is_utf8_bytes_and_does_not_reduce_other_sections(self):
         raw = envelope({})
         base = len(json.dumps(raw, separators=(",", ":")).encode())
