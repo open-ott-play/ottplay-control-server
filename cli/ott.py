@@ -2054,7 +2054,7 @@ def offline_profile_command(client, device, action, params, timeout):
         client.timeout = previous_timeout
 
 
-def profile_metadata(data, action, params, *, expected_provider=None):
+def profile_metadata(data, action, params, *, expected_provider=None, allow_no_active=False):
     message = "The player returned invalid profile metadata"
     if action != "profiles":
         message += ". The request may have executed; do not repeat the change blindly."
@@ -2088,7 +2088,7 @@ def profile_metadata(data, action, params, *, expected_provider=None):
             fail()
         rows = [profile(row) for row in data["profiles"]]
         if (any(row["number"] != number for number, row in enumerate(rows, 1))
-                or sum(row["active"] for row in rows) not in ((0, 1) if provider == "offline" or source_profiles else (1,))):
+                or sum(row["active"] for row in rows) not in ((0, 1) if allow_no_active or provider == "offline" or source_profiles else (1,))):
             fail()
         return {"provider": data["provider"], "profiles": rows}
     row = profile(data.get("profile"))
@@ -5138,7 +5138,7 @@ def print_player_help(data, name):
         print(f"  {prefix} settings  — list typed preferences for this player and source")
         print(f"  {prefix} setting KEY --value-file FILE  — save a private preference from a UTF-8 file")
         if native:
-            print(f"  {prefix} setting uiFontScale [100]  — read/save interface text scale (50–150%)")
+            print(f"  {prefix} setting uiFontScale [100]  — read/save interface text scale (see settings for limits)")
             print(f"  {prefix} setting players  — read the fixed Native engine")
             print(f"  {prefix} setting interfaceMode  — read the fixed Modern interface")
         else:
@@ -7273,7 +7273,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     if action in ("vportal", "vportal_random", "vportal_search"):
         data = vportal_metadata(data, action != "vportal_search", action == "vportal_random")
     elif action in ("profiles", "profile", "profile_settings"):
-        data = profile_metadata(data, action, params)
+        data = profile_metadata(data, action, params, allow_no_active=action == "profiles")
     elif action == "app_update":
         data = app_update_metadata(data, params)
     elif action == "restart":

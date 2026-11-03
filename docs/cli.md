@@ -3032,7 +3032,8 @@ acknowledgement still fails and is never automatically repeated. A plain
 `volume` read reports that the platform does not provide a reading. These are
 player controls; the separate `ott l tv volume 30` command controls system volume.
 
-The native settings schema exposes interface text scale from 50 to 150 percent.
+Use the range reported by `ott lg-native settings` for interface text scale;
+different native versions can advertise different limits.
 The engine is fixed to Native and the interface to Modern; their settings are
 read-only. Browser buffering and hls.js examples do not apply to this application.
 
@@ -3049,6 +3050,9 @@ Select the provider before listing its slots. The list contains 15 numbered
 names, with `*` marking the active slot if one is selected. It does not infer
 whether a source is configured from its name. Selection requires a configured,
 enabled slot and remains subject to the player's settings restrictions.
+An initial M3U or VPortal list can have no active slot; the CLI displays that
+state without inventing a selection. Preset changes still require their normal
+active-profile checks.
 `profile N` confirms dispatch, not completed loading or visible playback.
 These listing and selection commands do not extend M3U `profile-config` settings
 to other providers. Use `caps` and the player's settings schema for available
