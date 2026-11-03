@@ -66,6 +66,18 @@ class PairingCliTest(unittest.TestCase):
         self.assertIn(self.row['address'], output)
         self.assertNotIn('a' * 32, output)
 
+    def test_manual_pair_details_distinguish_native_ui_without_pairing_anything(self):
+        self.client.credentials = {'devices': [{'id': 'dev_tv', 'token': 'test-device-token'}]}
+        self.client.config['player_server'] = 'https://control.example/ott-control'
+        output = self.run_management(['pair', 'l'])
+        self.assertIn('Manual shared/web player connection details', output)
+        self.assertIn('this command does not pair a player', output)
+        self.assertIn('Access code: test-device-token', output)
+        self.assertIn('Settings → Remote control server → enter Address → Save', output)
+        self.assertIn('ott -j pending', output)
+        self.assertIn('ott registry approve lg-native NATIVE_DEVICE_UUID CURRENT_PAIRING_CODE', output)
+        self.client.api.assert_not_called()
+
     def test_discovery_and_pending_json_remain_one_document(self):
         for words, data in [(['discover'], {'version': 1, 'servers': []}),
                             (['pending'], {'pairings': [self.row]})]:

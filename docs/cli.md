@@ -160,7 +160,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`542bf044fe315eadcf419fd7788951cd44887d15`](https://github.com/open-ott-play/ottplay-control-server/commit/542bf044fe315eadcf419fd7788951cd44887d15).
+[`e6233ba74b911484f9559e9719efcc7125b4fda7`](https://github.com/open-ott-play/ottplay-control-server/commit/e6233ba74b911484f9559e9719efcc7125b4fda7).
 This is an exact source pin, not a claim about the latest published release.
 It includes [indexer diagnostics and per-request child selection](torrent-indexer.md):
 `ott t1 torrent indexer doctor jackett` checks capabilities without a tracker search.
@@ -263,8 +263,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=542bf044fe315eadcf419fd7788951cd44887d15
-  ott_source="$HOME/.local/share/ottplay-control-server-542bf044fe31"
+  ott_ref=e6233ba74b911484f9559e9719efcc7125b4fda7
+  ott_source="$HOME/.local/share/ottplay-control-server-e6233ba74b91"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -287,7 +287,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-542bf044fe31/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-e6233ba74b91/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -301,7 +301,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-542bf044fe31/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-e6233ba74b91/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -323,8 +323,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '542bf044fe315eadcf419fd7788951cd44887d15'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-542bf044fe31'
+$ottRef = 'e6233ba74b911484f9559e9719efcc7125b4fda7'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e6233ba74b91'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -371,12 +371,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-542bf044fe31/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-e6233ba74b91/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-542bf044fe31\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-e6233ba74b91\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -419,7 +419,7 @@ import sys
 launcher = Path.home() / ".local/bin/ott"
 backup = launcher.with_name("ott.before-local-c76cb9b728b8")
 staged = launcher.with_name("ott.switch-local-c76cb9b728b8")
-reviewed = Path.home() / ".local/share/ottplay-control-server-542bf044fe31/cli/ott.py"
+reviewed = Path.home() / ".local/share/ottplay-control-server-e6233ba74b91/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -626,13 +626,16 @@ name to work around the error or delete the journal. After recovery succeeds,
 add a usable alias with `ott alias living_room UUID` for player commands.
 
 `pair` displays the existing device token, **not the admin_token**. It does not
-register a device or change its credentials. Open
-**Settings → Remote control → Command server** in the player and enter the
+register or pair a device, or change its credentials. In the shared/web player, open
+**Settings → Remote control → Command server** and enter the
 address and access code. Saving the second field starts the connection. If both
 values are already saved but the client is disconnected, select **Connect** and
 wait for **Connected**. Each browser origin, TV and Tauri instance has its own
 settings. For a new browser address, add its exact origin to `allowed_origins`
 and restart the command server.
+
+The native LG application uses a different [on-screen pairing flow](#native-lg-controls);
+do not copy another player's UUID or access code into it.
 
 Enabling this connection authorizes the controller to operate the player and
 request diagnostics and supported screenshots. There is no additional player
@@ -2951,6 +2954,24 @@ before retrying; the CLI never automatically repeats the change.
 The native webOS application is a separate remote-control client from the TV's
 browser or MSX player. The following examples use its registered alias
 `lg-native`; replace it with the alias assigned during pairing.
+
+For a controller with the device registry enabled, open the native application's
+**Settings → Remote control server**, enter the trusted HTTPS controller address
+and select **Save**. If multiple servers are offered, select **Command server**.
+Read the **Pairing code** displayed on the TV, then inspect pending requests:
+
+```sh
+ott -j pending
+ott registry approve lg-native NATIVE_DEVICE_UUID CURRENT_PAIRING_CODE
+```
+
+Match the displayed code to its exact `device_id` in the JSON output; do not use
+the browser/MSX identity or infer the native identity from its prefix. The native
+app claims and stores its own credential. Keep an existing alias such as `l`
+unchanged. `ott pair NAME` only displays manual shared/web connection settings;
+it does not pair the native app or change its saved configuration. The
+`--lane native` option in Android maintenance commands still selects an Android
+system agent, not this LG application.
 
 ```sh
 ott lg-native caps

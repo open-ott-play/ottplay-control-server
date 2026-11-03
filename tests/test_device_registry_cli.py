@@ -124,6 +124,18 @@ class DeviceRegistryCliTest(unittest.TestCase):
         self.assertFalse(self.checkpoint.exists())
         self.assertEqual([path for path, _ in self.client.calls], ['/api/device-registry', '/api/device-registry/add', '/api/device-registry'])
 
+    def test_pair_displays_manual_and_native_guidance_without_a_pairing_mutation(self):
+        self.add()
+        self.client.calls.clear()
+        output = self.run_command('pair', 'tv')
+        self.assertIn('Manual shared/web player connection details', output)
+        self.assertIn('Native LG uses on-screen pairing', output)
+        self.assertIn('ott -j pending', output)
+        self.assertIn('Access code: ' + 'z' * 43, output)
+        self.assertTrue(all(payload is None for _, payload in self.client.calls))
+        raw = json.loads(self.run_command('pair', 'tv', json_output=True))
+        self.assertEqual(set(raw), {'version', 'device_id', 'generation', 'token'})
+
     def test_lost_ack_resumes_receipt_without_another_post(self):
         self.client.fail_next = 'after'
         with self.assertRaisesRegex(ott.Error, 'unconfirmed'):

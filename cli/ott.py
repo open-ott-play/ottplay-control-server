@@ -96,7 +96,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott registry --help               durable registration, revoke, rotate and recovery
   ott remove NAME                   revoke access, then remove the local alias
   ott unalias NAME                  remove only the local alias
-  ott pair NAME                      show the player connection settings
+  ott pair NAME                      show manual shared/web player connection settings
   ott discover                       show controllers advertised in network DNS
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
@@ -5664,6 +5664,21 @@ def home_assistant_metadata(raw):
     return result
 
 
+def print_pairing_settings(address, device, token):
+    print("Manual shared/web player connection details; this command does not pair a player:")
+    print("Settings → Remote control → Command server")
+    print("Address:", address)
+    print("Access code:", token)
+    print("Device UUID / queue:", device)
+    print("Select Connect. Do not use this access code in another player.")
+    print("Native LG uses on-screen pairing: Settings → Remote control server → enter Address → Save.")
+    print("Select Command server if shown, then read the Pairing code on the TV.")
+    print("Use ott -j pending to match that code to the full native device_id, then:")
+    print("  ott registry approve lg-native NATIVE_DEVICE_UUID CURRENT_PAIRING_CODE")
+    print("Keep the native alias separate from the existing browser/MSX player.")
+    print("Guide: https://github.com/open-ott-play/ottplay-control-server/blob/main/docs/cli.md#native-lg-controls")
+
+
 def registry_management(client, config_path, words, json_output=False):
     path = Path(__file__).resolve().with_name("device_registry.py")
     if not path.is_file():
@@ -5804,11 +5819,7 @@ def management(client, config_path, words, json_output=False):
         row = next((x for x in client.credentials["devices"] if x["id"] == device), None)
         if not row:
             raise Error("No local access code is available for this device")
-        print("Settings → Remote control → Command server")
-        print("Address:", client.config.get("player_server", client.server))
-        print("Access code:", row["token"])
-        print("Device UUID / queue:", device)
-        print("Select Connect. Do not use this access code in another player.")
+        print_pairing_settings(client.config.get("player_server", client.server), device, row["token"])
         return True
     if verb in ("alias", "add") and len(words) == 3:
         name, device = words[1:]
