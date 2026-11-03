@@ -21,6 +21,12 @@ REASONS = "producer_unavailable producer_failed invalid_sample state_changed_dur
 CAPABILITIES = "screenshot diagnostics input restart_stream reload_player restart_app exit_app reboot_device standby wake".split()
 CAP_REASONS = "ready not_implemented producer_unavailable remote_disconnected source_selection_required busy no_active_media current_state_unsupported policy_restricted".split()
 NATIVE_EVENTS = frozenset("result_ack_failed effect_claim_failed effect_failed operation_history_reset receipt_write_failed journal_write_failed result_write_failed poll_failed invalid_poll watchdog_recover watchdog_restart_app bundle_recovery_failed".split())
+NATIVE_PLAYBACK_PHASES = "idle resolving opening buffering playing paused seeking stopping error standby unknown".split()
+NATIVE_PLAYBACK_COUNTERS = "video_demuxed_units audio_demuxed_units video_submitted_units audio_submitted_units video_position_events video_displayed_reports video_displayed_frames video_decoded_frames audio_decoded_frames audio_presented_frames".split()
+NATIVE_PLAYBACK_UNMEASURED = "video_demuxed_units audio_demuxed_units video_decoded_frames audio_decoded_frames audio_presented_frames".split()
+NATIVE_PLAYBACK_AGES = "video_submission audio_submission video_position_event video_displayed_report".split()
+NATIVE_PLAYBACK_STAGES = "admitted waiting_catalog resolving_source".split()
+NATIVE_PLAYBACK_ERRORS = "media_source playback_interrupted tv_pipeline load_timeout release_timeout resolve_failed unspecified".split()
 COMPANION_ERROR = re.compile(
     r"(?:companion_(?:access_denied|endpoint_invalid|transport_unavailable|not_configured|timeout|request_failed|source_invalid|selection_invalid|receipt_invalid|too_many_files|no_playable_files|torrent_unavailable|unavailable)"
     r"|torznab_(?:invalid_(?:source|link|query|category|xml|page)|local_only|search_unavailable|source_(?:missing|changed|limit)|reference_missing|busy|cancelled|timeout|network_error|http_error|response_limit|xml_limit|api_error|store_(?:unavailable|busy|limit))"
@@ -197,7 +203,8 @@ def inspection_data(raw, runtime, section, version=1):
     check(type(version) is int and (version == 1 or version in (2, 3) and section == "debug"))
     check(isinstance(raw, dict) and raw.get("version") == version and type(raw.get("version")) is int)
     check(set(raw) == {"version", "runtime", "section", "error" if "error" in raw else "data"})
-    check(len(json.dumps(raw, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) <= 32768)
+    limit = 4096 if section == "native_playback" else 32768
+    check(len(json.dumps(raw, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) <= limit)
     check(raw.get("runtime") == runtime and raw.get("section") == section)
     if "error" in raw:
         reason = raw["error"]
@@ -207,6 +214,60 @@ def inspection_data(raw, runtime, section, version=1):
     # Measure the wire-shaped object, including unknown fields, before projection.
     check(len(json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) <= (16384 if section == "debug" else 8192))
     return data
+
+
+def native_playback_metadata(raw, runtime):
+    """Project one passive, epoch-scoped native sample; never infer missing measurements."""
+    token(runtime)
+    sample = inspection_data(raw, runtime, "native_playback")
+    measured = nullable(number(integral=True))
+    result = exact(sample, {
+        "version": number(1, 1, True), "scope": enum(["native_load"]),
+        "native_epoch": nullable(number(1, 4294967295, True)),
+        "phase": enum(NATIVE_PLAYBACK_PHASES),
+        "counters": lambda value: exact(value, {key: measured for key in NATIVE_PLAYBACK_COUNTERS}),
+        "ages_ms": lambda value: exact(value, {key: measured for key in NATIVE_PLAYBACK_AGES}),
+        "pending_command": nullable(lambda value: exact(value, {
+            "stage": enum(NATIVE_PLAYBACK_STAGES), "age_ms": measured})),
+        "last_error": nullable(lambda value: exact(value, {"code": enum(NATIVE_PLAYBACK_ERRORS)})),
+    })
+    check(all(result["counters"][key] is None for key in NATIVE_PLAYBACK_UNMEASURED))
+    if result["native_epoch"] is None:
+        check(all(value is None for value in result["counters"].values()))
+        check(all(value is None for value in result["ages_ms"].values()))
+    check(result["last_error"] is None or result["phase"] == "error")
+    return result
+
+
+def print_native_playback_summary(data, runtime):
+    def measured(value, unit=""):
+        return "NOT OBSERVED" if value is None else str(value) + (" " + unit if unit else "")
+
+    print("Native playback runtime: " + runtime)
+    print("  Phase: " + data["phase"] + "; native load epoch: " + measured(data["native_epoch"]))
+    labels = (
+        ("video_demuxed_units", "Video demuxed", "units"),
+        ("audio_demuxed_units", "Audio demuxed", "units"),
+        ("video_submitted_units", "Video submitted", "units"),
+        ("audio_submitted_units", "Audio submitted", "units"),
+        ("video_position_events", "Video position callbacks", "events"),
+        ("video_displayed_reports", "Displayed callbacks", "reports"),
+        ("video_displayed_frames", "Displayed interval sum", "frames"),
+        ("video_decoded_frames", "Video decoded", "frames"),
+        ("audio_decoded_frames", "Audio decoded", "frames"),
+        ("audio_presented_frames", "Audio presented", "frames"),
+    )
+    for key, label, unit in labels:
+        print("  " + label + ": " + measured(data["counters"][key], unit))
+    for key, label in (("video_submission", "Video submission"), ("audio_submission", "Audio submission"),
+                       ("video_position_event", "Video position callback"), ("video_displayed_report", "Displayed callback")):
+        print("  " + label + " age: " + measured(data["ages_ms"][key], "ms"))
+    pending = data["pending_command"]
+    print("  Pending command: " + (pending["stage"] if pending is not None else "none reported"))
+    print("  Pending command age: " + measured(pending["age_ms"] if pending is not None else None, "ms"))
+    error = data["last_error"]
+    print("  Current error: " + (error["code"] if error is not None else "none reported"))
+    print("  Runtime-reported measurements; physical display and audio remain unverified.")
 
 
 def snapshot_metadata(raw, runtime, section):
@@ -419,6 +480,8 @@ class Workbench:
             receipt = self.client.call_receipt(target, action, params)
             check(isinstance(receipt, dict) and isinstance(receipt.get("request_id"), str)
                   and REQUEST.fullmatch(receipt["request_id"]) and receipt.get("status") == "ok")
+            if action == "inspect" and params.get("section") == "native_playback":
+                check(isinstance(receipt.get("data"), dict) and "error" not in receipt["data"])
             receipts.append({"request_id": receipt["request_id"], "action": action, "status": "ok"})
             if time.monotonic() >= deadline:
                 raise ObservationError("deadline_exceeded")
@@ -432,6 +495,9 @@ class Workbench:
                 # Unbound legacy errors must not be attributed to this page.
                 data = getattr(exc, "data", None)
                 check(isinstance(data, dict) and "error" in data)
+                if params.get("section") == "native_playback":
+                    allowed = ("unsupported",) if isinstance(exc, self.api.PlayerUnsupported) else ("invalid_request", "runtime_mismatch", "unavailable")
+                    check(data["error"] in allowed)
                 inspection_data(data, params["runtime"], params["section"], params["version"])
             raise
         finally:
@@ -482,7 +548,8 @@ class Workbench:
                 raw = self.request(self.device, "capabilities", {}, deadline, receipts)
                 caps = self.api.capabilities_metadata(raw)
                 observation["capabilities"] = caps
-                supported = ("provider_diagnostics" in caps if section == "provider" else
+                supported = (caps.get("native_playback_diagnostics") == {"version": 1} if section == "native_playback" else
+                             "provider_diagnostics" in caps if section == "provider" else
                              "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", []))
                 if not supported:
                     raise ObservationError("unsupported")
@@ -504,10 +571,11 @@ class Workbench:
                     if section == "operation":
                         params["operation_id"] = operation_id
                     raw = self.request(self.device, "inspect", params, deadline, receipts)
-                    data = (debug_metadata(raw, caps["player"]["runtime"], debug_version) if section == "debug"
+                    data = (native_playback_metadata(raw, caps["player"]["runtime"]) if section == "native_playback"
+                            else debug_metadata(raw, caps["player"]["runtime"], debug_version) if section == "debug"
                             else operation_metadata(raw, caps["player"]["runtime"], operation_id) if section == "operation"
                             else snapshot_metadata(raw, caps["player"]["runtime"], section))
-            observation.update(status="observed", data=data, runtime=data["runtime"] if lane == "native" or section != "operation" else caps["player"]["runtime"])
+            observation.update(status="observed", data=data, runtime=data["runtime"] if lane == "native" or section not in ("operation", "native_playback") else caps["player"]["runtime"])
             if logs and lane == "native":
                 try:
                     raw = self.request(target, "maintenance", {"operation": "logs"}, deadline, receipts)
@@ -744,6 +812,7 @@ def arguments(words, json_output):
         parser.add_argument("--out", help="save the provider diagnostic report in a new private directory")
     if command == "debug":
         parser.add_argument("--engine", action="store_true", help="request attached-engine evidence, negotiated v3 attempt counters and cached companion evidence when advertised")
+        parser.add_argument("--native-playback", action="store_true", help="read one passive native playback sample with measured counters and event ages")
     if command == "inspect":
         parser.add_argument("--view", default="ui,media")
     elif command == "operation":
@@ -756,6 +825,8 @@ def arguments(words, json_output):
         parser.add_argument("--duration", type=float, default=5)
         parser.add_argument("--report")
     parsed = parser.parse_args(words[1:])
+    if command == "debug" and parsed.native_playback and (parsed.engine or parsed.provider):
+        raise ObservationError("invalid_arguments")
     if command in ("doctor", "debug") and ((parsed.out and not parsed.provider) or (parsed.provider and parsed.lane == "native")):
         raise ObservationError("invalid_arguments")
     if command == "operation" and not REQUEST.fullmatch(parsed.operation_id):
@@ -852,10 +923,12 @@ def run(api, client, device, words, timeout, json_output=False):
     result = {"version": 1, "command": command, "device_id": device, "started_at": now(),
               "read_only": True, "physical_display_verified": False, "evaluator": "workbench-v2"}
     provider_mode = False
+    native_playback_mode = False
     try:
         args = arguments([command, *words[1:]], json_output)
         json_output = args.json
         provider_mode = getattr(args, "provider", False)
+        native_playback_mode = getattr(args, "native_playback", False)
         result["tooling"] = {"workbench_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                              "cli_sha256": hashlib.sha256(Path(api.__file__).read_bytes()).hexdigest()}
         if command == "test" and args.action == "list":
@@ -907,7 +980,7 @@ def run(api, client, device, words, timeout, json_output=False):
                 final_deadline = bench.deadline
                 if command == "bundle" and args.lane != "native":
                     bench.deadline = time.monotonic() + max(0, final_deadline - time.monotonic()) * 0.75
-                observations = bench.observe(args.lane, "debug" if command == "debug" else "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
+                observations = bench.observe(args.lane, "native_playback" if native_playback_mode else "debug" if command == "debug" else "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
                                              logs=command == "bundle", operation_id=args.operation_id if command == "operation" else None,
                                              debug_version=2 if command == "debug" and args.engine else 1)
                 bench.deadline = final_deadline
@@ -966,6 +1039,8 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Reason: " + result["reason"])
         for row in result.get("observations", []):
             print("  " + row["lane"] + ": " + row["status"] + (" (" + row["reason"] + ")" if row.get("reason") else ""))
+            if native_playback_mode and row["status"] == "observed":
+                print_native_playback_summary(row["data"], row["runtime"])
         if "provider_observations" in result and (provider_mode or command == "bundle"):
             print_provider_summary(result)
         elif "provider_observations" in result:
@@ -986,6 +1061,6 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Report: " + result["report_directory"])
         if result.get("report_error"):
             print("Report error: " + result["report_error"]["reason"])
-        if command in ("doctor", "inspect", "operation", "debug") and not provider_mode:
+        if command in ("doctor", "inspect", "operation", "debug") and not provider_mode and not native_playback_mode:
             print(encoded(result).decode("utf-8"), end="")
     return 1 if result.get("report_error") else {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]

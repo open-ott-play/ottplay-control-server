@@ -14,8 +14,9 @@ configuration as ordinary controls. If using the direct source invocation,
 replace `ott` with `python3 "$ott_script"` on macOS/Linux or `py -3 $ottScript`
 on Windows. A new setup first needs [configuration and pairing](cli.md#configure-the-administrator-client).
 The player and controller need the inspection protocol for web observations;
-CLI installation alone does not add that support. Native examples additionally
-require a separately installed and bound [Android maintenance agent](../native/android-agent/README.md#bootstrap).
+CLI installation alone does not add that support. The `--lane native` examples
+additionally require a separately installed and bound
+[Android maintenance agent](../native/android-agent/README.md#bootstrap).
 
 Choose a new output directory for each bundle or test; the parent must already
 exist. These examples leave playback unchanged and can be run individually:
@@ -23,6 +24,7 @@ exist. These examples leave playback unchanged and can be run individually:
 ```sh
 ott a1 doctor --json                                   # identity, capabilities and readiness
 ott a1 debug --json                                    # runtime, events and native metrics; alias dbg
+ott l debug --native-playback                          # supported native backend: phase, measured counters, event ages
 ott --json a1 inspect --view ui,media
 ott a1 inspect --view media --lane web --json
 ott a1 inspect --lane native --json
@@ -94,6 +96,14 @@ is read through the running player, not the independent Android maintenance
 agent. Use existing `doctor --lane native` or `android status` for that agent.
 If the player JS or its command channel is blocked, `debug` can also time out;
 successful inspection does not establish that a physical display is working.
+
+For the native playback backend, use
+[`debug --native-playback`](native-playback-diagnostics.md). This separately
+advertised inspection reports per-load measurements and monotonic event ages.
+Unavailable measurements print `NOT OBSERVED`; submitted units and position
+events never count as displayed frames. It uses the existing player connection,
+not the Android maintenance-agent binding. Ordinary debug and bundle requests
+retain their current formats and do not add this inspection automatically.
 
 Support is advertised separately as `controls.debug: {"version":1}`. The existing
 `inspect.sections` list remains unchanged so earlier CLIs keep accepting player

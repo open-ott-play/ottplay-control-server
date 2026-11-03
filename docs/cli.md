@@ -188,6 +188,11 @@ before sending a conditional save. It also includes
 [provider diagnostics](provider-diagnostics.md) with private saved reports,
 offline verification and cached companion state, error codes and transfer counters.
 `debug --engine` also collects advertised companion evidence within its original timeout.
+[`debug --native-playback`](native-playback-diagnostics.md) separately reads
+advertised native playback phases, per-load measured counters and event ages.
+Unknown measurements remain `NOT OBSERVED`; neither submission nor a position
+update is treated as a displayed frame. It requires matching controller and
+player support and does not change existing debug or bundle requests.
 It also includes [local Torrent indexers](torrent-indexer.md) for Torznab,
 Jackett and Prowlarr, with private key input and opaque prepared sources.
 It also includes [saved player groups](#saved-player-groups), including offline

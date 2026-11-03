@@ -1,0 +1,291 @@
+{
+  "version": 1,
+  "synthetic": true,
+  "cases": [
+    {
+      "name": "idle",
+      "note": "Synthetic contract fixture, not a device observation.",
+      "expected_data": {
+        "version": 1,
+        "scope": "native_load",
+        "native_epoch": null,
+        "phase": "idle",
+        "counters": {
+          "video_demuxed_units": null,
+          "audio_demuxed_units": null,
+          "video_submitted_units": null,
+          "audio_submitted_units": null,
+          "video_position_events": null,
+          "video_displayed_reports": null,
+          "video_displayed_frames": null,
+          "video_decoded_frames": null,
+          "audio_decoded_frames": null,
+          "audio_presented_frames": null
+        },
+        "ages_ms": {
+          "video_submission": null,
+          "audio_submission": null,
+          "video_position_event": null,
+          "video_displayed_report": null
+        },
+        "pending_command": null,
+        "last_error": null
+      }
+    },
+    {
+      "name": "submitted_and_position_without_displayed",
+      "note": "Producer sequence: accepted video/audio feeds, position events; seen_frame may be true. No Displayed report: displayed values remain null.",
+      "expected_data": {
+        "version": 1,
+        "scope": "native_load",
+        "native_epoch": 7,
+        "phase": "playing",
+        "counters": {
+          "video_demuxed_units": null,
+          "audio_demuxed_units": null,
+          "video_submitted_units": 4,
+          "audio_submitted_units": 9,
+          "video_position_events": 3,
+          "video_displayed_reports": null,
+          "video_displayed_frames": null,
+          "video_decoded_frames": null,
+          "audio_decoded_frames": null,
+          "audio_presented_frames": null
+        },
+        "ages_ms": {
+          "video_submission": 120,
+          "audio_submission": 5,
+          "video_position_event": 200,
+          "video_displayed_report": null
+        },
+        "pending_command": null,
+        "last_error": null
+      }
+    },
+    {
+      "name": "displayed_zero",
+      "note": "One actual Displayed report with interval num=0 measures zero frame progress, not missing observation.",
+      "expected_data": {
+        "version": 1,
+        "scope": "native_load",
+        "native_epoch": 7,
+        "phase": "playing",
+        "counters": {
+          "video_demuxed_units": null,
+          "audio_demuxed_units": null,
+          "video_submitted_units": 4,
+          "audio_submitted_units": 9,
+          "video_position_events": 3,
+          "video_displayed_reports": 1,
+          "video_displayed_frames": 0,
+          "video_decoded_frames": null,
+          "audio_decoded_frames": null,
+          "audio_presented_frames": null
+        },
+        "ages_ms": {
+          "video_submission": 120,
+          "audio_submission": 5,
+          "video_position_event": 200,
+          "video_displayed_report": 40
+        },
+        "pending_command": null,
+        "last_error": null
+      }
+    },
+    {
+      "name": "displayed_intervals",
+      "note": "Synthetic actual-event sequence Displayed counts 0,10,7 sums to17; three reports are not three frames.",
+      "expected_data": {
+        "version": 1,
+        "scope": "native_load",
+        "native_epoch": 7,
+        "phase": "playing",
+        "counters": {
+          "video_demuxed_units": null,
+          "audio_demuxed_units": null,
+          "video_submitted_units": 4,
+          "audio_submitted_units": 9,
+          "video_position_events": 3,
+          "video_displayed_reports": 3,
+          "video_displayed_frames": 17,
+          "video_decoded_frames": null,
+          "audio_decoded_frames": null,
+          "audio_presented_frames": null
+        },
+        "ages_ms": {
+          "video_submission": 120,
+          "audio_submission": 5,
+          "video_position_event": 200,
+          "video_displayed_report": 20
+        },
+        "pending_command": null,
+        "last_error": null
+      }
+    },
+    {
+      "name": "new_load",
+      "note": "New active epoch clears prior observations. Known submission/position counters start at measured0; no Displayed report stays null.",
+      "expected_data": {
+        "version": 1,
+        "scope": "native_load",
+        "native_epoch": 8,
+        "phase": "opening",
+        "counters": {
+          "video_demuxed_units": null,
+          "audio_demuxed_units": null,
+          "video_submitted_units": 0,
+          "audio_submitted_units": 0,
+          "video_position_events": 0,
+          "video_displayed_reports": null,
+          "video_displayed_frames": null,
+          "video_decoded_frames": null,
+          "audio_decoded_frames": null,
+          "audio_presented_frames": null
+        },
+        "ages_ms": {
+          "video_submission": null,
+          "audio_submission": null,
+          "video_position_event": null,
+          "video_displayed_report": null
+        },
+        "pending_command": null,
+        "last_error": null
+      }
+    },
+    {
+      "name": "pending",
+      "note": "250ms since local admission, independent of server TTL. Current inspect request is excluded.",
+      "expected_data": {
+        "version": 1,
+        "scope": "native_load",
+        "native_epoch": null,
+        "phase": "resolving",
+        "counters": {
+          "video_demuxed_units": null,
+          "audio_demuxed_units": null,
+          "video_submitted_units": null,
+          "audio_submitted_units": null,
+          "video_position_events": null,
+          "video_displayed_reports": null,
+          "video_displayed_frames": null,
+          "video_decoded_frames": null,
+          "audio_decoded_frames": null,
+          "audio_presented_frames": null
+        },
+        "ages_ms": {
+          "video_submission": null,
+          "audio_submission": null,
+          "video_position_event": null,
+          "video_displayed_report": null
+        },
+        "pending_command": {
+          "stage": "resolving_source",
+          "age_ms": 250
+        },
+        "last_error": null
+      }
+    },
+    {
+      "name": "load_timeout",
+      "note": "Typed timeout signal, not arbitrary server text. Counter availability is independent of the error label.",
+      "expected_data": {
+        "version": 1,
+        "scope": "native_load",
+        "native_epoch": null,
+        "phase": "error",
+        "counters": {
+          "video_demuxed_units": null,
+          "audio_demuxed_units": null,
+          "video_submitted_units": null,
+          "audio_submitted_units": null,
+          "video_position_events": null,
+          "video_displayed_reports": null,
+          "video_displayed_frames": null,
+          "video_decoded_frames": null,
+          "audio_decoded_frames": null,
+          "audio_presented_frames": null
+        },
+        "ages_ms": {
+          "video_submission": null,
+          "audio_submission": null,
+          "video_position_event": null,
+          "video_displayed_report": null
+        },
+        "pending_command": null,
+        "last_error": {
+          "code": "load_timeout"
+        }
+      }
+    },
+    {
+      "name": "displayed_unknown_semantics",
+      "note": "Mapped Displayed callback arrived, but interval versus cumulative semantics are unverified for this runtime. Report count and age are observed; frame total remains null.",
+      "expected_data": {
+        "version": 1,
+        "scope": "native_load",
+        "native_epoch": 7,
+        "phase": "playing",
+        "counters": {
+          "video_demuxed_units": null,
+          "audio_demuxed_units": null,
+          "video_submitted_units": 4,
+          "audio_submitted_units": 9,
+          "video_position_events": 3,
+          "video_displayed_reports": 1,
+          "video_displayed_frames": null,
+          "video_decoded_frames": null,
+          "audio_decoded_frames": null,
+          "audio_presented_frames": null
+        },
+        "ages_ms": {
+          "video_submission": 120,
+          "audio_submission": 5,
+          "video_position_event": 200,
+          "video_displayed_report": 40
+        },
+        "pending_command": null,
+        "last_error": null
+      }
+    }
+  ],
+  "runtime": "native_fixture_1",
+  "section": "native_playback",
+  "error_envelopes": [
+    {
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "section": "native_playback",
+        "error": "invalid_request"
+      }
+    },
+    {
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "section": "native_playback",
+        "error": "runtime_mismatch"
+      }
+    },
+    {
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "section": "native_playback",
+        "error": "unsupported"
+      }
+    },
+    {
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "section": "native_playback",
+        "error": "unavailable"
+      }
+    }
+  ]
+}

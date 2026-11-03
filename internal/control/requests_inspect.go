@@ -99,7 +99,7 @@ func parseInspectRequest(params map[string]json.RawMessage) *inspectRequest {
 	if inspectEnum(params["section"], "debug") {
 		maximumVersion = 3
 	}
-	if !ok || !inspectNumber(params["version"], 1, maximumVersion, true, false) || !inspectEnum(params["section"], "doctor", "snapshot", "operation", "debug") {
+	if !ok || !inspectNumber(params["version"], 1, maximumVersion, true, false) || !inspectEnum(params["section"], "doctor", "snapshot", "operation", "debug", "native_playback") {
 		return nil
 	}
 	section, _ := inspectString(params["section"], 32)
@@ -126,6 +126,9 @@ func validInspectResult(raw json.RawMessage, status string, expected *inspectReq
 	if expected == nil || len(raw) > maxInspectResultBytes {
 		return false
 	}
+	if expected.Section == "native_playback" && (expected.Version != 1 || len(raw) > maxNativePlaybackResultBytes) {
+		return false
+	}
 	payload := "data"
 	if status != "ok" {
 		if status != "rejected" && status != "unsupported" {
@@ -139,7 +142,14 @@ func validInspectResult(raw json.RawMessage, status string, expected *inspectReq
 		return false
 	}
 	if status != "ok" {
+		if expected.Section == "native_playback" {
+			return (status == "unsupported" && inspectEnum(m["error"], "unsupported")) ||
+				(status == "rejected" && inspectEnum(m["error"], "invalid_request", "runtime_mismatch", "unavailable"))
+		}
 		return inspectEnum(m["error"], "invalid_request", "runtime_mismatch", "unsupported", "unavailable")
+	}
+	if expected.Section == "native_playback" {
+		return validNativePlaybackSnapshot(m["data"])
 	}
 	if expected.Section == "operation" {
 		return validInspectOperation(m["data"], expected.OperationID)
