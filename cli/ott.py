@@ -5132,7 +5132,7 @@ def print_player_help(data, name):
             print(f"  {prefix} provider local  — request Local videos (legacy alias: offline)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
             print(f"  {prefix} provider m3u 1 / R / NAME  — wait for loading, then play by number, random or name")
-            print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request each player in order")
+            print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request all players concurrently")
         if provider in ("m3u", "vportal") or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", [])):
             print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
             if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):

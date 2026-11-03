@@ -2704,9 +2704,10 @@ in the list. A complete, literal alias containing a comma in an existing manual
 configuration keeps its single-player meaning; use separate aliases or device
 IDs to address a group in that case.
 
-Requests run in order. `--timeout` applies separately to the complete operation
-on each distinct player (including optional catalogue loading and playback),
-so four unresponsive players can take up to four response timeouts. Text output
+Requests run concurrently, with at most eight active players. `--timeout` applies
+separately to the complete operation on each distinct player (including optional
+catalogue loading and playback). Four players have independent, concurrent
+timeout budgets; waiting for one does not delay the others. Text output
 identifies each player's result as it completes; `--json` returns one aggregate
 object with `action`, ordered `results`, `succeeded` and `failed`. Each result has
 `player` and `ok`, with acknowledged `data` and/or an `error`. When a provider
@@ -3088,7 +3089,15 @@ ott iphone load home
 ott --json t1 load LOCAL
 ```
 
-To configure all four instances, run each load sequentially and stop on failure:
+To configure all four instances concurrently, use a group or player list:
+
+```sh
+ott tt load local
+ott o1,o2,o3,o4 load local
+```
+
+Each player reports its own result; one failure does not stop the others. If you
+prefer sequential loading that stops at the first failure, use an explicit loop:
 
 ```sh
 for player in t1 t2 t3 t4; do ott "$player" load local || break; done
