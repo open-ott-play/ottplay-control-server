@@ -126,7 +126,7 @@ class MediaTracksCLITest(unittest.TestCase):
 
     def test_shared_contract_accepts_valid_results_and_rejects_every_negative(self):
         module = media_tracks_module()
-        fixture = json.loads((ROOT / "contracts" / "media-tracks-v1.json").read_text())
+        fixture = json.loads((ROOT / "contracts" / "media-tracks-v1.json").read_text(encoding="utf-8"))
         self.assertTrue(fixture["synthetic"])
         self.assertEqual(fixture["capability"], {"media_tracks": {"version": 1}})
         for row in fixture["valid"]:
