@@ -160,7 +160,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`542bf044fe315eadcf419fd7788951cd44887d15`](https://github.com/open-ott-play/ottplay-control-server/commit/542bf044fe315eadcf419fd7788951cd44887d15).
+[`63550efd2fbb2df2064e0f8e1f1d4ee25b41b975`](https://github.com/open-ott-play/ottplay-control-server/commit/63550efd2fbb2df2064e0f8e1f1d4ee25b41b975).
 This is an exact source pin, not a claim about the latest published release.
 It includes [indexer diagnostics and per-request child selection](torrent-indexer.md):
 `ott t1 torrent indexer doctor jackett` checks capabilities without a tracker search.
@@ -169,10 +169,13 @@ capability from a compatible player and companion; this CLI does not install it.
 It includes [direct LG television controls](television.md), named app launches
 such as `ott -t 90 lg2 tv go plex`, and the optional
 [`coco` / `cocop` Bash startup helpers](shell-shortcuts.md). The helpers have a
-separate installation and native Plex dependencies. Keep all 37 Python
-modules together, including `television.py`; updating the Go server alone does
+separate installation and native Plex dependencies. Keep all 38 Python
+modules together, including `television.py` and `media_tracks.py`; updating the Go server alone does
 not add `tv` commands to an older local CLI. The installation checks below include
 `tv --help`, which runs without configuration or contacting a television.
+It also includes [current-playback track commands](media-tracks.md); these require
+a player advertising `media_tracks` version 1 and do not enable the capability
+on their own.
 It includes [bounded EPG search batches](#programme-search-configuration-and-archives),
 compact guide search and a [local native EPG fallback](local-epg.md), with
 server/gateway error diagnostics for large channel catalogues. The explicit
@@ -231,7 +234,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 37 Python modules, including
+The current CLI contains 38 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -263,8 +266,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=542bf044fe315eadcf419fd7788951cd44887d15
-  ott_source="$HOME/.local/share/ottplay-control-server-542bf044fe31"
+  ott_ref=63550efd2fbb2df2064e0f8e1f1d4ee25b41b975
+  ott_source="$HOME/.local/share/ottplay-control-server-63550efd2fb"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -287,7 +290,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-542bf044fe31/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-63550efd2fb/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -301,7 +304,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-542bf044fe31/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-63550efd2fb/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -323,8 +326,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = '542bf044fe315eadcf419fd7788951cd44887d15'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-542bf044fe31'
+$ottRef = '63550efd2fbb2df2064e0f8e1f1d4ee25b41b975'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-63550efd2fb'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -371,12 +374,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-542bf044fe31/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-63550efd2fb/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-542bf044fe31\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-63550efd2fb\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -419,7 +422,7 @@ import sys
 launcher = Path.home() / ".local/bin/ott"
 backup = launcher.with_name("ott.before-local-c76cb9b728b8")
 staged = launcher.with_name("ott.switch-local-c76cb9b728b8")
-reviewed = Path.home() / ".local/share/ottplay-control-server-542bf044fe31/cli/ott.py"
+reviewed = Path.home() / ".local/share/ottplay-control-server-63550efd2fb/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -626,13 +629,16 @@ name to work around the error or delete the journal. After recovery succeeds,
 add a usable alias with `ott alias living_room UUID` for player commands.
 
 `pair` displays the existing device token, **not the admin_token**. It does not
-register a device or change its credentials. Open
-**Settings → Remote control → Command server** in the player and enter the
+register or pair a device, or change its credentials. In the shared/web player, open
+**Settings → Remote control → Command server** and enter the
 address and access code. Saving the second field starts the connection. If both
 values are already saved but the client is disconnected, select **Connect** and
 wait for **Connected**. Each browser origin, TV and Tauri instance has its own
 settings. For a new browser address, add its exact origin to `allowed_origins`
 and restart the command server.
+
+The native LG application uses a different [on-screen pairing flow](#native-lg-controls);
+do not copy another player's UUID or access code into it.
 
 Enabling this connection authorizes the controller to operate the player and
 request diagnostics and supported screenshots. There is no additional player
@@ -2704,9 +2710,10 @@ in the list. A complete, literal alias containing a comma in an existing manual
 configuration keeps its single-player meaning; use separate aliases or device
 IDs to address a group in that case.
 
-Requests run in order. `--timeout` applies separately to the complete operation
-on each distinct player (including optional catalogue loading and playback),
-so four unresponsive players can take up to four response timeouts. Text output
+Requests run concurrently, with at most eight active players. `--timeout` applies
+separately to the complete operation on each distinct player (including optional
+catalogue loading and playback). Four players have independent, concurrent
+timeout budgets; waiting for one does not delay the others. Text output
 identifies each player's result as it completes; `--json` returns one aggregate
 object with `action`, ordered `results`, `succeeded` and `failed`. Each result has
 `player` and `ok`, with acknowledged `data` and/or an `error`. When a provider
@@ -2945,6 +2952,103 @@ required” result means the profile is saved but the player needs local access.
 If a mutation times out or its acknowledgement is invalid, inspect `profiles`
 before retrying; the CLI never automatically repeats the change.
 
+## Current audio and subtitle tracks
+
+Compatible players expose temporary track selection through the optional
+[`media_tracks` extension](media-tracks.md). It requires a real producer
+implementation; installing the CLI does not enable it on a player.
+
+```sh
+ott lg-native tracks
+ott lg-native tracks audio AUDIO_ID
+ott lg-native tracks subtitle SUBTITLE_ID
+ott lg-native tracks subtitle off
+ott -j tt tracks
+```
+
+Copy exact opaque IDs from each player's current list. They are not numeric
+indices or language names. Selection is bound to the current playback and source;
+stale IDs are rejected and no failed or uncertain selection is replayed.
+`requested` and `NOT OBSERVED` do not claim that the backend selected a track.
+See the [command examples and troubleshooting guide](media-tracks.md) for JSON,
+group behavior, explicit Off, capabilities and native route limitations.
+
+## Native LG controls
+
+The native webOS application is a separate remote-control client from the TV's
+browser or MSX player. The following examples use its registered alias
+`lg-native`; replace it with the alias assigned during pairing.
+
+For a controller with the device registry enabled, open the native application's
+**Settings → Remote control server**, enter the trusted HTTPS controller address
+and select **Save**. If multiple servers are offered, select **Command server**.
+Read the **Pairing code** displayed on the TV, then inspect pending requests:
+
+```sh
+ott -j pending
+ott registry approve lg-native NATIVE_DEVICE_UUID CURRENT_PAIRING_CODE
+```
+
+Match the displayed code to its exact `device_id` in the JSON output; do not use
+the browser/MSX identity or infer the native identity from its prefix. The native
+app claims and stores its own credential. Keep an existing alias such as `l`
+unchanged. `ott pair NAME` only displays manual shared/web connection settings;
+it does not pair the native app or change its saved configuration. The
+`--lane native` option in Android maintenance commands still selects an Android
+system agent, not this LG application.
+
+A static controller without the device registry rejects pairing from an unknown
+UUID. If the native installation's exact UUID is already known from a trusted
+device readback, register it first with `ott add lg-native NATIVE_DEVICE_UUID`
+and apply the updated static server configuration. Then repeat on-screen pairing,
+check `ott -j pending`, and use `ott approve lg-native CURRENT_PAIRING_CODE`.
+If the native UI cannot show its UUID, enable the
+[device registry](device-registry.md#initialize-once) before pairing
+instead of substituting another player's identity. Displaying `ott pair NAME`
+does not bypass this registration requirement.
+
+```sh
+ott lg-native caps
+ott lg-native volume 30
+ott lg-native v +5
+ott lg-native settings
+ott lg-native setting uiFontScale 100
+ott lg-native setting players
+ott lg-native setting interfaceMode
+```
+
+Some native firmware can set volume but cannot reliably read its current value.
+When the player confirms dispatch and reports a desired level, the CLI prints
+`Volume request dispatched: 30%; measured volume is not reported.` JSON retains
+`"volume": null`, `"desired_volume": 30` and `"dispatched": true`. This acknowledges
+the setter without claiming a measured output level. A missing or rejected
+acknowledgement still fails and is never automatically repeated. A plain
+`volume` read reports that the platform does not provide a reading. These are
+player controls; the separate `ott l tv volume 30` command controls system volume.
+
+The native settings schema exposes interface text scale from 50 to 150 percent.
+The engine is fixed to Native and the interface to Modern; their settings are
+read-only. Browser buffering and hls.js examples do not apply to this application.
+
+Plex, Xtream and Stalker support listing and selecting their native numbered
+profiles, in addition to M3U, VPortal and Local:
+
+```sh
+ott lg-native provider plex
+ott lg-native profiles
+ott lg-native profile 2
+```
+
+Select the provider before listing its slots. The list contains 15 numbered
+names, with `*` marking the active slot if one is selected. It does not infer
+whether a source is configured from its name. Selection requires a configured,
+enabled slot and remains subject to the player's settings restrictions.
+`profile N` confirms dispatch, not completed loading or visible playback.
+These listing and selection commands do not extend M3U `profile-config` settings
+to other providers. Use `caps` and the player's settings schema for available
+operations; a provider's presence does not imply support for remote queue or
+shuffle commands.
+
 ## M3U profiles
 
 M3U has 15 numbered profiles. Select the M3U provider first; these commands
@@ -3088,7 +3192,15 @@ ott iphone load home
 ott --json t1 load LOCAL
 ```
 
-To configure all four instances, run each load sequentially and stop on failure:
+To configure all four instances concurrently, use a group or player list:
+
+```sh
+ott tt load local
+ott o1,o2,o3,o4 load local
+```
+
+Each player reports its own result; one failure does not stop the others. If you
+prefer sequential loading that stops at the first failure, use an explicit loop:
 
 ```sh
 for player in t1 t2 t3 t4; do ott "$player" load local || break; done

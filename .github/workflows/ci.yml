@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-26-intel, windows-latest]
     defaults:
       run:
         shell: bash
@@ -47,17 +47,30 @@ jobs:
           go vet ./...
       - name: Run race detector
         run: go test -race -count=1 ./...
-      - name: Test Android maintenance agent
+      - name: Check Android maintenance agent formatting and static analysis
         if: runner.os != 'Windows'
+        working-directory: native/android-agent
         run: |
-          cd native/android-agent
           test -z "$(gofmt -l .)"
           go vet ./...
-          go test -race ./...
-          python3 -m unittest discover -s . -p '*_test.py' -v
+      - name: Test Android maintenance agent Go code
+        if: runner.os != 'Windows'
+        working-directory: native/android-agent
+        run: go test -race ./...
+      - name: Test Android update tooling
+        if: runner.os != 'Windows'
+        working-directory: native/android-agent
+        run: python3 -m unittest discover -s . -p '*_test.py' -v
+      - name: Test Android player bridge
+        if: runner.os != 'Windows'
+        working-directory: native/android-agent
+        run: |
           npm ci --ignore-scripts --no-audit --no-fund
           node --test player.test.cjs
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o /tmp/ott-android-agent .
+      - name: Cross-build Android maintenance agent
+        if: runner.os != 'Windows'
+        working-directory: native/android-agent
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o /tmp/ott-android-agent .
       - name: Test terminal CLI
         run: |
           if [ "$RUNNER_OS" != Windows ]; then

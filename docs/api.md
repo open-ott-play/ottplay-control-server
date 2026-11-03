@@ -713,6 +713,19 @@ uncertain response is never automatically replayed. Requests retain ordinary
 `play_catalog` ownership, operator grants, queue and expiry rules. Shared wire
 fixtures live in [`contracts/random-v1.json`](../contracts/random-v1.json).
 
+### Current-playback media tracks
+
+The optional `media_tracks: {"version":1}` capability enables the `media_tracks`
+action with `list` and `select` operations over the existing request/receipt
+transport. It lists bounded current audio/subtitle tracks and supports explicit
+subtitle Off. Selection is fenced by runtime, logical playback, concrete source
+generation and catalog receipt; it never saves language or Plex part preferences.
+
+See the [protocol, bounds and producer requirements](media-tracks.md#protocol-and-bounds)
+and [shared contract fixtures](../contracts/media-tracks-v1.json). The existing
+`input` audio key is unchanged. A player must not advertise the new capability
+until its implementation is qualified; the controller does not synthesize it.
+
 ### Ordered Plex queue extension
 
 `plex_queue` uses the administrator-authenticated request lane. Player device

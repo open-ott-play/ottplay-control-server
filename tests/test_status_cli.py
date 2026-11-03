@@ -65,6 +65,24 @@ class StatusCliTest(unittest.TestCase):
                 self.assertEqual(out, json.dumps(dict(status, capabilities=caps), ensure_ascii=False, indent=2) + '\n')
                 self.assertNotIn('do-not-print', out)
 
+    def test_native_settings_help_uses_native_preferences_and_read_only_engine(self):
+        for platform in ['browser', 'webos-native']:
+            caps = self.capabilities()
+            caps['player']['platform'] = platform
+            caps['player_settings'] = {'version': 1, 'operations': ['schema', 'get', 'set'], 'max_page_size': 20}
+            code, out, err, _ = self.run_cli([], {'ready': True, 'player': caps['player']}, caps)
+            self.assertEqual((code, err), (0, ''))
+            self.assertIn('ott tv settings', out)
+            if platform == 'webos-native':
+                self.assertIn('setting uiFontScale [100]', out)
+                self.assertIn('setting players  — read the fixed Native engine', out)
+                self.assertIn('setting interfaceMode  — read the fixed Modern interface', out)
+                self.assertNotIn('bufSize', out)
+                self.assertNotIn('hls.js', out)
+            else:
+                self.assertIn('setting bufSize [3]', out)
+                self.assertIn('setting players [hls.js]', out)
+
     def test_standby_and_go_help_follow_independent_wire_capabilities(self):
         for operations in ([], ['standby'], ['wake'], ['standby', 'wake']):
             with self.subTest(operations=operations):

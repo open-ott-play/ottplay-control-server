@@ -157,7 +157,9 @@ ott unalias old_name
 ```
 
 `add` verifies a durable registration's current generation before saving its
-local alias. `pair` displays the active connection credential as before.
+local alias. `pair` displays the active manual shared/web connection credential;
+it does not pair an application. Native LG uses the
+[on-screen pairing flow](cli.md#native-lg-controls).
 `registry credential` requires a private output file or explicit `--show-secret`;
 output files are 0600 and never overwritten. Rotation mints a fresh credential,
 so reconnect the player with the new code. `registry revoke` keeps its alias for
@@ -168,7 +170,7 @@ without rotating a credential or writing server configuration.
 For an unknown player, enable remote control and read its pairing code:
 
 ```sh
-ott pending
+ott -j pending
 ott registry approve kitchen DEVICE_UUID ABCDEFGH
 ott registry approve office OTHER_UUID ABCD2345 --diagnostics on
 ```

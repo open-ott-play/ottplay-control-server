@@ -19,6 +19,7 @@ type requestResult struct {
 	expires                 time.Time
 	inspect                 *inspectRequest
 	aspect                  *aspectRequest
+	mediaTracks             *mediaTracksRequest
 	notificationSettings    *notificationsRequest
 	playerSettings          *playerSettingsRequest
 	plexFolders             *plexFoldersRequest
@@ -118,6 +119,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	var favoritesGlobalItemsBound *favoritesGlobalItemsRequest
 	var torrentCatalogBound *torrentCatalogRequest
 	var torrentIndexerBound *torrentIndexerRequest
+	var mediaTracksBound *mediaTracksRequest
 	switch action {
 	case "kiosk":
 		var mode string
@@ -145,6 +147,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = validScreenshotRequest(params)
 	case "aspect":
 		ok = parseAspectRequest(params) != nil
+	case "media_tracks":
+		mediaTracksBound = parseMediaTracksRequest(m["params"])
+		ok = mediaTracksBound != nil && len(b) <= maxMediaTracksRequestBytes && validFavoritesTransferJSON(b)
 	case "notifications":
 		ok = parseNotificationsRequest(params) != nil
 	case "player_settings":
@@ -326,6 +331,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	if action == "aspect" {
 		e.aspect = parseAspectRequest(params)
 	}
+	e.mediaTracks = mediaTracksBound
 	if action == "notifications" {
 		e.notificationSettings = parseNotificationsRequest(params)
 	}
@@ -493,6 +499,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var offlineProfile *offlineProfileRequest
 	var inspect *inspectRequest
 	var aspect *aspectRequest
+	var mediaTracks *mediaTracksRequest
 	var notificationSettings *notificationsRequest
 	var playerSettings *playerSettingsRequest
 	var plexFolders *plexFoldersRequest
@@ -523,6 +530,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			relativeSeek = pending.relativeSeek
 			inspect = pending.inspect
 			aspect = pending.aspect
+			mediaTracks = pending.mediaTracks
 			notificationSettings = pending.notificationSettings
 			playerSettings = pending.playerSettings
 			plexFolders = pending.plexFolders
@@ -543,6 +551,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if aspect == nil {
 		aspect = d.results[id].aspect
+	}
+	if mediaTracks == nil {
+		mediaTracks = d.results[id].mediaTracks
 	}
 	if notificationSettings == nil {
 		notificationSettings = d.results[id].notificationSettings
@@ -620,6 +631,14 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 400, "invalid native playback diagnostics capability")
 			return
 		}
+		if marker, exists := capabilities["media_tracks"]; exists {
+			player, playerErr := decodeObject(capabilities["player"])
+			_, validRuntime := mediaTracksString(player["runtime"], screenshotRuntimePattern)
+			if !validMediaTracksCapability(marker) || playerErr != nil || !validRuntime {
+				failure(w, 400, "invalid media tracks capability")
+				return
+			}
+		}
 		if marker, exists := capabilities["torrent_indexer"]; exists && !validTorrentCatalogCapability(marker) {
 			failure(w, 400, "invalid torrent indexer capability")
 			return
@@ -680,6 +699,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	// An unbound or stale negative response must not consume another page's work.
 	if aspect != nil && !validAspectResult(m["data"], status, aspect) {
 		failure(w, 400, "invalid aspect result")
+		return
+	}
+	if mediaTracks != nil && !validMediaTracksResult(m["data"], status, mediaTracks) {
+		failure(w, 400, "invalid media tracks result")
 		return
 	}
 	if notificationSettings != nil && (len(m["data"]) > 1024 || !validNotificationsResult(m["data"], status, notificationSettings)) {
@@ -795,7 +818,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

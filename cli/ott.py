@@ -96,7 +96,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott registry --help               durable registration, revoke, rotate and recovery
   ott remove NAME                   revoke access, then remove the local alias
   ott unalias NAME                  remove only the local alias
-  ott pair NAME                      show the player connection settings
+  ott pair NAME                      show manual shared/web player connection settings
   ott discover                       show controllers advertised in network DNS
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
@@ -149,6 +149,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME local shuffle /Volumes/data/Movies/  connect/play a path on a native player
   ott NAME local play Movies         play the connected source in its current order
   ott NAME local connect /Volumes/data/Movies/  connect a native folder without playback
+  ott NAME tracks                    list current audio and subtitle tracks
+  ott NAME tracks audio ID           request a current audio track by opaque ID
+  ott NAME tracks subtitle ID|off     request a subtitle track or turn subtitles off
   ott NAME provider-config FILE      update active provider settings from JSON
   ott NAME plex setup URL [TOKEN]    set Plex address and token (hidden prompt if omitted)
   ott NAME plex setup URL --token-file FILE  set Plex address and token from a file
@@ -356,7 +359,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "categories", "favorites", "aspect",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer", "media_tracks",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -2058,6 +2061,7 @@ def profile_metadata(data, action, params, *, expected_provider=None):
     def fail():
         raise Error(message)
     provider = data.get("provider") if isinstance(data, dict) else None
+    source_profiles = provider in ("plex", "xtream", "stalker")
     def profile(row):
         if provider == "offline":
             return offline_profile_metadata(row, fail)
@@ -2067,13 +2071,16 @@ def profile_metadata(data, action, params, *, expected_provider=None):
         if (not isinstance(row, dict) or type(row.get("number")) is not int or not 1 <= row["number"] <= 15
                 or not epg_text(row.get("name"), 256, "utf-8")
                 or any(type(row.get(key)) is not bool for key in ("active", "playlist_configured"))
+                or (source_profiles and row["playlist_configured"] is not False)
                 or ((provider == "vportal" or "vportal_configured" in row)
                     and type(row.get("vportal_configured")) is not bool)
                 or "history_hours" not in row or (row["history_hours"] is not None
                     and (type(row["history_hours"]) is not int or not 0 <= row["history_hours"] <= 8760))):
             fail()
         return {key: row[key] for key in keys}
-    if (not isinstance(data, dict) or data.get("provider") not in ("m3u", "vportal", "offline")
+    if (not isinstance(data, dict)
+            or (provider not in ("m3u", "vportal", "offline")
+                and not (source_profiles and action in ("profiles", "profile")))
             or (expected_provider is not None and data.get("provider") != expected_provider)):
         fail()
     if action == "profiles":
@@ -2081,7 +2088,7 @@ def profile_metadata(data, action, params, *, expected_provider=None):
             fail()
         rows = [profile(row) for row in data["profiles"]]
         if (any(row["number"] != number for number, row in enumerate(rows, 1))
-                or sum(row["active"] for row in rows) not in ((0, 1) if provider == "offline" else (1,))):
+                or sum(row["active"] for row in rows) not in ((0, 1) if provider == "offline" or source_profiles else (1,))):
             fail()
         return {"provider": data["provider"], "profiles": rows}
     row = profile(data.get("profile"))
@@ -2763,6 +2770,10 @@ def volume_metadata(data, mutating=False):
                     "The player returned invalid volume metadata")
     value = data.get("volume")
     if value is None:
+        desired = data.get("desired_volume")
+        if (mutating and "volume" in data and type(desired) in (int, float)
+                and 0 <= desired <= 100 and math.isfinite(desired)):
+            return {"volume": None, "desired_volume": desired, "dispatched": True}
         raise Error("The command was sent, but the platform does not report volume" if mutating else
                     "The platform does not report volume")
     if type(value) not in (int, float) or not 0 <= value <= 100 or not math.isfinite(value):
@@ -4716,6 +4727,13 @@ def capabilities_metadata(data):
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
     if native_playback:
         result["native_playback_diagnostics"] = {"version": 1}
+    if "media_tracks" in data:
+        marker = data["media_tracks"]
+        if (type(marker) is not dict or set(marker) != {"version"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["media_tracks"] = {"version": 1}
     if "provider_diagnostics" in data:
         marker = data["provider_diagnostics"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
@@ -5089,6 +5107,7 @@ def print_player_help(data, name):
         print(f"Local diagnostic help: {prefix} test list")
         print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
         return
+    native = controls.get("player", {}).get("platform") == "webos-native"
     lifecycle = {
         "reload_player": ("restart", "reload the player (alias: restart player)"),
         "restart_stream": ("restart stream", "restart only the current stream (alias: restart s)"),
@@ -5099,6 +5118,9 @@ def print_player_help(data, name):
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("Available controls now:")
+    if "media_tracks" in controls:
+        print(f"  {prefix} tracks  — list current audio/subtitle tracks and observed selections")
+        print(f"  {prefix} tracks audio ID / tracks subtitle ID|off  — select for current playback only")
     if "torrent_catalog" in controls:
         print(f"  {prefix} torrent list / files ENTRY  — read the saved Torrent catalog")
         print(f"  {prefix} torrent add SOURCE --name TITLE  — inspect and save a Torrent source")
@@ -5115,8 +5137,13 @@ def print_player_help(data, name):
     if "player_settings" in controls:
         print(f"  {prefix} settings  — list typed preferences for this player and source")
         print(f"  {prefix} setting KEY --value-file FILE  — save a private preference from a UTF-8 file")
-        print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
-        print(f"  {prefix} setting players [hls.js]  — read/save a supported engine for this provider/profile")
+        if native:
+            print(f"  {prefix} setting uiFontScale [100]  — read/save interface text scale (50–150%)")
+            print(f"  {prefix} setting players  — read the fixed Native engine")
+            print(f"  {prefix} setting interfaceMode  — read the fixed Modern interface")
+        else:
+            print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
+            print(f"  {prefix} setting players [hls.js]  — read/save a supported engine for this provider/profile")
     if "player_settings_patch" in controls:
         print(f"  {prefix} settings patch command_server|local_http [--value-file FILE]  — read/change a connection together; secrets stay redacted")
     if "plex_folders" in controls:
@@ -5132,8 +5159,9 @@ def print_player_help(data, name):
             print(f"  {prefix} provider local  — request Local videos (legacy alias: offline)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
             print(f"  {prefix} provider m3u 1 / R / NAME  — wait for loading, then play by number, random or name")
-            print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request each player in order")
-        if provider in ("m3u", "vportal") or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", [])):
+            print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request all players concurrently")
+        if (provider in ("m3u", "vportal") or (native and provider in ("plex", "xtream", "stalker"))
+                or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", []))):
             print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
             if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):
                 print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
@@ -5289,7 +5317,7 @@ def print_player_help(data, name):
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
             and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
-            and not any(key in controls for key in ("playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
+            and not any(key in controls for key in ("media_tracks", "playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls or "provider_diagnostics" in controls or "native_playback_diagnostics" in controls:
@@ -5649,6 +5677,29 @@ def home_assistant_metadata(raw):
     return result
 
 
+def print_pairing_settings(address, device, token, *, registry=False):
+    print("Manual shared/web player connection details; this command does not pair a player:")
+    print("Settings → Remote control → Command server")
+    print("Address:", address)
+    print("Access code:", token)
+    print("Device UUID / queue:", device)
+    print("Select Connect. Do not use this access code in another player.")
+    if not registry:
+        print("This static controller requires the native app's exact UUID to be registered first:")
+        print("  ott add lg-native NATIVE_DEVICE_UUID")
+        print("Apply the updated server configuration before starting native pairing.")
+        print("If the native UUID is unavailable, enable the device registry before pairing.")
+    print("Native LG uses on-screen pairing: Settings → Remote control server → enter Address → Save.")
+    print("Select Command server if shown, then read the Pairing code on the TV.")
+    print("Use ott -j pending to match that code to the full native device_id, then:")
+    if registry:
+        print("  ott registry approve lg-native NATIVE_DEVICE_UUID CURRENT_PAIRING_CODE")
+    else:
+        print("  ott approve lg-native CURRENT_PAIRING_CODE")
+    print("Keep the native alias separate from the existing browser/MSX player.")
+    print("Guide: https://github.com/open-ott-play/ottplay-control-server/blob/main/docs/cli.md#native-lg-controls")
+
+
 def registry_management(client, config_path, words, json_output=False):
     path = Path(__file__).resolve().with_name("device_registry.py")
     if not path.is_file():
@@ -5789,11 +5840,7 @@ def management(client, config_path, words, json_output=False):
         row = next((x for x in client.credentials["devices"] if x["id"] == device), None)
         if not row:
             raise Error("No local access code is available for this device")
-        print("Settings → Remote control → Command server")
-        print("Address:", client.config.get("player_server", client.server))
-        print("Access code:", row["token"])
-        print("Device UUID / queue:", device)
-        print("Select Connect. Do not use this access code in another player.")
+        print_pairing_settings(client.config.get("player_server", client.server), device, row["token"])
         return True
     if verb in ("alias", "add") and len(words) == 3:
         name, device = words[1:]
@@ -6646,6 +6693,16 @@ def player_groups_module():
     return module
 
 
+def media_tracks_module():
+    path = Path(__file__).resolve().with_name("media_tracks.py")
+    if not path.is_file():
+        raise Error("Install all CLI Python files from the same revision to manage media tracks")
+    spec = importlib.util.spec_from_file_location("ott_media_tracks", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def television_module():
     path = Path(__file__).resolve().with_name("television.py")
     if not path.is_file():
@@ -6664,6 +6721,8 @@ def player_group_targets(client, selector):
 def player_command_route(words):
     """The single dispatch table for built-in and optional player commands."""
     verb = words[0].casefold() if words else ""
+    if verb == "tracks":
+        return "media_tracks"
     if verb == "tv":
         return "television"
     if verb == "torrent":
@@ -6890,6 +6949,12 @@ def player_group_command(client, config, targets, args, argv):
         parsed = parse_preset_load(words)
         name, _ = validate_preset(config, parsed["preset"])
         require_preset_favorites_support(config, name, settings_only=parsed["settings_only"])
+    if route == "media_tracks":
+        module = media_tracks_module()
+        try:
+            module.parse(words[1:])
+        except ValueError:
+            raise Error(module.USAGE) from None
     plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
     group_output_preflight(plans)
     json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))
@@ -7045,6 +7110,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     """Run the same resolved-player command for a single target or one group member."""
     words = args.words[1:]
     route = player_command_route(words)
+    if route == "media_tracks":
+        return media_tracks_module().run(SimpleNamespace(**globals()), client, device, words[1:],
+                                         args.timeout, args.json)
     if route == "television":
         return television_module().run(SimpleNamespace(**globals()), client, device, args.words[0],
                                        words[1:], args.timeout, args.json)
@@ -7342,6 +7410,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                 print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | sources: {row['source_count']} | {state} | selected: {clean(row['selected_name']) or 'none'}")
             elif data["provider"] == "vportal":
                 print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
+            elif data["provider"] in ("plex", "xtream", "stalker"):
+                print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])}")
             else:
                 history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
                 print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | history: {history} h | "
@@ -7400,7 +7470,10 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "play":
         print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
     elif action == "command" and params.get("command") == "set_volume":
-        print(f"{data['volume']:g}%")
+        if data["volume"] is None:
+            print(f"Volume request dispatched: {data['desired_volume']:g}%; measured volume is not reported.")
+        else:
+            print(f"{data['volume']:g}%")
     elif action == "command" and params.get("command") == "random_channel":
         print(f"Random channel requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
     else:

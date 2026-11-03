@@ -467,6 +467,11 @@ retain a read-only footer. An existing lock keeps its target. Release it with
 On Android websites, system exit protection requires separate app pinning with
 a PIN; see [kiosk mode](docs/cli.md#kiosk-mode).
 
+Compatible players can expose [current-playback audio and subtitle tracks](docs/media-tracks.md)
+through `ott PLAYER tracks`, with explicit subtitle Off and temporary, source-bound
+selection. This optional capability requires a qualified player implementation;
+the CLI does not infer it from an audio menu or saved language settings.
+
 ## Remote diagnostics
 
 Start with the [read-only workbench quick start](docs/workbench.md#quick-start)

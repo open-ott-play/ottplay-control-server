@@ -36,6 +36,7 @@ var CommandOperations = map[string]string{
 	"plex_folders":          "list add remove clear",
 	"perf_capture":          "start status read stop",
 	"local_media":           "sources play shuffle connect",
+	"media_tracks":          "list select",
 	"torrent_catalog":       "read read_chunk metadata status cancel write_begin write_chunk write_commit play",
 	"torrent_indexer":       "list configure remove caps search prepare indexers",
 }
@@ -46,7 +47,15 @@ func ValidCommandAction(action string) bool {
 		return true
 	}
 	family, operation, ok := strings.Cut(action, ".")
-	return ok && operation != "" && strings.Contains(" "+CommandOperations[family]+" ", " "+operation+" ")
+	if !ok || operation == "" {
+		return false
+	}
+	for _, allowed := range strings.Fields(CommandOperations[family]) {
+		if operation == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) validateOperators() error {
