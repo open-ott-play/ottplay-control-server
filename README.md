@@ -474,6 +474,10 @@ the CLI does not infer it from an audio menu or saved language settings.
 
 ## Remote diagnostics
 
+[`ott PLAYER debug --local-source`](docs/workbench.md#local-source-identity)
+compares assigned and attached Local sources on compatible players, including
+endpoint matching and advisory codec support, without exposing URLs or tokens.
+
 Start with the [read-only workbench quick start](docs/workbench.md#quick-start)
 for `doctor`, UI/media `inspect`, operation receipt lookup, evidence bundles,
 `health`, web/native `media-progress` and offline `report verify`. It uses the
