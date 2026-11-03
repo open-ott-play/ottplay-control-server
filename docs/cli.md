@@ -2144,6 +2144,12 @@ does not prove that playback never started.
 `fav global` moves an ordered list spanning providers, profiles and sources.
 Install every `cli/*.py` module from the same revision and use a compatible
 controller and player. `ott PLAYER` lists global controls only when advertised.
+If Favorites commands report `invalid capability receipt` with a current
+controller, update the complete CLI directory: older clients reject the optional
+receipt wait hint before reading the player capabilities. After updating, verify
+with `ott t1 fav global describe` and export to a new file with
+`ott t1 fav global export backup.json`. Uncertain writes must not be repeated.
+
 The document contains source aliases and item locators, never provider tokens,
 playback URLs or the sender's absolute Local paths. The receiving player uses
 its own configured sources; missing or ambiguous items remain explicit.

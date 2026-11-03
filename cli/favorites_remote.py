@@ -33,6 +33,21 @@ ERROR_CODES = frozenset(("invalid_configuration", "invalid_snapshot", "invalid_d
                          "not_ready", "context_not_saved"))
 
 
+def valid_queue_ack(status, queued):
+    """Accept the bounded optional controller wait hint without changing pacing."""
+    if (status != 202 or type(queued) is not dict
+            or set(queued) not in ({"id", "status"}, {"id", "status", "receipt_wait_ms"})
+            or queued.get("status") != "queued" or type(queued.get("id")) is not str
+            or protocol.REQUEST_ID.fullmatch(queued["id"]) is None):
+        return False
+    if "receipt_wait_ms" not in queued:
+        return True
+    wait = queued["receipt_wait_ms"]
+    if type(wait) is str and re.fullmatch(r"[1-9][0-9]{0,3}", wait):
+        wait = int(wait)
+    return type(wait) is int and 1 <= wait <= 1000
+
+
 class RemoteError(ValueError):
     """Fixed diagnostics; never expose exception text, URLs, payloads or stage IDs."""
     def __init__(self, code, *, request_id=None, phase=None, http_status=None):
@@ -293,9 +308,7 @@ class _RequestTransport:
         request_id, phase = None, "enqueue"
         try:
             status, queued = self._api(self._query, {"action": self._action, "params": copy.deepcopy(params)}, deadline=deadline)
-            if (status != 202 or type(queued) is not dict or set(queued) != {"id", "status"}
-                    or queued["status"] != "queued" or type(queued["id"]) is not str
-                    or protocol.REQUEST_ID.fullmatch(queued["id"]) is None):
+            if not valid_queue_ack(status, queued):
                 raise RemoteError("invalid_response")
             request_id, phase = queued["id"], "receipt"
             path = self._query + "&id=" + request_id

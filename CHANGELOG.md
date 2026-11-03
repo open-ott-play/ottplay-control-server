@@ -96,6 +96,10 @@
 
 ### Fixed
 
+- Accept the controller's optional bounded receipt wait hint in Favorites
+  requests, restoring capability discovery, describe and export with current
+  servers while preserving strict validation and one-time command submission.
+
 - Explain confirmed player standby before favorites transfers with an explicit
   wake command, without automatic wake or retry; recovery reads remain available.
 - Preserve bounded newer operation names when reading version-1 command journals,
