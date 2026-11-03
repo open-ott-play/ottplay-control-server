@@ -2548,9 +2548,18 @@ def load_preset(client, device, name, preset, session=None):
         # ready: a Plex credential editor or empty catalogue is still configurable.
         return True if data["provider"] == "plex" else None
 
-    def profiles(data):
+    def profiles(data, *, allow_empty=False):
         # Presets own M3U slots even though standalone commands also accept VPortal.
-        return profile_metadata(data, "profiles", {}, expected_provider="m3u")["profiles"]
+        rows = profile_metadata(data, "profiles", {}, expected_provider="m3u",
+                                allow_no_active=allow_empty)["profiles"]
+        if allow_empty and not any(row["active"] for row in rows):
+            # Only the known-empty native shape may start without a selection.
+            # A partially configured store still requires an explicit active slot.
+            if (any(row["name"] or row["playlist_configured"] or row["history_hours"] != 0
+                    for row in rows)
+                    or any(row.get("vportal_configured", False) for row in data["profiles"])):
+                raise Error("The player returned no active profile for a nonempty M3U list")
+        return rows
 
     def save_profile(row, active):
         def validate(data):
@@ -2609,9 +2618,9 @@ def load_preset(client, device, name, preset, session=None):
              lambda data: plex_settings_metadata(data, preset["plex"]),
              ("Select this provider before changing its settings.", "Plex settings are unavailable on this player."))
         step("select_m3u", "provider", {"query": "m3u"}, provider("m3u"))
-        rows = step("wait_m3u", "profiles", {}, profiles,
+        rows = step("wait_m3u", "profiles", {}, lambda data: profiles(data, allow_empty=True),
                     ("Select the M3U provider before managing profiles.",))
-        current = next(row["number"] for row in rows if row["active"])
+        current = next((row["number"] for row in rows if row["active"]), None)
         desired = preset["active_profile"]
         for row in preset["m3u"]:
             if row["number"] != current:
