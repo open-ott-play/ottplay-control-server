@@ -2743,6 +2743,16 @@ def kiosk_metadata(data, mode, require_strict=False):
         channel = {"id": channel["id"], "name": channel["name"]}
     elif channel is not None:
         raise Error(message)
+    folder = None
+    if "folder" in data:
+        folder = data["folder"]
+        if (data["state"] != "locked" or data.get("provider") != "offline"
+                or channel is None or media is not None
+                or not isinstance(folder, dict) or not {"name", "available"} <= set(folder)
+                or type(folder["available"]) is not bool
+                or (folder["name"] is not None and not local_media_name(folder["name"]))):
+            raise Error(message)
+        folder = {key: folder[key] for key in ("name", "available")}
     provider = data.get("provider")
     if (data["enabled"] and not isinstance(provider, str)) or (not data["enabled"] and provider is not None):
         raise Error(message)
@@ -2758,6 +2768,7 @@ def kiosk_metadata(data, mode, require_strict=False):
         raise Error(message)
     return {**{key: data[key] for key in ("enabled", "state", "retry_seconds", "retries", "health")},
             "channel": channel, "provider": provider, **({"media": media} if media is not None else {}),
+            **({"folder": folder} if folder is not None else {}),
             **{key: data[key] for key in ("strict", "screen_suspended", "startup_grace_seconds") if key in data}}
 
 
@@ -7470,6 +7481,11 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         elif "media" in data:
             provider_name = "Plex" if data["provider"] == "plex" else "VPortal"
             print(f"Kiosk {provider_name}: {clean(data['media']['title'])} | {data['media']['index'] + 1}/{data['media']['total']} | {data['health']} | retries: {data['retries']}")
+        elif "folder" in data:
+            folder = data["folder"]
+            name = clean(folder["name"]) if folder["name"] is not None else "Not reported"
+            availability = "available" if folder["available"] else "unavailable"
+            print(f"Kiosk Local folder: {name} ({availability}) | current: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
         else:
             print(f"Kiosk channel: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
         if data.get("screen_suspended"):

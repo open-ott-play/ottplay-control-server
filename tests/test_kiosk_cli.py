@@ -256,5 +256,134 @@ class KioskTest(unittest.TestCase):
                 rendered = json.loads(output.getvalue()) if machine else output.getvalue()
                 self.assertEqual((code, rendered, errors.getvalue()), (0, expected, ''))
 
+    @staticmethod
+    def local_folder_receipt(name='Kids: Cartoons', available=True):
+        return {
+            'enabled':True, 'state':'locked', 'provider':'offline',
+            'channel':{'id':'kiosk:fixture', 'name':'Current episode'},
+            'folder':{'name':name, 'available':available},
+            'retry_seconds':10, 'retries':2, 'health':'playing',
+        }
+
+    def run_kiosk_receipt(self, data, words, machine=False):
+        client = mock.Mock(timeout=45)
+        client.device.return_value = 'dev_tv'
+        client.call.return_value = data
+        output, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(ott, 'Client', return_value=client), \
+                mock.patch.object(ott, 'read_json', return_value={}), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            code = ott.main((['--json'] if machine else []) + ['tv', 'kiosk'] + words)
+        return code, output.getvalue(), errors.getvalue(), client.call
+
+    def test_local_folder_metadata_preserves_nullable_name_and_availability_independently(self):
+        for name in (None, 'Kids: Cartoons', '  Movies  ', '夏' * 170 + 'ab', 'я' * 256):
+            for available in (False, True):
+                with self.subTest(name=name, available=available):
+                    data = self.local_folder_receipt(name, available)
+                    data['folder']['path'] = '/private/usb-secret'
+                    data['folder']['grant'] = {'token':'private-token'}
+                    data['channel']['url'] = 'file:///private/video-secret'
+                    data['source'] = '/private/source-secret'
+                    expected = self.local_folder_receipt(name, available)
+                    self.assertEqual(ott.kiosk_metadata(data, 'status'), expected)
+                    # Projection must not edit a caller's original receipt.
+                    self.assertIn('path', data['folder'])
+                    self.assertIn('url', data['channel'])
+
+    def test_local_folder_metadata_rejects_malformed_or_unbounded_fields(self):
+        malformed = [None, False, [], 'Movies', {}, {'name':'Movies'}, {'available':True}]
+        malformed += [{'name':'Movies', 'available':value}
+                      for value in (None, 0, 1, 'true', [], {})]
+        malformed += [{'name':value, 'available':True} for value in (
+            False, 1, [], {}, '', ' \t', '.', '..', '/Movies', 'Movies/Child',
+            'Movies\\Child', 'a\n', 'a\x00', 'a\x7f', 'a\x85', '\ud800',
+            'x' * 513, 'я' * 256 + 'x', '夏' * 171,
+        )]
+        for folder in malformed:
+            with self.subTest(folder=folder), self.assertRaises(ott.Error):
+                ott.kiosk_metadata({**self.local_folder_receipt(), 'folder':folder}, 'status')
+
+    def test_local_folder_metadata_requires_locked_offline_channel_target(self):
+        data = self.local_folder_receipt()
+        invalid = [
+            {'state':'off', 'enabled':False, 'provider':None, 'channel':None},
+            {'state':'waiting', 'channel':None},
+            {'provider':'local'}, {'provider':'m3u'}, {'provider':'plex'}, {'provider':'vportal'},
+            {'channel':None}, {'channel':{}},
+            {'media':{'title':'Episode', 'index':0, 'total':2}},
+            {'provider':'plex', 'channel':None,
+             'media':{'title':'Episode', 'index':0, 'total':2}},
+        ]
+        for patch in invalid:
+            with self.subTest(patch=patch), self.assertRaises(ott.Error):
+                ott.kiosk_metadata({**data, **patch}, 'status')
+        # Explicit null media remains equivalent to no media, as in old receipts.
+        self.assertEqual(ott.kiosk_metadata({**data, 'media':None}, 'status'), data)
+
+    def test_local_folder_cli_projects_private_fields_and_describes_observed_status(self):
+        for name in ('Kids: Cartoons', None):
+            for available in (False, True):
+                for machine in (False, True):
+                    with self.subTest(name=name, available=available, machine=machine):
+                        expected = {**self.local_folder_receipt(name, available),
+                                    'strict':True, 'screen_suspended':True}
+                        data = {**expected,
+                                'folder':{**expected['folder'], 'path':'/private/usb-secret'},
+                                'channel':{**expected['channel'], 'url':'file:///private/video-secret'},
+                                'request':{'token':'private-token'}}
+                        code, output, errors, calls = self.run_kiosk_receipt(data, ['status'], machine)
+                        calls.assert_called_once_with('dev_tv', 'kiosk', {'mode':'status'})
+                        self.assertEqual((code, errors), (0, ''))
+                        if machine:
+                            self.assertEqual(json.loads(output), expected)
+                        else:
+                            label = name if name is not None else 'Not reported'
+                            state = 'available' if available else 'unavailable'
+                            self.assertEqual(output,
+                                'Strict kiosk: local controls locked; supported players allow timeline seeking within the current media episode.\n'
+                                f'Kiosk Local folder: {label} ({state}) | current: Current episode | playing | retries: 2 (10 s)\n'
+                                'Playback is suspended while the screen is off or the app is in the background.\n')
+                        for secret in ('usb-secret', 'video-secret', 'private-token'):
+                            self.assertNotIn(secret, output + errors)
+
+    def test_local_folder_invalid_receipts_do_not_leak_or_replay_status_or_mutation(self):
+        for words, params in ((['status'], {'mode':'status'}),
+                              (['on', '--strict'], {'mode':'on', 'strict':True})):
+            for machine in (False, True):
+                for folder in (None, {'name':'Movies', 'available':'private-secret'},
+                               {'name':'/private/secret', 'available':True}):
+                    with self.subTest(words=words, machine=machine, folder=folder):
+                        data = {**self.local_folder_receipt(), 'folder':folder, 'strict':True,
+                                'request':{'token':'private-secret'}}
+                        code, output, errors, calls = self.run_kiosk_receipt(data, words, machine)
+                        calls.assert_called_once_with('dev_tv', 'kiosk', params)
+                        self.assertEqual((code, output), (1, ''))
+                        self.assertIn('did not confirm the kiosk policy', errors)
+                        self.assertNotIn('private-secret', errors)
+                        self.assertNotIn('/private/secret', errors)
+
+    def test_local_folder_does_not_replace_strict_policy_confirmation(self):
+        for strict in (None, False, 1, 'true'):
+            data = self.local_folder_receipt()
+            if strict is not None:
+                data['strict'] = strict
+            with self.subTest(strict=strict), self.assertRaises(ott.Error):
+                ott.kiosk_metadata(data, 'on', True)
+
+    def test_legacy_local_kiosk_without_folder_keeps_existing_output(self):
+        data = self.local_folder_receipt()
+        del data['folder']
+        for machine in (False, True):
+            with self.subTest(machine=machine):
+                code, output, errors, calls = self.run_kiosk_receipt(data, ['status'], machine)
+                calls.assert_called_once_with('dev_tv', 'kiosk', {'mode':'status'})
+                self.assertEqual((code, errors), (0, ''))
+                if machine:
+                    self.assertEqual(json.loads(output), data)
+                else:
+                    self.assertEqual(output,
+                        'Kiosk channel: Current episode | playing | retries: 2 (10 s)\n')
+
 if __name__=='__main__':
     unittest.main()
