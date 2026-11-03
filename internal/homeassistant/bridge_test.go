@@ -191,7 +191,7 @@ func TestRejectedAuthenticationParksUntilTokenChangesAndRedactsStatus(t *testing
 	if err := os.WriteFile(c.TokenFile+".new", []byte(fixtureToken+"_rotated"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(c.TokenFile+".new", c.TokenFile); err != nil {
+	if err := replaceTokenFile(c.TokenFile+".new", c.TokenFile); err != nil {
 		t.Fatal(err)
 	}
 	until(t, func() bool { return b.Snapshot().State == "connected" })

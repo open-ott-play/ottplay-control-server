@@ -188,7 +188,7 @@ func readToken(path string) (string, error) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 4098 {
 		return "", errors.New("token unavailable")
 	}
-	f, err := os.Open(path)
+	f, err := openTokenFile(path)
 	if err != nil {
 		return "", errors.New("token unavailable")
 	}

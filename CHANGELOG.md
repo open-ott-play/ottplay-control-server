@@ -161,6 +161,10 @@
 
 ### Fixed
 
+- Allow atomic Home Assistant token-file replacement during Windows credential
+  polling. Readers retain read-only, non-inheritable handles and token validation;
+  a held-open-reader regression covers the previous sharing violation.
+
 - Accept the controller's optional bounded receipt wait hint in Favorites
   requests, restoring capability discovery, describe and export with current
   servers while preserving strict validation and one-time command submission.
