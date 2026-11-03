@@ -226,4 +226,4 @@ Use **Run**, **End**, and **Disable** in Task Scheduler to start, stop, or preve
 
 ## Acceptance boundaries
 
-A cross-compiled binary is not proof of execution on every OS/CPU. CI executes tests on Linux amd64/arm64, macOS arm64, and Windows amd64, and builds all seven target binaries. CI also starts a restricted Linux container. Local chart rendering validates packaging; a real cluster rollout and physical TV behavior are separate acceptance steps.
+A cross-compiled binary is not proof of execution on every OS/CPU. CI executes tests on Linux amd64/arm64, macOS amd64 (`macos-26-intel`), and Windows amd64, and builds all seven target binaries. Both Darwin amd64 and arm64 remain cross-build targets; the arm64 build does not provide native macOS arm64 test coverage. CI also starts a restricted Linux container. Local chart rendering validates packaging; a real cluster rollout and physical TV behavior are separate acceptance steps.
