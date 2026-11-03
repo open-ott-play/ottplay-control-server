@@ -61,7 +61,9 @@ class IndexerRoutingTest(unittest.TestCase):
         module = ott.torrent_indexer_module()
         calls = []
 
-        def run(api, current, device, words, timeout, as_json, path):
+        def run(api, current, device, words, timeout, as_json, path, *, progress=None):
+            self.assertIsNotNone(progress)
+            progress("Reading configured sources")
             calls.append((device, words, timeout, as_json))
             print(json.dumps({"sources": []}))
             return 0
@@ -69,7 +71,8 @@ class IndexerRoutingTest(unittest.TestCase):
         module.run = run
         with mock.patch.object(ott, "torrent_indexer_module", return_value=module):
             code, out, err, _ = self.invoke(["-j", "-t", "45", "t1,t2", "torrent", "indexer", "list"], config, client)
-        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(code, 0)
+        self.assertEqual(err.count("Indexer request complete"), 2)
         self.assertEqual(json.loads(out)["succeeded"], 2)
         self.assertCountEqual(calls, [("dev1", ["list"], 45, True), ("dev2", ["list"], 45, True)])
 

@@ -23,6 +23,7 @@ var torrentIndexerSourceURI = regexp.MustCompile(`^ottplay-local-torrent:[a-z][a
 
 var torrentIndexerFields = map[string][]string{
 	"list":      {"version", "runtime", "op"},
+	"indexers":  {"version", "runtime", "op", "sourceId"},
 	"configure": {"version", "runtime", "op", "sourceId", "label", "endpoint", "apiKey"},
 	"remove":    {"version", "runtime", "op", "sourceId"},
 	"caps":      {"version", "runtime", "op", "sourceId"},
@@ -80,8 +81,8 @@ var torrentIndexerReasons = map[string]bool{
 
 // Keep credentials and endpoint out of retained request descriptors.
 type torrentIndexerRequest struct {
-	Runtime, Op, SourceID string
-	Offset, Limit         int
+	Runtime, Op, SourceID, IndexerID string
+	Offset, Limit                    int
 }
 
 func torrentIndexerText(raw json.RawMessage, maximum int, empty bool) bool {
@@ -165,6 +166,13 @@ func parseTorrentIndexerRequest(raw json.RawMessage) *torrentIndexerRequest {
 	}
 	q := &torrentIndexerRequest{Runtime: favoritesGlobalString(m["runtime"]), Op: favoritesGlobalString(m["op"])}
 	fields, ok := torrentIndexerFields[q.Op]
+	if member, exists := m["indexerId"]; exists {
+		if (q.Op != "caps" && q.Op != "search") || !validTorrentChildID(member) {
+			return nil
+		}
+		q.IndexerID = favoritesGlobalString(member)
+		fields = append(append([]string(nil), fields...), "indexerId")
+	}
 	if !ok || !favoritesTransferFields(m, fields...) {
 		return nil
 	}
@@ -224,7 +232,16 @@ func validTorrentIndexerResult(raw json.RawMessage, status string, q *torrentInd
 		return false
 	}
 	fields := []string{"version", "runtime", "op", "schema"}
+	if q.IndexerID != "" {
+		if !torrentCatalogEqual(m["indexerId"], q.IndexerID) {
+			return false
+		}
+		fields = append(fields, "indexerId")
+	}
 	switch q.Op {
+	case "indexers":
+		return favoritesTransferFields(m, append(fields, "sourceId", "supported", "indexers")...) &&
+			torrentCatalogEqual(m["sourceId"], q.SourceID) && validTorrentChildList(m)
 	case "list":
 		if !favoritesTransferFields(m, append(fields, "sources")...) {
 			return false
