@@ -75,6 +75,13 @@ before treating a missing capability as a transport failure.
 item from the source actually assigned to the video element. An updated player
 is required; installing the CLI alone does not enable this observation.
 
+The capability becomes available after normal Local playback preparation loads
+the optional Local feature. Before registration, the command reports unsupported;
+it does not load that feature itself. Ordinary status and capability requests
+never fetch diagnostic assets. A failed optional load does not delay direct
+Local playback. Cached source identities can still be unavailable after a
+library change, even when the diagnostic capability is present.
+
 The command first reads capabilities, then the existing `status` endpoint within
 one shared timeout. It validates the projection against that runtime. It does not
 retry a rejected read or fall back to playback commands. Group aliases and comma
