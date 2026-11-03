@@ -268,6 +268,28 @@ class MediaTracksCLITest(unittest.TestCase):
                 self.assertNotEqual(self.execute(["audio", "Audio_B"])[0], 0)
                 self.assertEqual(len(self.operations()), 2)
 
+    def test_invalid_list_metadata_reports_no_selection_for_listing_and_preflight(self):
+        for words in ([], ["list"], ["audio", "Audio_B"]):
+            with self.subTest(words=words):
+                self.client = Client()
+                self.client.list_transform = lambda value, params: {**value, "token": PRIVATE}
+                code, data, errors = self.execute(words)
+                self.assertEqual((code, data), (1, ""))
+                self.assertIn("invalid media track metadata", errors)
+                self.assertIn("No selection was sent", errors)
+                self.assertNotIn("may have executed", errors)
+                self.assertEqual(self.operations(), [("capabilities", {}),
+                    ("media_tracks", {"op": "list", "runtime": "runtime-dev-1"})])
+
+    def test_invalid_selection_metadata_retains_uncertainty_without_replay(self):
+        self.client.select_transform = lambda value, params: {**value, "token": PRIVATE}
+        code, data, errors = self.execute(["audio", "Audio_B"])
+        self.assertEqual((code, data), (1, ""))
+        self.assertIn("invalid media track metadata", errors)
+        self.assertIn("A sent selection may have executed; no request was repeated", errors)
+        self.assertNotIn("No selection was sent", errors)
+        self.assert_one_selection({"kind": "audio", "mode": "track", "id": "Audio_B"})
+
     def test_known_empty_catalog_is_valid_and_does_not_invent_tracks(self):
         def empty(value, params):
             value["tracks"] = []
