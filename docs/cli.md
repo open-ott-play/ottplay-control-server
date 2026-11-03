@@ -2946,6 +2946,54 @@ required” result means the profile is saved but the player needs local access.
 If a mutation times out or its acknowledgement is invalid, inspect `profiles`
 before retrying; the CLI never automatically repeats the change.
 
+## Native LG controls
+
+The native webOS application is a separate remote-control client from the TV's
+browser or MSX player. The following examples use its registered alias
+`lg-native`; replace it with the alias assigned during pairing.
+
+```sh
+ott lg-native caps
+ott lg-native volume 30
+ott lg-native v +5
+ott lg-native settings
+ott lg-native setting uiFontScale 100
+ott lg-native setting players
+ott lg-native setting interfaceMode
+```
+
+Some native firmware can set volume but cannot reliably read its current value.
+When the player confirms dispatch and reports a desired level, the CLI prints
+`Volume request dispatched: 30%; measured volume is not reported.` JSON retains
+`"volume": null`, `"desired_volume": 30` and `"dispatched": true`. This acknowledges
+the setter without claiming a measured output level. A missing or rejected
+acknowledgement still fails and is never automatically repeated. A plain
+`volume` read reports that the platform does not provide a reading. These are
+player controls; the separate `ott l tv volume 30` command controls system volume.
+
+The native settings schema exposes interface text scale from 50 to 150 percent.
+The engine is fixed to Native and the interface to Modern; their settings are
+read-only. Browser buffering and hls.js examples do not apply to this application.
+
+Plex, Xtream and Stalker support listing and selecting their native numbered
+profiles, in addition to M3U, VPortal and Local:
+
+```sh
+ott lg-native provider plex
+ott lg-native profiles
+ott lg-native profile 2
+```
+
+Select the provider before listing its slots. The list contains 15 numbered
+names, with `*` marking the active slot if one is selected. It does not infer
+whether a source is configured from its name. Selection requires a configured,
+enabled slot and remains subject to the player's settings restrictions.
+`profile N` confirms dispatch, not completed loading or visible playback.
+These listing and selection commands do not extend M3U `profile-config` settings
+to other providers. Use `caps` and the player's settings schema for available
+operations; a provider's presence does not imply support for remote queue or
+shuffle commands.
+
 ## M3U profiles
 
 M3U has 15 numbered profiles. Select the M3U provider first; these commands

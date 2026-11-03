@@ -2058,6 +2058,7 @@ def profile_metadata(data, action, params, *, expected_provider=None):
     def fail():
         raise Error(message)
     provider = data.get("provider") if isinstance(data, dict) else None
+    source_profiles = provider in ("plex", "xtream", "stalker")
     def profile(row):
         if provider == "offline":
             return offline_profile_metadata(row, fail)
@@ -2067,13 +2068,16 @@ def profile_metadata(data, action, params, *, expected_provider=None):
         if (not isinstance(row, dict) or type(row.get("number")) is not int or not 1 <= row["number"] <= 15
                 or not epg_text(row.get("name"), 256, "utf-8")
                 or any(type(row.get(key)) is not bool for key in ("active", "playlist_configured"))
+                or (source_profiles and row["playlist_configured"] is not False)
                 or ((provider == "vportal" or "vportal_configured" in row)
                     and type(row.get("vportal_configured")) is not bool)
                 or "history_hours" not in row or (row["history_hours"] is not None
                     and (type(row["history_hours"]) is not int or not 0 <= row["history_hours"] <= 8760))):
             fail()
         return {key: row[key] for key in keys}
-    if (not isinstance(data, dict) or data.get("provider") not in ("m3u", "vportal", "offline")
+    if (not isinstance(data, dict)
+            or (provider not in ("m3u", "vportal", "offline")
+                and not (source_profiles and action in ("profiles", "profile")))
             or (expected_provider is not None and data.get("provider") != expected_provider)):
         fail()
     if action == "profiles":
@@ -2081,7 +2085,7 @@ def profile_metadata(data, action, params, *, expected_provider=None):
             fail()
         rows = [profile(row) for row in data["profiles"]]
         if (any(row["number"] != number for number, row in enumerate(rows, 1))
-                or sum(row["active"] for row in rows) not in ((0, 1) if provider == "offline" else (1,))):
+                or sum(row["active"] for row in rows) not in ((0, 1) if provider == "offline" or source_profiles else (1,))):
             fail()
         return {"provider": data["provider"], "profiles": rows}
     row = profile(data.get("profile"))
@@ -2763,6 +2767,10 @@ def volume_metadata(data, mutating=False):
                     "The player returned invalid volume metadata")
     value = data.get("volume")
     if value is None:
+        desired = data.get("desired_volume")
+        if (mutating and "volume" in data and type(desired) in (int, float)
+                and 0 <= desired <= 100 and math.isfinite(desired)):
+            return {"volume": None, "desired_volume": desired, "dispatched": True}
         raise Error("The command was sent, but the platform does not report volume" if mutating else
                     "The platform does not report volume")
     if type(value) not in (int, float) or not 0 <= value <= 100 or not math.isfinite(value):
@@ -5089,6 +5097,7 @@ def print_player_help(data, name):
         print(f"Local diagnostic help: {prefix} test list")
         print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
         return
+    native = controls.get("player", {}).get("platform") == "webos-native"
     lifecycle = {
         "reload_player": ("restart", "reload the player (alias: restart player)"),
         "restart_stream": ("restart stream", "restart only the current stream (alias: restart s)"),
@@ -5115,8 +5124,13 @@ def print_player_help(data, name):
     if "player_settings" in controls:
         print(f"  {prefix} settings  — list typed preferences for this player and source")
         print(f"  {prefix} setting KEY --value-file FILE  — save a private preference from a UTF-8 file")
-        print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
-        print(f"  {prefix} setting players [hls.js]  — read/save a supported engine for this provider/profile")
+        if native:
+            print(f"  {prefix} setting uiFontScale [100]  — read/save interface text scale (50–150%)")
+            print(f"  {prefix} setting players  — read the fixed Native engine")
+            print(f"  {prefix} setting interfaceMode  — read the fixed Modern interface")
+        else:
+            print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
+            print(f"  {prefix} setting players [hls.js]  — read/save a supported engine for this provider/profile")
     if "player_settings_patch" in controls:
         print(f"  {prefix} settings patch command_server|local_http [--value-file FILE]  — read/change a connection together; secrets stay redacted")
     if "plex_folders" in controls:
@@ -5133,7 +5147,8 @@ def print_player_help(data, name):
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
             print(f"  {prefix} provider m3u 1 / R / NAME  — wait for loading, then play by number, random or name")
             print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request all players concurrently")
-        if provider in ("m3u", "vportal") or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", [])):
+        if (provider in ("m3u", "vportal") or (native and provider in ("plex", "xtream", "stalker"))
+                or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", []))):
             print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
             if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):
                 print(f"  {prefix} profile N  — select profile 1–15 (alias: prof N)")
@@ -7342,6 +7357,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                 print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | sources: {row['source_count']} | {state} | selected: {clean(row['selected_name']) or 'none'}")
             elif data["provider"] == "vportal":
                 print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | VPortal: {'set' if row['vportal_configured'] else 'empty'}")
+            elif data["provider"] in ("plex", "xtream", "stalker"):
+                print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])}")
             else:
                 history = "unknown" if row["history_hours"] is None else str(row["history_hours"])
                 print(f"{'*' if row['active'] else ' '} {row['number']}: {clean(row['name'])} | history: {history} h | "
@@ -7400,7 +7417,10 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "play":
         print(f"Channel switch requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
     elif action == "command" and params.get("command") == "set_volume":
-        print(f"{data['volume']:g}%")
+        if data["volume"] is None:
+            print(f"Volume request dispatched: {data['desired_volume']:g}%; measured volume is not reported.")
+        else:
+            print(f"{data['volume']:g}%")
     elif action == "command" and params.get("command") == "random_channel":
         print(f"Random channel requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
     else:

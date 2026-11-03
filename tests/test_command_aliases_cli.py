@@ -111,6 +111,42 @@ class AliasDispatchTest(unittest.TestCase):
                     self.assertEqual((code, out, len(calls)), (1, '', 1))
                     self.assertIn('do not repeat', err)
 
+    def test_native_volume_acceptance_keeps_requested_and_measured_levels_distinct(self):
+        for command in ['v', 'vol', 'VOLUME']:
+            for argument in ['30', '+5', '-5']:
+                for desired in [0, 30, 37.5, 100]:
+                    for machine in [False, True]:
+                        with self.subTest(command=command, argument=argument, desired=desired, json=machine):
+                            response = {'volume': None, 'desired_volume': desired, 'dispatched': True,
+                                        'muted': False, 'private': 'never-print'}
+                            code, out, err, calls, _ = self.run_cli([command, argument], [response], machine)
+                            self.assertEqual((code, err, len(calls)), (0, '', 1))
+                            self.assertEqual(calls[0].args[1:], ott.parse_command([command, argument]))
+                            if machine:
+                                self.assertEqual(json.loads(out), {'volume': None, 'desired_volume': desired,
+                                                                   'dispatched': True})
+                            else:
+                                self.assertEqual(out, f'Volume request dispatched: {desired:g}%; measured volume is not reported.\n')
+                            self.assertNotIn('never-print', out + err)
+
+    def test_native_volume_requires_explicit_unknown_reading_valid_target_and_acknowledgement(self):
+        base = {'volume': None, 'desired_volume': 30, 'dispatched': True}
+        invalid = [{key: value for key, value in base.items() if key != omitted}
+                   for omitted in base]
+        invalid += [{**base, 'desired_volume': value} for value in
+                    [None, True, '30', -1, 101, 10**400, float('nan'), float('inf'), {}, []]]
+        invalid += [{**base, 'dispatched': value} for value in [False, 1, 'true']]
+        for response in invalid:
+            for machine in [False, True]:
+                with self.subTest(response=response, json=machine):
+                    code, out, err, calls, _ = self.run_cli(['volume', '+5'], [response], machine)
+                    self.assertEqual((code, out, len(calls)), (1, '', 1))
+                    self.assertTrue(err)
+        # Desired state alone never establishes a measured reading for `volume`.
+        code, out, err, calls, _ = self.run_cli(['volume'], [base])
+        self.assertEqual((code, out, len(calls)), (1, '', 1))
+        self.assertIn('does not report volume', err)
+
     def test_status_and_channel_listing_aliases_do_not_switch(self):
         for command in ['status', 'ST']:
             response = {'ready': True, 'volume': None}
