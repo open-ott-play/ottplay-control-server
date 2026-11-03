@@ -41,6 +41,17 @@ def caps():
             "plex_library": {"version": 1, "operations": ["list", "play"], "max_items": 500}}
 
 
+def caps_v2():
+    result = caps()
+    operations = ["play", "status", "next", "previous", "stop"]
+    result["plex_queue"]["operations"] = operations
+    result["plex_queue_state_v2"] = {
+        "version": 2, "operations": list(operations), "max_write_items": 500,
+        "max_state_items": 1000, "max_state_bytes": 32768,
+    }
+    return result
+
+
 def queue(state="preparing"):
     return {"version": 1, "runtime": "page-lg2", "active": True, "state": state,
             "ids": ["11", "12"], "index": 0, "repeat": "none", "order": "listed"}
@@ -154,6 +165,57 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaisesRegex(shortcut.ShortcutError, "changed"):
                 workflow.run()
             self.assertEqual(len([call for call in runner.calls if call[2]]), 2)
+
+    def test_v2_readiness_accepts_library_v1_then_confirms_exact_status_v2(self):
+        preparing = dict(queue(), version=2)
+        playing = dict(queue("playing"), version=2)
+        workflow, runner, stream, _ = self.run_workflow([
+            television(), caps_v2(), library(), library("play"),
+            shortcut.ReadPending(), preparing, playing])
+        self.assertEqual(workflow.run(), playing)
+        self.assertEqual([call[0] for call in runner.calls if call[2]],
+                         [["tv", "go"], ["plex", "shuffle", shortcut.COLLECTION]])
+        self.assertEqual(sum(call[0] == ["plex", "status"] for call in runner.calls), 3)
+        self.assertIn("Playback confirmed", stream.getvalue())
+
+    def test_advertised_status_version_runtime_and_ids_cannot_change_during_confirmation(self):
+        cases = [
+            (caps_v2(), queue("playing")),
+            (caps(), dict(queue("playing"), version=2)),
+            (caps_v2(), dict(queue("playing"), version=2, runtime="page-other")),
+            (caps_v2(), dict(queue("playing"), version=2, ids=["12", "11"])),
+            (caps_v2(), dict(queue("playing"), version=2, ids=["11", "11"])),
+        ]
+        for readiness, status in cases:
+            with self.subTest(readiness_version=2 if "plex_queue_state_v2" in readiness else 1,
+                              status=status):
+                workflow, runner, stream, _ = self.run_workflow([
+                    television(), readiness, library(), library("play"), status])
+                with self.assertRaises(shortcut.ShortcutError):
+                    workflow.run()
+                self.assertEqual([call[0] for call in runner.calls if call[2]],
+                                 [["tv", "go"], ["plex", "shuffle", shortcut.COLLECTION]])
+                self.assertEqual(sum(call[0] == ["plex", "status"] for call in runner.calls), 1)
+                self.assertNotIn("Playback confirmed", stream.getvalue())
+
+    def test_library_receipt_stays_v1_even_when_readiness_advertises_v2(self):
+        malformed = library("play")
+        malformed["queue"]["version"] = 2
+        workflow, runner, stream, _ = self.run_workflow([
+            television(), caps_v2(), library(), malformed])
+        with self.assertRaises(shortcut.ShortcutError):
+            workflow.run()
+        self.assertEqual(sum(call[0] == ["plex", "shuffle", shortcut.COLLECTION] for call in runner.calls), 1)
+        self.assertFalse(any(call[0] == ["plex", "status"] for call in runner.calls))
+        self.assertNotIn("Playback confirmed", stream.getvalue())
+
+    def test_already_playing_library_v1_needs_no_status_v2_read(self):
+        playing = library("play")
+        playing["queue"]["state"] = "playing"
+        workflow, runner, _, _ = self.run_workflow([
+            television(), caps_v2(), library(), playing])
+        self.assertEqual(workflow.run(), playing["queue"])
+        self.assertFalse(any(call[0] == ["plex", "status"] for call in runner.calls))
 
     def test_error_queue_stops_and_paused_queue_does_not_claim_playback(self):
         error = queue("error")

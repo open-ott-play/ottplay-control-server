@@ -2101,6 +2101,21 @@ ends. They do not switch to a TV channel at a queue boundary. `plex stop` clears
 the queue; channel navigation otherwise retains its existing category/wrap rules.
 Queue state is local to the player runtime and is not a saved Plex playlist.
 
+Some players can restore an internal queue with up to 1,000 entries. When the
+player advertises `plex_queue_state_v2` and the controller supports it, the CLI
+automatically negotiates version 2 for `plex play`, `status`, `next`, `prev` and
+`stop`. The returned state can contain all 1,000 entries, preserving duplicate
+occurrences and their index. New `play` requests still accept at most 500 IDs;
+library lookup and preview keep their existing limits and version 1 format.
+This optional capability is not enabled by installing the CLI alone.
+
+Negotiation includes a read-only controller probe before any version 2 queue
+command. Both capability reads and the command share one timeout and must name
+the same player runtime. An old controller, changed runtime, or failed probe
+stops the command without a queue change; the CLI does not fall back and resend
+it. Ordinary `next`/`prev` keep their existing player-side navigation contract.
+See the [version 2 wire fixture](../contracts/plex-queue-state-v2.json).
+
 `preparing` means the request was accepted and preparation is in progress, not
 that a decoder is playing. Query `plex status` for `playing`, `paused`, `ended`
 or `error`. `active` means that a nonempty queue still owns navigation, including
@@ -2130,6 +2145,9 @@ does not prove that playback never started.
 
 - If the operation is missing or unsupported, update all three components and
   confirm `plex_queue.operations` in `caps` on the exact target player.
+- If a restored queue requires `plex_queue_state_v2`, update the controller and
+  CLI and confirm that the player advertises that capability. Repeated legacy
+  queue commands do not enable it or truncate the retained queue.
 - If configuration or access is rejected, check the player's saved Plex server
   and token, then use `plex preview` to verify readiness without interrupting it.
 - If an item is unavailable, check the IDs against that server's library. IDs
