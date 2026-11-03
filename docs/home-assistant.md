@@ -570,6 +570,11 @@ allows a new authentication attempt within the five-second file-check interval.
 An unreadable file is retried on that interval too. A configuration URL or rule
 change still needs a controller restart.
 
+On Windows, token readers allow the credential file to be replaced or renamed
+while a poll is reading it. Each open reader finishes reading the old file, and
+the next poll opens the replacement. The handle remains read-only and does not
+change file permissions; keep both the token and its replacement private.
+
 ### Disable or roll back
 
 Set `home_assistant.enabled` to `false` and restart the controller. This leaves
