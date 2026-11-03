@@ -160,7 +160,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`ed6c205e8efc4c8e044944fd0cd79c1bd32426af`](https://github.com/open-ott-play/ottplay-control-server/commit/ed6c205e8efc4c8e044944fd0cd79c1bd32426af).
+[`7e2a1a8d1444c390195afb75ef100d4996f9bd38`](https://github.com/open-ott-play/ottplay-control-server/commit/7e2a1a8d1444c390195afb75ef100d4996f9bd38).
 This is an exact source pin, not a claim about the latest published release.
 It includes [indexer diagnostics and per-request child selection](torrent-indexer.md):
 `ott t1 torrent indexer doctor jackett` checks capabilities without a tracker search.
@@ -263,7 +263,7 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=ed6c205e8efc4c8e044944fd0cd79c1bd32426af
+  ott_ref=7e2a1a8d1444c390195afb75ef100d4996f9bd38
   ott_source="$HOME/.local/share/ottplay-control-server-ed6c205e8efc"
   python3 --version
   mkdir -p "$HOME/.local/share"
@@ -323,7 +323,7 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'ed6c205e8efc4c8e044944fd0cd79c1bd32426af'
+$ottRef = '7e2a1a8d1444c390195afb75ef100d4996f9bd38'
 $ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-ed6c205e8efc'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
