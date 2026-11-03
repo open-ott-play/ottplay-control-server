@@ -395,7 +395,7 @@ def credential(session, data, words, json_output, pair=False):
     elif json_output:
         print(json.dumps(value, indent=2))
     else:
-        api.print_pairing_settings(client.config.get("player_server", client.server), value["device_id"], value["token"])
+        api.print_pairing_settings(client.config.get("player_server", client.server), value["device_id"], value["token"], registry=True)
 
 
 def dispatch(api, client, config_path, words, json_output=False):

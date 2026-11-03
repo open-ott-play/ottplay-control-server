@@ -5664,17 +5664,25 @@ def home_assistant_metadata(raw):
     return result
 
 
-def print_pairing_settings(address, device, token):
+def print_pairing_settings(address, device, token, *, registry=False):
     print("Manual shared/web player connection details; this command does not pair a player:")
     print("Settings → Remote control → Command server")
     print("Address:", address)
     print("Access code:", token)
     print("Device UUID / queue:", device)
     print("Select Connect. Do not use this access code in another player.")
+    if not registry:
+        print("This static controller requires the native app's exact UUID to be registered first:")
+        print("  ott add lg-native NATIVE_DEVICE_UUID")
+        print("Apply the updated server configuration before starting native pairing.")
+        print("If the native UUID is unavailable, enable the device registry before pairing.")
     print("Native LG uses on-screen pairing: Settings → Remote control server → enter Address → Save.")
     print("Select Command server if shown, then read the Pairing code on the TV.")
     print("Use ott -j pending to match that code to the full native device_id, then:")
-    print("  ott registry approve lg-native NATIVE_DEVICE_UUID CURRENT_PAIRING_CODE")
+    if registry:
+        print("  ott registry approve lg-native NATIVE_DEVICE_UUID CURRENT_PAIRING_CODE")
+    else:
+        print("  ott approve lg-native CURRENT_PAIRING_CODE")
     print("Keep the native alias separate from the existing browser/MSX player.")
     print("Guide: https://github.com/open-ott-play/ottplay-control-server/blob/main/docs/cli.md#native-lg-controls")
 

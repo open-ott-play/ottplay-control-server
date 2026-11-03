@@ -2973,6 +2973,16 @@ it does not pair the native app or change its saved configuration. The
 `--lane native` option in Android maintenance commands still selects an Android
 system agent, not this LG application.
 
+A static controller without the device registry rejects pairing from an unknown
+UUID. If the native installation's exact UUID is already known from a trusted
+device readback, register it first with `ott add lg-native NATIVE_DEVICE_UUID`
+and apply the updated static server configuration. Then repeat on-screen pairing,
+check `ott -j pending`, and use `ott approve lg-native CURRENT_PAIRING_CODE`.
+If the native UI cannot show its UUID, enable the
+[device registry](device-registry.md#initialize-once) before pairing
+instead of substituting another player's identity. Displaying `ott pair NAME`
+does not bypass this registration requirement.
+
 ```sh
 ott lg-native caps
 ott lg-native volume 30

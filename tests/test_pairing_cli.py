@@ -75,7 +75,10 @@ class PairingCliTest(unittest.TestCase):
         self.assertIn('Access code: test-device-token', output)
         self.assertIn('Settings → Remote control server → enter Address → Save', output)
         self.assertIn('ott -j pending', output)
-        self.assertIn('ott registry approve lg-native NATIVE_DEVICE_UUID CURRENT_PAIRING_CODE', output)
+        self.assertIn('static controller', output)
+        self.assertIn('ott add lg-native NATIVE_DEVICE_UUID', output)
+        self.assertIn('ott approve lg-native CURRENT_PAIRING_CODE', output)
+        self.assertNotIn('ott registry approve', output)
         self.client.api.assert_not_called()
 
     def test_discovery_and_pending_json_remain_one_document(self):
