@@ -570,10 +570,14 @@ allows a new authentication attempt within the five-second file-check interval.
 An unreadable file is retried on that interval too. A configuration URL or rule
 change still needs a controller restart.
 
-On Windows, token readers allow the credential file to be replaced or renamed
-while a poll is reading it. Each open reader finishes reading the old file, and
-the next poll opens the replacement. The handle remains read-only and does not
-change file permissions; keep both the token and its replacement private.
+On Windows, use `ReplaceFile` (for example, .NET `System.IO.File.Replace`) for
+same-volume credential replacement while a poll is reading the old file. Token
+readers share delete access, so each open reader can finish reading the old file
+and the next poll opens the replacement. An ordinary move/rename using
+`MoveFileEx`, including Go's `os.Rename`, can still fail when the destination is
+open. The reader remains read-only; replacement must preserve private file ACLs.
+Keep the active token, staged replacement and their containing directory private;
+preserving the destination ACL cannot protect a publicly readable staged token.
 
 ### Disable or roll back
 

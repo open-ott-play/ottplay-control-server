@@ -19,7 +19,7 @@ func TestTokenFileReplacementWhileReaderIsOpen(t *testing.T) {
 	}
 	// Keep the reader open deliberately: this must not depend on winning a
 	// timing race between the rejected-credential poll and the token writer.
-	if err := os.Rename(path+".new", path); err != nil {
+	if err := replaceTokenFile(path+".new", path); err != nil {
 		t.Fatal(err)
 	}
 	old, err := io.ReadAll(f)
