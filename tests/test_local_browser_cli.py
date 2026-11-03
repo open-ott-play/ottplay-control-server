@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ott_local_browser', ROOT / 'cli/ott.py')
 ott = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ott)
-FIXTURE = json.loads((ROOT / 'testdata/local_browser_v1.json').read_text())
+FIXTURE = json.loads((ROOT / 'testdata/local_browser_v1.json').read_text(encoding='utf-8'))
 
 
 def caps(runtime='native-qa-1'):
