@@ -179,9 +179,7 @@ class _Target:
         self.wait(self.now() + remote.POST_INTERVAL)
         status, queued = self.client.api(query, {"action": "capabilities", "params": {}}, timeout=min(10, self.remaining()))
         self.remaining()
-        if (status != 202 or type(queued) is not dict or set(queued) != {"id", "status"}
-                or queued.get("status") != "queued" or type(queued.get("id")) is not str
-                or protocol.REQUEST_ID.fullmatch(queued["id"]) is None):
+        if not remote.valid_queue_ack(status, queued):
             raise CommandError("invalid_capability_receipt")
         request_id, delay = queued["id"], 1.5
         while True:

@@ -161,6 +161,14 @@
 
 ### Fixed
 
+- Accept the controller's optional bounded receipt wait hint in Favorites
+  requests, restoring capability discovery, describe and export with current
+  servers while preserving strict validation and one-time command submission.
+
+- Display native M3U and VPortal profile lists with no active slot while
+  keeping profile changes and preset preflight checks strict. Use the player
+  settings schema for interface text-scale limits instead of a fixed range.
+
 - Keep retained `state` and `history` request timeouts within the original
   budget when floating-point subtraction rounds the remaining time upward.
   A deterministic regression test covers the Windows CI failure.
