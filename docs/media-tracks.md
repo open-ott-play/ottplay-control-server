@@ -82,7 +82,13 @@ define the request, response and negative cases.
 
 A track target instead contains exactly `kind`, `mode:"track"` and `id`. Subtitle
 Off contains exactly `kind:"subtitle"` and `mode:"off"`; it has no ID. Operators
-can be granted `media_tracks.list` and `media_tracks.select` separately.
+can be granted `media_tracks.list` and `media_tracks.select` separately at the API
+level. CLI listing requires `capabilities` and `media_tracks.list`. CLI selection
+requires all three grants: `capabilities`, `media_tracks.list` and
+`media_tracks.select`, because every selection first reads a fresh catalog.
+A `media_tracks.select`-only grant is usable through the API with an already
+obtained, still-valid catalog receipt and its exact runtime, playback and source
+bindings; it is insufficient for the CLI selection workflow.
 
 Requests are bounded to 2 KiB for the complete action/params object. Result data
 is bounded to 64 KiB. A complete list contains at most 128 tracks, at most 64 per
@@ -124,8 +130,11 @@ saved settings. A route that cannot honor temporary selection must refuse it.
   selection. Do not substitute a persistent Plex/menu operation automatically.
 - **Requested, not confirmed:** inspect a fresh list and the player. Desired
   indices and generic video progress are not selected-track observations.
-- **Timeout or malformed acknowledgement:** keep the request ID and inspect
-  current state. The command may have executed; it is never repeated automatically.
+- **Malformed track list:** no selection was sent, including when the list was
+  the preflight for a selection command. Check player/controller compatibility.
+- **Selection timeout or malformed selection acknowledgement:** keep the request
+  ID and inspect current state. The command may have executed; it is never
+  repeated automatically.
 
 Before a producer advertises version 1, qualify real audio selection, subtitles
 and explicit Off on controlled media. Include stale IDs, manual/remote races,
