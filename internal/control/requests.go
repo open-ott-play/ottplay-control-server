@@ -620,6 +620,11 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 400, "invalid torrent indexer capability")
 			return
 		}
+		if marker, exists := capabilities["torrent_indexer_children"]; exists &&
+			(!validTorrentChildrenCapability(marker) || !validTorrentCatalogCapability(capabilities["torrent_indexer"])) {
+			failure(w, 400, "invalid torrent indexer children capability")
+			return
+		}
 		if marker, exists := capabilities["torrent_catalog"]; exists && !validTorrentCatalogCapability(marker) {
 			failure(w, 400, "invalid torrent catalog capability")
 			return

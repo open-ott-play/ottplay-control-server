@@ -143,6 +143,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME torrent list              list the owned-native Torrent catalog
   ott NAME torrent --help            add, inspect, play, edit and transfer Torrent sources
   ott NAME torrent indexer --help    manage local indexers, search and prepare sources
+  ott NAME torrent indexer doctor ID inspect source capabilities without running a search
   ott NAME local sources [--path PATH] [--paths]  list sources; native paths are opt-in
   ott NAME local shuffle Movies      shuffle only the connected Movies folder
   ott NAME local shuffle /Volumes/data/Movies/  connect/play a path on a native player
@@ -613,6 +614,8 @@ class SearchProgress:
     """Keep search diagnostics live on stderr without changing result output."""
     heartbeat_seconds = 5
     update_seconds = 1
+    label = "search"
+    description = "Search"
 
     def __init__(self, player, stream=None):
         self.player = clean(str(player))[:128]
@@ -623,6 +626,7 @@ class SearchProgress:
         self.lock = threading.Lock()
         self.stopped = threading.Event()
         self.thread = None
+        self.failed = False
 
     def __enter__(self):
         self.thread = threading.Thread(target=self._heartbeat, name="ottplay-search-progress", daemon=True)
@@ -636,7 +640,7 @@ class SearchProgress:
             if self.total is not None:
                 stage += "/" + str(self.total)
         try:
-            print(f"[search {self.player}] {stage} [{max(0, now - self.started):.1f}s]",
+            print(f"[{self.label} {self.player}] {stage} [{max(0, now - self.started):.1f}s]",
                   file=self.stream, flush=True)
         except (OSError, ValueError):
             # A closed diagnostics destination must not interrupt a search.
@@ -661,10 +665,15 @@ class SearchProgress:
                     self._write(now, waiting=True)
 
     def __exit__(self, kind, value, traceback):
-        self("Search complete" if kind is None else "Search stopped")
+        self(self.description + (" complete" if kind is None and not self.failed else " stopped"))
         self.stopped.set()
         if self.thread is not None:
             self.thread.join()
+
+
+class IndexerProgress(SearchProgress):
+    label = "indexer"
+    description = "Indexer request"
 
 
 class EpgClient:
@@ -4718,6 +4727,16 @@ def capabilities_metadata(data):
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
             raise Error(invalid)
         result["torrent_indexer"] = {"version": 1}
+    if "torrent_indexer_children" in data:
+        marker = data["torrent_indexer_children"]
+        if ("torrent_indexer" not in result or type(marker) is not dict
+                or set(marker) != {"version", "operations", "scopedOperations"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or marker["operations"] != ["indexers"]
+                or marker["scopedOperations"] not in (["caps", "search"], ["search", "caps"])):
+            raise Error(invalid)
+        result["torrent_indexer_children"] = {
+            "version": 1, "operations": ["indexers"], "scopedOperations": ["caps", "search"]}
     for key in ("playback_seek_relative", "playback_seek_archive_relative"):
         if key in data:
             marker = data[key]
@@ -5078,8 +5097,12 @@ def print_player_help(data, name):
         print(f"  {prefix} torrent --help  — catalog editing, transfer and operation recovery")
     if "torrent_indexer" in controls:
         print(f"  {prefix} torrent indexer list / caps SOURCE  — inspect local indexers")
+        print(f"  {prefix} torrent indexer doctor SOURCE  — diagnose capabilities without a search")
         print(f"  {prefix} torrent indexer search SOURCE QUERY  — find sources through the local companion")
         print(f"  {prefix} torrent indexer --help  — source configuration and preparation")
+        if "torrent_indexer_children" in controls:
+            print(f"  {prefix} torrent indexer indexers SOURCE  — list configured child indexers")
+            print(f"  {prefix} torrent indexer search SOURCE QUERY --indexer ID  — search one indexer")
     if "player_settings" in controls:
         print(f"  {prefix} settings  — list typed preferences for this player and source")
         print(f"  {prefix} setting KEY --value-file FILE  — save a private preference from a UTF-8 file")
@@ -7015,8 +7038,11 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         return television_module().run(SimpleNamespace(**globals()), client, device, args.words[0],
                                        words[1:], args.timeout, args.json)
     if route == "torrent_indexer":
-        return torrent_indexer_module().run(SimpleNamespace(**globals()), client, device, words[2:],
-                                            args.timeout, args.json, args.config)
+        with IndexerProgress(args.words[0], progress_stream) as progress:
+            code = torrent_indexer_module().run(SimpleNamespace(**globals()), client, device, words[2:],
+                                                args.timeout, args.json, args.config, progress=progress)
+            progress.failed = code != 0
+            return code
     if route == "torrent_catalog":
         return torrent_module().run(SimpleNamespace(**globals()), client, device, words[1:],
                                     args.timeout, args.json, args.config)

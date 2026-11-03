@@ -1,0 +1,843 @@
+{
+  "schema": 1,
+  "action": "torrent_indexer",
+  "capability": {
+    "torrent_indexer": {
+      "version": 1
+    },
+    "torrent_indexer_children": {
+      "version": 1,
+      "operations": [
+        "indexers"
+      ],
+      "scopedOperations": [
+        "caps",
+        "search"
+      ]
+    }
+  },
+  "limits": {
+    "max_indexers": 256,
+    "label_utf8_bytes": 128,
+    "metadata_utf8_bytes": 32,
+    "id_ascii_bytes": 128,
+    "max_response_bytes": 2097152
+  },
+  "valid": [
+    {
+      "name": "children-configured",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "language": "en-US",
+            "type": "public"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "children-none",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": []
+      }
+    },
+    {
+      "name": "children-unsupported",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": false,
+        "indexers": []
+      }
+    },
+    {
+      "name": "child-caps",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "1337x"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "child-search",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "search",
+        "indexerId": "Bittorrentfiles",
+        "query": "Big Buck Bunny",
+        "categoryIds": [],
+        "offset": 0,
+        "limit": 5
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "search",
+        "schema": 1,
+        "indexerId": "Bittorrentfiles",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123,
+            "seeders": null,
+            "publishedAt": null,
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": null
+      }
+    },
+    {
+      "name": "child-error",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "search",
+        "indexerId": "Bittorrentfiles",
+        "query": "Big Buck Bunny",
+        "categoryIds": [],
+        "offset": 0,
+        "limit": 5
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "op": "search",
+        "error": "Torrent indexer request failed.",
+        "reason": "torznab_timeout"
+      }
+    }
+  ],
+  "invalid_requests": [
+    {
+      "name": "bad-child-id-0",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "all"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "bad-child-id-1",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "ALL"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "bad-child-id-2",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "tag:fast"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "bad-child-id-3",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "id/escape"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "bad-child-id-4",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "a%2fb"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "bad-child-id-5",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "../child"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "bad-child-id-6",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": " child"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "bad-child-id-7",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "bad-child-id-8",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": ""
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "1337x",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "selector-on-enumeration",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "indexerId": "1337x"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "language": "en-US",
+            "type": "public"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "arbitrary-endpoint",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "endpoint": "https://example.invalid"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "language": "en-US",
+            "type": "public"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          }
+        ]
+      }
+    }
+  ],
+  "invalid_results": [
+    {
+      "name": "unavailable-with-rows",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": false,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "language": "en-US",
+            "type": "public"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate-child",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "language": "en-US",
+            "type": "public"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          },
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "language": "en-US",
+            "type": "public"
+          }
+        ]
+      }
+    },
+    {
+      "name": "upstream-url-field",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "language": "en-US",
+            "type": "public",
+            "endpoint": "http://example.invalid"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing-null-field",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "type": "public"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "label-too-long",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+            "language": "en-US",
+            "type": "public"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "language-too-long",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "indexers",
+        "schema": 1,
+        "supported": true,
+        "indexers": [
+          {
+            "id": "1337x",
+            "label": "Example indexer",
+            "language": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "type": "public"
+          },
+          {
+            "id": "Bittorrentfiles",
+            "label": "Example indexer",
+            "language": null,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "wrong-child-scope",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "1337x"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "indexerId": "other",
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "missing-child-scope",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "indexerId": "1337x"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "caps",
+        "schema": 1,
+        "searchAvailable": true,
+        "categories": [
+          {
+            "id": 2000,
+            "name": "Movies",
+            "parentId": null
+          }
+        ],
+        "maxLimit": 100
+      }
+    },
+    {
+      "name": "wrong-search-scope",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "search",
+        "indexerId": "Bittorrentfiles",
+        "query": "Big Buck Bunny",
+        "categoryIds": [],
+        "offset": 0,
+        "limit": 5
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "search",
+        "schema": 1,
+        "indexerId": "bittorrentfiles",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123,
+            "seeders": null,
+            "publishedAt": null,
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": null
+      }
+    },
+    {
+      "name": "wrong-runtime",
+      "params": {
+        "version": 1,
+        "runtime": "indexer-runtime:1",
+        "sourceId": "home",
+        "op": "search",
+        "indexerId": "Bittorrentfiles",
+        "query": "Big Buck Bunny",
+        "categoryIds": [],
+        "offset": 0,
+        "limit": 5
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "runtime": "different-runtime",
+        "sourceId": "home",
+        "op": "search",
+        "schema": 1,
+        "indexerId": "Bittorrentfiles",
+        "items": [
+          {
+            "resultRef": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "Big Buck Bunny",
+            "size": 123,
+            "seeders": null,
+            "publishedAt": null,
+            "categoryIds": [
+              2000
+            ],
+            "languages": [
+              "en"
+            ]
+          }
+        ],
+        "nextOffset": null,
+        "total": null
+      }
+    }
+  ]
+}

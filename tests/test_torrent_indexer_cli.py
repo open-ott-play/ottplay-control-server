@@ -97,10 +97,8 @@ class IndexerTests(unittest.TestCase):
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             code = cli.run(ott, self.client, "device-1", words, timeout, json_output, self.directory / "cli.json")
         raw = output.getvalue()
-        self.assertEqual(errors.getvalue(), "")
-        self.assertNotIn(SECRET, raw)
-        self.assertNotIn("sample-input", raw)
-        self.assertNotIn(ENDPOINT, raw)
+        for private in (SECRET, "sample-input", ENDPOINT):
+            self.assertNotIn(private, raw + errors.getvalue())
         return code, json.loads(raw) if json_output else raw
 
     def configure(self, *extra):

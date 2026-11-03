@@ -3,7 +3,7 @@ package config
 import "testing"
 
 func TestTorrentIndexerExactPermissions(t *testing.T) {
-	for _, op := range []string{"list", "configure", "remove", "caps", "search", "prepare"} {
+	for _, op := range []string{"list", "configure", "remove", "caps", "search", "prepare", "indexers"} {
 		if !ValidCommandAction("torrent_indexer." + op) {
 			t.Fatal("missing exact torrent permission", op)
 		}
