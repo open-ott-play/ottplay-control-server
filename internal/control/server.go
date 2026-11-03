@@ -49,6 +49,7 @@ type entry struct {
 	relativeSeek            *relativeSeekRequest
 	inspect                 *inspectRequest
 	aspect                  *aspectRequest
+	mediaTracks             *mediaTracksRequest
 	notificationSettings    *notificationsRequest
 	playerSettings          *playerSettingsRequest
 	plexFolders             *plexFoldersRequest

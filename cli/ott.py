@@ -149,6 +149,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME local shuffle /Volumes/data/Movies/  connect/play a path on a native player
   ott NAME local play Movies         play the connected source in its current order
   ott NAME local connect /Volumes/data/Movies/  connect a native folder without playback
+  ott NAME tracks                    list current audio and subtitle tracks
+  ott NAME tracks audio ID           request a current audio track by opaque ID
+  ott NAME tracks subtitle ID|off     request a subtitle track or turn subtitles off
   ott NAME provider-config FILE      update active provider settings from JSON
   ott NAME plex setup URL [TOKEN]    set Plex address and token (hidden prompt if omitted)
   ott NAME plex setup URL --token-file FILE  set Plex address and token from a file
@@ -356,7 +359,7 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "categories", "favorites", "aspect",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer", "media_tracks",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
@@ -4724,6 +4727,13 @@ def capabilities_metadata(data):
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
     if native_playback:
         result["native_playback_diagnostics"] = {"version": 1}
+    if "media_tracks" in data:
+        marker = data["media_tracks"]
+        if (type(marker) is not dict or set(marker) != {"version"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["media_tracks"] = {"version": 1}
     if "provider_diagnostics" in data:
         marker = data["provider_diagnostics"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
@@ -5108,6 +5118,9 @@ def print_player_help(data, name):
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("Available controls now:")
+    if "media_tracks" in controls:
+        print(f"  {prefix} tracks  — list current audio/subtitle tracks and observed selections")
+        print(f"  {prefix} tracks audio ID / tracks subtitle ID|off  — select for current playback only")
     if "torrent_catalog" in controls:
         print(f"  {prefix} torrent list / files ENTRY  — read the saved Torrent catalog")
         print(f"  {prefix} torrent add SOURCE --name TITLE  — inspect and save a Torrent source")
@@ -5304,7 +5317,7 @@ def print_player_help(data, name):
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
             and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
-            and not any(key in controls for key in ("playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
+            and not any(key in controls for key in ("media_tracks", "playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
     if sections or "debug" in controls or "provider_diagnostics" in controls or "native_playback_diagnostics" in controls:
@@ -6680,6 +6693,16 @@ def player_groups_module():
     return module
 
 
+def media_tracks_module():
+    path = Path(__file__).resolve().with_name("media_tracks.py")
+    if not path.is_file():
+        raise Error("Install all CLI Python files from the same revision to manage media tracks")
+    spec = importlib.util.spec_from_file_location("ott_media_tracks", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def television_module():
     path = Path(__file__).resolve().with_name("television.py")
     if not path.is_file():
@@ -6698,6 +6721,8 @@ def player_group_targets(client, selector):
 def player_command_route(words):
     """The single dispatch table for built-in and optional player commands."""
     verb = words[0].casefold() if words else ""
+    if verb == "tracks":
+        return "media_tracks"
     if verb == "tv":
         return "television"
     if verb == "torrent":
@@ -6924,6 +6949,12 @@ def player_group_command(client, config, targets, args, argv):
         parsed = parse_preset_load(words)
         name, _ = validate_preset(config, parsed["preset"])
         require_preset_favorites_support(config, name, settings_only=parsed["settings_only"])
+    if route == "media_tracks":
+        module = media_tracks_module()
+        try:
+            module.parse(words[1:])
+        except ValueError:
+            raise Error(module.USAGE) from None
     plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
     group_output_preflight(plans)
     json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))
@@ -7079,6 +7110,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     """Run the same resolved-player command for a single target or one group member."""
     words = args.words[1:]
     route = player_command_route(words)
+    if route == "media_tracks":
+        return media_tracks_module().run(SimpleNamespace(**globals()), client, device, words[1:],
+                                         args.timeout, args.json)
     if route == "television":
         return television_module().run(SimpleNamespace(**globals()), client, device, args.words[0],
                                        words[1:], args.timeout, args.json)

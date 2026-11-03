@@ -169,7 +169,7 @@ capability from a compatible player and companion; this CLI does not install it.
 It includes [direct LG television controls](television.md), named app launches
 such as `ott -t 90 lg2 tv go plex`, and the optional
 [`coco` / `cocop` Bash startup helpers](shell-shortcuts.md). The helpers have a
-separate installation and native Plex dependencies. Keep all 37 Python
+separate installation and native Plex dependencies. Keep all 38 Python
 modules together, including `television.py`; updating the Go server alone does
 not add `tv` commands to an older local CLI. The installation checks below include
 `tv --help`, which runs without configuration or contacting a television.
@@ -231,7 +231,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 37 Python modules, including
+The current CLI contains 38 Python modules, including
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -2948,6 +2948,27 @@ and controller and unlock settings/kiosk locally as appropriate. A “binding
 required” result means the profile is saved but the player needs local access.
 If a mutation times out or its acknowledgement is invalid, inspect `profiles`
 before retrying; the CLI never automatically repeats the change.
+
+## Current audio and subtitle tracks
+
+Compatible players expose temporary track selection through the optional
+[`media_tracks` extension](media-tracks.md). It requires a real producer
+implementation; installing the CLI does not enable it on a player.
+
+```sh
+ott lg-native tracks
+ott lg-native tracks audio AUDIO_ID
+ott lg-native tracks subtitle SUBTITLE_ID
+ott lg-native tracks subtitle off
+ott -j tt tracks
+```
+
+Copy exact opaque IDs from each player's current list. They are not numeric
+indices or language names. Selection is bound to the current playback and source;
+stale IDs are rejected and no failed or uncertain selection is replayed.
+`requested` and `NOT OBSERVED` do not claim that the backend selected a track.
+See the [command examples and troubleshooting guide](media-tracks.md) for JSON,
+group behavior, explicit Off, capabilities and native route limitations.
 
 ## Native LG controls
 
