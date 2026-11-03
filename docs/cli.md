@@ -2910,8 +2910,9 @@ ott lg2 local sources --paths
 ```
 
 `local sources` lists known bindings, not all attached disks or their directories.
-There is currently no `local roots`, `local browse` or remote folder-picker
-command. Paths refer to the **TV**, not the Mac running `ott`. On the native LG
+For builds advertising the separate `local_browser` and `local_media_handles`
+capabilities, see [native folder browsing](local-browser.md). These capabilities
+must not be inferred from `local_media` alone. Paths refer to the **TV**, not the Mac running `ott`. On the native LG
 implementation, `local connect` does not grant access to an unknown USB folder:
 guessing a `/tmp/usb/...` path cannot replace selecting an accessible source in
 the player. Likewise, `local sources --path PATH` only looks up a known binding;
