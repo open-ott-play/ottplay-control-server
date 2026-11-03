@@ -199,6 +199,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME doctor [-j]                read web/native identity and diagnostic capabilities
   ott NAME doctor --provider [--out DIR]  explain provider lookup with safe runtime evidence
   ott NAME debug [--engine] [-j]      read bounded runtime/native diagnostics (alias: dbg)
+  ott NAME debug --native-playback [-j]  read native playback counters and event ages
   ott NAME perf --help               opt-in bounded performance capture and safe notification trials
   ott NAME inspect --view ui,media    observe the interface and media without changing playback
   ott NAME operation REQUEST_ID      read a web operation receipt without repeating its effect
@@ -4701,12 +4702,20 @@ def capabilities_metadata(data):
     invalid = "The player returned invalid capabilities metadata"
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
         raise Error(invalid)
+    native_playback = "native_playback_diagnostics" in data
+    if native_playback:
+        marker = data["native_playback_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
     player = data.get("player")
-    patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}", "runtime": r"[a-z0-9-]{1,64}"}
+    patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}",
+                "runtime": r"[A-Za-z0-9_.-]{1,96}" if native_playback else r"[a-z0-9-]{1,64}"}
     if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if native_playback:
+        result["native_playback_diagnostics"] = {"version": 1}
     if "provider_diagnostics" in data:
         marker = data["provider_diagnostics"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
@@ -5283,12 +5292,14 @@ def print_player_help(data, name):
             and not any(key in controls for key in ("playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
-    if sections or "debug" in controls or "provider_diagnostics" in controls:
+    if sections or "debug" in controls or "provider_diagnostics" in controls or "native_playback_diagnostics" in controls:
         print("\nAvailable diagnostics now:")
         if "provider_diagnostics" in controls:
             print(f"  {prefix} doctor --provider [--out DIR]  — explain provider lookup and correlate runtime evidence")
         if "debug" in controls:
             print(f"  {prefix} debug  — read bounded runtime and native diagnostics")
+        if "native_playback_diagnostics" in controls:
+            print(f"  {prefix} debug --native-playback  — read native playback counters and event ages")
         if "doctor" in sections:
             print(f"  {prefix} doctor  — read runtime health and identity")
         if "snapshot" in sections:

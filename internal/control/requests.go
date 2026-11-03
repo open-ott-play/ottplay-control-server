@@ -616,6 +616,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			failure(w, 400, "invalid capabilities result")
 			return
 		}
+		if marker, exists := capabilities["native_playback_diagnostics"]; exists && !validNativePlaybackCapability(marker) {
+			failure(w, 400, "invalid native playback diagnostics capability")
+			return
+		}
 		if marker, exists := capabilities["torrent_indexer"]; exists && !validTorrentCatalogCapability(marker) {
 			failure(w, 400, "invalid torrent indexer capability")
 			return
