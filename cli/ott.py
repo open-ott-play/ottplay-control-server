@@ -343,7 +343,7 @@ LOCAL_MEDIA_ERRORS = {
         "check file formats and profile selection"
     ),
     "too_many_items": "The selected local source exceeds the supported item limit; no partial queue was started",
-    "operation_in_progress": "Another local media operation is still in progress",
+    "operation_in_progress": "Local media is busy or the source availability check did not finish; inspect the player and storage before issuing another change",
     "native_error": "The native player could not open the local source",
 }
 OFFLINE_BINDING_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
@@ -4316,7 +4316,7 @@ def print_local_media(data, params=None):
             print("No connected local source matches that path." if params and "path" in params else
                   "No local sources are connected. Add a folder in the player or use local connect with a supported native path.")
         for row in data["sources"]:
-            print(f"{clean(row['id'])}  {clean(row['name'])} ({row['kind']}; {'available' if row['available'] else 'unavailable'})")
+            print(f"{clean(row['id'])}  {clean(row['name'])} ({row['kind']}; {'available' if row['available'] else 'availability not confirmed'})")
             if "path" in row:
                 print("  " + clean(row["path"]))
     elif data["op"] == "connect":

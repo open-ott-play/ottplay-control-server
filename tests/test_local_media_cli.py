@@ -391,6 +391,48 @@ class LocalMediaTest(unittest.TestCase):
         self.assertEqual(client.call.call_count, 2)
         self.assertEqual(client.timeout, 10)
 
+    def test_source_availability_wording_preserves_wire_data_and_passive_requests(self):
+        data = copy.deepcopy(CONTRACT['sources_result'])
+        first = copy.deepcopy(data['sources'][0])
+        data['sources'] = [dict(first, id='confirmed', name='Confirmed', available=True),
+                           dict(first, id='unconfirmed', name='Unconfirmed', available=False)]
+        expected = [mock.call('dev_t1', 'capabilities', {}),
+                    mock.call('dev_t1', 'local_media', {'op': 'sources', 'runtime': 'page-123'})]
+        for json_output in (False, True):
+            with self.subTest(json_output=json_output):
+                code, out, err, calls = self.run_cli(['local', 'sources'], [caps(), data], json_output)
+                self.assertEqual((code, err, calls), (0, '', expected))
+                if json_output:
+                    self.assertEqual(json.loads(out), data)
+                    self.assertIs(json.loads(out)['sources'][1]['available'], False)
+                else:
+                    self.assertIn('Confirmed (folder; available)', out)
+                    self.assertIn('Unconfirmed (folder; availability not confirmed)', out)
+                    self.assertNotIn('; unavailable)', out)
+        # Responses must not smuggle private paths into ordinary listings.
+        data['sources'][1]['path'] = '/private/fixture-only'
+        code, out, err, calls = self.run_cli(['local', 'sources'], [caps(), data])
+        self.assertEqual((code, out, len(calls)), (1, '', 2))
+        self.assertNotIn('/private/fixture-only', err)
+
+    def test_busy_or_unfinished_probe_error_is_safe_and_never_replayed(self):
+        for operation in ('sources', 'shuffle'):
+            data = dict(CONTRACT['error_result'], op=operation, error='operation_in_progress')
+            for rejected in (False, True):
+                with self.subTest(operation=operation, rejected=rejected):
+                    response = (ott.PlayerRejected('private token /private/storage', data)
+                                if rejected else data)
+                    words = ['local', operation] + (['Movies'] if operation == 'shuffle' else [])
+                    code, out, err, calls = self.run_cli(words, [caps(), response])
+                    self.assertEqual((code, out, len(calls)), (1, '', 2))
+                    self.assertEqual(calls[-1].args[1], 'local_media')
+                    self.assertEqual(calls[-1].args[2]['op'], operation)
+                    self.assertIn('Local media is busy or the source availability check did not finish', err)
+                    self.assertIn('inspect the player and storage before issuing another change', err)
+                    self.assertIn('The request was not repeated', err)
+                    self.assertNotIn('private token', err)
+                    self.assertNotIn('/private/storage', err)
+
     def test_empty_source_explains_formats_and_profile_without_retry(self):
         data = dict(CONTRACT['error_result'], error='empty_source')
         for reply in (data, ott.PlayerRejected('private player details', data)):
