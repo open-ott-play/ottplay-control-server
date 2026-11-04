@@ -131,6 +131,36 @@
   explicit uncertainty recovery. Source examples do not establish that matching
   CLI, controller and player components are installed.
 
+## [0.1.8] - 2026-11-03
+
+### Fixed
+
+- Allow a saved preset to initialize an empty player only after all 15 profile
+  slots have been checked. Partially populated stores still require an active
+  profile, and settings writes retain their acknowledgement and final-state checks.
+- Preserve the native player's optional Local folder name and availability in
+  kiosk status. Validate the bounded metadata, omit private paths and grants,
+  and keep older player responses and strict-mode acknowledgement checks working.
+- Retry eligible transient GitHub GET failures with bounded whole-response reads.
+  Distinguish HTTP headers from binary payload text without copying the partial
+  body. Discard failed fragments, and reject successful validation jobs copied
+  from an earlier release attempt before publishing or promoting a release.
+
+### Upgrade
+
+Update the CLI to display optional Local folder status. The player must already
+support that response; this update adds no remote disk browser or folder picker.
+The Local folder guide distinguishes temporary playback from saved profiles and
+lists the limits of USB and strict-kiosk acceptance. Existing paired credentials,
+permission scopes and deployment configuration are unchanged.
+
+### Security
+
+Folder status projects only validated name and availability fields; filesystem
+paths and grants are not returned by the CLI. Release read recovery does not retry
+writes or authorization, certificate, missing-resource or rate-limit failures.
+Source publication does not imply live controller or physical-player acceptance.
+
 ## [0.1.7] - 2026-11-02
 
 ### Added
