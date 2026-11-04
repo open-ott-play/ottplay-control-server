@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import re
+import shlex
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -49,8 +50,8 @@ class DevicePowerTests(unittest.TestCase):
             return 0, (b"PROJECTOR-123\n" if args[4] == "ro.serialno" else b"Projector 2\n"), b""
         if args == ["-t", "42", "shell", "svc", "power"]:
             return 0, b"", b"usage: svc power shutdown\n Perform a runtime shutdown and power off the device.\n"
-        if args == ["-t", "42", "shell", "dumpsys", "window"]:
-            return 0, b"mCurrentFocus=Window{abc u0 play.ott.foss}\n", b""
+        if args == ["-t", "42", "shell", power.WINDOW_QUERY]:
+            return 0, b"mCurrentFocus=Window{abc u0 play.ott.foss}\n" + power.WINDOW_END.encode() + b"\n", b""
         if args == ["-t", "42", "shell", "svc", "power", "shutdown"]:
             if isinstance(self.shutdown_reply, Exception):
                 raise self.shutdown_reply
@@ -408,8 +409,8 @@ class ShutdownDialogTests(unittest.TestCase):
 
     def adb(self, executable, args, deadline, cancelled=None, mutation=False, on_wait=None):
         self.calls.append((list(args), mutation))
-        if args == ["-t", "42", "shell", "dumpsys", "window"]:
-            return 0, self.windows.pop(0), b""
+        if args == ["-t", "42", "shell", power.WINDOW_QUERY]:
+            return 0, self.windows.pop(0) + power.WINDOW_END.encode() + b"\n", b""
         if len(args) == 4 and args[:3] == ["-t", "42", "shell"] and args[3].startswith("umask 077;"):
             return 0, self.ui.pop(0) if isinstance(self.ui, list) else self.ui, b""
         if args[:5] == ["-t", "42", "shell", "input", "tap"]:
@@ -467,7 +468,7 @@ class ShutdownDialogTests(unittest.TestCase):
         self.assertTrue(self.confirm())
         effects = [args for args, mutation in self.calls if mutation]
         self.assertEqual(effects, [["-t", "42", "shell", "input", "tap", "640", "365"]])
-        self.assertEqual([args[-1] for args, _ in self.calls if args[-2:-1] == ["dumpsys"]], ["window", "window", "window"])
+        self.assertEqual(sum(args[-1] == power.WINDOW_QUERY for args, _ in self.calls), 3)
         script = self.calls[1][0][3]
         paths = re.findall(r"/data/local/tmp/\.ott-power-[0-9a-f]{32}\.xml", script)
         self.assertEqual(len(paths), 3)
@@ -634,6 +635,64 @@ class ConfigLockTests(unittest.TestCase):
             with power._ConfigLock(path):
                 pass
             api.write_private.assert_not_called()
+
+
+class WindowSnapshotTests(unittest.TestCase):
+    def snapshot(self, raw, code=0, err=b""):
+        with mock.patch.object(power, "_run", return_value=(code, raw, err)) as run:
+            result = power._window_snapshot("adb", "42", time.monotonic() + 10)
+        self.assertEqual(run.call_args.args[1], ["-t", "42", "shell", power.WINDOW_QUERY])
+        return result
+
+    def test_projection_requires_one_final_success_marker(self):
+        marker = power.WINDOW_END.encode() + b"\n"
+        self.assertEqual(self.snapshot(WINDOW + marker), ("abc123", "u0"))
+        self.assertIsNone(self.snapshot(marker))
+        for raw, code, err in ((WINDOW, 0, b""), (WINDOW + marker + marker, 0, b""),
+                               (WINDOW + marker + b"extra", 0, b""),
+                               (WINDOW + marker, 1, b""), (WINDOW + marker, 0, b"failed")):
+            with self.subTest(raw=raw[-60:], code=code), self.assertRaisesRegex(power.PowerError, "complete.*snapshot"):
+                self.snapshot(raw, code, err)
+
+    def test_wrapped_type_stays_bound_to_owning_window(self):
+        wrapped = WINDOW.replace(b"ty=KEYGUARD_DIALOG", b"\n      ty=KEYGUARD_DIALOG")
+        self.assertEqual(self.snapshot(wrapped + power.WINDOW_END.encode() + b"\n"), ("abc123", "u0"))
+        wrong = WINDOW.replace(b"ty=KEYGUARD_DIALOG", b"ty=APPLICATION_OVERLAY")
+        wrong = wrong.replace(b"mOwnerUid=12345 package=player", b"mOwnerUid=12345 package=player\n      ty=KEYGUARD_DIALOG")
+        self.assertIsNone(self.snapshot(wrong + power.WINDOW_END.encode() + b"\n"))
+
+    def test_type_from_another_dump_section_cannot_qualify_window(self):
+        wrong = WINDOW.replace(b"ty=KEYGUARD_DIALOG", b"ty=APPLICATION_OVERLAY")
+        wrong += b"WINDOW MANAGER UNRELATED\n      ty=KEYGUARD_DIALOG\n"
+        self.assertIsNone(self.snapshot(wrong + power.WINDOW_END.encode() + b"\n"))
+
+    @unittest.skipIf(sys.platform == "win32", "Runs the trusted Android shell projection with a local POSIX shell")
+    def test_large_unrelated_report_is_filtered_before_capture_limit(self):
+        noise = b"    irrelevant_history=" + b"x" * 1024 + b"\n"
+        wrapped = WINDOW.replace(b"ty=KEYGUARD_DIALOG", b"\n      ty=KEYGUARD_DIALOG")
+        report = noise * 512 + wrapped.replace(b"mAttrs=", noise * 512 + b"    mAttrs=") + noise * 512
+        self.assertGreater(len(report), power.MAX_OUTPUT * 32)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "windows.txt"
+            path.write_bytes(report)
+            script = "dumpsys() { cat " + shlex.quote(str(path)) + "; }; " + power.WINDOW_QUERY
+            code, projected, err = power._run("/bin/sh", ["-c", script], time.monotonic() + 5)
+        self.assertEqual((code, err), (0, b""))
+        self.assertLess(len(projected), 2048)
+        self.assertNotIn(b"irrelevant", projected)
+        self.assertEqual(self.snapshot(projected), ("abc123", "u0"))
+
+    @unittest.skipIf(sys.platform == "win32", "Runs the trusted Android shell projection with a local POSIX shell")
+    def test_failed_dump_with_valid_earlier_window_has_no_success_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "windows.txt"
+            path.write_bytes(WINDOW)
+            script = "dumpsys() { cat " + shlex.quote(str(path)) + "; return 1; }; " + power.WINDOW_QUERY
+            code, projected, err = power._run("/bin/sh", ["-c", script], time.monotonic() + 5)
+        self.assertEqual(code, 0)  # grep's success must not conceal dumpsys failure.
+        self.assertNotIn(power.WINDOW_END.encode(), projected)
+        with self.assertRaisesRegex(power.PowerError, "complete.*snapshot"):
+            self.snapshot(projected, code, err)
 
 
 if __name__ == "__main__":

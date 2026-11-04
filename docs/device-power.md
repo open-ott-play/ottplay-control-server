@@ -39,7 +39,7 @@ Then bind one explicit ADB target:
 adb devices -l
 ott p2 shutdown bind-adb 192.0.2.20:5555
 ott p2 shutdown status
-ott -t 30 p2 shutdown
+ott p2 shutdown
 ```
 
 `192.0.2.20:5555` is a placeholder: use the projector's actual ADB endpoint.

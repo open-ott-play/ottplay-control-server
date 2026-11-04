@@ -18,6 +18,13 @@ import xml.etree.ElementTree as ET
 
 MAX_OUTPUT = 32768
 FIELDS = frozenset(("version", "backend", "serial", "android_id", "hardware_serial", "model"))
+WINDOW_END = "__OTT_SHUTDOWN_WINDOW_END_V1__"
+# Android's "displays" subcommand has focus, while "windows" has ownership.
+# Keep both from one snapshot, but do not transfer unbounded unrelated dumps.
+# Window/section boundaries remain intact, including wrapped type attributes.
+WINDOW_QUERY = ("{ dumpsys window && printf '\\n" + WINDOW_END + "\\n'; } | grep -E '"
+                "^[[:space:]]*(mCurrentFocus=|Window #[0-9]+ Window[{]|mOwnerUid=|mAttrs=)"
+                "|(^|[[:space:]])ty=|^WINDOW MANAGER|^" + WINDOW_END + "$'")
 
 
 class PowerError(Exception):
@@ -252,7 +259,7 @@ def _system_dialog_window(raw):
         return None
     token, user = focus[0]
     heading = re.escape("Window{" + token + " " + user + " android}:")
-    sections = re.findall(r"(?ms)^\s*Window #\d+ " + heading + r"\s*\n(.*?)(?=^\s*Window #\d+ |\Z)", text)
+    sections = re.findall(r"(?ms)^\s*Window #\d+ " + heading + r"\s*\n(.*?)(?=^\s*Window #\d+ |^WINDOW MANAGER|\Z)", text)
     if len(sections) != 1:
         return None
     body = sections[0]
@@ -260,6 +267,16 @@ def _system_dialog_window(raw):
             or not re.search(r"\bty=KEYGUARD_DIALOG\b", body)):
         return None
     return token, user
+
+
+def _window_snapshot(adb, transport, deadline, cancelled=None):
+    code, raw, err = _run(adb, ["-t", transport, "shell", WINDOW_QUERY], deadline, cancelled)
+    lines = _text(raw).splitlines()
+    # A pipeline may otherwise look successful after dumpsys failed partway
+    # through a valid-looking window. Never treat partial output as a snapshot.
+    if code or err.strip() or not lines or lines[-1] != WINDOW_END or lines.count(WINDOW_END) != 1:
+        raise PowerError("Could not read a complete Android window snapshot")
+    return _system_dialog_window("\n".join(lines[:-1]).encode("utf-8"))
 
 
 def _shutdown_button(raw, require_focused=False):
@@ -327,8 +344,7 @@ def _shutdown_button(raw, require_focused=False):
 
 def _read_shutdown_dialog(adb, transport, deadline, cancelled=None):
     prefix = ["-t", transport, "shell"]
-    code, window, err = _run(adb, [*prefix, "dumpsys", "window"], deadline, cancelled)
-    before = _system_dialog_window(window) if not code and not err.strip() else None
+    before = _window_snapshot(adb, transport, deadline, cancelled)
     if before is None:
         return None
     # Every shell byte is fixed except this generated hexadecimal nonce. The
@@ -341,8 +357,7 @@ def _read_shutdown_dialog(adb, transport, deadline, cancelled=None):
     button = _shutdown_button(ui) if not code and not err.strip() else None
     if button is None:
         return None
-    code, window, err = _run(adb, [*prefix, "dumpsys", "window"], deadline, cancelled)
-    after = _system_dialog_window(window) if not code and not err.strip() else None
+    after = _window_snapshot(adb, transport, deadline, cancelled)
     if after != before:
         return None
     return before, button, _shutdown_button(ui, require_focused=True) is not None
