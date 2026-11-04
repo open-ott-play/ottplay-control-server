@@ -6,7 +6,7 @@ This runbook exercises a qualified **normal macOS player** through the real CLI 
 
 Pin the complete CLI module set, controller executable, normal player executable, composed source revision, enabled features, assets and host libraries. Reconcile the queue-v2, Local-browser and managed-Plex changes before using one combined CLI. A version label alone does not establish that those producers are present. The isolated HostFixture route requires the supported macOS build and its authenticated storage adapter.
 
-Use a dedicated private configuration, fixture alias, evidence directory and source/profile inputs supplied by the runtime operator. Do not point the fixture at household aliases or copy live credentials into reports. Synthetic PMS and media remain isolated. On real players, playback checks are restricted to **`~/v/data/Movies/`**; USB/SSD discovery does not authorize playing another directory.
+Use a dedicated private configuration, fixture alias, evidence directory and source/profile inputs supplied by the runtime operator. Do not point the fixture at household aliases or copy live credentials into reports. All actual playback checks, including an isolated Native test player, are restricted to media from **`~/v/data/Movies/`**. Synthetic metadata and mocked responses can be used without playing other media. USB/SSD discovery does not authorize playing another directory.
 
 The templates below show the underlying CLI, not a process supervisor:
 
@@ -100,7 +100,7 @@ List reads the retained candidate. Select changes the temporary runtime and requ
 
 ## Plex catalog, transport, tracks and queue
 
-Use only IDs from the isolated fixture or current catalog. Preview/listing is read-only; play, seek, track selection, kiosk and queue navigation mutate state.
+Use only IDs from the isolated fixture or current catalog. Every playback ID must resolve to media in the permitted Movies directory. Preview/listing is read-only; play, seek, track selection, kiosk and queue navigation mutate state.
 
 ```sh
 native_case plex libraries

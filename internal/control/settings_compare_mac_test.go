@@ -129,3 +129,85 @@ func TestSettingsCompareStalkerRetainsHTTPBodyLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestSettingsCompareStalkerNameBytesAndPrivateRoundTrip(t *testing.T) {
+	const mac = "  02:00:00:00:00:01  "
+	for _, row := range []struct {
+		label string
+		name  string
+		valid bool
+	}{
+		{"ascii-512", strings.Repeat("a", 512), true},
+		{"ascii-513", strings.Repeat("a", 513), false},
+		{"utf8-512", strings.Repeat("é", 256), true},
+		{"utf8-514", strings.Repeat("é", 257), false},
+		{"padded-utf8-512", "  " + strings.Repeat("é", 254) + "  ", true},
+		{"control", "name\n", false},
+		{"del", "name\x7f", false},
+	} {
+		t.Run(row.label, func(t *testing.T) {
+			params := stalkerCompareParams(t, mac)
+			settings, err := decodeObject(params["settings"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings["name"], err = json.Marshal(row.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			params["settings"], err = json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]any{"action": "settings_compare", "params": params})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := newTestServer(t)
+			if !row.valid {
+				expect(t, request(s, "POST", "/api/requests?device_id=first", adminToken, string(body), nil), 400)
+				if len(s.devices[0].queue) != 0 || s.bytes != 0 {
+					t.Fatal("invalid comparison name entered the queue")
+				}
+				return
+			}
+			id := rpcID(t, s, string(body))
+			poll := request(s, "GET", "/api/webhook/commands?delivery=ack", firstToken, "", nil)
+			expect(t, poll, 200)
+			var delivery struct {
+				Requests []struct {
+					ID     string `json:"id"`
+					Action string `json:"action"`
+					Params struct {
+						Settings map[string]string `json:"settings"`
+					} `json:"params"`
+				} `json:"requests"`
+			}
+			if err := json.Unmarshal(poll.Body.Bytes(), &delivery); err != nil {
+				t.Fatal(err)
+			}
+			if len(delivery.Requests) != 1 || delivery.Requests[0].ID != id ||
+				delivery.Requests[0].Action != "settings_compare" ||
+				delivery.Requests[0].Params.Settings["name"] != row.name ||
+				delivery.Requests[0].Params.Settings["mac"] != mac {
+				t.Fatal("private comparison delivery changed the exact stored literals")
+			}
+			other := request(s, "GET", "/api/webhook/commands?delivery=ack", secondToken, "", nil)
+			expect(t, other, 200)
+			metadata := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+			expect(t, metadata, 202)
+			for _, value := range []string{row.name, mac, "fixture.invalid"} {
+				if strings.Contains(other.Body.String(), value) || strings.Contains(metadata.Body.String(), value) {
+					t.Fatal("comparison metadata or another player exposed stored literals")
+				}
+			}
+			response := `{"id":"` + id + `","status":"ok","data":{"provider":"stalker","number":3,"matched":true}}`
+			expect(t, request(s, "POST", "/api/responses", firstToken, response, nil), 200)
+			result := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+			expect(t, result, 200)
+			if result.Body.String() != response || len(s.devices[0].queue) != 0 || s.bytes != 0 {
+				t.Fatal("comparison did not finish with only its credential-free result")
+			}
+		})
+	}
+}
