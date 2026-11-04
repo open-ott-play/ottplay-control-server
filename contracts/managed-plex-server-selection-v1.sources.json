@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "action": "plex_servers",
+  "version": 1,
+  "status": "agreed interface and wire fixtures; native execution qualification pending",
+  "files": {
+    "contracts/managed-plex-server-selection-v1.md": "96630fdc691b94bcf4b6e26324636dbbcccb5798a988eb34af5e01d3082d3464",
+    "testdata/plex_servers_v1.json": "f4e5d75babe9313e99139115d483e46cfb19763f3aea751361d8c75069ec20a2"
+  },
+  "wire_case_counts": {
+    "capabilities": 23,
+    "requests": 50,
+    "replies": 105
+  },
+  "agreement_receipt_sha256": {
+    "contract": "0412541d1b2edc17f03caad2e0bb5d852c51920c26d450b95888084a37a73c32",
+    "wire": "5917c315df1d2d7d6c2c475a0e3e3eec9ceff0efb546c5f7adbf87d52aa0a878",
+    "lifecycle": "a6dad766e3a2bb83e443df5767495473f7723647d990473cdcd8171a99463254"
+  },
+  "note": "Historical proposal wording in the exact reviewed inputs is retained to preserve their hashes. These pins are not production execution evidence."
+}

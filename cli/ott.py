@@ -380,7 +380,7 @@ RECEIPT_ACTIONS = frozenset((
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
-    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "local_browser", "categories", "favorites", "aspect",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "plex_servers", "local_media", "local_browser", "categories", "favorites", "aspect",
     "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer", "media_tracks",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
@@ -1259,6 +1259,10 @@ class Client:
             wait_options = ({"wait_ms": advertised_wait} if type(advertised_wait) is int
                             and 1 <= advertised_wait <= 1000 else {})
             try:
+                if action == "plex_servers":
+                    # This protocol bounds the entire original reply, not its
+                    # compacted data subtree after the generic projection.
+                    wait_options["response_validator"] = lambda raw, identity: plex_servers_receipt(raw, params, identity)
                 receipt = self._wait_receipt(query, request_id, deadline, **wait_options)
             except Error as exc:
                 exc.request_id = request_id
@@ -1285,7 +1289,7 @@ class Client:
                     # Output failure cannot replay or change a completed operation.
                     pass
 
-    def _wait_receipt(self, query, request_id, deadline, wait_ms=0):
+    def _wait_receipt(self, query, request_id, deadline, wait_ms=0, response_validator=None):
         last_failure = None
         last_transport_category = None
         pending_confirmed = False
@@ -1310,7 +1314,15 @@ class Client:
             suffix = "&wait_ms=" + str(wait) if wait else ""
             backoff = 0.8
             try:
-                status, result = self.api("/api/requests" + query + "&id=" + request_id + suffix, timeout=remaining)
+                path = "/api/requests" + query + "&id=" + request_id + suffix
+                if response_validator is None:
+                    status, result = self.api(path, timeout=remaining)
+                else:
+                    status, raw = self.api_raw(path, timeout=remaining)
+                    if status == 200:
+                        result = response_validator(raw, request_id)
+                    else:
+                        result = plex_servers_decode(raw, 65536)
             except TransportError as exc:
                 # A final long poll can exhaust the caller's deadline after
                 # healthy pending receipts. Preserve that known state unless
@@ -1824,6 +1836,8 @@ def parse_command(words):
         return "provider_settings", data
     if verb == "plex":
         operation = tail[0].casefold() if tail else ""
+        if operation == "servers":
+            return "plex_servers", parse_plex_servers(tail[1:])
         if operation in ("libraries", "library", "shuffle"):
             return "plex_library", parse_plex_library(tail)
         operation = {"queue": "status", "prev": "previous"}.get(operation, operation)
@@ -4554,6 +4568,187 @@ def print_local_media(data, params=None):
         print("Playback request accepted; playback has not been confirmed.")
 
 
+PLEX_SERVERS_USAGE = "Use plex servers or plex servers select SERVER_ID --context CONTEXT"
+PLEX_SERVERS_ERRORS = {
+    "invalid_request": "The player rejected the Plex server request",
+    "unsupported": "Managed Plex server selection is unavailable on this player",
+    "busy": "The managed Plex server owner is busy",
+    "stale": "The player runtime or retained selection context changed",
+    "source_changed": "The retained Plex candidate changed",
+    "authorization_conflict": "The retained Plex candidate conflicts with existing server authorization",
+    "unavailable": "The retained Plex candidate is unavailable",
+    "restricted": "Player policy or the Providers PIN prevents this selection",
+    "expired": "The Plex server request or selection context expired before admission",
+    "cancelled": "The Plex server operation was cancelled",
+    "limit_exceeded": "The managed Plex server operation exceeded its bounds",
+    "activation_failed": "Managed Plex activation failed with the prior state retained or restored",
+    "outcome_unknown": "Managed Plex activation has an unknown outcome; inspect current player status",
+}
+
+
+def plex_servers_token(value, pattern):
+    return isinstance(value, str) and re.fullmatch(pattern, value) is not None
+
+
+def parse_plex_servers(words):
+    if not words:
+        return {"version": 1, "op": "list"}
+    if (len(words) != 4 or words[0].casefold() != "select" or words[2] != "--context"
+            or not plex_servers_token(words[1], r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}")
+            or not plex_servers_token(words[3], r"[A-Za-z0-9_.:-]{1,256}")):
+        raise Error(PLEX_SERVERS_USAGE)
+    return {"version": 1, "op": "select", "server_id": words[1], "context": words[3]}
+
+
+def plex_servers_capability(marker):
+    invalid = "The player returned invalid managed Plex server capabilities"
+    if (not isinstance(marker, dict) or set(marker) != {"version", "operations", "max_servers"}
+            or type(marker["version"]) is not int or marker["version"] != 1
+            or type(marker["max_servers"]) is not int or marker["max_servers"] != 1
+            or not isinstance(marker["operations"], list) or len(marker["operations"]) != 2
+            or not all(isinstance(op, str) for op in marker["operations"])
+            or set(marker["operations"]) != {"list", "select"}):
+        raise Error(invalid)
+    return {"version": 1, "operations": list(marker["operations"]), "max_servers": 1}
+
+
+def plex_servers_request(params):
+    if (not isinstance(params, dict) or type(params.get("version")) is not int
+            or params["version"] != 1 or params.get("op") not in ("list", "select")
+            or not plex_servers_token(params.get("runtime"), r"[a-z0-9-]{1,64}")):
+        raise Error("Invalid managed Plex server request")
+    expected = {"version", "runtime", "op"}
+    if params["op"] == "select":
+        expected |= {"server_id", "context"}
+        if (not plex_servers_token(params.get("server_id"), r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}")
+                or not plex_servers_token(params.get("context"), r"[A-Za-z0-9_.:-]{1,256}")):
+            raise Error("Invalid managed Plex server request")
+    if set(params) != expected:
+        raise Error("Invalid managed Plex server request")
+    return dict(params)
+
+
+def plex_servers_decode(raw, maximum=65536):
+    try:
+        if not isinstance(raw, (bytes, str)) or len(raw.encode("utf-8") if isinstance(raw, str) else raw) > maximum:
+            raise ValueError()
+        return decode_response_json(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    except (ValueError, RecursionError, UnicodeError):
+        raise Error("The player returned invalid managed Plex server JSON") from None
+
+
+def plex_servers_metadata(data, params, status="ok"):
+    invalid = "The player returned invalid managed Plex server metadata"
+    plex_servers_request(params)
+    if (not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1
+            or data.get("runtime") != params["runtime"] or data.get("op") != params["op"]):
+        raise Error(invalid)
+    common = {"version", "runtime", "op", "state"}
+    if status in ("rejected", "unsupported"):
+        if (set(data) != common | {"error"} or data["state"] != "error"
+                or not isinstance(data["error"], str) or data["error"] not in PLEX_SERVERS_ERRORS):
+            raise Error(invalid)
+        return dict(data)
+    if status != "ok" or data.get("state") != "ready":
+        raise Error(invalid)
+    if params["op"] == "list":
+        if set(data) != common | {"servers"} or not isinstance(data["servers"], list) or len(data["servers"]) > 1:
+            raise Error(invalid)
+        for row in data["servers"]:
+            if (not isinstance(row, dict) or set(row) != {"server_id", "name", "context", "expires_in_ms"}
+                    or not plex_servers_token(row["server_id"], r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}")
+                    or not plex_servers_token(row["context"], r"[A-Za-z0-9_.:-]{1,256}")
+                    or not isinstance(row["name"], str) or not row["name"]
+                    or re.search(r"[\x00-\x1f\x7f-\x9f]", row["name"])
+                    or type(row["expires_in_ms"]) is not int or not 1 <= row["expires_in_ms"] <= 120000):
+                raise Error(invalid)
+            try:
+                if len(row["name"].encode("utf-8")) > 512:
+                    raise Error(invalid)
+            except UnicodeError:
+                raise Error(invalid) from None
+    elif (set(data) != common | {"server_id", "context", "activated", "persisted", "playback_confirmed"}
+            or data["server_id"] != params["server_id"] or data["context"] != params["context"]
+            or data["activated"] is not True or data["persisted"] is not False
+            or data["playback_confirmed"] is not False):
+        raise Error(invalid)
+    return copy.deepcopy(data)
+
+
+def plex_servers_receipt(raw, params, request_id):
+    result = plex_servers_decode(raw)
+    if (not isinstance(result, dict) or set(result) != {"id", "status", "data"}
+            or not plex_servers_token(request_id, r"[a-f0-9]{32}") or result["id"] != request_id):
+        raise Error("The player returned an invalid managed Plex server receipt")
+    plex_servers_metadata(result["data"], params, result["status"])
+    return result
+
+
+def plex_servers_command(client, device, params, timeout):
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    request = None
+    submitted = False
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Plex server capability discovery exceeded --timeout; no server command was sent")
+        client.timeout = remaining
+        raw_controls = client.call(device, "capabilities", {})
+        try:
+            controls = capabilities_metadata(raw_controls)
+        except Error as exc:
+            raise Error(str(exc) + ". No server command was sent") from None
+        if "plex_servers" not in controls:
+            raise Error("Managed Plex server commands require a player and controller advertising plex_servers. No server command was sent")
+        request = plex_servers_request(dict(params, runtime=controls["player"]["runtime"]))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Plex server capability discovery exceeded --timeout; no server command was sent")
+        client.timeout = remaining
+        submitted = True
+        result = client.call(device, "plex_servers", request)
+        if time.monotonic() >= deadline:
+            raise Error("Managed Plex server response exceeded --timeout")
+        return plex_servers_metadata(result, request)
+    except (PlayerRejected, PlayerUnsupported) as exc:
+        detail = "Managed Plex server request was rejected or unsupported"
+        if request is not None:
+            status = "unsupported" if isinstance(exc, PlayerUnsupported) else "rejected"
+            try:
+                result = plex_servers_metadata(exc.data, request, status)
+                detail = PLEX_SERVERS_ERRORS[result["error"]]
+            except Error:
+                detail = "The player returned invalid managed Plex server error metadata"
+        raise Error(detail + ". The request was not repeated") from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("Managed Plex server commands require an updated controller and player advertising plex_servers. The request was not repeated") from None
+        raise
+    except RequestError:
+        # Keep the original action/request ID and the transport's uncertainty.
+        raise
+    except Error as exc:
+        if submitted:
+            suffix = (" Activation is uncertain; inspect current player status before another selection."
+                      if params["op"] == "select" else "")
+            raise Error(str(exc) + suffix + " The request was not repeated") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_plex_servers(data):
+    if data["op"] == "select":
+        print("Managed Plex server activated temporarily; profile not saved and playback not confirmed.")
+        return
+    if not data["servers"]:
+        print("No eligible retained managed Plex server is available.")
+    for row in data["servers"]:
+        print(f"{clean(row['name'])} (server_id: {row['server_id']})")
+        print(f"  context: {row['context']}; expires in {row['expires_in_ms']} ms")
+
+
 def parse_plex_library(words):
     operation = words[0].casefold()
     if operation == "libraries":
@@ -5002,6 +5197,10 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "plex_servers" in data:
+        if not plex_servers_token(player["runtime"], r"[a-z0-9-]{1,64}"):
+            raise Error(invalid)
+        result["plex_servers"] = plex_servers_capability(data["plex_servers"])
     if native_playback:
         result["native_playback_diagnostics"] = {"version": 1}
     if "media_tracks" in data:
@@ -5529,6 +5728,12 @@ def print_player_help(data, name):
     if queue:
         print(f"  {prefix} plex " + " / ".join(op + " ID [ID ...]" if op in ("play", "preview") else op for op in queue))
         print("    next/prev use the retained Plex queue until plex stop clears it; kiosk can repeat its order.")
+    if "plex_servers" in controls:
+        # Also validate callers that supply already-projected help metadata.
+        plex_servers_capability(controls["plex_servers"])
+        print(f"  {prefix} plex servers  — list the eligible retained managed Plex server")
+        print(f"  {prefix} plex servers select SERVER_ID --context CONTEXT  — activate temporarily on this player")
+        print("    Uses a fresh listed context; does not save the profile or confirm playback.")
     local = controls.get("local_media", {})
     local_operations = local.get("operations", [])
     if "sources" in local_operations:
@@ -7266,6 +7471,8 @@ def player_group_command(client, config, targets, args, argv):
             ((action == "local_browser" and prepared[1]["op"] != "roots")
              or (action == "local_media" and "source_handle" in prepared[1]))):
         raise Error("Local browser tokens and source handles belong to one player; choose a single target. No local command was sent")
+    if action == "plex_servers" and prepared[1]["op"] == "select" and len(targets) != 1:
+        raise Error("Managed Plex server selection requires exactly one player; contexts cannot be shared between receivers")
     if action in ("favorites_profile", "favorites_global") and prepared[1]["op"] == "acknowledge" and len(targets) != 1:
         raise Error("Favorites acknowledgement requires exactly one player")
     if action == "favorites_profile" and prepared[1]["op"] == "collect":
@@ -7538,6 +7745,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         data = plex_queue_command(client, device, params, args.timeout)
     elif action == "plex_library":
         data = plex_library_command(client, device, params, args.timeout)
+    elif action == "plex_servers":
+        data = plex_servers_command(client, device, params, args.timeout)
     elif action == "local_media":
         data = local_media_command(client, device, params, args.timeout)
     elif action == "local_browser":
@@ -7695,6 +7904,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         print_plex_queue(data, preview=params["op"] == "preview")
     elif action == "plex_library":
         print_plex_library(data)
+    elif action == "plex_servers":
+        print_plex_servers(data)
     elif action == "local_media":
         print_local_media(data, params)
     elif action == "local_browser":

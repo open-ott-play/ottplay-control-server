@@ -798,6 +798,10 @@ the current queue, and use a new request only after assessing that state.
 
 ### Plex library extension
 
+The separate [`plex_servers` extension](managed-plex-servers.md#protocol) selects
+a retained managed native server temporarily. Its controller/CLI support does
+not advertise player support; native producer qualification remains required.
+
 `plex_library` is a separate administrator-authenticated RPC. It resolves library
 sections using the player's saved Plex credentials and reuses its existing queue
 implementation. It accepts no URL, token, preset or filesystem path. It neither
