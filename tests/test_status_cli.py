@@ -75,6 +75,9 @@ class StatusCliTest(unittest.TestCase):
             self.assertIn('ott tv settings', out)
             if platform == 'webos-native':
                 self.assertIn('setting uiFontScale [100]', out)
+                self.assertIn('see settings for limits', out)
+                self.assertNotIn('50–150', out)
+                self.assertNotIn('20–200', out)
                 self.assertIn('setting players  — read the fixed Native engine', out)
                 self.assertIn('setting interfaceMode  — read the fixed Modern interface', out)
                 self.assertNotIn('bufSize', out)

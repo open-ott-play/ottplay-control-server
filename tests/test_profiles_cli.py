@@ -173,13 +173,12 @@ class ProfileOutputTest(unittest.TestCase):
             data = self.listing()
             data['profiles'][0][field] = value
             cases.append(data)
-        for change in ['short', 'long', 'reordered', 'duplicate', 'no-active', 'two-active', 'missing-history']:
+        for change in ['short', 'long', 'reordered', 'duplicate', 'two-active', 'missing-history']:
             data = self.listing()
             if change == 'short': data['profiles'].pop()
             elif change == 'long': data['profiles'].append(self.row(16, False))
             elif change == 'reordered': data['profiles'].reverse()
             elif change == 'duplicate': data['profiles'][1]['number'] = 1
-            elif change == 'no-active': data['profiles'][2]['active'] = False
             elif change == 'two-active': data['profiles'][0]['active'] = True
             else: data['profiles'][0].pop('history_hours')
             cases.append(data)

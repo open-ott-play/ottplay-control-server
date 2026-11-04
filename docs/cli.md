@@ -49,6 +49,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Switch provider and start playback](#switch-provider-and-start-playback)
 - [Switch providers on several players](#switch-providers-on-several-players)
 - [Local folders and shuffled playback](#local-folders-and-shuffled-playback)
+- [Native LG USB and SSD folders](#native-lg-usb-and-ssd-folders)
 - [Torrent catalog, file selection and portable export](torrent-catalog.md)
 - [Local Torznab, Jackett and Prowlarr indexers](torrent-indexer.md)
 - [Resolve a playlist for a local launcher](#local-playlist-resolver)
@@ -2147,6 +2148,12 @@ does not prove that playback never started.
 `fav global` moves an ordered list spanning providers, profiles and sources.
 Install every `cli/*.py` module from the same revision and use a compatible
 controller and player. `ott PLAYER` lists global controls only when advertised.
+If Favorites commands report `invalid capability receipt` with a current
+controller, update the complete CLI directory: older clients reject the optional
+receipt wait hint before reading the player capabilities. After updating, verify
+with `ott t1 fav global describe` and export to a new file with
+`ott t1 fav global export backup.json`. Uncertain writes must not be repeated.
+
 The document contains source aliases and item locators, never provider tokens,
 playback URLs or the sender's absolute Local paths. The receiving player uses
 its own configured sources; missing or ambiguous items remain explicit.
@@ -2889,6 +2896,77 @@ A timeout is an uncertain outcome, not permission to replay a shuffle. Read
 does not prove that the decoder is rendering video. Update CLI, controller and
 player together if the command is reported unsupported.
 
+### Native LG USB and SSD folders
+
+Start in the native player's **Local videos** UI: select and remember the folder
+on the attached disk, then wait for its scan to finish. The native candidate
+implements a folder picker; its availability and USB access still depend on the
+installed TV build. This is not a fully verified USB setup procedure for every LG
+model. Check the installed player's capabilities and connected sources first:
+
+```sh
+ott lg2 caps
+ott lg2 local sources
+ott lg2 status
+# Only if local_media advertises absolute_paths:
+ott lg2 local sources --paths
+```
+
+`local sources` lists known bindings, not all attached disks or their directories.
+There is currently no `local roots`, `local browse` or remote folder-picker
+command. Paths refer to the **TV**, not the Mac running `ott`. On the native LG
+implementation, `local connect` does not grant access to an unknown USB folder:
+guessing a `/tmp/usb/...` path cannot replace selecting an accessible source in
+the player. Likewise, `local sources --path PATH` only looks up a known binding;
+it does not browse the directory.
+
+Once `Movies` is connected and available, these commands use it for temporary
+playback:
+
+```sh
+ott lg2 local play Movies
+ott lg2 local shuffle Movies
+```
+
+If names are duplicated, use the source ID from `local sources` instead. These
+commands require the Local session capability described above; they do not save
+a startup folder or a durable queue. To save a Local profile, make the persistent
+folder and video selection in the player's UI, finish scanning, and check that
+`caps` advertises `offline_profiles` with the needed operations. Then use an
+appropriate profile slot:
+
+```sh
+ott lg2 profiles
+ott lg2 profile save 1 "USB movies"
+ott lg2 profile load 1
+```
+
+Do not use `profile save` to capture a temporary remote shuffle. A saved profile
+also cannot restore a removed disk or grant filesystem access.
+
+The native implementation also accepts this folder-specific kiosk query after
+the uniquely named folder has been selected, bound and remembered through the UI:
+
+```sh
+ott lg2 kiosk on --strict 'folder:Movies'
+ott lg2 kiosk status
+ott lg2 kiosk off
+```
+
+A temporary `local shuffle` is not that persistent setup step. The `folder:`
+selector is native-specific, has no separate advertised folder capability yet,
+and this USB workflow has not been qualified on the TV. A successful strict
+receipt confirms the policy, not uninterrupted disk playback. There is no
+`local loop` or `local repeat` command, and the native settings schema exposes no
+loop setting; do not infer configurable looping from `shuffle` or strict kiosk.
+
+When returned by the player, kiosk status preserves optional folder name and
+availability metadata. This does not guarantee that an installed native build
+can return kiosk status after unplugging the disk. If it rejects that read, use
+`local sources` and `status` to inspect availability and playback. Reconnect and
+reselect the intended source locally when needed. After a timed-out mutation,
+read status before deciding what to do; do not automatically repeat it.
+
 ## Local videos profiles
 
 Use `provider local` (display name **Local videos**, compatible wire ID `offline`) for files or folders connected
@@ -3029,7 +3107,8 @@ acknowledgement still fails and is never automatically repeated. A plain
 `volume` read reports that the platform does not provide a reading. These are
 player controls; the separate `ott l tv volume 30` command controls system volume.
 
-The native settings schema exposes interface text scale from 50 to 150 percent.
+Use the range reported by `ott lg-native settings` for interface text scale;
+different native versions can advertise different limits.
 The engine is fixed to Native and the interface to Modern; their settings are
 read-only. Browser buffering and hls.js examples do not apply to this application.
 
@@ -3046,6 +3125,9 @@ Select the provider before listing its slots. The list contains 15 numbered
 names, with `*` marking the active slot if one is selected. It does not infer
 whether a source is configured from its name. Selection requires a configured,
 enabled slot and remains subject to the player's settings restrictions.
+An initial M3U or VPortal list can have no active slot; the CLI displays that
+state without inventing a selection. Preset changes still require their normal
+active-profile checks.
 `profile N` confirms dispatch, not completed loading or visible playback.
 These listing and selection commands do not extend M3U `profile-config` settings
 to other providers. Use `caps` and the player's settings schema for available

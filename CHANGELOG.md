@@ -131,6 +131,36 @@
   explicit uncertainty recovery. Source examples do not establish that matching
   CLI, controller and player components are installed.
 
+## [0.1.8] - 2026-11-03
+
+### Fixed
+
+- Allow a saved preset to initialize an empty player only after all 15 profile
+  slots have been checked. Partially populated stores still require an active
+  profile, and settings writes retain their acknowledgement and final-state checks.
+- Preserve the native player's optional Local folder name and availability in
+  kiosk status. Validate the bounded metadata, omit private paths and grants,
+  and keep older player responses and strict-mode acknowledgement checks working.
+- Retry eligible transient GitHub GET failures with bounded whole-response reads.
+  Distinguish HTTP headers from binary payload text without copying the partial
+  body. Discard failed fragments, and reject successful validation jobs copied
+  from an earlier release attempt before publishing or promoting a release.
+
+### Upgrade
+
+Update the CLI to display optional Local folder status. The player must already
+support that response; this update adds no remote disk browser or folder picker.
+The Local folder guide distinguishes temporary playback from saved profiles and
+lists the limits of USB and strict-kiosk acceptance. Existing paired credentials,
+permission scopes and deployment configuration are unchanged.
+
+### Security
+
+Folder status projects only validated name and availability fields; filesystem
+paths and grants are not returned by the CLI. Release read recovery does not retry
+writes or authorization, certificate, missing-resource or rate-limit failures.
+Source publication does not imply live controller or physical-player acceptance.
+
 ## [0.1.7] - 2026-11-02
 
 ### Added
@@ -143,18 +173,59 @@
 - Document archive capability checks, conditional playback examples, readable
   local timestamps and numeric Unix timestamps in JSON output.
 
+- Run player-group commands concurrently with isolated clients and output,
+  ordered JSON results and cancellation that stops further requests. One slow
+  player no longer serializes the whole group.
+- Add bounded indexer `doctor` / `diagnose` checks, progress on stderr and
+  capability-gated Jackett child discovery and request-scoped selection. A
+  diagnostic search requires explicit `--query`; diagnostics do not prepare
+  media or start playback.
+- Add `debug --native-playback` for a capability-gated, read-only snapshot of
+  the native pipeline. Report unavailable measurements separately from zero;
+  submitted units and position events do not prove displayed frames or sound.
+- Add current-playback `tracks` listing and audio/subtitle selection, including
+  explicit subtitle Off, with separate list/select permissions and fresh
+  runtime, playback, source and catalog bindings. The controller and CLI
+  protocol require a compatible player; native producer integration remains
+  pending. See the [track-selection guide](docs/media-tracks.md).
+
 ### Fixed
+
+- Allow atomic Home Assistant token-file replacement during Windows credential
+  polling. Readers retain read-only, non-inheritable handles and token validation;
+  a held-open-reader regression covers the previous sharing violation.
+
+- Accept the controller's optional bounded receipt wait hint in Favorites
+  requests, restoring capability discovery, describe and export with current
+  servers while preserving strict validation and one-time command submission.
+
+- Display native M3U and VPortal profile lists with no active slot while
+  keeping profile changes and preset preflight checks strict. Use the player
+  settings schema for interface text-scale limits instead of a fixed range.
 
 - Keep retained `state` and `history` request timeouts within the original
   budget when floating-point subtraction rounds the remaining time upward.
   A deterministic regression test covers the Windows CI failure.
 
+- Preserve request IDs and transport evidence when native diagnostic replies
+  are malformed, so an uncertain result can be inspected without replaying it.
+- Accept native volume acknowledgements that report a requested value without
+  claiming observed volume. Validate Plex, Xtream and Stalker source profiles,
+  and distinguish native LG pairing from manual shared/web connection settings.
+- Read media-track contract fixtures explicitly as UTF-8 on Windows. Use the
+  available Intel macOS runner for native CLI checks; separate Darwin ARM64
+  builds do not establish ARM64 runtime acceptance.
+
 ### Upgrade
 
-- Update the controller, the participating player and all 37 Python modules in
+- Update the controller, the participating player and all 38 Python modules in
   the local CLI together. Archive seeking requires the player's
   `playback_seek_archive_relative` capability; older components retain their
   existing VOD behavior. See the [CLI installation and seek guide](docs/cli.md).
+- Install the complete `cli/` directory from one reviewed revision, including
+  `media_tracks.py`. Native diagnostics, child-indexer selection and media tracks
+  require their own advertised player capabilities; installing this release
+  alone does not enable those implementations on existing players.
 - Preserve device registrations, controller configuration and player profiles.
   No configuration or persistent-state migration is required for this release.
   A command acknowledgement reports dispatch, not observed decoder progress.
@@ -164,6 +235,9 @@
 - Keep restricted operators scoped to `capabilities` and
   `playback.seek_relative`. Archive seeking uses the existing permission;
   it does not grant new controls or bypass standby, kiosk or parental checks.
+- Grant `media_tracks.list` and `media_tracks.select` only where needed.
+  Selection is limited to current playback, must not change saved language or
+  Plex preferences, and rejects stale or non-selectable tracks without fallback.
 - Cross-timeline and malformed receipts are rejected. Uncertain or expired
   playback changes are not automatically repeated; check current player state
   before issuing another change.

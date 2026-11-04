@@ -2054,7 +2054,7 @@ def offline_profile_command(client, device, action, params, timeout):
         client.timeout = previous_timeout
 
 
-def profile_metadata(data, action, params, *, expected_provider=None):
+def profile_metadata(data, action, params, *, expected_provider=None, allow_no_active=False):
     message = "The player returned invalid profile metadata"
     if action != "profiles":
         message += ". The request may have executed; do not repeat the change blindly."
@@ -2088,7 +2088,7 @@ def profile_metadata(data, action, params, *, expected_provider=None):
             fail()
         rows = [profile(row) for row in data["profiles"]]
         if (any(row["number"] != number for number, row in enumerate(rows, 1))
-                or sum(row["active"] for row in rows) not in ((0, 1) if provider == "offline" or source_profiles else (1,))):
+                or sum(row["active"] for row in rows) not in ((0, 1) if allow_no_active or provider == "offline" or source_profiles else (1,))):
             fail()
         return {"provider": data["provider"], "profiles": rows}
     row = profile(data.get("profile"))
@@ -2548,9 +2548,18 @@ def load_preset(client, device, name, preset, session=None):
         # ready: a Plex credential editor or empty catalogue is still configurable.
         return True if data["provider"] == "plex" else None
 
-    def profiles(data):
+    def profiles(data, *, allow_empty=False):
         # Presets own M3U slots even though standalone commands also accept VPortal.
-        return profile_metadata(data, "profiles", {}, expected_provider="m3u")["profiles"]
+        rows = profile_metadata(data, "profiles", {}, expected_provider="m3u",
+                                allow_no_active=allow_empty)["profiles"]
+        if allow_empty and not any(row["active"] for row in rows):
+            # Only the known-empty native shape may start without a selection.
+            # A partially configured store still requires an explicit active slot.
+            if (any(row["name"] or row["playlist_configured"] or row["history_hours"] != 0
+                    for row in rows)
+                    or any(row.get("vportal_configured", False) for row in data["profiles"])):
+                raise Error("The player returned no active profile for a nonempty M3U list")
+        return rows
 
     def save_profile(row, active):
         def validate(data):
@@ -2609,9 +2618,9 @@ def load_preset(client, device, name, preset, session=None):
              lambda data: plex_settings_metadata(data, preset["plex"]),
              ("Select this provider before changing its settings.", "Plex settings are unavailable on this player."))
         step("select_m3u", "provider", {"query": "m3u"}, provider("m3u"))
-        rows = step("wait_m3u", "profiles", {}, profiles,
+        rows = step("wait_m3u", "profiles", {}, lambda data: profiles(data, allow_empty=True),
                     ("Select the M3U provider before managing profiles.",))
-        current = next(row["number"] for row in rows if row["active"])
+        current = next((row["number"] for row in rows if row["active"]), None)
         desired = preset["active_profile"]
         for row in preset["m3u"]:
             if row["number"] != current:
@@ -2734,6 +2743,16 @@ def kiosk_metadata(data, mode, require_strict=False):
         channel = {"id": channel["id"], "name": channel["name"]}
     elif channel is not None:
         raise Error(message)
+    folder = None
+    if "folder" in data:
+        folder = data["folder"]
+        if (data["state"] != "locked" or data.get("provider") != "offline"
+                or channel is None or media is not None
+                or not isinstance(folder, dict) or not {"name", "available"} <= set(folder)
+                or type(folder["available"]) is not bool
+                or (folder["name"] is not None and not local_media_name(folder["name"]))):
+            raise Error(message)
+        folder = {key: folder[key] for key in ("name", "available")}
     provider = data.get("provider")
     if (data["enabled"] and not isinstance(provider, str)) or (not data["enabled"] and provider is not None):
         raise Error(message)
@@ -2749,6 +2768,7 @@ def kiosk_metadata(data, mode, require_strict=False):
         raise Error(message)
     return {**{key: data[key] for key in ("enabled", "state", "retry_seconds", "retries", "health")},
             "channel": channel, "provider": provider, **({"media": media} if media is not None else {}),
+            **({"folder": folder} if folder is not None else {}),
             **{key: data[key] for key in ("strict", "screen_suspended", "startup_grace_seconds") if key in data}}
 
 
@@ -5143,7 +5163,7 @@ def print_player_help(data, name):
         print(f"  {prefix} settings  — list typed preferences for this player and source")
         print(f"  {prefix} setting KEY --value-file FILE  — save a private preference from a UTF-8 file")
         if native:
-            print(f"  {prefix} setting uiFontScale [100]  — read/save interface text scale (50–150%)")
+            print(f"  {prefix} setting uiFontScale [100]  — read/save interface text scale (see settings for limits)")
             print(f"  {prefix} setting players  — read the fixed Native engine")
             print(f"  {prefix} setting interfaceMode  — read the fixed Modern interface")
         else:
@@ -7280,7 +7300,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     if action in ("vportal", "vportal_random", "vportal_search"):
         data = vportal_metadata(data, action != "vportal_search", action == "vportal_random")
     elif action in ("profiles", "profile", "profile_settings"):
-        data = profile_metadata(data, action, params)
+        data = profile_metadata(data, action, params, allow_no_active=action == "profiles")
     elif action == "app_update":
         data = app_update_metadata(data, params)
     elif action == "restart":
@@ -7468,6 +7488,11 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         elif "media" in data:
             provider_name = "Plex" if data["provider"] == "plex" else "VPortal"
             print(f"Kiosk {provider_name}: {clean(data['media']['title'])} | {data['media']['index'] + 1}/{data['media']['total']} | {data['health']} | retries: {data['retries']}")
+        elif "folder" in data:
+            folder = data["folder"]
+            name = clean(folder["name"]) if folder["name"] is not None else "Not reported"
+            availability = "available" if folder["available"] else "unavailable"
+            print(f"Kiosk Local folder: {name} ({availability}) | current: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
         else:
             print(f"Kiosk channel: {clean(data['channel']['name'])} | {data['health']} | retries: {data['retries']} (10 s)")
         if data.get("screen_suspended"):
