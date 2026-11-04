@@ -36,6 +36,7 @@ var CommandOperations = map[string]string{
 	"plex_folders":          "list add remove clear",
 	"perf_capture":          "start status read stop",
 	"local_media":           "sources play shuffle connect",
+	"local_browser":         "roots list more select",
 	"media_tracks":          "list select",
 	"torrent_catalog":       "read read_chunk metadata status cancel write_begin write_chunk write_commit play",
 	"torrent_indexer":       "list configure remove caps search prepare indexers",

@@ -24,6 +24,7 @@ type localMediaRequest struct {
 	Runtime      string
 	Op           string
 	Source       string
+	SourceHandle string
 	Path         string
 	IncludePaths bool
 	Progressive  bool
@@ -32,7 +33,7 @@ type localMediaRequest struct {
 
 func validLocalMediaCapabilityProbe(params map[string]json.RawMessage) bool {
 	for name, value := range params {
-		if (name != "local_media_progressive" && name != "local_media_session") || string(value) != "true" {
+		if (name != "local_media_progressive" && name != "local_media_session" && name != "local_media_handles") || string(value) != "true" {
 			return false
 		}
 	}
@@ -91,12 +92,23 @@ func parseLocalMediaRequest(params map[string]json.RawMessage) *localMediaReques
 		v.Progressive = true
 		count--
 	}
-	if (v.Op != "play" && v.Op != "shuffle" && v.Op != "connect") || count != 3 || !localMediaSelector(params["source"]) || json.Unmarshal(params["source"], &v.Source) != nil {
+	if (v.Op != "play" && v.Op != "shuffle" && v.Op != "connect") || count != 3 {
+		return nil
+	}
+	if handle, exists := params["source_handle"]; exists {
+		var valid bool
+		v.SourceHandle, valid = localBrowserToken(handle)
+		if !valid {
+			return nil
+		}
+	} else if !localMediaSelector(params["source"]) || json.Unmarshal(params["source"], &v.Source) != nil {
 		return nil
 	}
 	return v
 }
 
+// Source names are display labels, including for handle-selected folders.
+// Keep request selectors and portable profile names on their existing validators.
 func validLocalMediaSource(raw json.RawMessage, includePaths bool) (string, bool) {
 	m, err := decodeObject(raw)
 	var id string
@@ -108,7 +120,7 @@ func validLocalMediaSource(raw json.RawMessage, includePaths bool) (string, bool
 		}
 		count--
 	}
-	if err != nil || count != 4 || json.Unmarshal(m["id"], &id) != nil || !localMediaIDPattern.MatchString(id) || !localMediaName(m["name"]) || !offlineEnum(m["kind"], "folder", "file") || (string(m["available"]) != "true" && string(m["available"]) != "false") {
+	if err != nil || count != 4 || json.Unmarshal(m["id"], &id) != nil || !localMediaIDPattern.MatchString(id) || !localBrowserName(m["name"]) || !offlineEnum(m["kind"], "folder", "file") || (string(m["available"]) != "true" && string(m["available"]) != "false") {
 		return "", false
 	}
 	return id, true
@@ -157,7 +169,7 @@ func validLocalMediaResult(raw json.RawMessage, status string, request *localMed
 	var sourceID, sourceName string
 	_ = json.Unmarshal(sourceFields["id"], &sourceID)
 	_ = json.Unmarshal(sourceFields["name"], &sourceName)
-	if !localMediaAbsolutePattern.MatchString(request.Source) && request.Source != sourceID && request.Source != sourceName {
+	if request.SourceHandle == "" && !localMediaAbsolutePattern.MatchString(request.Source) && request.Source != sourceID && request.Source != sourceName {
 		return false
 	}
 	minimum := 1
@@ -169,6 +181,14 @@ func validLocalMediaResult(raw json.RawMessage, status string, request *localMed
 		wantShuffle = "true"
 	}
 	count := len(m)
+	if handle, exists := m["source_handle"]; exists {
+		if request.SourceHandle == "" || settingString(handle) != request.SourceHandle {
+			return false
+		}
+		count--
+	} else if request.SourceHandle != "" {
+		return false
+	}
 	if session, exists := m["session"]; exists {
 		if !request.Session || (op != "play" && op != "shuffle") || string(session) != "true" {
 			return false
@@ -189,6 +209,23 @@ func validLocalMediaResult(raw json.RawMessage, status string, request *localMed
 func validLocalMediaExtensionCapability(raw json.RawMessage) bool {
 	m, err := decodeObject(raw)
 	return err == nil && len(m) == 1 && profileInteger(m["version"], 1, 1)
+}
+
+func validLocalMediaHandlesCapability(raw, base json.RawMessage) bool {
+	m, err := decodeObject(raw)
+	if err != nil || !validFavoritesTransferJSON(raw) || !validLocalMediaCapability(base) ||
+		!favoritesTransferFields(m, "version", "operations") || !profileInteger(m["version"], 1, 1) ||
+		!localBrowserOperations(m["operations"], "connect", "play", "shuffle") {
+		return false
+	}
+	b, _ := decodeObject(base)
+	var operations []string
+	_ = json.Unmarshal(b["operations"], &operations)
+	available := map[string]bool{}
+	for _, op := range operations {
+		available[op] = true
+	}
+	return available["connect"] && available["play"] && available["shuffle"]
 }
 
 func validLocalMediaCapability(raw json.RawMessage) bool {

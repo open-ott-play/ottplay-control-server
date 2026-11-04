@@ -149,6 +149,12 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME local shuffle /Volumes/data/Movies/  connect/play a path on a native player
   ott NAME local play Movies         play the connected source in its current order
   ott NAME local connect /Volumes/data/Movies/  connect a native folder without playback
+  ott NAME local roots               discover folders on a supported native player
+  ott NAME local browse ENTRY --generation GEN  open a returned folder entry
+  ott NAME local browse --cursor CURSOR --generation GEN  read a retained page
+  ott NAME local more SELECT_ID --generation GEN  expand a partial folder scan
+  ott NAME local select SELECT_ID --generation GEN  hold a folder without saving or playing
+  ott NAME local connect|play|shuffle --handle HANDLE  use a selected native source
   ott NAME tracks                    list current audio and subtitle tracks
   ott NAME tracks audio ID           request a current audio track by opaque ID
   ott NAME tracks subtitle ID|off     request a subtitle track or turn subtitles off
@@ -326,6 +332,22 @@ CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
 PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
 OFFLINE_PROFILE_OPERATIONS = frozenset(("list", "load", "save", "export", "import"))
 LOCAL_MEDIA_OPERATIONS = frozenset(("sources", "play", "shuffle", "connect"))
+LOCAL_BROWSER_OPERATIONS = frozenset(("roots", "list", "more", "select"))
+LOCAL_MEDIA_HANDLE_OPERATIONS = frozenset(("connect", "play", "shuffle"))
+MAX_LOCAL_BROWSER_ENTRIES = 64
+MAX_LOCAL_BROWSER_BYTES = 64 * 1024
+LOCAL_BROWSER_ERRORS = {
+    "invalid_request": "The player rejected the local browser request",
+    "unsupported": "Local browsing is unsupported by this player",
+    "busy": "The local browser is busy; finish the current player UI operation first",
+    "stale": "The local browser view is stale; start again with local roots",
+    "source_changed": "The local source changed; start again with local roots",
+    "unavailable": "The local source is unavailable; check the connected disk",
+    "restricted": "Local browsing is restricted by the player's current policy",
+    "expired": "The local browser request expired",
+    "cancelled": "The local browser request was cancelled",
+    "limit_exceeded": "The local browser reached its supported limit",
+}
 MAX_LOCAL_MEDIA_SOURCES = 32
 MAX_LOCAL_MEDIA_ITEMS = 50000
 LOCAL_MEDIA_ERRORS = {
@@ -358,7 +380,7 @@ RECEIPT_ACTIONS = frozenset((
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
-    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "categories", "favorites", "aspect",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "local_browser", "categories", "favorites", "aspect",
     "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer", "media_tracks",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
@@ -1588,6 +1610,8 @@ def parse_command(words):
         except module.InvalidReport as exc:
             raise Error(str(exc)) from None
     if verb in ("local", "offline"):
+        if tail and tail[0].casefold() in ("roots", "browse", "more", "select"):
+            return "local_browser", parse_local_browser(tail)
         return "local_media", parse_local_media(tail)
     if re.match(r"[+-](?:[0-9]|\.)", verb) and re.search(r"[hms]", verb):
         if tail:
@@ -4138,6 +4162,185 @@ def local_media_selector(value):
              (len(value.encode("utf-8")) <= 512 and "/" not in value and "\\" not in value and value not in (".", ".."))))
 
 
+def local_browser_token(value):
+    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", value) is not None
+
+
+def local_browser_name(value):
+    try:
+        return (isinstance(value, str) and 0 < len(value.encode("utf-8")) <= 512
+                and all(ord(char) >= 32 and not 127 <= ord(char) <= 159 for char in value))
+    except UnicodeEncodeError:
+        return False
+
+
+def parse_local_browser(words):
+    invalid = ("Use local roots, local browse ENTRY --generation GEN, local browse --cursor CURSOR --generation GEN, "
+               "local more SELECT_ID --generation GEN or local select SELECT_ID --generation GEN")
+    op = "list" if words[0].casefold() == "browse" else words[0].casefold()
+    params = {"op": op}
+    tail = words[1:]
+    while tail:
+        option = tail[0]
+        if option in ("--generation", "--cursor") and len(tail) >= 2:
+            key = option[2:]
+            if key in params or not local_browser_token(tail[1]):
+                raise Error(invalid)
+            params[key] = tail[1]
+            tail = tail[2:]
+        elif local_browser_token(option):
+            key = "entry_id" if op == "list" else "select_id"
+            if key in params:
+                raise Error(invalid)
+            params[key] = option
+            tail = tail[1:]
+        else:
+            raise Error(invalid)
+    if not local_browser_params(params):
+        raise Error(invalid)
+    return params
+
+
+def local_browser_params(params):
+    if not isinstance(params, dict):
+        return False
+    op = params.get("op")
+    if op == "roots":
+        return set(params) == {"op"}
+    fields = {"op", "generation"}
+    if op == "list":
+        valid = set(params) in (fields | {"entry_id"}, fields | {"cursor"})
+    else:
+        valid = op in ("more", "select") and set(params) == fields | {"select_id"}
+    return valid and all(local_browser_token(value) for key, value in params.items() if key != "op")
+
+
+def local_browser_metadata(data, runtime, params, status="ok"):
+    invalid = "Invalid local browser result. The request was not repeated; inspect local sources before another change"
+    try:
+        if len(_compact_json_text(data).encode("utf-8")) > MAX_LOCAL_BROWSER_BYTES:
+            raise Error(invalid)
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise Error(invalid) from None
+    base = {"version", "runtime", "op", "state"}
+    if (not isinstance(data, dict) or not base <= set(data)
+            or type(data["version"]) is not int or data["version"] != 1
+            or data["runtime"] != runtime or data["op"] != params["op"]):
+        raise Error(invalid)
+    if data["state"] == "error":
+        if (status not in ("rejected", "unsupported") or set(data) != base | {"error"}
+                or not isinstance(data["error"], str) or data["error"] not in LOCAL_BROWSER_ERRORS):
+            raise Error(invalid)
+        return dict(data)
+    if status != "ok" or data["state"] != "ready" or not local_browser_token(data.get("generation")):
+        raise Error(invalid)
+    if params["op"] == "select":
+        row = data.get("source")
+        if (set(data) != base | {"generation", "source", "persisted", "activated"}
+                or data["generation"] != params["generation"]
+                or data["persisted"] is not False or data["activated"] is not False
+                or not isinstance(row, dict) or set(row) != {"id", "name", "kind", "handle", "stable_identity"}
+                or not local_browser_token(row["id"]) or not local_browser_token(row["handle"])
+                or not local_browser_name(row["name"]) or row["kind"] != "folder"
+                or type(row["stable_identity"]) is not bool):
+            raise Error(invalid)
+        return dict(data, source=dict(row))
+    fields = base | {"generation", "kind", "entries", "parent_id", "select_id", "next_cursor", "partial", "limit_reached"}
+    if (set(data) != fields or data["kind"] not in ("roots", "directories")
+            or (params["op"] == "roots" and data["kind"] != "roots")
+            or (params["op"] == "more" and data["kind"] != "directories")
+            or (params["op"] in ("list", "more") and data["generation"] == params["generation"])
+            or type(data["partial"]) is not bool or type(data["limit_reached"]) is not bool
+            or (data["limit_reached"] and not data["partial"])
+            or not isinstance(data["entries"], list) or len(data["entries"]) > MAX_LOCAL_BROWSER_ENTRIES
+            or any(data[key] is not None and not local_browser_token(data[key]) for key in ("parent_id", "select_id", "next_cursor"))
+            or (data["kind"] == "roots" and (data["parent_id"] is not None or data["select_id"] is not None))
+            or (data["kind"] == "directories" and data["select_id"] is None)):
+        raise Error(invalid)
+    entries, identities = [], set()
+    kind = "root" if data["kind"] == "roots" else "directory"
+    for row in data["entries"]:
+        if (not isinstance(row, dict) or set(row) != {"id", "name", "kind"}
+                or not local_browser_token(row["id"]) or row["id"] in identities
+                or not local_browser_name(row["name"]) or row["kind"] != kind):
+            raise Error(invalid)
+        identities.add(row["id"])
+        entries.append(dict(row))
+    return dict(data, entries=entries)
+
+
+def local_browser_command(client, device, params, timeout):
+    if not local_browser_params(params):
+        raise Error("Invalid local browser arguments. No local browser command was sent")
+    deadline = time.monotonic() + timeout
+    previous_timeout, runtime, request, sent = client.timeout, None, None, False
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        if params["op"] not in controls.get("local_browser", {}).get("operations", []):
+            raise Error("Local browsing requires updated player and controller support. No local browser command was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Local browser capability discovery exceeded --timeout; no local browser command was sent")
+        runtime = controls["player"]["runtime"]
+        request = dict(params, version=1, runtime=runtime)
+        client.timeout = remaining
+        sent = True
+        data = client.call(device, "local_browser", request)
+        if time.monotonic() >= deadline:
+            raise Error("Local browser response exceeded --timeout. Acceptance is uncertain; the request was not repeated")
+        result = local_browser_metadata(data, runtime, request)
+        if result["state"] == "error":
+            raise Error(LOCAL_BROWSER_ERRORS[result["error"]] + ". The request was not repeated")
+        return result
+    except PlayerRejected as exc:
+        detail = "The player rejected the local browser request"
+        if request is not None:
+            try:
+                rejected = local_browser_metadata(exc.data, runtime, request, status="rejected")
+                if rejected["state"] == "error":
+                    detail = LOCAL_BROWSER_ERRORS[rejected["error"]]
+            except Error:
+                pass
+        raise Error(detail + ". The request was not repeated") from None
+    except PlayerUnsupported:
+        raise Error("Local browsing is unsupported by this player/controller. " +
+                    ("The request was not repeated" if sent else "No local browser command was sent")) from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("This controller does not accept local browser commands; update the controller and player. " +
+                        ("The request was not repeated" if sent else "No local browser command was sent")) from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_local_browser(data):
+    if data["op"] == "select":
+        row = data["source"]
+        print(f"Local source selected: {clean(row['name'])} ({row['id']})")
+        print("Handle: " + row["handle"])
+        print("Not saved or activated; playback was not started.")
+        if not row["stable_identity"]:
+            print("Stable identity is unavailable; automatic recovery after restart is not guaranteed.")
+        return
+    print("Generation: " + data["generation"])
+    for row in data["entries"]:
+        print(f"{row['id']}  {clean(row['name'])} ({row['kind']})")
+    if not data["entries"]:
+        print("No entries in this retained page.")
+    for field, label in (("parent_id", "Parent entry"), ("select_id", "Select ID"), ("next_cursor", "Next cursor")):
+        if data[field] is not None:
+            print(label + ": " + data[field])
+    if data["partial"]:
+        if data["limit_reached"]:
+            print("Scan is partial; the scan limit has been reached.")
+        elif data["kind"] == "directories":
+            print("Scan is partial; use local more with this Select ID to expand the directory scan.")
+        else:
+            print("Root discovery is partial; local roots starts a fresh discovery.")
+
+
 def parse_local_media(words):
     op = words[0].casefold() if words else "sources"
     op = "sources" if op == "list" else op
@@ -4156,6 +4359,8 @@ def parse_local_media(words):
                 raise Error("Use local sources [--path ABSOLUTE_TARGET_PATH] [--paths], with each option once")
         return params
     if op in ("connect", "play", "shuffle"):
+        if len(tail) == 2 and tail[0] == "--handle" and local_browser_token(tail[1]):
+            return {"op": op, "source_handle": tail[1]}
         if tail[:1] == ["--"]:
             tail = tail[1:]
         elif any(value.startswith("--") for value in tail):
@@ -4189,7 +4394,7 @@ def local_media_metadata(data, runtime, params, capability=None):
         fields = {"id", "name", "kind", "available"}
         if (not isinstance(row, dict) or set(row) not in (fields, fields | {"path"})
                 or not isinstance(row.get("id"), str) or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", row["id"]) is None
-                or not local_media_name(row.get("name")) or row.get("kind") not in ("folder", "file")
+                or not local_browser_name(row.get("name")) or row.get("kind") not in ("folder", "file")
                 or type(row.get("available")) is not bool
                 or ("path" in row and (not paths or not plex_library_text(row["path"], 4096) or not local_media_absolute(row["path"])))):
             raise Error(invalid)
@@ -4203,6 +4408,10 @@ def local_media_metadata(data, runtime, params, capability=None):
             raise Error(invalid)
         return dict(data, sources=rows)
     fields = base | {"source", "count", "shuffled", "accepted", "playback_confirmed"}
+    if "source_handle" in params:
+        if not local_browser_token(params["source_handle"]) or data.get("source_handle") != params["source_handle"]:
+            raise Error(invalid)
+        fields.add("source_handle")
     if params["op"] in ("play", "shuffle"):
         if params.get("session") is not True or data.get("session") is not True:
             raise Error(invalid)
@@ -4218,8 +4427,8 @@ def local_media_metadata(data, runtime, params, capability=None):
             or data["accepted"] is not True or data["playback_confirmed"] is not False):
         raise Error(invalid)
     selected = source(data["source"])
-    if (not selected["available"] or
-            (not local_media_absolute(params["source"]) and params["source"] not in (selected["id"], selected["name"]))):
+    if (not selected["available"] or ("source_handle" not in params and
+            not local_media_absolute(params["source"]) and params["source"] not in (selected["id"], selected["name"]))):
         raise Error(invalid)
     return dict(data, source=selected)
 
@@ -4238,6 +4447,10 @@ def local_media_capabilities(client, device, timeout):
 
 def local_media_command(client, device, params, timeout, session=None, *, controls=None):
     playback_session = params["op"] in ("play", "shuffle")
+    handle = "source_handle" in params
+    if handle and (params["op"] not in LOCAL_MEDIA_HANDLE_OPERATIONS or "source" in params
+                   or not local_browser_token(params["source_handle"])):
+        raise Error("Invalid local source handle arguments. No local media command was sent")
     if not playback_session and "session" in params:
         raise Error("Session playback flags are only valid for local play or shuffle. No local media command was sent")
     deadline = time.monotonic() + timeout
@@ -4250,15 +4463,20 @@ def local_media_command(client, device, params, timeout, session=None, *, contro
         # Reuse a validated runtime only for a bounded read-only preset phase.
         # Every mutation still discovers fresh capabilities before dispatch.
         if controls is None or params["op"] != "sources":
-            if playback_session:
+            if playback_session or handle:
+                probe = ({"local_media_session": True, "local_media_progressive": True} if playback_session else {})
+                if handle:
+                    probe["local_media_handles"] = True
                 try:
-                    raw_controls = client.call(device, "capabilities", {"local_media_session": True,
-                                                                         "local_media_progressive": True})
+                    raw_controls = client.call(device, "capabilities", probe)
                 except HTTPError as exc:
                     if exc.code != 400:
                         raise
                     # A legacy controller cannot guarantee temporary playback.
                     # Never fall back to a persistent Local mutation.
+                    if handle:
+                        raise Error("This controller does not support Local source handles; update the controller. "
+                                    "No local media command was sent") from None
                     raise Error("This controller does not support session-only Local playback; update the controller. "
                                 "No local media command was sent") from None
                 controls = capabilities_metadata(raw_controls)
@@ -4267,6 +4485,8 @@ def local_media_command(client, device, params, timeout, session=None, *, contro
         capability = controls.get("local_media", {})
         if params["op"] not in capability.get("operations", []):
             raise Error("Local media commands require an updated player and controller advertising local_media. No local media command was sent")
+        if handle and params["op"] not in controls.get("local_media_handles", {}).get("operations", []):
+            raise Error("This player does not support Local source handles; update the player. No local media command was sent")
         if playback_session and "local_media_session" not in controls:
             raise Error("This player does not support session-only Local playback; update the player. No local media command was sent")
         if (params.get("include_paths") is True or "path" in params or local_media_absolute(params.get("source"))) and capability.get("absolute_paths") is not True:
@@ -5043,6 +5263,26 @@ def capabilities_metadata(data):
                     or marker["version"] != 1):
                 raise Error(invalid)
             result[key] = {"version": 1}
+    if "local_browser" in data:
+        marker = data["local_browser"]
+        operations = marker.get("operations") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "operations", "max_entries"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or type(marker["max_entries"]) is not int or marker["max_entries"] != MAX_LOCAL_BROWSER_ENTRIES
+                or not isinstance(operations, list) or len(operations) != len(LOCAL_BROWSER_OPERATIONS)
+                or any(not isinstance(op, str) for op in operations) or set(operations) != LOCAL_BROWSER_OPERATIONS):
+            raise Error(invalid)
+        result["local_browser"] = dict(marker, operations=list(operations))
+    if "local_media_handles" in data:
+        marker = data["local_media_handles"]
+        operations = marker.get("operations") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "operations"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or not isinstance(operations, list) or len(operations) != len(LOCAL_MEDIA_HANDLE_OPERATIONS)
+                or any(not isinstance(op, str) for op in operations) or set(operations) != LOCAL_MEDIA_HANDLE_OPERATIONS
+                or not LOCAL_MEDIA_HANDLE_OPERATIONS <= set(result.get("local_media", {}).get("operations", []))):
+            raise Error(invalid)
+        result["local_media_handles"] = dict(marker, operations=list(operations))
     if "plex_library_truncation" in data:
         truncation = data["plex_library_truncation"]
         if ("plex_library" not in result or result["plex_library"]["max_items"] != MAX_PLEX_QUEUE_ITEMS
@@ -5306,6 +5546,19 @@ def print_player_help(data, name):
         print(f"  {prefix} local connect Movies  — confirm a connected source without playback")
         if local.get("absolute_paths"):
             print(f"  {prefix} local connect /Volumes/data/Movies/  — connect a folder without playback")
+    browser = controls.get("local_browser", {}).get("operations", [])
+    if "roots" in browser:
+        print(f"  {prefix} local roots  — discover native root entries")
+    if "list" in browser:
+        print(f"  {prefix} local browse ENTRY --generation GEN  — open a returned entry")
+        print(f"  {prefix} local browse --cursor CURSOR --generation GEN  — read a retained page")
+    if "more" in browser:
+        print(f"  {prefix} local more SELECT_ID --generation GEN  — expand a partial directory scan")
+    if "select" in browser:
+        print(f"  {prefix} local select SELECT_ID --generation GEN  — hold a folder without saving or playing")
+    for operation in ("connect", "play", "shuffle"):
+        if operation in controls.get("local_media_handles", {}).get("operations", []):
+            print(f"  {prefix} local {operation} --handle HANDLE  — use a source selected on this player")
     libraries = controls.get("plex_library", {}).get("operations", [])
     if "list" in libraries:
         print(f"  {prefix} plex libraries  — list movie/show libraries on the player's Plex server")
@@ -5394,7 +5647,7 @@ def print_player_help(data, name):
         print(f"  {prefix} update install SHA256  — request installation of the staged APK")
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
+            and shot.get("state") != "ready" and not queue and not local_operations and not browser and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
             and not any(key in controls for key in ("media_tracks", "playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
@@ -7009,6 +7262,10 @@ def player_group_command(client, config, targets, args, argv):
     # validates ordinary commands once, before any target receives a request.
     prepared = parse_command(words) if route is None else None
     action = prepared[0] if prepared else (words[0].casefold() if words else "status")
+    if (len(targets) > 1 and prepared and
+            ((action == "local_browser" and prepared[1]["op"] != "roots")
+             or (action == "local_media" and "source_handle" in prepared[1]))):
+        raise Error("Local browser tokens and source handles belong to one player; choose a single target. No local command was sent")
     if action in ("favorites_profile", "favorites_global") and prepared[1]["op"] == "acknowledge" and len(targets) != 1:
         raise Error("Favorites acknowledgement requires exactly one player")
     if action == "favorites_profile" and prepared[1]["op"] == "collect":
@@ -7283,6 +7540,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         data = plex_library_command(client, device, params, args.timeout)
     elif action == "local_media":
         data = local_media_command(client, device, params, args.timeout)
+    elif action == "local_browser":
+        data = local_browser_command(client, device, params, args.timeout)
     elif action == "categories":
         data = categories_command(client, device, params, args.timeout)
     elif action == "channels":
@@ -7438,6 +7697,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         print_plex_library(data)
     elif action == "local_media":
         print_local_media(data, params)
+    elif action == "local_browser":
+        print_local_browser(data)
     elif action == "categories":
         print_categories(data)
     elif action == "favorites":

@@ -35,6 +35,7 @@ type entry struct {
 	plexQueue               *plexQueueRequest
 	plexLibrary             *plexLibraryRequest
 	localMedia              *localMediaRequest
+	localBrowser            *localBrowserRequest
 	favorites               *favoritesRequest
 	favoritesTransfer       *favoritesTransferRequest
 	favoritesGlobal         *favoritesGlobalRequest

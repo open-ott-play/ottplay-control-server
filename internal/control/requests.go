@@ -31,6 +31,7 @@ type requestResult struct {
 	plexQueue               *plexQueueRequest
 	plexLibrary             *plexLibraryRequest
 	localMedia              *localMediaRequest
+	localBrowser            *localBrowserRequest
 	favorites               *favoritesRequest
 	favoritesTransfer       *favoritesTransferRequest
 	favoritesGlobal         *favoritesGlobalRequest
@@ -135,6 +136,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	var torrentCatalogBound *torrentCatalogRequest
 	var torrentIndexerBound *torrentIndexerRequest
 	var mediaTracksBound *mediaTracksRequest
+	var localBrowserBound *localBrowserRequest
 	switch action {
 	case "kiosk":
 		var mode string
@@ -183,6 +185,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parsePlexQueueRequest(params) != nil
 	case "local_media":
 		ok = parseLocalMediaRequest(params) != nil
+	case "local_browser":
+		localBrowserBound = parseLocalBrowserRequest(m["params"])
+		ok = localBrowserBound != nil && validFavoritesTransferJSON(b)
 	case "plex_library":
 		ok = parsePlexLibraryRequest(params) != nil
 	case "favorites":
@@ -347,6 +352,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		e.aspect = parseAspectRequest(params)
 	}
 	e.mediaTracks = mediaTracksBound
+	e.localBrowser = localBrowserBound
 	if action == "notifications" {
 		e.notificationSettings = parseNotificationsRequest(params)
 	}
@@ -503,6 +509,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var plexQueue *plexQueueRequest
 	var plexLibrary *plexLibraryRequest
 	var localMedia *localMediaRequest
+	var localBrowser *localBrowserRequest
 	var favorites *favoritesRequest
 	var favoritesTransfer *favoritesTransferRequest
 	var favoritesGlobal *favoritesGlobalRequest
@@ -532,6 +539,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			plexQueue = pending.plexQueue
 			plexLibrary = pending.plexLibrary
 			localMedia = pending.localMedia
+			localBrowser = pending.localBrowser
 			favorites = pending.favorites
 			favoritesTransfer = pending.favoritesTransfer
 			favoritesGlobal = pending.favoritesGlobal
@@ -599,6 +607,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if localMedia == nil {
 		localMedia = d.results[id].localMedia
+	}
+	if localBrowser == nil {
+		localBrowser = d.results[id].localBrowser
 	}
 	if plexLibrary == nil {
 		plexLibrary = d.results[id].plexLibrary
@@ -681,6 +692,14 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		}
 		if marker, exists := capabilities["local_media"]; exists && !validLocalMediaCapability(marker) {
 			failure(w, 400, "invalid local media capability")
+			return
+		}
+		if marker, exists := capabilities["local_browser"]; exists && !validLocalBrowserCapability(marker) {
+			failure(w, 400, "invalid local browser capability")
+			return
+		}
+		if marker, exists := capabilities["local_media_handles"]; exists && !validLocalMediaHandlesCapability(marker, capabilities["local_media"]) {
+			failure(w, 400, "invalid local media handles capability")
 			return
 		}
 		for _, key := range []string{"favorites_global", "favorites_global_recovery", "favorites_global_items"} {
@@ -772,6 +791,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid local media result")
 		return
 	}
+	if localBrowser != nil && (len(b) > maxLocalBrowserEnvelopeBytes || !validFavoritesTransferJSON(b) || !validLocalBrowserResult(m["data"], status, localBrowser)) {
+		failure(w, 400, "invalid local browser result")
+		return
+	}
 	if plexLibrary != nil && !validPlexLibraryResult(m["data"], status, plexLibrary) {
 		failure(w, 400, "invalid Plex library result")
 		return
@@ -845,7 +868,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexQueue: e.plexQueue, plexLibrary: e.plexLibrary, localMedia: e.localMedia, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexQueue: e.plexQueue, plexLibrary: e.plexLibrary, localMedia: e.localMedia, localBrowser: e.localBrowser, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])
