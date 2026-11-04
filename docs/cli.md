@@ -2065,8 +2065,8 @@ If acceptance is uncertain, inspect `plex status` before deciding to play again.
 Preview does not replace current playback. Play reuses the existing Plex queue,
 including parental and kiosk checks. It does not unlock controls, enable repeat
 or change saved settings. `preparing` confirms acceptance and preparation, not
-decoder playback. Existing kiosk policy determines whether the queue repeats;
-shuffle changes the order once, not on each loop.
+decoder playback. Use `plex repeat all` for ordinary queue repetition; kiosk
+policy remains separate. Shuffle changes the order once, not on each loop.
 
 ## Ordered Plex queues
 
@@ -2083,6 +2083,9 @@ ott l plex play 78777 78776 78775     # replace the queue and start the first fi
 ott l plex play --shuffle 78777 78776 78775 # shuffle the supplied IDs once
 ott l plex queue                     # same as plex status; does not start anything
 ott l plex status
+ott l plex repeat                    # read current queue state and repeat mode
+ott l plex repeat all                # repeat this queue in its current order
+ott l plex repeat off                # stop naturally after its last item
 ott l plex next                      # next item, starting at 0
 ott l plex prev                      # previous item, starting at 0
 ott l plex previous                  # long spelling of prev
@@ -2100,14 +2103,25 @@ guarantee later network availability or decoder compatibility.
 Playback starts at the first item from zero. `play --shuffle` shuffles all
 supplied IDs once in the CLI; ordinary `play` preserves the supplied order.
 Natural completion advances through the list and stops after the last item
-unless existing kiosk policy repeats it. Older players can advertise a lower
-item limit; the CLI rejects oversized requests before sending a queue command.
+unless repeat is `all` or existing kiosk policy repeats it. Older players can
+advertise a lower item limit; the CLI rejects oversized requests before sending
+a queue command.
 `next` at the last item and `prev` at the first are rejected without wrapping or
 stopping the current item. Ordinary `ott l next` and `ott l prev` use a retained
 Plex queue atomically inside the player, including while preparing or after it
 ends. They do not switch to a TV channel at a queue boundary. `plex stop` clears
 the queue; channel navigation otherwise retains its existing category/wrap rules.
 Queue state is local to the player runtime and is not a saved Plex playlist.
+
+`plex repeat` without a mode reads queue status. `all` (alias `on`) repeats the
+retained order without reshuffling; `off` (alias `none`) stops after the last
+item. Changes require a nonempty active ordinary queue, including a paused one,
+and the separate `plex_queue_repeat` capability with a successful controller
+probe. The command does not save a profile or playlist, restart playback, change
+the current position, or resume a paused item. Kiosk locking and repetition are
+a separate policy; this command does not enable or release kiosk. A failed probe
+sends no repeat change, and an uncertain result is never automatically repeated.
+See the [repeat contract](../contracts/plex-queue-repeat-v1.json).
 
 Some players can restore an internal queue with up to 1,000 entries. When the
 player advertises `plex_queue_state_v2` and the controller supports it, the CLI

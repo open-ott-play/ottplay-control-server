@@ -41,6 +41,7 @@ type plexQueueRequest struct {
 	Runtime      string
 	Op           string
 	IDs          []string
+	Repeat       string
 	StateVersion int
 }
 
@@ -85,6 +86,10 @@ func parsePlexQueueRequest(params map[string]json.RawMessage) *plexQueueRequest 
 		if count != 2 {
 			return nil
 		}
+	case "repeat":
+		if count != 3 || json.Unmarshal(params["repeat"], &v.Repeat) != nil || (v.Repeat != "none" && v.Repeat != "all") {
+			return nil
+		}
 	default:
 		return nil
 	}
@@ -104,6 +109,16 @@ func validPlexQueueResponse(raw json.RawMessage, status string, request *plexQue
 	if status == "ok" {
 		return validPlexQueueResult(raw, request)
 	}
+	if request.Op == "repeat" {
+		// Repeat is additive: it never inherited the permissive legacy error
+		// envelope. Refusals contain only an existing fixed queue error.
+		_, _, maximum := plexQueueStateLimits(request)
+		m, err := decodeObject(raw)
+		var message string
+		return len(raw) <= maximum && err == nil && len(m) == 1 &&
+			json.Unmarshal(m["error"], &message) == nil &&
+			(plexQueueErrors[message] || message == "This queue requires plex_queue_state_v2 and state_version: 2; upgrade the controller")
+	}
 	if request.StateVersion != 2 {
 		// Preserve the legacy negative-envelope contract, including previews.
 		return len(raw) <= maxPlexPreviewResultBytes
@@ -116,6 +131,23 @@ func validPlexQueueResponse(raw json.RawMessage, status string, request *plexQue
 	}
 	_, err := decodeObject(raw)
 	return err == nil && validFavoritesTransferJSON(raw)
+}
+
+func validPlexQueueRepeatCapability(raw, base json.RawMessage) bool {
+	m, err := decodeObject(raw)
+	var modes []string
+	if err != nil || len(m) != 2 || !profileInteger(m["version"], 1, 1) ||
+		json.Unmarshal(m["modes"], &modes) != nil || len(modes) != 2 ||
+		!((modes[0] == "none" && modes[1] == "all") || (modes[0] == "all" && modes[1] == "none")) {
+		return false
+	}
+	legacy, err := decodeObject(base)
+	if err != nil || len(legacy) != 3 || !profileInteger(legacy["version"], 1, 1) ||
+		!profileInteger(legacy["max_items"], 1, maxPlexQueueItems) {
+		return false
+	}
+	operations, valid := plexQueueCapabilityOperations(legacy["operations"], true)
+	return valid && operations["status"]
 }
 
 func validPlexQueueStateV2Capability(raw, base json.RawMessage) bool {
@@ -233,6 +265,9 @@ func validPlexQueueResult(raw json.RawMessage, request *plexQueueRequest) bool {
 			return false
 		}
 		if request.Op == "stop" && state != "idle" {
+			return false
+		}
+		if request.Op == "repeat" && (repeat != request.Repeat || !*active || len(ids) == 0) {
 			return false
 		}
 	}

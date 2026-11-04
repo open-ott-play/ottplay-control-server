@@ -166,11 +166,12 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME plex token-file FILE      update the Plex token from a file
   ott NAME plex preview ID [ID ...]  check the listed Plex items without starting playback
   ott NAME plex play ID [ID ...]     play IDs in order from the start; stop after the last
-  ott NAME plex play --shuffle ID...  shuffle all IDs once; kiosk on repeats that order
+  ott NAME plex play --shuffle ID...  shuffle all IDs once; plex repeat all repeats that order
   ott NAME plex libraries            list movie/show libraries from the player's Plex server
   ott NAME plex shuffle NAME         shuffle up to 500 library items; warn if the library is larger
   ott NAME plex library [--shuffle] [--preview] NAME  play or preview a library (or id:16)
   ott NAME plex queue / status       show the Plex queue without changing it
+  ott NAME plex repeat [off|all]      read or change repeat for the current Plex queue
   ott NAME plex next / prev / stop   move within or clear the Plex queue (no wrapping)
   ott NAME playlist URL              update the M3U playlist
   ott NAME fav                       list saved favorites on this player
@@ -381,9 +382,11 @@ RECEIPT_ACTIONS = frozenset((
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "plex_servers", "local_media", "local_browser", "categories", "favorites", "aspect",
+    "favorites_transfer", "favorites_global", "favorites_global_items", "favorites_global_recovery",
     "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer", "media_tracks",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
+PLEX_QUEUE_REPEAT_MODES = frozenset(("none", "all"))
 MAX_PLEX_QUEUE_ITEMS = 500
 PLEX_QUEUE_STATE_OPERATIONS = PLEX_QUEUE_OPERATIONS - {"preview"}
 MAX_PLEX_QUEUE_STATE_ITEMS = 1000
@@ -1840,6 +1843,13 @@ def parse_command(words):
             return "plex_servers", parse_plex_servers(tail[1:])
         if operation in ("libraries", "library", "shuffle"):
             return "plex_library", parse_plex_library(tail)
+        if operation == "repeat":
+            if len(tail) == 1:
+                return "plex_queue", {"op": "status"}
+            modes = {"none": "none", "off": "none", "all": "all", "on": "all"}
+            if len(tail) != 2 or tail[1].casefold() not in modes:
+                raise Error("Use plex repeat [off|none|all|on]")
+            return "plex_queue", {"op": "repeat", "repeat": modes[tail[1].casefold()]}
         operation = {"queue": "status", "prev": "previous"}.get(operation, operation)
         if operation in PLEX_QUEUE_OPERATIONS:
             ids = tail[1:]
@@ -4974,36 +4984,50 @@ def plex_queue_metadata(data, runtime=None, params=None, *, expected_version=1):
         valid = False
     if not valid or (params and ((params["op"] == "play" and index != 0) or (params["op"] == "stop" and state != "idle"))):
         raise Error(invalid)
+    if params and params["op"] == "repeat" and (
+            not data["active"] or not ids or data["repeat"] != params.get("repeat")):
+        raise Error(invalid)
     return dict(data, ids=list(ids))
 
 
 def plex_queue_command(client, device, params, timeout):
+    repeating = params["op"] == "repeat"
+    if repeating and (not isinstance(params.get("repeat"), str)
+                      or params["repeat"] not in PLEX_QUEUE_REPEAT_MODES):
+        raise Error("Use plex repeat [off|none|all|on]")
     deadline = time.monotonic() + timeout
     previous_timeout = client.timeout
     try:
         client.timeout = max(0, deadline - time.monotonic())
         controls = capabilities_metadata(client.call(device, "capabilities", {}))
-        if params["op"] not in controls.get("plex_queue", {}).get("operations", []):
+        if repeating and "plex_queue_repeat" not in controls:
+            raise Error("Plex repeat is not supported by this player/controller; update both and check caps. No queue command was sent")
+        if not repeating and params["op"] not in controls.get("plex_queue", {}).get("operations", []):
             raise Error("Plex queues are not supported by this player/controller; update both and check caps. No queue command was sent")
         if len(params.get("ids", [])) > controls["plex_queue"]["max_items"]:
             raise Error("This player supports at most " + str(controls["plex_queue"]["max_items"]) + " Plex items; update it. No queue command was sent")
         runtime = controls["player"]["runtime"]
         version = 1
-        if params["op"] in PLEX_QUEUE_STATE_OPERATIONS and "plex_queue_state_v2" in controls:
+        probes = {"plex_queue_repeat": True} if repeating else {}
+        if (params["op"] in PLEX_QUEUE_STATE_OPERATIONS or repeating) and "plex_queue_state_v2" in controls:
+            probes["plex_queue_state_v2"] = True
+            version = 2
+        if probes:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise Error("Plex capability discovery exceeded --timeout; no queue command was sent")
             client.timeout = remaining
             try:
-                confirmed = capabilities_metadata(client.call(device, "capabilities", {"plex_queue_state_v2": True}))
+                confirmed = capabilities_metadata(client.call(device, "capabilities", probes))
             except HTTPError as exc:
                 if exc.code == 400:
+                    if repeating:
+                        raise Error("This controller does not support Plex repeat; update it. No queue command was sent") from None
                     raise Error("This controller does not support Plex queue state v2; update it. No queue command was sent") from None
                 raise
             if (confirmed["player"]["runtime"] != runtime
-                    or confirmed.get("plex_queue_state_v2") != controls["plex_queue_state_v2"]):
+                    or any(confirmed.get(marker) != controls[marker] for marker in probes)):
                 raise Error("Plex capabilities changed during negotiation. No queue command was sent")
-            version = 2
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Plex capability discovery exceeded --timeout; no queue command was sent")
@@ -5403,6 +5427,18 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": queue["max_items"]}
+    if "plex_queue_repeat" in data:
+        marker = data["plex_queue_repeat"]
+        modes = marker.get("modes") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "modes"}
+                or type(marker.get("version")) is not int or marker["version"] != 1
+                or not isinstance(modes, list) or len(modes) != 2
+                or any(not isinstance(mode, str) or mode not in PLEX_QUEUE_REPEAT_MODES for mode in modes)
+                or len(set(modes)) != 2
+                or "status" not in result.get("plex_queue", {}).get("operations", [])
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["plex_queue_repeat"] = {"version": 1, "modes": sorted(modes)}
     if "plex_queue_state_v2" in data:
         state = data["plex_queue_state_v2"]
         operations = state.get("operations") if isinstance(state, dict) else None
@@ -5728,6 +5764,9 @@ def print_player_help(data, name):
     if queue:
         print(f"  {prefix} plex " + " / ".join(op + " ID [ID ...]" if op in ("play", "preview") else op for op in queue))
         print("    next/prev use the retained Plex queue until plex stop clears it; kiosk can repeat its order.")
+    if "plex_queue_repeat" in controls:
+        print(f"  {prefix} plex repeat [off|none|all|on]  — read or change repeat for the current Plex queue")
+        print("    all/on repeats its listed order; off/none stops at the end. Does not save the profile or change playback position.")
     if "plex_servers" in controls:
         # Also validate callers that supply already-projected help metadata.
         plex_servers_capability(controls["plex_servers"])

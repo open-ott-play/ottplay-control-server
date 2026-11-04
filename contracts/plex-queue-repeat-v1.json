@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "action": "plex_queue",
+  "capability_name": "plex_queue_repeat",
+  "capability": {"version": 1, "modes": ["none", "all"]},
+  "runtime_pattern": "^[a-z0-9-]{1,64}$",
+  "probe": {"plex_queue_repeat": true},
+  "combined_probe": {"plex_queue_repeat": true, "plex_queue_state_v2": true},
+  "probe_forwarded_params": {},
+  "repeat_request": {"runtime": "page-123", "op": "repeat", "repeat": "all"},
+  "repeat_request_v2": {"runtime": "page-123", "op": "repeat", "repeat": "none", "state_version": 2},
+  "repeat_response": {
+    "version": 1, "runtime": "page-123", "active": true, "state": "playing",
+    "ids": ["78777", "78776", "78775"], "index": 1, "repeat": "all", "order": "listed"
+  },
+  "repeat_response_v2": {
+    "version": 2, "runtime": "page-123", "active": true, "state": "paused",
+    "ids": ["78777", "78776", "78775"], "index": 1, "repeat": "none", "order": "listed"
+  },
+  "cli_aliases": {"off": "none", "none": "none", "all": "all", "on": "all"},
+  "cli_without_mode": {"op": "status"},
+  "unchanged_base_operations": ["play", "preview", "status", "next", "previous", "stop"],
+  "unchanged_v2_operations": ["play", "status", "next", "previous", "stop"],
+  "legacy_state_max_items": 500,
+  "legacy_state_max_bytes": 16384,
+  "v2_state_max_items": 1000,
+  "v2_state_max_bytes": 32768,
+  "semantics": {
+    "scope": "Current ordinary Plex queue only; paused playback is allowed.",
+    "none": "Stop after the last item.",
+    "all": "Repeat the retained listed order after the last item without reshuffling.",
+    "unchanged": ["saved profile", "queue IDs and order", "current index", "playback position", "play/pause state"],
+    "success": "Return an active nonempty queue with the exact requested repeat mode, runtime and negotiated state version.",
+    "rollout": "Require the separate marker and successful true-only controller probe before sending one repeat mutation. Never retry or downgrade after dispatch.",
+    "limits": "Check response-version queue size limits before changing repeat; legacy requests cannot mutate queues whose state requires v2."
+  },
+  "refusals": {
+    "empty": "Plex queue is empty.",
+    "stopped": "Plex playback is unavailable on this player.",
+    "pending_target": "Plex queue request is already in progress.",
+    "stale_binding": "Player context changed before Plex playback.",
+    "kiosk": "Kiosk mode does not allow a Plex queue.",
+    "parental": "Unlock parental access before starting the Plex queue.",
+    "state_upgrade": "This queue requires plex_queue_state_v2 and state_version: 2; upgrade the controller"
+  },
+  "refusal_data_shape": {"error": "Plex queue is empty."}
+}

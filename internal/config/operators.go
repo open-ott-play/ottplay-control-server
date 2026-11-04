@@ -22,7 +22,7 @@ var CommandOperations = map[string]string{
 	"playback":  "pause resume previous_channel next_channel step_channel seek seek_relative",
 	"lifecycle": "restart_stream reload_player restart_app standby wake exit_app reboot_device",
 	"restart":   "stream player", "kiosk": "status off on set", "aspect": "get set",
-	"plex_queue": "status preview play next previous stop", "plex_library": "list preview play",
+	"plex_queue": "status preview play next previous stop repeat", "plex_library": "list preview play",
 	"favorites": "list add play remove", "vportal_queue": "status next previous restart stop play",
 	"favorites_global":          "describe export begin append preview commit status abort",
 	"favorites_global_recovery": "inspect acknowledge",

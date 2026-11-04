@@ -48,7 +48,7 @@ type requestResult struct {
 func validCapabilityProbe(params map[string]json.RawMessage) bool {
 	local := make(map[string]json.RawMessage, len(params))
 	for name, value := range params {
-		if name == "plex_queue_state_v2" {
+		if name == "plex_queue_state_v2" || name == "plex_queue_repeat" {
 			if string(value) != "true" {
 				return false
 			}
@@ -673,6 +673,15 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			if !validPlexQueueStateV2Capability(marker, capabilities["plex_queue"]) || playerErr != nil ||
 				json.Unmarshal(player["runtime"], &runtime) != nil || !screenshotRuntimePattern.MatchString(runtime) {
 				failure(w, 400, "invalid Plex queue state v2 capability")
+				return
+			}
+		}
+		if marker, exists := capabilities["plex_queue_repeat"]; exists {
+			player, playerErr := decodeObject(capabilities["player"])
+			var runtime string
+			if !validPlexQueueRepeatCapability(marker, capabilities["plex_queue"]) || playerErr != nil ||
+				json.Unmarshal(player["runtime"], &runtime) != nil || !screenshotRuntimePattern.MatchString(runtime) {
+				failure(w, 400, "invalid Plex queue repeat capability")
 				return
 			}
 		}
