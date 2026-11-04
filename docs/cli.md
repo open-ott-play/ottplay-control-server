@@ -2788,7 +2788,12 @@ in memory for the current player session. They do not overwrite the saved
 provider, profile or startup folder, and must not be written later by autosave,
 deferred saves or export. Reloading or restarting follows the previously saved
 startup configuration; it does not restore this remote queue. Running
-`local shuffle` again creates a fresh session shuffle.
+`local shuffle` again creates a fresh session shuffle. Each explicit `local play`
+or `local shuffle` starts its chosen file at position zero, even if it selects
+the same folder or the same file again. An old saved-profile cursor or resume
+position cannot override that choice. Normal startup of an active saved Local
+profile may still resume its saved file and position. Within an already active
+temporary session, `ott t1 restart stream` may reuse that session's own bookmark.
 
 Explicit player UI actions that select a provider, Local folder/order or kiosk
 startup selection remain persistent. A saved UI folder and compact shuffle seed
@@ -2837,6 +2842,9 @@ playback. An existing readable directory with no binding returns an empty list;
 invalid or unreadable paths return an error. `--path` requires native path
 support and does not imply `--paths` disclosure.
 
+Current players advertise `local_media_progressive` only for native path-backed
+Tauri after its native source-capability check succeeds. Browser, server-backed
+and Capacitor Local commands use the complete selected-source catalogue path.
 With progressive support on both controller and player, `local play` and `local
 shuffle` can return as soon as playable items from the selected source are ready.
 The same source continues scanning; the accepted prefix is not a final catalogue

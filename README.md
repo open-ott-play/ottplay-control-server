@@ -293,12 +293,17 @@ order and position in memory. They do not replace saved provider/profile/startup
 settings or become persistent through autosave or export. Explicit UI selection
 and native source bindings remain separate persistent actions. The new CLI
 refuses playback if the controller or player cannot prove session support.
+Each explicit command starts its chosen file at position zero, even when
+repeating the same folder or choosing the same file again. Normal startup of
+a saved Local profile may resume its saved file and position; `restart stream`
+within a temporary session may reuse that session's own bookmark.
 
-With session and progressive support on the controller and player, the command
-can return after discovering playable items while the selected folder continues
-scanning. The CLI labels that count as partial; an accepted request does not
-confirm decoded video. Session-capable players without progressive support wait
-for a complete selected-source scan.
+With negotiated progressive support, the command can return after discovering
+playable items while the selected folder continues scanning. Current players
+advertise this only for native path-backed Tauri after its native source
+capability check succeeds. Browser, server-backed and Capacitor Local sources
+wait for a complete selected-source scan. The CLI labels a progressive count
+as partial; an accepted request does not confirm decoded video.
 
 Folder names are exact. Absolute paths refer to the target player's filesystem
 and require native path support; browser players use folders already selected
