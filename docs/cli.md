@@ -2842,6 +2842,13 @@ playback. An existing readable directory with no binding returns an empty list;
 invalid or unreadable paths return an error. `--path` requires native path
 support and does not imply `--paths` disclosure.
 
+In `local sources`, `available` means access was confirmed. `availability not
+confirmed` preserves `available: false` in JSON: the source may be missing or
+unreadable, or its native availability check may not have finished before the
+deadline. The `operation_in_progress` error can likewise mean another Local
+operation is busy or a source check did not finish. Inspect the player and
+storage before issuing another change; the CLI does not repeat the request.
+
 Current players advertise `local_media_progressive` only for native path-backed
 Tauri after its native source-capability check succeeds. Browser, server-backed
 and Capacitor Local commands use the complete selected-source catalogue path.
