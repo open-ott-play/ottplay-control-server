@@ -51,6 +51,33 @@ class NotificationsCliTest(unittest.TestCase):
                 self.assertEqual(client.call.call_args_list, [mock.call('dev_1', 'capabilities', {}),
                     mock.call('dev_1', 'notifications', {'version': 1, 'runtime': RUNTIME, 'operation': 'get'})])
 
+    def test_optional_local_source_marker_does_not_block_notification_reads(self):
+        baseline = None
+        for marker in (None, {}, True, 1, {"version": True}, {"version": 1.0},
+                       {"version": 0}, {"version": 2}, {"version": 1, "token": SECRET},
+                       {"version": 1}):
+            with self.subTest(marker=marker):
+                caps = capabilities()
+                caps["local_source_diagnostics"] = marker
+                code, out, err, client = self.run_cli(
+                    ['-j', 't1', 'notifications', 'status'], [caps, result()])
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(json.loads(out), result())
+                self.assertEqual(client.call.call_args_list, [
+                    mock.call('dev_1', 'capabilities', {}),
+                    mock.call('dev_1', 'notifications', {
+                        'version': 1, 'runtime': RUNTIME, 'operation': 'get'})])
+                self.assertNotIn(SECRET, out + err)
+                if baseline is None:
+                    baseline = out
+                else:
+                    self.assertEqual(out, baseline)
+                normalized = ott.capabilities_metadata(caps)
+                if type(marker) is dict and marker == {"version": 1} and type(marker['version']) is int:
+                    self.assertEqual(normalized['local_source_diagnostics'], {"version": 1})
+                else:
+                    self.assertNotIn('local_source_diagnostics', normalized)
+
     def test_set_on_off_requires_persistence_and_never_wakes(self):
         for value, enabled in [('ON', True), ('off', False)]:
             code, out, err, client = self.run_cli(['t1', 'notifications', value], [capabilities(), result('set', enabled)])
