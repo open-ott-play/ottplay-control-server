@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
@@ -169,17 +170,85 @@ func TestPlexQueueRepeatRefusalsKeepClosedErrorContract(t *testing.T) {
 	if err := json.Unmarshal(c["refusals"], &refusals); err != nil {
 		t.Fatal(err)
 	}
+	var common map[string]string
+	if err := json.Unmarshal(c["common_fence_refusals"], &common); err != nil {
+		t.Fatal(err)
+	}
+	for name, message := range common {
+		refusals["common_"+name] = message
+	}
+	contract, err := decodeObject(c["refusal_contract"])
+	if err != nil || !profileInteger(contract["max_error_utf8_bytes"], maxPlexQueueRepeatErrorBytes, maxPlexQueueRepeatErrorBytes) {
+		t.Fatal("repeat error bound differs from the shared contract")
+	}
+	refusals["unknown-private-text"] = "private fixture https://private.example/?token=secret"
 	for _, version := range []int{1, 2} {
 		bound := &plexQueueRequest{Runtime: "page-123", Op: "repeat", Repeat: "all", StateVersion: version}
 		for name, message := range refusals {
 			raw, _ := json.Marshal(map[string]string{"error": message})
-			if !validPlexQueueResponse(raw, "rejected", bound) {
-				t.Fatal("fixed repeat refusal rejected", name, version)
+			for _, status := range []string{"rejected", "unsupported"} {
+				if !validPlexQueueResponse(raw, status, bound) {
+					t.Fatal("bounded repeat refusal rejected", name, version, status)
+				}
 			}
 		}
-		for _, raw := range []string{`{}`, `{"error":"arbitrary private detail"}`, `{"error":"Plex queue is empty.","token":"private"}`, `{"error":"Plex queue is empty.","error":"Plex queue is empty."}`} {
+		for _, raw := range []string{
+			`{}`, `{"error":""}`, `{"error":null}`, `{"error":true}`, `{"error":123}`, `{"error":[]}`, `{"error":{}}`,
+			`{"error":"Plex queue is empty.","token":"private"}`, `{"error":"Plex queue is empty.","error":"Plex queue is empty."}`,
+			`{"error":"line\nfeed"}`, `{"error":"\u007f"}`, `{"error":"\ud800"}`, `{"error":"\udc00"}`,
+			`{"error":"` + string([]byte{0xff}) + `"}`,
+		} {
 			if validPlexQueueResponse(json.RawMessage(raw), "rejected", bound) {
-				t.Fatal("open-ended repeat refusal accepted")
+				t.Fatal("malformed repeat refusal accepted")
+			}
+		}
+		for _, message := range []string{strings.Repeat("a", 1024), strings.Repeat("a", 1025), strings.Repeat("é", 512), strings.Repeat("é", 513)} {
+			raw, _ := json.Marshal(map[string]string{"error": message})
+			if validPlexQueueResponse(raw, "rejected", bound) != (len(message) <= 1024) {
+				t.Fatal("repeat error UTF-8 byte boundary changed", len(message))
+			}
+		}
+		_, _, maximum := plexQueueStateLimits(bound)
+		for _, extra := range []int{0, 1} {
+			raw := []byte(`{"error":"bounded"}`)
+			raw = append(raw[:len(raw)-1], []byte(strings.Repeat(" ", maximum-len(raw)+extra)+"}")...)
+			if validPlexQueueResponse(raw, "rejected", bound) != (extra == 0) {
+				t.Fatal("repeat refusal raw-data boundary changed", version, extra)
+			}
+		}
+	}
+}
+
+func TestPlexQueueRepeatCommonRefusalPendingAndCachedRoundTrip(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		for _, status := range []string{"rejected", "unsupported"} {
+			for _, message := range []string{"This action is restricted by kiosk policy.", "private fixture https://private.example/?token=secret"} {
+				s := newTestServer(t)
+				params := map[string]any{"runtime": "page-123", "op": "repeat", "repeat": "all"}
+				if version == 2 {
+					params["state_version"] = 2
+				}
+				body, _ := json.Marshal(map[string]any{"action": "plex_queue", "params": params})
+				id := rpcID(t, s, string(body))
+				malformed := screenshotEnvelope(id, status, map[string]any{"error": message, "extra": true})
+				expect(t, request(s, "POST", "/api/responses", firstToken, malformed, nil), 400)
+				if len(s.devices[0].queue) != 1 || s.resultBytes != 0 {
+					t.Fatal("malformed refusal consumed the pending repeat request")
+				}
+				response := screenshotEnvelope(id, status, map[string]string{"error": message})
+				expect(t, request(s, "POST", "/api/responses", secondToken, response, nil), 404)
+				expect(t, request(s, "POST", "/api/responses", firstToken, response, nil), 200)
+				expect(t, request(s, "POST", "/api/responses", firstToken, response, nil), 200)
+				expect(t, request(s, "POST", "/api/responses", firstToken, malformed, nil), 400)
+				bound := s.devices[0].results[id].plexQueue
+				if bound == nil || bound.Repeat != "all" || bound.StateVersion != version {
+					t.Fatal("refusal receipt lost repeat correlation")
+				}
+				got := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+				expect(t, got, 200)
+				if got.Body.String() != response || len(s.devices[0].queue) != 0 || s.bytes != 0 {
+					t.Fatal("valid repeat refusal was not retained or invalid replay replaced it")
+				}
 			}
 		}
 	}

@@ -161,6 +161,25 @@ class PlexQueueRepeatTests(unittest.TestCase):
             if message != "private-server-token":
                 self.assertIn(message, err)
 
+    def test_common_fences_and_unknown_private_refusals_use_generic_output_without_retry(self):
+        messages = [*CONTRACT["common_fence_refusals"].values(),
+                    "private fixture https://private.example/?token=private-server-token /Users/private"]
+        for version in (1, 2):
+            for plain in (False, True):
+                for rejected in (ott.PlayerRejected, ott.PlayerUnsupported):
+                    for message in messages:
+                        with self.subTest(version=version, plain=plain, status=rejected.__name__, message=message):
+                            failure = rejected(message, {"error": message})
+                            code, out, err, calls = self.run_cli(
+                                ["plex", "repeat", "all"], [caps(version), caps(version), failure], plain=plain)
+                            self.assertEqual((code, out, len(calls)), (1, "", 3))
+                            self.assertEqual(sum(call.args[1] == "plex_queue" for call in calls), 1)
+                            self.assertIn("The request was not repeated", err)
+                            self.assertNotIn(message, err)
+                            self.assertNotIn("private-server-token", err)
+                            self.assertNotIn("private.example", err)
+                            self.assertNotIn("/Users/private", err)
+
     def test_repeat_help_is_advertised_only_by_its_own_capability(self):
         for present in (False, True):
             value = caps(1)

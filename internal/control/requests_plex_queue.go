@@ -11,6 +11,7 @@ const maxPlexQueueResultBytes = 16 * 1024
 const maxPlexPreviewResultBytes = 1024 * 1024
 const maxPlexQueueStateV2Items = 1000
 const maxPlexQueueStateV2ResultBytes = 32 * 1024
+const maxPlexQueueRepeatErrorBytes = 1024
 
 var plexQueueIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 
@@ -110,14 +111,15 @@ func validPlexQueueResponse(raw json.RawMessage, status string, request *plexQue
 		return validPlexQueueResult(raw, request)
 	}
 	if request.Op == "repeat" {
-		// Repeat is additive: it never inherited the permissive legacy error
-		// envelope. Refusals contain only an existing fixed queue error.
+		// Common policy/expiry fences can reject before the Plex adapter runs.
+		// Keep their envelope closed and bounded without treating prose as an
+		// enum. CLI display still uses its fixed safe-message allowlist.
 		_, _, maximum := plexQueueStateLimits(request)
 		m, err := decodeObject(raw)
 		var message string
 		return len(raw) <= maximum && err == nil && len(m) == 1 &&
-			json.Unmarshal(m["error"], &message) == nil &&
-			(plexQueueErrors[message] || message == "This queue requires plex_queue_state_v2 and state_version: 2; upgrade the controller")
+			profileText(m["error"], maxPlexQueueRepeatErrorBytes) &&
+			json.Unmarshal(m["error"], &message) == nil && message != ""
 	}
 	if request.StateVersion != 2 {
 		// Preserve the legacy negative-envelope contract, including previews.
