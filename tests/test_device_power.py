@@ -26,6 +26,9 @@ class Error(Exception):
 
 class DevicePowerTests(unittest.TestCase):
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.config_path = str(Path(temporary.name) / "cli.json")
         self.device = "11111111-2222-4333-8444-555555555555"
         self.identity = {"version": 1, "backend": "adb", "serial": "192.0.2.10:5555",
                          "android_id": "0123456789abcdef", "hardware_serial": "PROJECTOR-123", "model": "Projector 2"}
@@ -58,7 +61,7 @@ class DevicePowerTests(unittest.TestCase):
         out = io.StringIO()
         with mock.patch.object(power.shutil, "which", return_value="/sdk/adb"), \
                 mock.patch.object(power, "_run", side_effect=self.adb), contextlib.redirect_stdout(out):
-            code = power.run(self.api, self.client, self.config, "/private/cli.json", self.device,
+            code = power.run(self.api, self.client, self.config, self.config_path, self.device,
                              "p2", words, 10, machine)
         return code, out.getvalue()
 
@@ -86,7 +89,7 @@ class DevicePowerTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.config["device_power"][self.device], self.identity)
         self.assertEqual(self.config["preserved"], {"value": 7})
-        self.api.write_private.assert_called_once_with("/private/cli.json", self.config)
+        self.api.write_private.assert_called_once_with(self.config_path, self.config)
         self.assertFalse(any(mutation for _, mutation in self.calls))
         self.assertTrue(json.loads(output)["identity_verified"])
         for secret in self.identity.values():
@@ -397,18 +400,21 @@ UI = b'''<?xml version="1.0" encoding="UTF-8"?>
 class ShutdownDialogTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
-        self.windows = [WINDOW, WINDOW]
+        self.windows = [WINDOW, WINDOW, ABSENT_WINDOW]
         self.ui = UI
         self.tap_reply = (0, b"", b"")
+        self.key_reply = (0, b"", b"")
 
     def adb(self, executable, args, deadline, cancelled=None, mutation=False, on_wait=None):
         self.calls.append((list(args), mutation))
         if args == ["-t", "42", "shell", "dumpsys", "window"]:
             return 0, self.windows.pop(0), b""
         if len(args) == 4 and args[:3] == ["-t", "42", "shell"] and args[3].startswith("umask 077;"):
-            return 0, self.ui, b""
+            return 0, self.ui.pop(0) if isinstance(self.ui, list) else self.ui, b""
         if args[:5] == ["-t", "42", "shell", "input", "tap"]:
             return self.tap_reply
+        if args == ["-t", "42", "shell", "input", "keyevent", "KEYCODE_DPAD_CENTER"]:
+            return self.key_reply
         raise AssertionError("Unexpected ADB operation")
 
     def confirm(self):
@@ -460,7 +466,7 @@ class ShutdownDialogTests(unittest.TestCase):
         self.assertTrue(self.confirm())
         effects = [args for args, mutation in self.calls if mutation]
         self.assertEqual(effects, [["-t", "42", "shell", "input", "tap", "640", "365"]])
-        self.assertEqual([args[-1] for args, _ in self.calls if args[-2:-1] == ["dumpsys"]], ["window", "window"])
+        self.assertEqual([args[-1] for args, _ in self.calls if args[-2:-1] == ["dumpsys"]], ["window", "window", "window"])
         script = self.calls[1][0][3]
         paths = re.findall(r"/data/local/tmp/\.ott-power-[0-9a-f]{32}\.xml", script)
         self.assertEqual(len(paths), 3)
@@ -497,7 +503,7 @@ class ShutdownDialogTests(unittest.TestCase):
         self.assertEqual(sum(mutation for _, mutation in self.calls), 1)
 
     def test_blocked_svc_is_confirmed_within_same_request(self):
-        self.windows = [ABSENT_WINDOW, WINDOW, WINDOW]
+        self.windows = [ABSENT_WINDOW, WINDOW, WINDOW, ABSENT_WINDOW]
         original = self.adb
         def blocked(executable, args, deadline, cancelled=None, mutation=False, on_wait=None):
             if args[-3:] == ["svc", "power", "shutdown"]:
@@ -524,6 +530,109 @@ class ShutdownDialogTests(unittest.TestCase):
         with mock.patch.object(power, "_run", side_effect=failed), self.assertRaises(power.PowerError) as failure:
             power._shutdown("adb", "42", time.monotonic() + 10)
         self.assertTrue(failure.exception.uncertain)
+
+    def test_focused_positive_activates_with_one_guarded_center_and_no_tap(self):
+        self.ui = UI.replace(b'text="OK"', b'text="OK" focused="true"')
+        self.assertTrue(self.confirm())
+        effects = [args for args, mutation in self.calls if mutation]
+        self.assertEqual(effects, [["-t", "42", "shell", "input", "keyevent", "KEYCODE_DPAD_CENTER"]])
+
+    def test_tap_that_only_focuses_is_followed_by_fresh_guarded_center(self):
+        self.ui = [UI, UI.replace(b'text="OK"', b'text="OK" focused="true"')]
+        self.windows = [WINDOW] * 4
+        self.assertTrue(self.confirm())
+        effects = [args for args, mutation in self.calls if mutation]
+        self.assertEqual(effects, [["-t", "42", "shell", "input", "tap", "640", "365"],
+                                  ["-t", "42", "shell", "input", "keyevent", "KEYCODE_DPAD_CENTER"]])
+
+    def test_tap_without_positive_focus_never_sends_center(self):
+        self.windows = [WINDOW] * 4
+        with self.assertRaisesRegex(power.PowerError, "verified focus") as failure:
+            self.confirm()
+        self.assertTrue(failure.exception.uncertain)
+        self.assertEqual(sum(mutation for _, mutation in self.calls), 1)
+
+    def test_both_buttons_focused_are_not_validated_as_positive_focus(self):
+        raw = UI.replace(b'text="OK"', b'text="OK" focused="true"').replace(b'text="CANCEL"', b'text="CANCEL" focused="true"')
+        self.assertIsNone(power._shutdown_button(raw, require_focused=True))
+
+    def test_changed_window_after_focus_tap_never_sends_center(self):
+        self.ui = [UI, UI.replace(b'text="OK"', b'text="OK" focused="true"')]
+        changed = WINDOW.replace(b"abc123", b"abc124")
+        self.windows = [WINDOW, WINDOW, changed, changed]
+        with self.assertRaises(power.PowerError):
+            self.confirm()
+        self.assertEqual(sum(mutation for _, mutation in self.calls), 1)
+
+    def test_uncertain_center_is_not_retried(self):
+        self.ui = UI.replace(b'text="OK"', b'text="OK" focused="true"')
+        self.key_reply = (1, b"", b"closed")
+        with self.assertRaises(power.PowerError) as failure:
+            self.confirm()
+        self.assertTrue(failure.exception.uncertain)
+        self.assertEqual(sum(mutation for _, mutation in self.calls), 1)
+
+
+class ConfigLockTests(unittest.TestCase):
+    def test_two_concurrent_updates_cannot_both_compare_and_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cli.json"
+            original = {"original": True}
+            path.write_text(json.dumps(original))
+            entered, release = threading.Event(), threading.Event()
+            failures = []
+            def write(_, value):
+                entered.set()
+                release.wait(2)
+                path.write_text(json.dumps(value))
+            api = SimpleNamespace(read_json=lambda _: json.loads(path.read_text()), write_private=write)
+            def first():
+                try:
+                    power._save(api, path, dict(original), original, {"winner": 1})
+                except Exception as exc:
+                    failures.append(exc)
+            worker = threading.Thread(target=first)
+            worker.start()
+            self.assertTrue(entered.wait(2))
+            try:
+                with self.assertRaisesRegex(power.PowerError, "update is active"):
+                    power._save(api, path, dict(original), original, {"loser": 2})
+            finally:
+                release.set()
+                worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(failures, [])
+            self.assertEqual(json.loads(path.read_text()), {"winner": 1})
+            with self.assertRaisesRegex(power.PowerError, "configuration changed"):
+                power._save(api, path, dict(original), original, {"loser": 2})
+
+    @unittest.skipIf(sys.platform == "win32", "Unix private mode and symbolic link semantics")
+    def test_symlink_or_public_lock_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cli.json"
+            lock = Path(str(path) + ".device-power.lock")
+            target = Path(directory) / "target"
+            target.write_text("private")
+            lock.symlink_to(target)
+            with self.assertRaises(power.PowerError):
+                with power._ConfigLock(path):
+                    self.fail("unsafe lock entered")
+            lock.unlink()
+            lock.write_text("")
+            lock.chmod(0o644)
+            with self.assertRaises(power.PowerError):
+                with power._ConfigLock(path):
+                    self.fail("public lock entered")
+
+    def test_lock_releases_after_comparison_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cli.json"
+            api = SimpleNamespace(read_json=lambda _: {"changed": True}, write_private=mock.Mock())
+            with self.assertRaises(power.PowerError):
+                power._save(api, path, {}, {}, {"x": 1})
+            with power._ConfigLock(path):
+                pass
+            api.write_private.assert_not_called()
 
 
 if __name__ == "__main__":

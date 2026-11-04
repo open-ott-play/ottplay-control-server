@@ -7580,13 +7580,15 @@ def main(argv=None):
         return module.main(argv[1:])
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("-c", "--config", default=os.environ.get("OTT_CONFIG", str(Path.home() / ".config/ottplay-control/cli.json")))
-    parser.add_argument("-t", "--timeout", type=float, default=45)
+    parser.add_argument("-t", "--timeout", type=float)
     parser.add_argument("-j", "--json", action="store_true")
     parser.add_argument("--refresh", action="store_true", help="Refresh cached EPG history and archive checks")
     parser.add_argument("--receipt", action="store_true", help="Write safe player RPC receipts to stderr")
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("words", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
+    if args.timeout is None:
+        args.timeout = 90 if len(args.words) > 1 and args.words[1].casefold() == "shutdown" else 45
     if args.help or not args.words or args.words == ["help"]:
         print(HELP)
         return 0

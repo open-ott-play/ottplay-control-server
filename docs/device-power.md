@@ -67,10 +67,16 @@ uses package `android` and has type `KEYGUARD_DIALOG`. The labels, widget types
 and resource IDs must match, including the firmware's actual
 `android:id/alert_dialog_custom_btn_comfirm` spelling.
 
-The CLI reads fresh button bounds, verifies the same system window still has
-focus, then submits one tap to **OK**. Button coordinates are not saved for later
-use. If this exact dialog is already open when you explicitly run `shutdown`,
+The CLI verifies that **OK** is the focused button before sending the remote's
+confirm key (`DPAD_CENTER`). If necessary, it first focuses **OK** with one tap
+using fresh button bounds, then reads the dialog and window again. It sends no
+confirm key if the window or focus changed. Button coordinates are not saved for
+later use. If this exact dialog is already open when you explicitly run `shutdown`,
 the CLI completes it without sending another `svc power shutdown` request.
+
+Shutdown defaults to a 90-second total budget because firmware UI inspection can
+be slow. An explicit `-t SECONDS` overrides it; the CLI never resets that budget
+between identity checks, the shutdown request and confirmation.
 
 Other dialogs, translated text and changed layouts are not automatically
 confirmed. This is a narrow compatibility path for the recognized system power

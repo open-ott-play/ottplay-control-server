@@ -4,10 +4,12 @@ import ipaddress
 import json
 import math
 import os
+from pathlib import Path
 import re
 import shlex
 import shutil
 import secrets
+import stat
 import subprocess
 import threading
 import time
@@ -260,7 +262,7 @@ def _system_dialog_window(raw):
     return token, user
 
 
-def _shutdown_button(raw):
+def _shutdown_button(raw, require_focused=False):
     """Only the observed system Power off dialog is eligible for confirmation."""
     text = _text(raw)
     start, end = text.find("<?xml"), text.rfind("</hierarchy>")
@@ -295,6 +297,10 @@ def _shutdown_button(raw):
             return None
     if set(selected) != set(expected):
         return None
+    positive_node = selected["android:id/alert_dialog_custom_btn_comfirm"]
+    negative_node = selected["android:id/alert_dialog_custom_btn_cancel"]
+    if require_focused and (positive_node.get("focused") != "true" or negative_node.get("focused") == "true"):
+        return None
 
     def bounds(node):
         match = re.fullmatch(r"\[([0-9]{1,5}),([0-9]{1,5})\]\[([0-9]{1,5}),([0-9]{1,5})\]", node.get("bounds", ""))
@@ -319,12 +325,12 @@ def _shutdown_button(raw):
     return (positive[0] + positive[2]) // 2, (positive[1] + positive[3]) // 2
 
 
-def _confirm_shutdown_dialog(adb, transport, deadline, cancelled=None):
+def _read_shutdown_dialog(adb, transport, deadline, cancelled=None):
     prefix = ["-t", transport, "shell"]
     code, window, err = _run(adb, [*prefix, "dumpsys", "window"], deadline, cancelled)
     before = _system_dialog_window(window) if not code and not err.strip() else None
     if before is None:
-        return False
+        return None
     # Every shell byte is fixed except this generated hexadecimal nonce. The
     # dump can otherwise expose the app underneath if the window changes, so
     # create it privately and remove that exact file on all normal shell exits.
@@ -334,12 +340,38 @@ def _confirm_shutdown_dialog(adb, transport, deadline, cancelled=None):
     code, ui, err = _run(adb, [*prefix, script], deadline, cancelled)
     button = _shutdown_button(ui) if not code and not err.strip() else None
     if button is None:
-        return False
+        return None
     code, window, err = _run(adb, [*prefix, "dumpsys", "window"], deadline, cancelled)
     after = _system_dialog_window(window) if not code and not err.strip() else None
     if after != before:
+        return None
+    return before, button, _shutdown_button(ui, require_focused=True) is not None
+
+
+def _confirm_shutdown_dialog(adb, transport, deadline, cancelled=None):
+    dialog = _read_shutdown_dialog(adb, transport, deadline, cancelled)
+    if dialog is None:
         return False
-    code, out, err = _run(adb, [*prefix, "input", "tap", str(button[0]), str(button[1])],
+    window, button, focused = dialog
+    prefix = ["-t", transport, "shell", "input"]
+    if not focused:
+        code, out, err = _run(adb, [*prefix, "tap", str(button[0]), str(button[1])],
+                             deadline, cancelled, mutation=True)
+        if code or out.strip() or err.strip():
+            raise PowerError("System shutdown confirmation was not acknowledged", True)
+        try:
+            after = _read_shutdown_dialog(adb, transport, deadline, cancelled)
+        except PowerError as exc:
+            raise PowerError(str(exc), True) from None
+        if after is None:
+            # On touch-driven firmware the tap activates the button directly.
+            # Once the recognized dialog disappears, no key may be sent.
+            return True
+        if after[0] != window or not after[2]:
+            raise PowerError("The system power-off button did not acquire verified focus", True)
+    # Some TV firmware treats a touch as focus only. Activation is allowed only
+    # after a fresh snapshot proves the exact positive system button has focus.
+    code, out, err = _run(adb, [*prefix, "keyevent", "KEYCODE_DPAD_CENTER"],
                          deadline, cancelled, mutation=True)
     if code or out.strip() or err.strip():
         raise PowerError("System shutdown confirmation was not acknowledged", True)
@@ -416,12 +448,49 @@ def _print(result, json_output):
         print("The request was not repeated; no other shutdown route was used.")
 
 
+class _ConfigLock:
+    """Serialize binding writers without replacing the stable lock inode."""
+    def __init__(self, config_path):
+        self.path = Path(str(Path(config_path).expanduser().resolve()) + ".device-power.lock")
+        self.fd = None
+
+    def __enter__(self):
+        try:
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                              | getattr(os, "O_NONBLOCK", 0), 0o600)
+            info = os.fstat(self.fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or os.name != "nt" and (info.st_uid != os.getuid() or info.st_mode & 0o077)):
+                raise OSError("unsafe lock")
+            if os.name == "nt":
+                import msvcrt
+                if info.st_size == 0:
+                    os.write(self.fd, b"0")
+                os.lseek(self.fd, 0, os.SEEK_SET)
+                msvcrt.locking(self.fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return self
+        except BaseException as exc:
+            self.__exit__(None, None, None)
+            if not isinstance(exc, Exception):
+                raise
+            raise PowerError("Another device-power binding update is active or its private lock is unavailable") from None
+
+    def __exit__(self, *_):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
 def _save(api, config_path, config, original, updated):
-    if api.read_json(config_path) != original:
-        raise PowerError("CLI configuration changed during device verification; no binding change was saved")
-    api.write_private(config_path, updated)
-    config.clear()
-    config.update(updated)
+    with _ConfigLock(config_path):
+        if api.read_json(config_path) != original:
+            raise PowerError("CLI configuration changed during device verification; no binding change was saved")
+        api.write_private(config_path, updated)
+        config.clear()
+        config.update(updated)
 
 
 def run(api, client, config, config_path, device, name, words, timeout, json_output=False):

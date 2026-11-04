@@ -61,6 +61,16 @@ class ShutdownCliTest(unittest.TestCase):
         client.call.assert_not_called()
         client.api.assert_not_called()
 
+    def test_shutdown_default_budget_and_explicit_timeout(self):
+        module = ott.device_power_module()
+        for arguments, expected in ((["p2", "shutdown"], 90),
+                                    (["-t", "1", "p2", "shutdown"], 1)):
+            with mock.patch.object(module, "run", return_value=0) as run, \
+                    mock.patch.object(ott, "device_power_module", return_value=module):
+                code, _, _, _ = self.run_cli(arguments)
+            self.assertEqual(code, 0)
+            self.assertEqual(run.call_args.args[7], expected)
+
     def test_group_binding_changes_are_rejected_before_any_target(self):
         module = ott.device_power_module()
         for selector in ("p1,p2", "projectors"):
@@ -71,6 +81,25 @@ class ShutdownCliTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn("exactly one player", err)
                 run.assert_not_called()
+
+    def test_one_second_budget_still_dispatches_bound_television_off(self):
+        client = self.client()
+
+        def reply(_path, payload=None, **_kwargs):
+            if payload is None:
+                return 200, {"version": 1, "device_id": "projector2", "configured": True,
+                             "capabilities": ["off"]}
+            return 200, {"version": 1, "device_id": "projector2", "action": "off",
+                         "transport": "webos", "outcome": "accepted"}
+
+        client.api.side_effect = reply
+        code, _, _, _ = self.run_cli(["-t", "1", "p2", "shutdown"], client)
+        self.assertEqual(code, 0)
+        self.assertEqual(client.api.call_count, 2)
+        posted = client.api.call_args
+        self.assertEqual(posted.args[1]["action"], "off")
+        self.assertGreater(posted.kwargs["timeout"], 0)
+        self.assertLess(posted.kwargs["timeout"], 1)
 
     def test_group_shutdown_is_parallel_and_preserves_partial_results(self):
         for selector in ("p1,p2", "projectors"):

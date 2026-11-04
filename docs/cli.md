@@ -817,7 +817,7 @@ ott --receipt tv restart
 - `-c FILE` / `--config FILE`: configuration path; otherwise `OTT_CONFIG`, then
   `~/.config/ottplay-control/cli.json`.
 - `-t SECONDS` / `--timeout SECONDS`: how long the CLI waits for a response, in
-  seconds; finite value from 1 to 300, default 45. For example, `-t 45` explicitly
+  seconds; finite value from 1 to 300, default 45 (90 for device `shutdown`). For example, `-t 45` explicitly
   selects the default response timeout, not a 45-second playback limit or delay
   before playback starts. Put it before `PLAYER` or the management verb.
   Multi-step searches/setups can take longer than one request budget; see their
