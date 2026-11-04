@@ -1975,6 +1975,10 @@ only preferences absent from that schema require their local workflow.
 
 ## Plex libraries by name
 
+Managed native server selection has a separate, capability-gated command family:
+[`plex servers`](managed-plex-servers.md). Its producer qualification is still
+pending; existing installed players may correctly report it as unsupported.
+
 Play items from a movie or show library using the player's saved Plex connection:
 
 ```sh
