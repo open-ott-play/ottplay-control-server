@@ -13,7 +13,8 @@ SPEC = importlib.util.spec_from_file_location("native_cli_case_tested", ROOT / "
 case = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = case
 SPEC.loader.exec_module(case)
-SECRET = "private-token-and-https://private.example/path"
+# Synthetic marker for leak assertions; never a credential or environment input.
+REDACTION_CANARY = "private-token-and-https://private.example/path"
 
 
 class CaseFixtures:
@@ -37,7 +38,7 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
         (self.source / "cli").mkdir(parents=True)
         self.write(self.source / "cli/ott.py", b"# must never be executed\n")
         self.write(self.source / "cli/module.py", b"# second pinned member\n")
-        self.credentials = self.write(self.root / "credentials.json", case.encoded({"operator_token": SECRET}))
+        self.credentials = self.write(self.root / "credentials.json", case.encoded({"operator_token": REDACTION_CANARY}))
         self.config = self.write(self.root / "config.json", case.encoded({"server": "https://127.0.0.1:12345",
             "server_config": str(self.credentials), "players": {"fixture-v2": "fixture-device"}}))
         self.ca = self.write(self.root / "ca.pem", b"opaque fixture certificate")
@@ -135,13 +136,13 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
                     self.prepare()
 
     def test_success_returns_data_privately_and_only_allowlisted_summary_publicly(self):
-        data = {"version": 1, "player": {"runtime": "page-1", "private": SECRET}, "private": SECRET,
+        data = {"version": 1, "player": {"runtime": "page-1", "private": REDACTION_CANARY}, "private": REDACTION_CANARY,
                 "local_media": {"version": 1}}
-        report, response, output, call = self.run_inert(self.prepare(), case.encoded(data), self.receipt() + SECRET.encode())
+        report, response, output, call = self.run_inert(self.prepare(), case.encoded(data), self.receipt() + REDACTION_CANARY.encode())
         self.assertEqual(report["result"], "response_received")
         self.assertEqual(response, data)
-        self.assertNotIn(SECRET, json.dumps(report))
-        self.assertNotIn(SECRET, json.dumps(call.args[0]))
+        self.assertNotIn(REDACTION_CANARY, json.dumps(report))
+        self.assertNotIn(REDACTION_CANARY, json.dumps(call.args[0]))
         self.assertEqual(json.loads((output / "response.private.json").read_text()), data)
         self.assertEqual((output / "stdout.private").stat().st_mode & 0o777, 0o600)
         self.assertFalse((output / "credentials.json").exists())
@@ -154,7 +155,7 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
 
     def test_staging_uses_verified_bytes_not_later_source_changes(self):
         prepared = self.prepare()
-        self.write(self.source / "cli/ott.py", SECRET.encode())
+        self.write(self.source / "cli/ott.py", REDACTION_CANARY.encode())
         self.handoff["origin"] = "https://private.example"
         output = self.root / "case"
         def capture(*args):
@@ -256,7 +257,7 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
         capture.assert_not_called()
 
     def test_capture_spawn_error_is_reported_without_any_retry(self):
-        with mock.patch.object(case.subprocess, "Popen", side_effect=OSError(SECRET)) as spawn:
+        with mock.patch.object(case.subprocess, "Popen", side_effect=OSError(REDACTION_CANARY)) as spawn:
             code, stdout, stderr, reason, cleanup, spawned = case.capture(
                 ["inert"], {}, str(self.root), 20, 25, 1024, clock=lambda: 10)
         self.assertEqual(spawn.call_count, 1)
@@ -341,7 +342,7 @@ class PortableCliValidationTests(CaseFixtures, unittest.TestCase):
         with self.assertRaisesRegex(case.CaseError, "mutation_not_enabled"):
             self.prepare("local_handle_play", {"handle": "opaque-1"})
         with self.assertRaisesRegex(case.CaseError, "invalid_case_parameters"):
-            self.prepare("local_handle_play", {"handle": "opaque-1", "path": SECRET}, True)
+            self.prepare("local_handle_play", {"handle": "opaque-1", "path": REDACTION_CANARY}, True)
         with self.assertRaisesRegex(case.CaseError, "setting_not_allowlisted"):
             self.prepare("setting_read", {"setting": "plexToken"})
 
@@ -428,10 +429,10 @@ class PortableCliValidationTests(CaseFixtures, unittest.TestCase):
             case.project(prepared, data)
 
     def test_public_failure_does_not_echo_path_or_exception_text(self):
-        with mock.patch.object(case, "regular", side_effect=OSError(SECRET)), mock.patch("builtins.print") as printed:
+        with mock.patch.object(case, "regular", side_effect=OSError(REDACTION_CANARY)), mock.patch("builtins.print") as printed:
             result = case.main(["--handoff", "/private/path", "--case", "caps"])
         self.assertEqual(result, 1)
-        self.assertNotIn(SECRET, printed.call_args.args[0])
+        self.assertNotIn(REDACTION_CANARY, printed.call_args.args[0])
         self.assertNotIn("/private/path", printed.call_args.args[0])
 
     def test_contract_queue_idle_status_and_stop_allow_null_index(self):
