@@ -131,6 +131,29 @@
   explicit uncertainty recovery. Source examples do not establish that matching
   CLI, controller and player components are installed.
 
+## [0.1.10] - 2026-11-03
+
+### Fixed
+
+- Describe an unconfirmed Local source as `availability not confirmed`, because
+  a native filesystem check may be unfinished rather than proving the source
+  unavailable. Keep the JSON `available` boolean unchanged.
+- Explain that `operation_in_progress` can mean a busy Local operation or an
+  unfinished source check. Keep diagnostic details private and preserve the
+  existing rule that Local requests are not repeated automatically.
+
+### Upgrade
+
+- Update the CLI to receive the revised human-readable diagnostics. JSON output,
+  request schemas and controller/player compatibility are unchanged; this change
+  does not require a server deployment or storage migration.
+
+### Security
+
+- Keep private paths and raw player errors out of ordinary source listings and
+  error messages. These wording changes preserve source validation and the
+  existing no-retry behavior for Local requests.
+
 ## [0.1.9] - 2026-11-03
 
 ### Added
