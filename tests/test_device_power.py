@@ -312,7 +312,8 @@ class DevicePowerTests(unittest.TestCase):
 
 class BoundedProcessTests(unittest.TestCase):
     def test_read_command_returns_separate_bounded_output(self):
-        code, out, err = power._run(sys.executable, ["-c", "import sys;print('ok');print('notice', file=sys.stderr)"], time.monotonic() + 5)
+        child = "import sys;sys.stdout.buffer.write(b'ok\\n');sys.stderr.buffer.write(b'notice\\n')"
+        code, out, err = power._run(sys.executable, ["-c", child], time.monotonic() + 5)
         self.assertEqual((code, out, err), (0, b"ok\n", b"notice\n"))
 
     def test_existing_deadline_prevents_process_creation(self):

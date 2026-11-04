@@ -84,16 +84,21 @@ class ShutdownCliTest(unittest.TestCase):
 
     def test_one_second_budget_still_dispatches_bound_television_off(self):
         client = self.client()
+        module = ott.device_power_module()
+        clock = [100.0]
 
         def reply(_path, payload=None, **_kwargs):
             if payload is None:
+                clock[0] += 0.1
                 return 200, {"version": 1, "device_id": "projector2", "configured": True,
                              "capabilities": ["off"]}
             return 200, {"version": 1, "device_id": "projector2", "action": "off",
                          "transport": "webos", "outcome": "accepted"}
 
         client.api.side_effect = reply
-        code, _, _, _ = self.run_cli(["-t", "1", "p2", "shutdown"], client)
+        with mock.patch.object(ott, "device_power_module", return_value=module), \
+                mock.patch.object(module.time, "monotonic", side_effect=lambda: clock[0]):
+            code, _, _, _ = self.run_cli(["-t", "1", "p2", "shutdown"], client)
         self.assertEqual(code, 0)
         self.assertEqual(client.api.call_count, 2)
         posted = client.api.call_args
