@@ -225,6 +225,9 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME restart app               relaunch a supported native app
   ott NAME reload                    reload the player after acknowledgement
   ott NAME reboot [device]           reboot the device OS only when supported
+  ott NAME shutdown [device]         power off a bound Android device or television
+  ott NAME shutdown status           inspect device power support without shutting down
+  ott NAME shutdown --help           ADB setup, device identity and power-off outcomes
   ott NAME android bind NATIVE       bind a separately provisioned native device alias
   ott NAME android status / logs     inspect Android independently of the web player
   ott NAME android operation ID      read a durable native receipt without replay
@@ -6740,6 +6743,16 @@ def television_module():
     return module
 
 
+def device_power_module():
+    path = Path(__file__).resolve().with_name("device_power.py")
+    if not path.is_file():
+        raise Error("Install device_power.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_device_power", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def player_group_targets(client, selector):
     """Resolve saved groups and comma lists before any per-player request."""
     return player_groups_module().targets(SimpleNamespace(**globals()), client, selector)
@@ -6752,6 +6765,8 @@ def player_command_route(words):
         return "media_tracks"
     if verb == "tv":
         return "television"
+    if verb == "shutdown":
+        return "device_power"
     if verb == "torrent":
         return "torrent_indexer" if len(words) > 1 and words[1].casefold() == "indexer" else "torrent_catalog"
     if verb == "perf":
@@ -6972,6 +6987,10 @@ def player_group_command(client, config, targets, args, argv):
         television = television_module().parse(SimpleNamespace(**globals()), words[1:])
         if television and television["action"] == "pair" and len(targets) > 1:
             raise Error("Television pairing requires one player at a time")
+    if route == "device_power":
+        power = device_power_module().parse(SimpleNamespace(**globals()), words[1:])
+        if power["action"] in ("bind-adb", "unbind") and len(targets) > 1:
+            raise Error("Shutdown binding changes require exactly one player")
     if route == "preset":
         parsed = parse_preset_load(words)
         name, _ = validate_preset(config, parsed["preset"])
@@ -7143,6 +7162,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     if route == "television":
         return television_module().run(SimpleNamespace(**globals()), client, device, args.words[0],
                                        words[1:], args.timeout, args.json)
+    if route == "device_power":
+        return device_power_module().run(SimpleNamespace(**globals()), client, config, args.config,
+                                         device, args.words[0], words[1:], args.timeout, args.json)
     if route == "torrent_indexer":
         with IndexerProgress(args.words[0], progress_stream) as progress:
             code = torrent_indexer_module().run(SimpleNamespace(**globals()), client, device, words[2:],
@@ -7207,6 +7229,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     status_overview = action == "status" and command_verb(words) != "v"
     status_deadline = time.monotonic() + args.timeout if status_overview else None
     if status_overview and not args.json:
+        device_power_module().overview_help(SimpleNamespace(**globals()), config, device, args.words[0])
         television_module().overview_help(SimpleNamespace(**globals()), client, device, args.words[0])
     catalog_play = None
     implicit_search_deadline = None
@@ -7602,6 +7625,13 @@ def main(argv=None):
                            and args.words[0].casefold() not in TOP_LEVEL_COMMANDS)
         television_command = (len(args.words) > 1 and args.words[1].casefold() == "tv"
                               and args.words[0].casefold() not in TOP_LEVEL_COMMANDS)
+        shutdown_command = (len(args.words) > 1 and args.words[1].casefold() == "shutdown"
+                            and args.words[0].casefold() not in TOP_LEVEL_COMMANDS)
+        if shutdown_command:
+            power = device_power_module().parse(SimpleNamespace(**globals()), args.words[2:])
+            if power["action"] == "help":
+                print(device_power_module().help_text(args.words[0]))
+                return 0
         if television_command and [word.casefold() for word in args.words[2:]] in (["--help"], ["-h"], ["help"]):
             print(television_module().help_text(args.words[0]))
             return 0

@@ -137,6 +137,14 @@ provide `coco` for OttPlay and `cocop` for native Plex, with bounded readiness
 checks and playback confirmation. Native Plex remains subject to its own
 authorization and Remote Watch Pass requirements.
 
+For a supported Android projector or an already configured television, use
+[`ott p2 shutdown`](docs/device-power.md) to request device power-off.
+`ott p2 shutdown status` inspects its power route without switching off.
+Android uses an explicitly bound, identity-checked ADB target; setup is
+`ott p2 shutdown bind-adb SERIAL`. Lists and saved groups work for shutdown too.
+This requires the CLI revision containing `device_power.py`; ADB debugging alone
+does not guarantee that a projector's firmware permits shutdown.
+
 The Python CLI is installed from a source checkout, separately from the native
 server archive. The [installation and configuration steps](docs/cli.md#installation-and-connection)
 cover macOS/Linux and Windows, Python/PATH setup and the required CLI modules.
@@ -175,6 +183,8 @@ ott a1 restart             # reload the player
 ott a1 restart stream      # restart only the current stream
 ott a1 standby             # stop playback and enter player standby; stay connected
 ott a1 go                  # leave standby and start configured playback (start/wake also work)
+ott p2 shutdown status     # inspect the configured device power route
+ott p2 shutdown            # request power-off on the supported, configured projector
 ott a1 screenshot          # save a PNG; browser builds need a selected capture source
 ott a1 shot -o screen.png  # short alias; never overwrites an existing file
 ott a1 test run media-progress --report ./a1-progress

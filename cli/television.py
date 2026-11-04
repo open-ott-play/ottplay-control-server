@@ -203,6 +203,8 @@ def overview_help(api, client, device, name):
         print("Television controls (available independently of the player):")
         print(f"  {prefix} status / volume [N|+N|-N] / mute on|off")
         print(f"  {prefix} on / off / launch [APP] / go [APP] / apps / pair")
+        if "off" in binding["capabilities"]:
+            print(f"  ott {shlex.quote(name)} shutdown  — switch off the television")
         print(f"  {prefix} --help  — television power and system volume; player controls stay separate")
         print()
 

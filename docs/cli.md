@@ -9,7 +9,8 @@ Keep all files from the same `cli/` revision together: `ott.py`, `programme_sear
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
 `global_favorites_remote.py`, `global_favorites_recovery.py`, `global_favorites_operations.py`,
 `global_favorites_commands.py`, `global_favorites_items.py`, `global_favorites_items_commands.py`,
-`torrent_catalog.py`, `torrent_document.py`, `torrent_indexer.py` and `television.py`.
+`torrent_catalog.py`, `torrent_document.py`, `torrent_indexer.py`, `television.py`,
+`media_tracks.py` and `device_power.py`.
 Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
@@ -62,6 +63,7 @@ covers the settings on the TV, browser, Tauri or Capacitor installation.
 - [Scoped diagnostics and MCP](diagnostics-cli.md)
 - [Home Assistant connection and event delivery status](#home-assistant-event-status), [per-player notification preference](#per-player-notification-preference)
 - [Direct LG television power, system volume and app launch](television.md)
+- [Device shutdown and Android ADB power bindings](device-power.md)
 - [Read-only doctor, inspect, debug, bundles and test scenarios](workbench.md)
 - [Monitor one player or a group and diagnose failures](monitoring-runbook.md)
 - [Verify saved reports offline](workbench.md#verify-saved-evidence-offline)
@@ -238,7 +240,11 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 38 Python modules, including
+The current CLI contains 39 Python modules, including `device_power.py` for
+[device shutdown](device-power.md). This command requires a source revision
+containing that module; the historical source pin above predates it. Run
+`ott PLAYER shutdown --help` to check the installed command without contacting
+a device. Other modules include
 [global favorites transfer](#global-favorites-transfer), its separate recovery
 commands, [saved favorites documents](#saved-favorites-documents), and explicit current-Plex
 binding, collect, load, diff, clear and status commands. It adds global
@@ -1239,6 +1245,8 @@ ott tv stop                 # standby: stop playback while remaining connected
 ott tv start                # wake: start according to the player's startup settings
 ott tv exit                 # exit a supported app; no standby fallback
 ott tv reboot device        # reboot the device OS only if advertised/supported
+ott tv shutdown             # power off through a configured, supported device route
+ott tv shutdown status      # inspect that route without switching off
 ott --json tv s             # machine-readable output
 ott --timeout 60 tv p
 ```
@@ -3431,6 +3439,21 @@ already awake TV. Output distinguishes the selected transport and whether the
 result is confirmed, merely accepted, or uncertain. Mutations are never blindly
 repeated after a timeout. See [direct LG television control](television.md) for
 configuration, all aliases, pairing, Wake-on-LAN and troubleshooting.
+
+## Device shutdown
+
+Use `ott p2 shutdown` to request a supported device's graceful power-off. For an
+Android projector, configure its exact ADB endpoint once with
+`ott p2 shutdown bind-adb 192.0.2.20:5555` (replace the example address). The CLI
+checks device identity and command support before sending shutdown. Without a
+local ADB binding, it can use an existing controller-managed television binding.
+
+`ott p2 shutdown status` is read-only. Ordinary lists and groups support parallel
+shutdown requests, for example `ott p1,p2 shutdown`. Setup and removal of bindings
+require a single player. An accepted request does not prove completed power-off;
+an uncertain result is never retried automatically. See the
+[device power guide](device-power.md) for installation, USB targets, binding
+removal, wake limitations and troubleshooting.
 
 ## Restarting playback or the player
 
