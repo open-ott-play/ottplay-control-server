@@ -7,9 +7,11 @@ import os
 import re
 import shlex
 import shutil
+import secrets
 import subprocess
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 
 MAX_OUTPUT = 32768
@@ -88,7 +90,7 @@ def _remaining(deadline, cancelled=None):
     return remaining
 
 
-def _run(adb, arguments, deadline, cancelled=None, mutation=False):
+def _run(adb, arguments, deadline, cancelled=None, mutation=False, on_wait=None):
     """Bound both output and wall time; never include command output in errors."""
     _remaining(deadline, cancelled)
     try:
@@ -98,6 +100,7 @@ def _run(adb, arguments, deadline, cancelled=None, mutation=False):
         raise PowerError("Could not start Android SDK Platform Tools") from None
     buffers = [bytearray(), bytearray()]
     streams = {process.stdout: buffers[0], process.stderr: buffers[1]}
+    next_check = time.monotonic() + 0.25
     try:
         try:
             for stream in streams:
@@ -124,6 +127,9 @@ def _run(adb, arguments, deadline, cancelled=None, mutation=False):
                     target.extend(block)
             if process.poll() is not None and not streams:
                 break
+            if on_wait is not None and time.monotonic() >= next_check:
+                on_wait()
+                next_check = time.monotonic() + 1
             time.sleep(min(0.02, remaining))
         return process.returncode, bytes(buffers[0]), bytes(buffers[1])
     except KeyboardInterrupt:
@@ -236,6 +242,143 @@ def _ensure_unique(bindings, device, identity):
             raise PowerError("This Android device is already bound to another player; use an alias of that player")
 
 
+def _system_dialog_window(raw):
+    """Recognize a focused Android-owned keyguard dialog, never an app imitation."""
+    text = _text(raw)
+    focus = re.findall(r"(?m)^\s*mCurrentFocus=Window\{([a-f0-9]+) (u[0-9]+) android\}\s*$", text)
+    if len(focus) != 1:
+        return None
+    token, user = focus[0]
+    heading = re.escape("Window{" + token + " " + user + " android}:")
+    sections = re.findall(r"(?ms)^\s*Window #\d+ " + heading + r"\s*\n(.*?)(?=^\s*Window #\d+ |\Z)", text)
+    if len(sections) != 1:
+        return None
+    body = sections[0]
+    if (not re.search(r"(?m)^\s*mOwnerUid=1000\b[^\n]*\bpackage=android(?:\s|$)", body)
+            or not re.search(r"\bty=KEYGUARD_DIALOG\b", body)):
+        return None
+    return token, user
+
+
+def _shutdown_button(raw):
+    """Only the observed system Power off dialog is eligible for confirmation."""
+    text = _text(raw)
+    start, end = text.find("<?xml"), text.rfind("</hierarchy>")
+    if start < 0 or end < start or "<!" in text:
+        return None
+    xml = text[start:end + len("</hierarchy>")]
+    try:
+        root = ET.fromstring(xml)
+    except (ET.ParseError, ValueError):
+        return None
+    if root.tag != "hierarchy" or len(root) != 1:
+        return None
+    nodes = list(root.iter("node"))
+    if not 4 <= len(nodes) <= 128 or any(node.get("package") != "android" for node in nodes):
+        return None
+    expected = {
+        "android:id/alert_dialog_custom_title": ("Power off", "android.widget.TextView"),
+        "android:id/alert_dialog_custom_content": ("Do you want to shut down?", "android.widget.TextView"),
+        "android:id/alert_dialog_custom_btn_cancel": ("CANCEL", "android.widget.Button"),
+        # This is the resource's actual spelling on the supported firmware.
+        "android:id/alert_dialog_custom_btn_comfirm": ("OK", "android.widget.Button"),
+    }
+    selected = {}
+    for node in nodes:
+        resource = node.get("resource-id")
+        if resource in expected:
+            if (resource in selected or (node.get("text"), node.get("class")) != expected[resource]
+                    or node.get("enabled") != "true"):
+                return None
+            selected[resource] = node
+        elif node.get("text") or node.get("clickable") == "true":
+            return None
+    if set(selected) != set(expected):
+        return None
+
+    def bounds(node):
+        match = re.fullmatch(r"\[([0-9]{1,5}),([0-9]{1,5})\]\[([0-9]{1,5}),([0-9]{1,5})\]", node.get("bounds", ""))
+        if match is None:
+            return None
+        values = tuple(map(int, match.groups()))
+        return values if 0 <= values[0] < values[2] <= 16384 and 0 <= values[1] < values[3] <= 16384 else None
+
+    frame = bounds(nodes[0])
+    if frame is None:
+        return None
+    for resource, node in selected.items():
+        area = bounds(node)
+        if area is None or not (frame[0] <= area[0] < area[2] <= frame[2] and frame[1] <= area[1] < area[3] <= frame[3]):
+            return None
+        if "_btn_" in resource and node.get("clickable") != "true":
+            return None
+    positive = bounds(selected["android:id/alert_dialog_custom_btn_comfirm"])
+    negative = bounds(selected["android:id/alert_dialog_custom_btn_cancel"])
+    if max(positive[0], negative[0]) < min(positive[2], negative[2]) and max(positive[1], negative[1]) < min(positive[3], negative[3]):
+        return None
+    return (positive[0] + positive[2]) // 2, (positive[1] + positive[3]) // 2
+
+
+def _confirm_shutdown_dialog(adb, transport, deadline, cancelled=None):
+    prefix = ["-t", transport, "shell"]
+    code, window, err = _run(adb, [*prefix, "dumpsys", "window"], deadline, cancelled)
+    before = _system_dialog_window(window) if not code and not err.strip() else None
+    if before is None:
+        return False
+    # Every shell byte is fixed except this generated hexadecimal nonce. The
+    # dump can otherwise expose the app underneath if the window changes, so
+    # create it privately and remove that exact file on all normal shell exits.
+    path = "/data/local/tmp/.ott-power-" + secrets.token_hex(16) + ".xml"
+    script = ("umask 077; trap 'rm -f " + path + "' EXIT; "
+              "uiautomator dump " + path + " >/dev/null && cat " + path)
+    code, ui, err = _run(adb, [*prefix, script], deadline, cancelled)
+    button = _shutdown_button(ui) if not code and not err.strip() else None
+    if button is None:
+        return False
+    code, window, err = _run(adb, [*prefix, "dumpsys", "window"], deadline, cancelled)
+    after = _system_dialog_window(window) if not code and not err.strip() else None
+    if after != before:
+        return False
+    code, out, err = _run(adb, [*prefix, "input", "tap", str(button[0]), str(button[1])],
+                         deadline, cancelled, mutation=True)
+    if code or out.strip() or err.strip():
+        raise PowerError("System shutdown confirmation was not acknowledged", True)
+    return True
+
+
+class _ConfirmationSubmitted(Exception):
+    pass
+
+
+def _shutdown(adb, transport, deadline, cancelled=None):
+    # A new explicit shutdown can complete an already-open recognized dialog;
+    # it must not send a second svc request to create or toggle another prompt.
+    if _confirm_shutdown_dialog(adb, transport, deadline, cancelled):
+        return True
+
+    def check_dialog():
+        try:
+            if _confirm_shutdown_dialog(adb, transport, deadline, cancelled):
+                raise _ConfirmationSubmitted()
+        except PowerError as exc:
+            # svc was already dispatched. A later inspection failure is never
+            # permission to replay it or pretend no change may have happened.
+            raise PowerError(str(exc), True) from None
+
+    try:
+        code, out, err = _run(adb, ["-t", transport, "shell", "svc", "power", "shutdown"],
+                             deadline, cancelled, mutation=True, on_wait=check_dialog)
+        if re.search(rb"(?:java\.lang\.)?SecurityException[^\r\n]*android\.permission\.REBOOT\b", out + b"\n" + err):
+            raise PowerError("Android rejected shutdown: the ADB shell lacks REBOOT permission. The request was not repeated")
+        if code or out.strip() or err.strip():
+            raise PowerError("The Android shutdown request did not return a clean acknowledgement", True)
+        # Some firmware returns before its confirmation dialog is answered.
+        check_dialog()
+    except _ConfirmationSubmitted:
+        return True
+    return False
+
+
 def overview_help(api, config, device, name):
     try:
         binding = _bindings(config).get(device)
@@ -265,6 +408,8 @@ def _print(result, json_output):
             print("  Firmware advertises shutdown; permission is checked when requested.")
         print("  No shutdown was sent.")
     elif result["outcome"] == "accepted":
+        if result.get("confirmation_submitted"):
+            print("System power-off confirmation submitted.")
         print("Device shutdown request submitted through ADB. Final power state has not been confirmed.")
     else:
         print("Device shutdown outcome is uncertain. Inspect the device before another command.")
@@ -331,16 +476,9 @@ def run(api, client, config, config_path, device, name, words, timeout, json_out
             _print({"version": 1, "action": action, "transport": "adb", "configured": True,
                     "supported": True, "identity_verified": True}, json_output)
             return 0
-        code, out, err = _run(adb, ["-t", transport, "shell", "svc", "power", "shutdown"],
-                              deadline, cancelled, mutation=True)
-        if re.search(rb"(?:java\.lang\.)?SecurityException[^\r\n]*android\.permission\.REBOOT\b", out + b"\n" + err):
-            raise PowerError("Android rejected shutdown: the ADB shell lacks REBOOT permission. The request was not repeated")
-        if code or out.strip() or err.strip():
-            # svc can lose its Binder/ADB connection while Android shuts down.
-            # Neither a socket close nor a quiet exit proves the physical state.
-            raise PowerError("The Android shutdown request did not return a clean acknowledgement", True)
+        confirmed = _shutdown(adb, transport, deadline, cancelled)
         _print({"version": 1, "action": action, "transport": "adb", "outcome": "accepted",
-                "power_state_confirmed": False, "repeated": False}, json_output)
+                "power_state_confirmed": False, "confirmation_submitted": confirmed, "repeated": False}, json_output)
         return 0
     except PowerError as exc:
         if exc.uncertain:

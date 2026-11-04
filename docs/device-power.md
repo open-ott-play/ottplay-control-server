@@ -57,6 +57,28 @@ forced reboot command.
 The status probe checks the advertised method; firmware permission can still
 reject the actual shutdown request.
 
+### Firmware that asks for confirmation
+
+Some projector firmware displays a system **Power off** confirmation even after
+`svc power shutdown`. The CLI can complete the specific English dialog observed
+on supported firmware: **Power off**, **Do you want to shut down?**, **CANCEL** and
+**OK**. It verifies the focused window is owned by Android's system UID 1000,
+uses package `android` and has type `KEYGUARD_DIALOG`. The labels, widget types
+and resource IDs must match, including the firmware's actual
+`android:id/alert_dialog_custom_btn_comfirm` spelling.
+
+The CLI reads fresh button bounds, verifies the same system window still has
+focus, then submits one tap to **OK**. Button coordinates are not saved for later
+use. If this exact dialog is already open when you explicitly run `shutdown`,
+the CLI completes it without sending another `svc power shutdown` request.
+
+Other dialogs, translated text and changed layouts are not automatically
+confirmed. This is a narrow compatibility path for the recognized system power
+dialog, not a general dialog-clicking facility. Complete an unrecognized prompt
+with the physical remote. A submitted confirmation still does not prove the
+projector has finished powering off; firmware can refuse the operation or lose
+its ADB connection while shutting down. No forced reboot is used as a fallback.
+
 ```sh
 ott p2 shutdown unbind         # remove only this computer's local power binding
 ```
@@ -107,6 +129,10 @@ television guide.
 - **Shutdown unsupported or permission denied:** the firmware does not expose
   or permit the operation. Use the remote control; the CLI does not escalate
   privileges or replace shutdown with standby.
+- **Power-off confirmation remains on screen:** only the specifically recognized
+  Android system dialog is eligible for automatic confirmation. A translated,
+  changed or unrecognized dialog requires the physical remote. Do not repeatedly
+  send shutdown to dismiss an unfamiliar prompt.
 - **Uncertain result:** the projector may already be shutting down. Inspect its
   screen or power indicator before submitting another command. A disconnected
   ADB transport alone does not prove power-off.

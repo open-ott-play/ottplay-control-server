@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+import re
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -35,7 +36,7 @@ class DevicePowerTests(unittest.TestCase):
         self.calls = []
         self.shutdown_reply = (0, b"", b"")
 
-    def adb(self, executable, args, deadline, cancelled=None, mutation=False):
+    def adb(self, executable, args, deadline, cancelled=None, mutation=False, on_wait=None):
         self.calls.append((list(args), mutation))
         if args == ["devices", "-l"]:
             return 0, b"List of devices attached\n192.0.2.10:5555 device product:p model:m transport_id:42\nOTHER device transport_id:9\n", b""
@@ -45,6 +46,8 @@ class DevicePowerTests(unittest.TestCase):
             return 0, (b"PROJECTOR-123\n" if args[4] == "ro.serialno" else b"Projector 2\n"), b""
         if args == ["-t", "42", "shell", "svc", "power"]:
             return 0, b"", b"usage: svc power shutdown\n Perform a runtime shutdown and power off the device.\n"
+        if args == ["-t", "42", "shell", "dumpsys", "window"]:
+            return 0, b"mCurrentFocus=Window{abc u0 play.ott.foss}\n", b""
         if args == ["-t", "42", "shell", "svc", "power", "shutdown"]:
             if isinstance(self.shutdown_reply, Exception):
                 raise self.shutdown_reply
@@ -106,7 +109,7 @@ class DevicePowerTests(unittest.TestCase):
         self.assertEqual((code, result["outcome"], result["power_state_confirmed"]), (0, "accepted", False))
         effects = [args for args, mutation in self.calls if mutation]
         self.assertEqual(effects, [["-t", "42", "shell", "svc", "power", "shutdown"]])
-        self.assertEqual(self.calls[-2][0], ["-t", "42", "shell", "svc", "power"])
+        self.assertEqual(self.calls[4][0], ["-t", "42", "shell", "svc", "power"])
         self.api.television_module.assert_not_called()
 
     def test_timeout_disconnect_nonzero_or_output_is_uncertain_without_retry(self):
@@ -355,6 +358,172 @@ class BoundedProcessTests(unittest.TestCase):
             power._run("missing", [], time.monotonic() + 5, mutation=True)
         self.assertFalse(failure.exception.uncertain)
         self.assertNotIn("private", str(failure.exception))
+
+    def test_wait_callback_can_finish_and_reap_blocked_command(self):
+        processes = []
+        original = power.subprocess.Popen
+        def create(*args, **kwargs):
+            process = original(*args, **kwargs)
+            processes.append(process)
+            return process
+        def confirmed():
+            raise power._ConfirmationSubmitted()
+        with mock.patch.object(power.subprocess, "Popen", side_effect=create), self.assertRaises(power._ConfirmationSubmitted):
+            power._run(sys.executable, ["-c", "import time;time.sleep(10)"], time.monotonic() + 5,
+                       mutation=True, on_wait=confirmed)
+        self.assertIsNotNone(processes[0].poll())
+        self.assertTrue(processes[0].stdout.closed)
+        self.assertTrue(processes[0].stderr.closed)
+
+
+WINDOW = b"""WINDOW MANAGER WINDOWS
+  Window #0 Window{abc123 u0 android}:
+    mOwnerUid=1000 showForAllUsers=true package=android appop=NONE
+    mAttrs={(0,0)(400x200) ty=KEYGUARD_DIALOG fmt=TRANSLUCENT}
+  Window #1 Window{def456 u0 player}:
+    mOwnerUid=12345 package=player
+  mCurrentFocus=Window{abc123 u0 android}
+"""
+ABSENT_WINDOW = b"mCurrentFocus=Window{def456 u0 player}\n"
+UI = b'''<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0"><node package="android" class="android.widget.FrameLayout" bounds="[300,200][700,400]">
+<node package="android" resource-id="android:id/alert_dialog_custom_title" class="android.widget.TextView" text="Power off" enabled="true" clickable="false" bounds="[320,210][680,250]"/>
+<node package="android" resource-id="android:id/alert_dialog_custom_content" class="android.widget.TextView" text="Do you want to shut down?" enabled="true" clickable="false" bounds="[320,260][680,300]"/>
+<node package="android" resource-id="android:id/alert_dialog_custom_btn_cancel" class="android.widget.Button" text="CANCEL" enabled="true" clickable="true" bounds="[320,350][400,380]"/>
+<node package="android" resource-id="android:id/alert_dialog_custom_btn_comfirm" class="android.widget.Button" text="OK" enabled="true" clickable="true" bounds="[600,350][680,380]"/>
+</node></hierarchy>'''
+
+
+class ShutdownDialogTests(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.windows = [WINDOW, WINDOW]
+        self.ui = UI
+        self.tap_reply = (0, b"", b"")
+
+    def adb(self, executable, args, deadline, cancelled=None, mutation=False, on_wait=None):
+        self.calls.append((list(args), mutation))
+        if args == ["-t", "42", "shell", "dumpsys", "window"]:
+            return 0, self.windows.pop(0), b""
+        if len(args) == 4 and args[:3] == ["-t", "42", "shell"] and args[3].startswith("umask 077;"):
+            return 0, self.ui, b""
+        if args[:5] == ["-t", "42", "shell", "input", "tap"]:
+            return self.tap_reply
+        raise AssertionError("Unexpected ADB operation")
+
+    def confirm(self):
+        with mock.patch.object(power, "_run", side_effect=self.adb):
+            return power._confirm_shutdown_dialog("adb", "42", time.monotonic() + 10)
+
+    def test_system_owned_window_and_button_are_recognized(self):
+        self.assertEqual(power._system_dialog_window(WINDOW), ("abc123", "u0"))
+        self.assertEqual(power._shutdown_button(UI), (640, 365))
+
+    def test_window_requires_exact_focus_uid_package_type_and_unique_section(self):
+        for raw in (ABSENT_WINDOW, WINDOW.replace(b"mOwnerUid=1000", b"mOwnerUid=12345"),
+                    WINDOW.replace(b"package=android", b"package=player"),
+                    WINDOW.replace(b"ty=KEYGUARD_DIALOG", b"ty=APPLICATION_OVERLAY"),
+                    WINDOW + b"mCurrentFocus=Window{abc123 u0 android}\n",
+                    WINDOW.replace(b"Window #0 Window{abc123", b"Window #0 Window{another")):
+            with self.subTest(raw=raw[:50]):
+                self.assertIsNone(power._system_dialog_window(raw))
+
+    def test_xml_requires_exact_system_dialog_no_guessed_buttons(self):
+        bads = [UI.replace(b'package="android"', b'package="player"', 1),
+                UI.replace(b"Power off", b"Restart"), UI.replace(b"Do you want to shut down?", b"Delete all data?"),
+                UI.replace(b'btn_comfirm', b'button1'), UI.replace(b'text="OK"', b'text="YES"'),
+                UI.replace(b'enabled="true"', b'enabled="false"'), UI.replace(b'clickable="true"', b'clickable="false"'),
+                UI.replace(b'class="android.widget.Button"', b'class="android.widget.TextView"'),
+                UI.replace(b'[600,350][680,380]', b'[600,350][900,380]'),
+                UI.replace(b'[600,350][680,380]', b'[600,350][600,380]'),
+                UI.replace(b'<hierarchy', b'<!DOCTYPE hierarchy []><hierarchy'), b'not XML',
+                UI.replace(b'</node></hierarchy>', b'<node package="android" text="Unexpected"/></node></hierarchy>')]
+        for raw in bads:
+            with self.subTest(raw=raw[:60]):
+                self.assertIsNone(power._shutdown_button(raw))
+
+    def test_overlapping_cancel_and_confirm_buttons_are_rejected(self):
+        for bounds in (b"[600,350][680,380]", b"[590,350][620,380]", b"[610,360][620,370]"):
+            with self.subTest(bounds=bounds):
+                changed = UI.replace(b"[320,350][400,380]", bounds)
+                self.assertIsNone(power._shutdown_button(changed))
+        self.assertIsNotNone(power._shutdown_button(UI.replace(b"[320,350][400,380]", b"[320,350][600,380]")))
+
+    def test_plain_output_reports_confirmation_separately_from_power_state(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            power._print({"action": "shutdown", "outcome": "accepted", "confirmation_submitted": True}, False)
+        self.assertIn("System power-off confirmation submitted.", out.getvalue())
+        self.assertIn("Final power state has not been confirmed.", out.getvalue())
+
+    def test_fresh_matching_dialog_taps_derived_positive_once(self):
+        self.assertTrue(self.confirm())
+        effects = [args for args, mutation in self.calls if mutation]
+        self.assertEqual(effects, [["-t", "42", "shell", "input", "tap", "640", "365"]])
+        self.assertEqual([args[-1] for args, _ in self.calls if args[-2:-1] == ["dumpsys"]], ["window", "window"])
+        script = self.calls[1][0][3]
+        paths = re.findall(r"/data/local/tmp/\.ott-power-[0-9a-f]{32}\.xml", script)
+        self.assertEqual(len(paths), 3)
+        self.assertEqual(len(set(paths)), 1)
+        self.assertIn("trap 'rm -f " + paths[0] + "' EXIT", script)
+        self.assertTrue(script.startswith("umask 077;"))
+
+    def test_changed_focus_never_taps(self):
+        self.windows[1] = WINDOW.replace(b"abc123", b"abc124")
+        self.assertFalse(self.confirm())
+        self.assertFalse(any(mutation for _, mutation in self.calls))
+
+    def test_unrecognized_dialog_never_taps(self):
+        self.ui = UI.replace(b"Power off", b"Restart")
+        self.assertFalse(self.confirm())
+        self.assertFalse(any(mutation for _, mutation in self.calls))
+
+    def test_app_window_never_dumps_ui_or_taps(self):
+        self.windows = [ABSENT_WINDOW]
+        self.assertFalse(self.confirm())
+        self.assertEqual(len(self.calls), 1)
+
+    def test_unconfirmed_tap_is_uncertain_and_not_repeated(self):
+        self.tap_reply = (1, b"", b"closed")
+        with self.assertRaises(power.PowerError) as failure:
+            self.confirm()
+        self.assertTrue(failure.exception.uncertain)
+        self.assertEqual(sum(mutation for _, mutation in self.calls), 1)
+
+    def test_existing_dialog_finishes_without_another_svc(self):
+        with mock.patch.object(power, "_run", side_effect=self.adb):
+            self.assertTrue(power._shutdown("adb", "42", time.monotonic() + 10))
+        self.assertFalse(any("svc" in args for args, _ in self.calls))
+        self.assertEqual(sum(mutation for _, mutation in self.calls), 1)
+
+    def test_blocked_svc_is_confirmed_within_same_request(self):
+        self.windows = [ABSENT_WINDOW, WINDOW, WINDOW]
+        original = self.adb
+        def blocked(executable, args, deadline, cancelled=None, mutation=False, on_wait=None):
+            if args[-3:] == ["svc", "power", "shutdown"]:
+                self.calls.append((args, mutation))
+                self.assertTrue(callable(on_wait))
+                on_wait()
+                raise AssertionError("Confirmation must finish the blocked wait")
+            return original(executable, args, deadline, cancelled, mutation, on_wait)
+        with mock.patch.object(power, "_run", side_effect=blocked):
+            self.assertTrue(power._shutdown("adb", "42", time.monotonic() + 10))
+        effects = [args for args, mutation in self.calls if mutation]
+        self.assertEqual(len(effects), 2)
+        self.assertEqual(effects[0][-3:], ["svc", "power", "shutdown"])
+        self.assertEqual(effects[1][-4:], ["input", "tap", "640", "365"])
+
+    def test_post_svc_inspection_failure_stays_uncertain(self):
+        self.windows = [ABSENT_WINDOW]
+        original = self.adb
+        def failed(executable, args, deadline, cancelled=None, mutation=False, on_wait=None):
+            if args[-3:] == ["svc", "power", "shutdown"]:
+                with mock.patch.object(power, "_confirm_shutdown_dialog", side_effect=power.PowerError("read timeout")):
+                    on_wait()
+            return original(executable, args, deadline, cancelled, mutation, on_wait)
+        with mock.patch.object(power, "_run", side_effect=failed), self.assertRaises(power.PowerError) as failure:
+            power._shutdown("adb", "42", time.monotonic() + 10)
+        self.assertTrue(failure.exception.uncertain)
 
 
 if __name__ == "__main__":
