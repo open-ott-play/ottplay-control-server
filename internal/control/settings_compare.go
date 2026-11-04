@@ -22,7 +22,9 @@ func validSettingsCompare(p map[string]json.RawMessage) bool {
 	case "plex":
 		return len(p) == 2 && len(s) == 2 && profileText(s["server"], 8192) && profileText(s["token"], 1024)
 	case "stalker":
-		return len(p) == 3 && profileInteger(p["number"], 1, 15) && len(s) == 3 && profileText(s["name"], 256) && profileText(s["server"], 8192) && profileText(s["mac"], 17)
+		// Compare the stored literal, including surrounding spaces. The complete
+		// request remains subject to the existing 16 KiB HTTP body limit.
+		return len(p) == 3 && profileInteger(p["number"], 1, 15) && len(s) == 3 && profileText(s["name"], 256) && profileText(s["server"], 8192) && profileText(s["mac"], 16384)
 	}
 	return false
 }
