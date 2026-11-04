@@ -131,6 +131,31 @@
   explicit uncertainty recovery. Source examples do not establish that matching
   CLI, controller and player components are installed.
 
+## [0.1.9] - 2026-11-03
+
+### Added
+
+- Add `ott PLAYER debug --local-source` for passive inspection of assigned and
+  attached Local media sources, including explicit player groups. Negotiate the
+  versioned capability and bind the bounded status projection to that runtime.
+- Distinguish attached and assigned source identity, endpoint agreement, media
+  error codes and H.264/HEVC capability hints. Inconsistent or unsupported
+  observations remain unknown instead of reporting successful playback.
+
+### Upgrade
+
+- Update the CLI to use the new command with a compatible player. Existing
+  status, overview and debug commands retain their behavior, and the controller
+  continues to relay optional status metadata without requiring an upgrade.
+- The command reads capabilities and status only. Codec hints are not a decode
+  test; it does not load media, switch sources or confirm picture and sound.
+
+### Security
+
+- Reject malformed, oversized or mismatched diagnostic blocks. Export only the
+  documented fields and opaque source IDs, keeping raw status, URLs, paths and
+  credentials out of this diagnostic report.
+
 ## [0.1.8] - 2026-11-03
 
 ### Fixed

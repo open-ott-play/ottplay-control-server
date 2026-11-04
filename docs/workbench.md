@@ -25,6 +25,8 @@ exist. These examples leave playback unchanged and can be run individually:
 ott a1 doctor --json                                   # identity, capabilities and readiness
 ott a1 debug --json                                    # runtime, events and native metrics; alias dbg
 ott l debug --native-playback                          # supported native backend: phase, measured counters, event ages
+ott t3 debug --local-source                            # assigned/attached Local identity and endpoint match
+ott --json tt debug --local-source                     # independent passive observations for the group
 ott --json a1 inspect --view ui,media
 ott a1 inspect --view media --lane web --json
 ott a1 inspect --lane native --json
@@ -65,6 +67,65 @@ and new transfers still require an awake, unlocked player. See the
 before treating a missing capability as a transport failure.
 
 ## Runtime debug snapshots
+
+### Local source identity
+
+`ott PLAYER debug --local-source` reads a separately advertised, versioned
+`local_source_diagnostics` projection. It helps distinguish a selected catalogue
+item from the source actually assigned to the video element. An updated player
+is required; installing the CLI alone does not enable this observation.
+
+The capability becomes available after normal Local playback preparation loads
+the optional Local feature. Before registration, the command reports unsupported;
+it does not load that feature itself. Ordinary status and capability requests
+never fetch diagnostic assets. A failed optional load does not delay direct
+Local playback. Cached source identities can still be unavailable after a
+library change, even when the diagnostic capability is present.
+
+The command first reads capabilities, then the existing `status` endpoint within
+one shared timeout. It validates the projection against that runtime. It does not
+retry a rejected read or fall back to playback commands. Group aliases and comma
+lists use the same independent, concurrent dispatch as other workbench commands.
+
+The report keeps these observations separate:
+
+- **Attached:** the video element's `currentSrc`, which may still be empty while
+  the assigned source is loading.
+- **Assigned:** the video element's `src`; catalogue selection is not substituted
+  for either value.
+- **Endpoint:** `match`, `mismatch`, or `unknown` for a Local route. A mismatch
+  can identify a stale endpoint after a native restart. Unknown means the current
+  endpoint could not be observed; it must not be treated as a mismatch.
+- **Identity:** opaque item/source IDs only when the current endpoint and an
+  exact cached mapping establish them. Missing IDs remain unavailable.
+- **Media error:** the numerical HTML media error code, when observed.
+- **Codec hints:** passive `canPlayType` results for fixed H.264 and HEVC MIME
+  strings. `maybe` and `probably` are browser hints, not proof that the selected
+  file will decode. An empty browser result means unsupported; unavailable
+  observations remain distinct.
+
+The fixed MIME strings are `video/mp4; codecs="avc1.42E01E, mp4a.40.2"`
+and `video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"`. The
+[version-1 contract](../contracts/local-source-diagnostics-v1.json) records the
+exact fields, bounded identifiers and consistency rules.
+
+The producer compares the video element and playback identity before and after
+the native observation. If they change, the report marks the snapshot
+inconsistent and removes source identities. The CLI returns exit code 3 for that
+unknown result. Use ordinary `debug --engine` or `test run media-progress` to
+observe decoding separately; source identity alone is not playback confirmation.
+
+No URL, endpoint token, media path, filename, or free-form browser error message
+is returned. The observation reads existing state only: it does not initialize a
+Local server, scan folders, open media, prepare a compatibility stream, or start
+FFmpeg. It uses an optional capability and optional `status` field, preserving
+the existing strict debug versions 1–3 and older status consumers.
+
+`--local-source` is exclusive with `--engine`, `--provider`, and
+`--native-playback`. JSON output uses the distinct `local-source-v1` evaluator;
+it is not an ordinary debug snapshot or a saved workbench bundle.
+
+### Runtime and engine snapshots
 
 For `Unsupported source` or `Failed to load` before decoder attachment, use
 [`ott PLAYER doctor --provider`](provider-diagnostics.md). It combines a safe
