@@ -30,8 +30,7 @@ shutdown. No separate OttPlay Android agent is required for this route.
 Install the complete CLI from one reviewed source revision containing
 `cli/device_power.py`, alongside `ott.py` and the other CLI modules. Updating only
 the Go controller or the projector app does not install this CLI command. Check
-`ott p2 shutdown --help` before configuring it. Older source pins in installation
-examples may predate device shutdown; select a revision containing this feature.
+`ott p2 shutdown --help` before configuring it. The source revision pinned in the [CLI installation guide](cli.md#choose-the-cli-source-revision) includes this feature.
 
 First register the player alias using the [CLI registration workflow](cli.md#register-and-connect-a-player).
 Then bind one explicit ADB target:
