@@ -363,6 +363,10 @@ RECEIPT_ACTIONS = frozenset((
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 MAX_PLEX_QUEUE_ITEMS = 500
+PLEX_QUEUE_STATE_OPERATIONS = PLEX_QUEUE_OPERATIONS - {"preview"}
+MAX_PLEX_QUEUE_STATE_ITEMS = 1000
+MAX_PLEX_QUEUE_STATE_BYTES = 32768
+PLEX_QUEUE_UPGRADE_ERROR = "This queue requires plex_queue_state_v2 and state_version: 2; upgrade the controller"
 PLEX_QUEUE_ERRORS = frozenset((
     "Plex configuration is missing or invalid.",
     "Plex provider module could not be loaded.",
@@ -4499,17 +4503,31 @@ def plex_queue_title(value):
     return epg_text(value, 512, "utf-8") and all(ord(char) >= 32 and ord(char) != 127 for char in value)
 
 
-def plex_queue_metadata(data, runtime=None, params=None):
+def plex_queue_metadata(data, runtime=None, params=None, *, expected_version=1):
     invalid = "The player returned invalid Plex queue metadata. The request may have executed; do not repeat the change blindly."
     preview = params is not None and params["op"] == "preview"
+    if type(expected_version) is not int or expected_version not in (1, 2) or (preview and expected_version != 1):
+        raise Error(invalid)
+    if expected_version == 2:
+        # The relay checks the received raw JSON subtree. A decoded CLI value
+        # can only check canonical UTF-8 size; whitespace/escapes are not retained.
+        try:
+            if len(json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) > MAX_PLEX_QUEUE_STATE_BYTES:
+                raise Error(invalid)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            raise Error(invalid) from None
     required = ({"version", "runtime", "state", "ids", "titles", "order"} if preview else
                 {"version", "runtime", "active", "state", "ids", "index", "repeat", "order"})
     optional = {"error"} if preview else {"title", "error"}
+    ids = data.get("ids") if isinstance(data, dict) else None
+    valid_ids = (isinstance(ids, list) and len(ids) <= MAX_PLEX_QUEUE_STATE_ITEMS
+                 and all(isinstance(item, str) and re.fullmatch(r"[1-9][0-9]{0,19}", item) for item in ids)
+                 if expected_version == 2 else plex_queue_ids(ids))
     if (not isinstance(data, dict) or not required <= set(data) or set(data) - required - optional
-            or type(data.get("version")) is not int or data["version"] != 1
+            or type(data.get("version")) is not int or data["version"] != expected_version
             or not isinstance(data.get("runtime"), str) or not re.fullmatch(r"[a-z0-9-]{1,64}", data["runtime"])
             or (runtime is not None and data["runtime"] != runtime)
-            or not plex_queue_ids(data.get("ids")) or data.get("order") != "listed"
+            or not valid_ids or data.get("order") != "listed"
             or ("error" in data and (data.get("state") != "error" or not isinstance(data["error"], str)
                                      or data["error"] not in PLEX_QUEUE_ERRORS))):
         raise Error(invalid)
@@ -4554,21 +4572,40 @@ def plex_queue_command(client, device, params, timeout):
             raise Error("Plex queues are not supported by this player/controller; update both and check caps. No queue command was sent")
         if len(params.get("ids", [])) > controls["plex_queue"]["max_items"]:
             raise Error("This player supports at most " + str(controls["plex_queue"]["max_items"]) + " Plex items; update it. No queue command was sent")
+        runtime = controls["player"]["runtime"]
+        version = 1
+        if params["op"] in PLEX_QUEUE_STATE_OPERATIONS and "plex_queue_state_v2" in controls:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Error("Plex capability discovery exceeded --timeout; no queue command was sent")
+            client.timeout = remaining
+            try:
+                confirmed = capabilities_metadata(client.call(device, "capabilities", {"plex_queue_state_v2": True}))
+            except HTTPError as exc:
+                if exc.code == 400:
+                    raise Error("This controller does not support Plex queue state v2; update it. No queue command was sent") from None
+                raise
+            if (confirmed["player"]["runtime"] != runtime
+                    or confirmed.get("plex_queue_state_v2") != controls["plex_queue_state_v2"]):
+                raise Error("Plex capabilities changed during negotiation. No queue command was sent")
+            version = 2
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Plex capability discovery exceeded --timeout; no queue command was sent")
         client.timeout = remaining
-        runtime = controls["player"]["runtime"]
-        result = client.call(device, "plex_queue", dict(params, runtime=runtime))
+        request = dict(params, runtime=runtime)
+        if version == 2:
+            request["state_version"] = 2
+        result = client.call(device, "plex_queue", request)
         if time.monotonic() >= deadline:
             raise Error("Plex queue response exceeded --timeout. Acceptance is uncertain and the request may still execute before its server deadline; do not repeat it blindly. Inspect plex status")
-        result = plex_queue_metadata(result, runtime, params)
+        result = plex_queue_metadata(result, runtime, params, expected_version=version)
         if result["state"] == "error" and params["op"] != "status":
             raise Error(result.get("error", "Plex playback could not start.") + " Inspect plex status before another playback request")
         return result
     except PlayerRejected as exc:
         detail = exc.data.get("error") if isinstance(exc.data, dict) else None
-        if not isinstance(detail, str) or detail not in PLEX_QUEUE_ERRORS:
+        if not isinstance(detail, str) or (detail not in PLEX_QUEUE_ERRORS and detail != PLEX_QUEUE_UPGRADE_ERROR):
             detail = "Plex queue request was rejected; check saved Plex settings, the current player runtime and availability."
         raise Error(detail + " The request was not repeated") from None
     except PlayerUnsupported:
@@ -4947,6 +4984,22 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": queue["max_items"]}
+    if "plex_queue_state_v2" in data:
+        state = data["plex_queue_state_v2"]
+        operations = state.get("operations") if isinstance(state, dict) else None
+        if (not isinstance(state, dict)
+                or set(state) != {"version", "operations", "max_write_items", "max_state_items", "max_state_bytes"}
+                or any(type(state.get(key)) is not int or state[key] != value for key, value in
+                       (("version", 2), ("max_write_items", MAX_PLEX_QUEUE_ITEMS),
+                        ("max_state_items", MAX_PLEX_QUEUE_STATE_ITEMS), ("max_state_bytes", MAX_PLEX_QUEUE_STATE_BYTES)))
+                or not isinstance(operations, list) or len(operations) != len(PLEX_QUEUE_STATE_OPERATIONS)
+                or any(not isinstance(op, str) or op not in PLEX_QUEUE_STATE_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)
+                or "plex_queue" not in result or result["plex_queue"]["max_items"] != MAX_PLEX_QUEUE_ITEMS
+                or not PLEX_QUEUE_STATE_OPERATIONS <= set(result["plex_queue"]["operations"])
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["plex_queue_state_v2"] = dict(state, operations=sorted(operations))
     if "favorites" in data:
         favorites = data["favorites"]
         operations = favorites.get("operations") if isinstance(favorites, dict) else None
