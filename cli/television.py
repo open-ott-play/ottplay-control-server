@@ -203,6 +203,8 @@ def overview_help(api, client, device, name):
         print("Television controls (available independently of the player):")
         print(f"  {prefix} status / volume [N|+N|-N] / mute on|off")
         print(f"  {prefix} on / off / launch [APP] / go [APP] / apps / pair")
+        if "off" in binding["capabilities"]:
+            print(f"  ott {shlex.quote(name)} shutdown  — switch off the television")
         print(f"  {prefix} --help  — television power and system volume; player controls stay separate")
         print()
 
@@ -232,8 +234,10 @@ def run(api, client, device, name, words, timeout, json_output=False):
     if params is None:
         print(help_text(name))
         return 0
-    if type(timeout) not in (int, float) or not 1 <= timeout <= 120 or not math.isfinite(timeout):
-        raise api.Error("Television --timeout must be between 1 and 120 seconds")
+    # Public --timeout is checked by the CLI. A dispatcher may already have
+    # spent part of that budget discovering the television binding.
+    if type(timeout) not in (int, float) or not 0 < timeout <= 120 or not math.isfinite(timeout):
+        raise api.Error("The remaining television timeout must be positive and at most 120 seconds")
     action = params["action"]
     if action == "pair":
         print("Pairing television: accept the connection request on its screen.", file=sys.stderr, flush=True)
