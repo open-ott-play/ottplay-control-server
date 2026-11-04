@@ -9,6 +9,7 @@ from unittest import mock
 import test_local_browser_cli as browser
 
 ott, FIXTURE = browser.ott, browser.FIXTURE
+DISPLAY_NAMES = json.loads((browser.ROOT / 'testdata/local_media_display_names_v1.json').read_text())
 
 
 def caps(progressive=False):
@@ -52,6 +53,45 @@ class LocalMediaHandlesTest(unittest.TestCase):
             client.call.assert_not_called()
         self.assertEqual(ott.parse_command(['local', 'play', '--', '--handle']),
                          ('local_media', {'op': 'play', 'source': '--handle'}))
+
+    def test_selected_display_names_survive_handle_actions_and_source_listing(self):
+        for name in DISPLAY_NAMES['valid']:
+            selected = browser.case('select_without_playback_or_save')
+            selected['data']['source']['name'] = name
+            code, out, err, calls = self.run_cli(browser.words(selected['request']), [caps(), selected['data']])
+            self.assertEqual((code, err, len(calls)), (0, '', 2))
+            source = json.loads(out)['source']
+            self.assertEqual(source['name'], name)
+            for row in FIXTURE['handle_cases']:
+                with self.subTest(name=repr(name), op=row['request']['op']):
+                    data = copy.deepcopy(row['data'])
+                    data['source']['name'] = name
+                    data['source_handle'] = source['handle']
+                    request = dict(row['request'], source_handle=source['handle'])
+                    code, out, err, calls = self.run_cli(
+                        ['local', request['op'], '--handle', source['handle']], [caps(), data])
+                    self.assertEqual((code, err, json.loads(out)), (0, '', data))
+                    self.assertEqual(len(calls), 2)
+                    self.assertEqual(calls[-1], mock.call('dev_tv', 'local_media', request))
+                    listing = {'version': 1, 'runtime': request['runtime'], 'op': 'sources',
+                               'state': 'ready', 'sources': [data['source']]}
+                    code, out, err, calls = self.run_cli(['local', 'sources'], [caps(), listing])
+                    self.assertEqual((code, err, json.loads(out)), (0, '', listing))
+                    self.assertEqual(calls, [mock.call('dev_tv', 'capabilities', {}),
+                                            mock.call('dev_tv', 'local_media', {
+                                                'runtime': request['runtime'], 'op': 'sources'})])
+
+    def test_invalid_display_names_reject_handle_receipt_without_retry(self):
+        for name in DISPLAY_NAMES['invalid']:
+            for row in FIXTURE['handle_cases']:
+                with self.subTest(name=repr(name), op=row['request']['op']):
+                    data = copy.deepcopy(row['data'])
+                    data['source']['name'] = name
+                    code, out, err, calls = self.run_cli(
+                        ['local', row['request']['op'], '--handle', 'handle-1'], [caps(), data])
+                    self.assertEqual((code, out, len(calls)), (1, '', 2))
+                    self.assertIn('Invalid local media result', err)
+                    self.assertEqual(calls[-1], mock.call('dev_tv', 'local_media', row['request']))
 
     def test_marker_is_closed_complete_and_requires_base_operations(self):
         base = caps()['local_media_handles']

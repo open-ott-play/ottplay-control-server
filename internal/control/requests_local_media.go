@@ -107,6 +107,8 @@ func parseLocalMediaRequest(params map[string]json.RawMessage) *localMediaReques
 	return v
 }
 
+// Source names are display labels, including for handle-selected folders.
+// Keep request selectors and portable profile names on their existing validators.
 func validLocalMediaSource(raw json.RawMessage, includePaths bool) (string, bool) {
 	m, err := decodeObject(raw)
 	var id string
@@ -118,7 +120,7 @@ func validLocalMediaSource(raw json.RawMessage, includePaths bool) (string, bool
 		}
 		count--
 	}
-	if err != nil || count != 4 || json.Unmarshal(m["id"], &id) != nil || !localMediaIDPattern.MatchString(id) || !localMediaName(m["name"]) || !offlineEnum(m["kind"], "folder", "file") || (string(m["available"]) != "true" && string(m["available"]) != "false") {
+	if err != nil || count != 4 || json.Unmarshal(m["id"], &id) != nil || !localMediaIDPattern.MatchString(id) || !localBrowserName(m["name"]) || !offlineEnum(m["kind"], "folder", "file") || (string(m["available"]) != "true" && string(m["available"]) != "false") {
 		return "", false
 	}
 	return id, true

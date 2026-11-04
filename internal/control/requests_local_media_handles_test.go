@@ -2,6 +2,8 @@ package control
 
 import (
 	"encoding/json"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -198,5 +200,112 @@ func TestLocalMediaHandleRequestAndReplyGuardsPreserveLegacy(t *testing.T) {
 		if parseLocalMediaRequest(transferObject(t, json.RawMessage(params))) != nil {
 			t.Fatal("handle bypassed operation-specific guard")
 		}
+	}
+}
+
+func localMediaDisplayLabels(t *testing.T) (valid, invalid []json.RawMessage) {
+	t.Helper()
+	raw, err := os.ReadFile("../../testdata/local_media_display_names_v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Version        int
+		Valid, Invalid []json.RawMessage
+	}
+	if json.Unmarshal(raw, &fixture) != nil || fixture.Version != 1 || len(fixture.Valid) < 8 || len(fixture.Invalid) < 8 {
+		t.Fatal("invalid shared Local display-label fixture")
+	}
+	// Keep invalid UTF-16 escapes raw: unmarshalling names into strings would
+	// replace lone surrogates before the production validator can reject them.
+	return fixture.Valid, fixture.Invalid
+}
+
+func localMediaDisplayLabelCases(t *testing.T) []localBrowserCase {
+	t.Helper()
+	return append(readLocalBrowserFixture(t).HandleCases, localBrowserCase{
+		Name:    "sources",
+		Request: json.RawMessage(`{"runtime":"native-qa-1","op":"sources"}`),
+		Status:  "ok",
+		Data: json.RawMessage(`{"version":1,"runtime":"native-qa-1","op":"sources","state":"ready",` +
+			`"sources":[{"id":"usb-source-1","name":"Family movies","kind":"folder","available":true}]}`),
+	})
+}
+
+func localMediaWithDisplayLabel(t *testing.T, raw, name json.RawMessage) json.RawMessage {
+	t.Helper()
+	data := transferObject(t, raw)
+	if rows, exists := data["sources"]; exists {
+		var sources []map[string]json.RawMessage
+		if err := json.Unmarshal(rows, &sources); err != nil || len(sources) != 1 {
+			t.Fatal("expected one source in the display-label fixture")
+		}
+		sources[0]["name"] = name
+		data["sources"] = transferJSON(t, sources)
+	} else {
+		source := transferObject(t, data["source"])
+		source["name"] = name
+		data["source"] = transferJSON(t, source)
+	}
+	return transferJSON(t, data)
+}
+
+func TestLocalMediaDisplayLabelsRetainSuccessfulHTTPReceipts(t *testing.T) {
+	labels, _ := localMediaDisplayLabels(t)
+	for _, row := range localMediaDisplayLabelCases(t) {
+		for i, label := range labels {
+			t.Run(row.Name+"/"+strconv.Itoa(i), func(t *testing.T) {
+				s := newTestServer(t)
+				id := rpcID(t, s, globalRPC(t, "local_media", row.Request, ""))
+				bound := *s.devices[0].queue[0].localMedia
+				data := localMediaWithDisplayLabel(t, row.Data, label)
+				body := transferResponse(t, id, "ok", data)
+				for range 2 {
+					expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
+				}
+				stored := s.devices[0].results[id].localMedia
+				if stored == nil || *stored != bound || len(s.devices[0].queue) != 0 {
+					t.Fatal("display label changed request correlation or replayed the operation")
+				}
+				got := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+				expect(t, got, 200)
+				if got.Body.String() != body {
+					t.Fatal("display label was normalized or lost from the retained receipt")
+				}
+			})
+		}
+	}
+	for _, value := range []string{" ", ".", "..", "USB/SSD", `a\b`} {
+		if localMediaSelector(transferJSON(t, value)) {
+			t.Fatalf("display label became an accepted legacy selector: %q", value)
+		}
+	}
+}
+
+func TestLocalMediaInvalidDisplayLabelsDoNotConsumePendingHTTPRequests(t *testing.T) {
+	_, invalid := localMediaDisplayLabels(t)
+	invalid = append(invalid, json.RawMessage(`null`), json.RawMessage(`true`), json.RawMessage(`1`), json.RawMessage(`"\udc00"`))
+	for _, row := range localMediaDisplayLabelCases(t) {
+		t.Run(row.Name, func(t *testing.T) {
+			s := newTestServer(t)
+			id := rpcID(t, s, globalRPC(t, "local_media", row.Request, ""))
+			good := transferResponse(t, id, "ok", localMediaWithDisplayLabel(t, row.Data, json.RawMessage(`"Family movies"`)))
+			badBodies := []string{strings.Replace(good, `"Family movies"`, "\"\xff\"", 1)}
+			for _, name := range invalid {
+				badBodies = append(badBodies, transferResponse(t, id, "ok", localMediaWithDisplayLabel(t, row.Data, name)))
+			}
+			for i, body := range badBodies {
+				expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 400)
+				if len(s.devices[0].queue) != 1 || s.resultBytes != 0 || len(s.devices[0].results) != 0 {
+					t.Fatalf("invalid display label %d consumed the pending request", i)
+				}
+			}
+			expect(t, request(s, "POST", "/api/responses", firstToken, good, nil), 200)
+			got := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+			expect(t, got, 200)
+			if got.Body.String() != good || len(s.devices[0].queue) != 0 {
+				t.Fatal("valid completion was lost after invalid display labels")
+			}
+		})
 	}
 }

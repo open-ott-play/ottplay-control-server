@@ -131,5 +131,25 @@ handle-based replies add an exact `source_handle` echo; source-based replies and
 five-field error replies retain their existing shape. Session-only playback
 negotiation remains mandatory in the CLI.
 
+The returned `source.name` is a display label in both handle acknowledgements
+and `local sources` listings. It uses the same nonempty, control-free,
+512-UTF-8-byte rule as browser names. Spaces, dots and path punctuation are
+preserved; the label is never resolved as a filesystem path. Use the selected
+handle, or a connected source ID from `local sources`, when a label is not a
+valid legacy selector. This does not relax legacy source arguments or portable
+profile names. A source with a display label outside the portable profile grammar
+can be used through its handle, while profile capture/export may explicitly
+refuse that label. For example:
+
+```sh
+ott t1 local select SELECT_ID --generation GENERATION
+ott t1 local shuffle --handle SOURCE_HANDLE
+ott t1 local sources
+```
+
+Copy the generation, selection ID and source handle from that player's current
+browser responses. A stale or mismatched handle still fails without a fallback
+to the display label.
+
 The [shared wire examples](../testdata/local_browser_v1.json) are synthetic
 cross-language fixtures, not evidence of installed-device support.

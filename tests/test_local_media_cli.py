@@ -315,13 +315,34 @@ class LocalMediaTest(unittest.TestCase):
                 self.assertEqual(len(calls), 2)
         self.assertFalse(ott.offline_source_name('Kids: Cartoons', 512))
 
-    def test_source_names_remain_bounded_basename_text(self):
-        for name in ('', ' ', '.', '..', 'Kids/Cartoons', 'Kids\\Cartoons', 'Kids\nCartoons',
+    def test_source_display_names_remain_bounded_control_free_text(self):
+        for name in ('', 'Kids\nCartoons',
                      'Kids\x7fCartoons', 'Kids\x85Cartoons', '\ud800', 'Я' * 257):
             data = copy.deepcopy(CONTRACT['sources_result'])
             data['sources'][0]['name'] = name
             code, out, _, _ = self.run_cli(['local', 'sources'], [caps(), data], True)
             self.assertEqual((code, out), (1, ''), repr(name))
+
+    def test_display_labels_do_not_widen_legacy_source_selectors(self):
+        for name in (' ', '.', '..', 'Kids/Cartoons', 'Kids\\Cartoons'):
+            data = copy.deepcopy(CONTRACT['sources_result'])
+            data['sources'][0]['name'] = name
+            code, out, err, calls = self.run_cli(['local', 'sources'], [caps(), data], True)
+            self.assertEqual((code, err, json.loads(out), len(calls)), (0, '', data, 2))
+            for op in ('connect', 'play', 'shuffle'):
+                code, out, _, calls = self.run_cli(['local', op, name], [])
+                self.assertEqual((code, out, calls), (1, '', []), repr(name))
+
+    def test_source_id_keeps_display_label_separate_from_authority(self):
+        for op in ('connect', 'play', 'shuffle'):
+            data = copy.deepcopy(CONTRACT[op + '_result'])
+            data['source']['name'] = 'USB/SSD'
+            source_id = data['source']['id']
+            code, out, err, calls = self.run_cli(['local', op, source_id], [caps(), data], True)
+            self.assertEqual((code, err, json.loads(out), len(calls)), (0, '', data, 2))
+            self.assertEqual(calls[-1].args[2]['source'], source_id)
+            code, out, _, calls = self.run_cli(['local', op, 'unrelated-source'], [caps(), data], True)
+            self.assertEqual((code, out, len(calls)), (1, '', 2))
 
     def test_path_lookup_uses_player_canonical_identity_without_revealing_paths_by_default(self):
         params = CONTRACT['lookup_request']['params']

@@ -4390,7 +4390,7 @@ def local_media_metadata(data, runtime, params, capability=None):
         fields = {"id", "name", "kind", "available"}
         if (not isinstance(row, dict) or set(row) not in (fields, fields | {"path"})
                 or not isinstance(row.get("id"), str) or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", row["id"]) is None
-                or not local_media_name(row.get("name")) or row.get("kind") not in ("folder", "file")
+                or not local_browser_name(row.get("name")) or row.get("kind") not in ("folder", "file")
                 or type(row.get("available")) is not bool
                 or ("path" in row and (not paths or not plex_library_text(row["path"], 4096) or not local_media_absolute(row["path"])))):
             raise Error(invalid)
