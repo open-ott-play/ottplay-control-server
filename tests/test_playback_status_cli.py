@@ -75,6 +75,62 @@ class PlaybackProtocolTest(unittest.TestCase):
             reports.validate_playback(PLAYBACK, True)
         self.assertEqual(reports.validate_playback(dict(PLAYBACK, title="é" * 128), False)["title"], "é" * 128)
 
+    def test_live_native_generated_media_ids_preserve_playback_without_mutating_input(self):
+        for media_id in ("token", "secret", "data", "m" * 128, "m:0123456789abcdef", "provider:folder:item:0123456789abcdef",
+                         "mytoken:0123456789abcdef", "x_secret:0123456789abcdef", "bearer:0123456789abcdef",
+                         "m" * 128 + ":0123456789abcdef"):
+            with self.subTest(media_id=media_id):
+                status = {"player": dict(PLAYER, platform="webos-native", runtime="native-one"),
+                          "playback": dict(PLAYBACK, media_id=media_id)}
+                before = copy.deepcopy(status)
+                result = reports.live_status(status)
+                self.assertEqual(result, before)
+                self.assertEqual(status, before)
+                result["playback"]["title"] = "changed"
+                self.assertEqual(status, before)
+
+    def test_live_native_generated_media_ids_keep_exact_bounds_and_platform_scope(self):
+        bad_ids = ("m" * 129, "m" * 129 + ":0123456789abcdef", ":0123456789abcdef",
+                   "m:0123456789abcde", "m:0123456789abcdef0", "m:0123456789abcdeF",
+                   "m:0123456789abcdeg", "a:b", "m/1:0123456789abcdef",
+                   "https://private.invalid:0123456789abcdef", "/private:0123456789abcdef",
+                   "~/private:0123456789abcdef", "C:\\private:0123456789abcdef",
+                   "data:0123456789abcdef", "BLOB:0123456789abcdef", "file:0123456789abcdef",
+                   "authorization:0123456789abcdef", "password:0123456789abcdef",
+                   "token:0123456789abcdef", "p.secret:0123456789abcdef",
+                   "apiKey:0123456789abcdef", "api_key:0123456789abcdef", "api-key:0123456789abcdef",
+                   "safe:password:0123456789abcdef", "safe.TOKEN:0123456789abcdef",
+                   "m\u200b:0123456789abcdef", "m:0123456789abcdef\n")
+        cases = [("webos-native", media_id) for media_id in bad_ids]
+        cases += [(platform, "m:0123456789abcdef")
+                  for platform in ("browser", "webos", "tauri", "capacitor-android", None)]
+        for platform, media_id in cases:
+            with self.subTest(platform=platform, media_id=media_id):
+                status = {"player": dict(PLAYER, platform=platform, runtime="native-one"),
+                          "volume": 35, "playback": dict(PLAYBACK, media_id=media_id)}
+                before = copy.deepcopy(status)
+                result = reports.live_status(status)
+                self.assertNotIn("playback", result)
+                self.assertIn("playback_error", result)
+                self.assertEqual(result["volume"], 35)
+                self.assertEqual(status, before)
+
+    def test_retained_native_reports_still_refuse_generated_media_ids(self):
+        for media_id in ("m:0123456789abcdef", "m" * 128 + ":0123456789abcdef"):
+            for location in ("state", "history"):
+                with self.subTest(media_id=media_id, location=location):
+                    raw = fixture()
+                    if location == "history":
+                        raw["history"] = [event(raw["runtimes"][0])]
+                        row = raw["history"][0]
+                    else:
+                        row = raw["runtimes"][0]
+                    row["player"]["platform"] = "webos-native"
+                    row["playback"]["media_id"] = media_id
+                    sync_rows(raw)
+                    with self.assertRaises(reports.InvalidReport):
+                        reports.validate_response(raw, "dev_one", 1)
+
     def test_private_labels_redacted_in_live_and_retained_json_but_punctuation_retained(self):
         for private in ("https://private.invalid/token", "/private/movie", "C:\\private\\movie", "\\server\\movie", "~/movie",
                         "\u200b/private/example", "https:\u200b/\u2060/private.invalid", "\ufeffC:\u200b\\private", "\ue000/private"):

@@ -26,6 +26,106 @@ This command is separate from `--lane native`, which addresses a bound Android
 maintenance agent. Ordinary `debug`, `debug --engine`, existing inspection
 sections, and saved diagnostic bundles retain their existing behavior.
 
+## Reading the last failure from live status
+
+Use `status --details` to read the extended failure report from a supported
+native player:
+
+```sh
+ott l status --details
+ott -t 20 --json lg2 status --details
+ott l,lg2 status --details
+```
+
+The command first checks capabilities, then requests version 3 only when the
+player advertises `playback_failure_versions: [2,3]`. These are two read-only
+RPCs within the command's timeout; capability discovery is not repeated after
+the status reply. An unsupported player gets a clear error without sending the
+versioned status request. The readable output adds failure details; `--json`
+preserves the returned fields for scripts. Neither form starts or changes
+playback.
+
+When the player reports `preplay`, the readable details also show preparation
+phase, last failure, attempt generation and phase elapsed time. For example,
+`inspect_failed` means media inspection returned an error before playback was
+admitted; `playback_failure` may still be `null`. An elapsed time near 15 seconds
+does not by itself establish a network timeout. Keep the original playback
+request's terminal error when diagnosing the cause.
+
+Ordinary `ott l`, `ott l status` and `ott --json l status` keep the default
+request unchanged. On a player supporting version negotiation, its default
+failure format remains version 2. Diagnostic API clients can explicitly request
+version 3 using this RPC body:
+
+```json
+{"action":"status","params":{"playback_failure_version":3}}
+```
+
+An explicit integer `2` also selects the previous format. Other values and
+additional status parameters are rejected. Both controller and player must
+support negotiation; do not send the parameter to older components. Ordinary
+CLI status never silently opts an older player into a new format.
+
+This is separate from `debug --native-playback` and from the controller's
+`state` / `history` records. The controller and JSON CLI preserve this additive
+field, including versions they do not interpret. The ordinary plain-text status
+summary omits it unless `--details` was requested. Availability depends on the
+installed player build.
+
+Version 1 supplies `play_generation` and a fixed failure `code`. Version 2 adds
+`context` with `demux_exit` and `pipeline_error`. Version 3 adds
+`context.io_failure`, either `null` or one of these fixed branches:
+
+- `source_io`: a `transport` code; `none` means no transport detail, not success.
+- `hls`: an `exit` code and an `outcome` of `null` or `deadline`.
+- `auto_fallback`: `outcome: "refused"`.
+- `audio_decode`: `outcome: "inconclusive"` after an observed decode error.
+- `unclassified`: `outcome: "inconclusive"`.
+
+`playback_failure: null` means no saved failure; it does not prove playback.
+`context: null` means no native details owned by that failure, while
+`io_failure: null` means native details exist without an attributed I/O cause.
+A zero `pipeline_error` is not a health check. The player captures the first
+failure for an accepted playback attempt before cleanup; a new attempt clears
+it. Compare `play_generation` only within the same player runtime. It is a
+different identifier from the internal native load epoch.
+
+Live native webOS status also accepts generated current-content IDs consisting
+of a profile prefix and a colon-separated 16-character lowercase hexadecimal
+suffix, up to 145 characters total. This prevents valid current playback from
+disappearing from the CLI summary. Retained `state` / `history` validation is
+unchanged. Neither an ID nor an accepted request confirms a visible picture.
+
+## Optional callback evidence in status
+
+When the player supplies `video_evidence` version 1, `status --details` also shows
+its window-present permission, position-callback count and latest raw sink
+report. This uses the same status response: there is no extra request, capability
+probe or controller upgrade for this additive field. Ordinary text status stays
+unchanged; JSON status preserves the object, including versions it cannot render.
+An unsupported or malformed object does not remove the existing playback status.
+
+For example, a supported reply can add these two lines:
+
+```text
+Video evidence: window present permission=allowed; position callbacks=12.
+Sink raw report: type=49; callbacks=3; firmware major=5; raw=0.
+```
+
+Window-present permission is the application's permission to draw its UI, not
+TV power or proof of a visible picture. Position callbacks and sink-report
+callbacks count handler arrivals, not decoded or displayed frames. The sink's
+raw value is a signed 64-bit decimal string; zero is an observed value, while
+`sink_report: null` means no report. Firmware major zero means unknown and uses
+the player's older callback mapping. `native: null` means no current owned native
+sample is available, including during replacement or teardown.
+
+These counters reset for each physical native load. Position callbacks can wrap
+at 32 bits; the sink callback count saturates. No physical-load identifier is
+exposed in this object, so two samples cannot establish a reliable counter delta
+or frame rate. Neither increasing counters nor window-present permission confirms
+the picture or sound on the television.
+
 ## Reading the measurements
 
 The phase describes the native playback pipeline. Counters and event ages belong

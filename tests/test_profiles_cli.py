@@ -240,6 +240,37 @@ class ProfileOutputTest(unittest.TestCase):
                                                            {'provider': 'm3u', 'profile': row, 'saved': True})
                 self.assertEqual((status, errors, len(calls)), (0, '', 1))
 
+    def test_blank_profile_name_accepts_exact_native_default_or_original_value(self):
+        for provider, label in [('m3u', 'M3U'), ('vportal', 'VPortal')]:
+            for requested in ['', '   ', '\u2003']:
+                for actual in [requested, label + ' 2']:
+                    with self.subTest(provider=provider, requested=requested, actual=actual):
+                        row = self.row(2, name=actual)
+                        if provider == 'vportal':
+                            row['vportal_configured'] = False
+                        reply = {'provider': provider, 'profile': row, 'saved': True}
+                        status, output, errors, calls = self.run_command(
+                            ['profile', '2', 'name', requested], reply, True)
+                        self.assertEqual((status, errors), (0, ''))
+                        self.assertEqual(json.loads(output), reply)
+                        self.assertEqual(calls, [mock.call('dev_tv', 'profile_settings',
+                                                          {'number': 2, 'settings': {'name': requested}})])
+
+    def test_blank_name_normalization_does_not_accept_wrong_slot_label_or_nonblank_name(self):
+        for provider, label in [('m3u', 'M3U'), ('vportal', 'VPortal')]:
+            for requested, actual, number in [('', label + ' 1', 2), ('', label + ' 2', 1),
+                                               ('', label.lower() + ' 2', 2), ('', 'Other 2', 2),
+                                               ('', label + ' 02', 2), ('Cinema', label + ' 2', 2)]:
+                with self.subTest(provider=provider, requested=requested, actual=actual, number=number):
+                    row = self.row(number, name=actual)
+                    if provider == 'vportal':
+                        row['vportal_configured'] = False
+                    status, output, errors, calls = self.run_command(
+                        ['profile', '2', 'name', requested],
+                        {'provider': provider, 'profile': row, 'saved': True}, True)
+                    self.assertEqual((status, output, len(calls)), (1, '', 1))
+                    self.assertIn('may have executed', errors)
+
     def test_vportal_link_writes_require_standalone_provider_before_dispatch(self):
         for words in [['profile', '1', 'vportal', 'secret-link'],
                       ['profile', '1', 'vp', ''], ['profile-config', '1', 'private.json']]:
@@ -266,6 +297,40 @@ class ProfileOutputTest(unittest.TestCase):
             self.assertNotIn('secret', output)
             self.assertEqual(calls, [mock.call('dev_tv', 'profiles', {}),
                                     mock.call('dev_tv', 'profile_settings', {'number': 1, 'settings': {'vportal': value}})])
+
+    def test_first_standalone_vportal_profile_can_be_configured_without_active_slot(self):
+        profiles = {'provider': 'vportal', 'profiles': [
+            self.row(number, False, history_hours=0, playlist_configured=False, vportal_configured=False)
+            for number in range(1, 16)]}
+        before = copy.deepcopy(profiles)
+        row = self.row(1, False, history_hours=0, playlist_configured=False, vportal_configured=True)
+        reply = {'provider': 'vportal', 'profile': row, 'saved': True}
+        status, output, errors, calls = self.run_command(
+            ['profile', '1', 'vp', 'https://example?key=secret'], [profiles, reply], True)
+        self.assertEqual((status, errors), (0, ''))
+        self.assertEqual(json.loads(output), reply)
+        self.assertEqual(profiles, before)
+        self.assertEqual(calls, [mock.call('dev_tv', 'profiles', {}),
+                                mock.call('dev_tv', 'profile_settings',
+                                          {'number': 1, 'settings': {'vportal': 'https://example?key=secret'}})])
+
+    def test_vportal_preflight_still_refuses_invalid_or_multiple_active_profiles(self):
+        base = {'provider': 'vportal', 'profiles': [
+            self.row(number, False, vportal_configured=False) for number in range(1, 16)]}
+        for kind in ['multiple-active', 'short', 'boolean-number', 'wrong-provider', 'unknown-provider']:
+            profiles = copy.deepcopy(base)
+            if kind == 'multiple-active':
+                profiles['profiles'][0]['active'] = profiles['profiles'][1]['active'] = True
+            elif kind == 'short':
+                profiles['profiles'].pop()
+            elif kind == 'boolean-number':
+                profiles['profiles'][0]['number'] = True
+            else:
+                profiles['provider'] = 'm3u' if kind == 'wrong-provider' else 'unknown'
+            with self.subTest(kind=kind):
+                status, output, _, calls = self.run_command(['profile', '1', 'vp', 'secret-link'], profiles)
+                self.assertEqual((status, output), (1, ''))
+                self.assertEqual(calls, [mock.call('dev_tv', 'profiles', {})])
 
     def test_standalone_vportal_requires_its_configured_flag(self):
         profiles = self.listing()
@@ -354,6 +419,33 @@ class ProfileOutputTest(unittest.TestCase):
             expected = ("Stream restart is unavailable in the current playback state or player version. Wait for loading to finish, check capabilities, or use 'ott <player> restart' to reload the player."
                         if words[1] == 'stream' else "The restart request was unsupported by this player; check its settings on the player")
             self.assertEqual(errors, 'Error: ' + expected + '\n')
+
+
+class ProfileHelpTest(unittest.TestCase):
+    def help_text(self, random=False, categories=False):
+        controls = {'player': {'platform': 'webos-native'}, 'lifecycle': [], 'input': [], 'playback': []}
+        if random:
+            controls['random'] = {'version': 1}
+        if categories:
+            controls['categories'] = {'operations': ['list', 'select'], 'maxPageSize': 100}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            ott.print_player_help({'provider': 'm3u', 'capabilities': controls}, 'tv')
+        return output.getvalue()
+
+    def test_provider_random_and_partial_name_examples_require_advertised_random(self):
+        supported = self.help_text(random=True)
+        self.assertIn('provider m3u 1 / R / NAME', supported)
+        unsupported = self.help_text()
+        self.assertIn('provider m3u 1 / EXACT_NAME', unsupported)
+        self.assertIn('exact full name', unsupported)
+        self.assertNotIn('provider m3u 1 / R / NAME', unsupported)
+        self.assertNotIn('R / random', unsupported)
+
+    def test_all_category_help_does_not_promise_to_leave_current_catalog(self):
+        output = self.help_text(categories=True)
+        self.assertIn('cat all  — select the All category; use s to list its entries', output)
+        self.assertNotIn('show all videos again', output)
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@ package control
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,40 @@ func TestResultReadPreservesBoundedJSON(t *testing.T) {
 	expect(t, result, 200)
 	if result.Body.String() != body || result.Header().Get("Content-Type") != "application/json" {
 		t.Fatal("reading an accepted result changed its JSON or exceeded the wire limit")
+	}
+}
+
+// Status diagnostics are an opaque, bounded player response, not the stricter
+// retained-state or inspect DTO. Preserve newer versions and integer widths.
+func TestStatusResultPreservesPlaybackFailureExamples(t *testing.T) {
+	raw, err := os.ReadFile("../../tests/fixtures/status-playback-failure-examples.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var examples []struct {
+		Name   string          `json:"name"`
+		Status json.RawMessage `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &examples); err != nil {
+		t.Fatal(err)
+	}
+	if len(examples) == 0 {
+		t.Fatal("missing status compatibility examples")
+	}
+	for _, example := range examples {
+		t.Run(example.Name, func(t *testing.T) {
+			s := newTestServer(t)
+			id := rpcID(t, s, `{"action":"status","params":{}}`)
+			body := `{"id":"` + id + `","status":"ok","data":` + string(example.Status) + `}`
+			expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
+			for _, wait := range []string{"", "&wait_ms=100"} {
+				result := request(s, "GET", "/api/requests?device_id=first&id="+id+wait, adminToken, "", nil)
+				expect(t, result, 200)
+				if result.Body.String() != body || result.Header().Get("Content-Type") != "application/json" {
+					t.Fatal("status receipt changed diagnostic JSON")
+				}
+			}
+		})
 	}
 }
 
