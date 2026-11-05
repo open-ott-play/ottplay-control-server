@@ -16,6 +16,8 @@ STATES = frozenset("unknown idle loading playing paused buffering ended error st
 KINDS = frozenset("none live archive vod unknown".split())
 FIELDS = frozenset("state kind title provider media_id channel_number position duration volume".split())
 LABEL = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
+NATIVE_LIVE_MEDIA_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}:[0-9a-f]{16}\Z")
+NATIVE_PRIVATE_KEY = re.compile(r"(?<![a-z0-9_])(?:authorization|password|token|secret|apikey|api_key|api-key):")
 RUNTIME = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 STAMP = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})\Z")
 
@@ -79,7 +81,17 @@ def timestamp(value):
         raise InvalidReport("Invalid playback report") from None
 
 
-def validate_playback(value, standby):
+def native_live_media_id(value):
+    if NATIVE_LIVE_MEDIA_ID.fullmatch(value) is None:
+        return False
+    # The generated-ID alphabet already excludes paths, URLs, whitespace and
+    # '='. Keep the producer's remaining private-text exclusions for ':' IDs.
+    lowered = value.lower()
+    return (not lowered.startswith(("data:", "blob:", "file:"))
+            and NATIVE_PRIVATE_KEY.search(lowered) is None)
+
+
+def validate_playback(value, standby, *, native_live=False):
     exact(value, FIELDS)
     require(type(standby) is bool)
     require(type(value["state"]) is str and value["state"] in STATES)
@@ -89,7 +101,9 @@ def validate_playback(value, standby):
         if value[key] is not None:
             text(value[key], maximum)
     if value["media_id"] is not None:
-        require(type(value["media_id"]) is str and LABEL.fullmatch(value["media_id"]) is not None)
+        media_id = value["media_id"]
+        require(type(media_id) is str and (LABEL.fullmatch(media_id) is not None
+                or native_live and native_live_media_id(media_id)))
     if value["channel_number"] is not None:
         integer(value["channel_number"], 1, 2147483647)
     for key in ("position", "duration", "volume"):
@@ -112,7 +126,10 @@ def live_status(data):
         player = result.get("player")
         require(type(player) is dict and type(player.get("runtime")) is str
                 and RUNTIME.fullmatch(player["runtime"]) is not None)
-        result["playback"] = validate_playback(result["playback"], player.get("standby"))
+        # Native live IDs append a catalog fingerprint to a public identifier.
+        # This does not extend the separate retained-report v1 wire contract.
+        result["playback"] = validate_playback(result["playback"], player.get("standby"),
+                                               native_live=player.get("platform") == "webos-native")
     except InvalidReport:
         result.pop("playback", None)
         result["playback_error"] = "Playback details were not valid; current content is not reported."

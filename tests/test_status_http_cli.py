@@ -42,7 +42,9 @@ def serve(handler):
 
 
 class StatusHttpCliTest(unittest.TestCase):
-    def run_status(self, redirect=None):
+    def run_status(self, redirect=None, *, status=None, capabilities=None):
+        status = STATUS if status is None else status
+        capabilities = CAPABILITIES if capabilities is None else capabilities
         events, sink_requests, timeouts, clients = [], [], [], []
         receipts = {}
 
@@ -90,12 +92,12 @@ class StatusHttpCliTest(unittest.TestCase):
                     if self.validate_request(payload) is None:
                         return
                     if payload == {'action': 'status', 'params': {}}:
-                        request_id, data = 'a' * 32, STATUS
+                        request_id, data = 'a' * 32, status
                     elif payload == {'action': 'capabilities', 'params': {}}:
                         if redirect == 'enqueue':
                             self.reply(303, {'error': TOKEN}, sink_address + '/stolen')
                             return
-                        request_id, data = 'b' * 32, CAPABILITIES
+                        request_id, data = 'b' * 32, capabilities
                     else:
                         self.reply(400, {})
                         return
@@ -185,6 +187,39 @@ class StatusHttpCliTest(unittest.TestCase):
                 if phase == 'receipt':
                     expected.append(('GET', ['b' * 32]))
                 self.assertEqual([(event[0], event[2].get('id')) for event in events], expected)
+
+    def test_native_playback_failure_fixtures_survive_real_status_http(self):
+        examples = json.loads((Path(__file__).parent / 'fixtures' /
+                               'status-playback-failure-examples.json').read_text())
+        player = dict(PLAYER, version='0.3.0', platform='webos-native',
+                      runtime='native-one', standby=False)
+        capabilities = dict(CAPABILITIES, player=player)
+        self.assertTrue(examples)
+        for example in examples:
+            with self.subTest(example=example['name']):
+                status = dict(STATUS, player=player, **example['status'])
+                result, _, _ = self.run_status(status=status, capabilities=capabilities)
+                self.assertEqual(result, dict(status, capabilities=capabilities))
+                if example['name'] == 'v3_source_recv_error':
+                    failure = result['playback_failure']
+                    self.assertIs(type(failure['play_generation']), int)
+                    self.assertEqual(failure['play_generation'], 2**64 - 1)
+                    self.assertEqual(failure['context']['pipeline_error'], 2**31 - 1)
+
+    def test_native_generated_media_id_survives_live_status_http(self):
+        player = dict(PLAYER, version='0.3.0', platform='webos-native',
+                      runtime='native-one', standby=False)
+        capabilities = dict(CAPABILITIES, player=player)
+        media_id = 'p' * 128 + ':0123456789abcdef'
+        self.assertEqual(len(media_id), 145)
+        playback = {'state': 'playing', 'kind': 'live', 'title': 'Fixture channel',
+                    'provider': 'm3u', 'media_id': media_id, 'channel_number': 1,
+                    'position': 12, 'duration': None, 'volume': 35}
+        status = dict(STATUS, player=player, playback=playback)
+        result, _, _ = self.run_status(status=status, capabilities=capabilities)
+        self.assertEqual(result, dict(status, capabilities=capabilities))
+        self.assertEqual(result['playback']['media_id'], media_id)
+        self.assertNotIn('playback_error', result)
 
     def test_retained_history_is_one_authenticated_get_with_no_rpc_or_redirect(self):
         value = {'version': 1, 'controller_epoch': 'a' * 32, 'device_id': DEVICE,

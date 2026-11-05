@@ -1,0 +1,261 @@
+[
+  {
+    "name": "absent",
+    "status": {}
+  },
+  {
+    "name": "null",
+    "status": {
+      "playback_failure": null
+    }
+  },
+  {
+    "name": "v1",
+    "status": {
+      "playback_failure": {
+        "version": 1,
+        "play_generation": 5,
+        "code": "playback_interrupted"
+      }
+    }
+  },
+  {
+    "name": "v2_no_context",
+    "status": {
+      "playback_failure": {
+        "version": 2,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": null
+      }
+    }
+  },
+  {
+    "name": "v2_native_context",
+    "status": {
+      "playback_failure": {
+        "version": 2,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "hls_transport_open_failed",
+          "pipeline_error": 0
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_no_context",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": null
+      }
+    }
+  },
+  {
+    "name": "v3_no_io_cause",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "none",
+          "pipeline_error": 0,
+          "io_failure": null
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_source_no_transport_detail",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "none",
+          "pipeline_error": -2147483648,
+          "io_failure": {
+            "source_io": {
+              "transport": "none"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_source_recv_error",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 18446744073709551615,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "none",
+          "pipeline_error": 2147483647,
+          "io_failure": {
+            "source_io": {
+              "transport": "recv_error"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_hls_failed",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "hls_failed",
+          "pipeline_error": 0,
+          "io_failure": {
+            "hls": {
+              "exit": "hls_failed",
+              "outcome": null
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_hls_not_ready",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "hls_not_ready",
+          "pipeline_error": 0,
+          "io_failure": {
+            "hls": {
+              "exit": "hls_not_ready",
+              "outcome": null
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_hls_other",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "none",
+          "pipeline_error": 0,
+          "io_failure": {
+            "hls": {
+              "exit": "other",
+              "outcome": null
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_hls_deadline",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "none",
+          "pipeline_error": 0,
+          "io_failure": {
+            "hls": {
+              "exit": "other",
+              "outcome": "deadline"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_auto_fallback",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "none",
+          "pipeline_error": 0,
+          "io_failure": {
+            "auto_fallback": {
+              "outcome": "refused"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_audio_decode",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "none",
+          "pipeline_error": 0,
+          "io_failure": {
+            "audio_decode": {
+              "outcome": "inconclusive"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "v3_unclassified",
+    "status": {
+      "playback_failure": {
+        "version": 3,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "context": {
+          "demux_exit": "none",
+          "pipeline_error": 0,
+          "io_failure": {
+            "unclassified": {
+              "outcome": "inconclusive"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "future_version",
+    "status": {
+      "playback_failure": {
+        "version": 4,
+        "play_generation": 5,
+        "code": "playback_interrupted",
+        "future_detail": {
+          "phase": "terminal"
+        }
+      }
+    }
+  }
+]

@@ -1,5 +1,6 @@
 """Status discovers current controls without causing player actions or hiding status."""
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -64,6 +65,59 @@ class StatusCliTest(unittest.TestCase):
                 self.assertEqual((code, err), (0, ''))
                 self.assertEqual(out, json.dumps(dict(status, capabilities=caps), ensure_ascii=False, indent=2) + '\n')
                 self.assertNotIn('do-not-print', out)
+
+    def test_json_status_preserves_versioned_failure_examples_without_mutation(self):
+        fixture_path = Path(__file__).resolve().parent / 'fixtures/status-playback-failure-examples.json'
+        examples = json.loads(fixture_path.read_text())
+        self.assertTrue(examples)
+        for example in examples:
+            for words in ([], ['status']):
+                with self.subTest(example=example['name'], words=words):
+                    caps = self.capabilities()
+                    status = {'ready': True, 'volume': 55, 'player': dict(caps['player']),
+                              **copy.deepcopy(example['status'])}
+                    before, before_caps = copy.deepcopy(status), copy.deepcopy(caps)
+                    code, out, err, _ = self.run_cli(words, status, caps, '--json')
+                    self.assertEqual((code, err), (0, ''))
+                    self.assertEqual(json.loads(out), dict(before, capabilities=before_caps))
+                    self.assertEqual(status, before)
+                    self.assertEqual(caps, before_caps)
+
+    def test_failure_examples_leave_existing_plain_text_status_unchanged(self):
+        fixture_path = Path(__file__).resolve().parent / 'fixtures/status-playback-failure-examples.json'
+        examples = json.loads(fixture_path.read_text())
+        for words in ([], ['status']):
+            caps = self.capabilities()
+            base = {'ready': True, 'volume': 55, 'player': dict(caps['player'])}
+            _, baseline, _, _ = self.run_cli(words, copy.deepcopy(base), copy.deepcopy(caps))
+            for example in examples:
+                with self.subTest(example=example['name'], words=words):
+                    status = dict(copy.deepcopy(base), **copy.deepcopy(example['status']))
+                    before = copy.deepcopy(status)
+                    code, out, err, _ = self.run_cli(words, status, copy.deepcopy(caps))
+                    self.assertEqual((code, err, out), (0, '', baseline))
+                    self.assertEqual(status, before)
+
+    def test_native_live_catalog_id_keeps_now_playing_in_json_and_plain_text(self):
+        caps = self.capabilities()
+        caps['player'].update(platform='webos-native', standby=False)
+        playback = {'state': 'playing', 'kind': 'vod', 'title': 'Example movie', 'provider': 'vportal',
+                    'media_id': 'm' * 128 + ':0123456789abcdef', 'channel_number': None,
+                    'position': 12, 'duration': 120, 'volume': 55}
+        status = {'ready': True, 'volume': 55, 'player': dict(caps['player']), 'playback': playback}
+        before = copy.deepcopy(status)
+        for words in ([], ['status']):
+            for machine in (False, '--json'):
+                with self.subTest(words=words, machine=machine):
+                    code, out, err, _ = self.run_cli(words, status, copy.deepcopy(caps), machine)
+                    self.assertEqual((code, err), (0, ''))
+                    self.assertEqual(status, before)
+                    if machine:
+                        self.assertEqual(json.loads(out)['playback'], playback)
+                        self.assertNotIn('playback_error', json.loads(out))
+                    else:
+                        self.assertIn('Now playing:  Example movie (playing)', out)
+                        self.assertNotIn('Playback details were not valid', out)
 
     def test_native_settings_help_uses_native_preferences_and_read_only_engine(self):
         for platform in ['browser', 'webos-native']:

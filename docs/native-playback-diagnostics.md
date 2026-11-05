@@ -26,6 +26,44 @@ This command is separate from `--lane native`, which addresses a bound Android
 maintenance agent. Ordinary `debug`, `debug --engine`, existing inspection
 sections, and saved diagnostic bundles retain their existing behavior.
 
+## Reading a retained failure from live status
+
+Native builds can also expose a root `playback_failure` in ordinary live status:
+
+```sh
+ott --json l status
+ott --json lg2
+```
+
+This is separate from `debug --native-playback` and from the controller's
+`state` / `history` records. The controller and JSON CLI preserve this additive
+field, including versions they do not interpret. The plain-text status summary
+does not render it. Availability depends on the installed player build.
+
+Version 1 supplies `play_generation` and a fixed failure `code`. Version 2 adds
+`context` with `demux_exit` and `pipeline_error`. Version 3 adds
+`context.io_failure`, either `null` or one of these fixed branches:
+
+- `source_io`: a `transport` code; `none` means no transport detail, not success.
+- `hls`: an `exit` code and an `outcome` of `null` or `deadline`.
+- `auto_fallback`: `outcome: "refused"`.
+- `audio_decode`: `outcome: "inconclusive"` after an observed decode error.
+- `unclassified`: `outcome: "inconclusive"`.
+
+`playback_failure: null` means no saved failure; it does not prove playback.
+`context: null` means no native details owned by that failure, while
+`io_failure: null` means native details exist without an attributed I/O cause.
+A zero `pipeline_error` is not a health check. The player captures the first
+failure for an accepted playback attempt before cleanup; a new attempt clears
+it. Compare `play_generation` only within the same player runtime. It is a
+different identifier from the internal native load epoch.
+
+Live native webOS status also accepts generated current-content IDs consisting
+of a profile prefix and a colon-separated 16-character lowercase hexadecimal
+suffix, up to 145 characters total. This prevents valid current playback from
+disappearing from the CLI summary. Retained `state` / `history` validation is
+unchanged. Neither an ID nor an accepted request confirms a visible picture.
+
 ## Reading the measurements
 
 The phase describes the native playback pipeline. Counters and event ages belong
