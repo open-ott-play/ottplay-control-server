@@ -1,4 +1,4 @@
-"""Native empty profile lists remain distinct from mutation preconditions."""
+"""Native empty lists permit first-profile setup, but never confirm activation."""
 import copy
 import json
 import unittest
@@ -66,7 +66,7 @@ class NativeProfileReadTests(unittest.TestCase):
                     self.assertIn("invalid profile metadata", errors)
                     self.assertEqual(len(calls), 1)
 
-    def test_preflight_default_stays_strict_and_opt_in_is_read_only(self):
+    def test_profile_list_opt_in_does_not_relax_selection_acknowledgement(self):
         for provider in ("m3u", "vportal"):
             data = listing(provider)
             with self.assertRaisesRegex(ott.Error, "invalid profile metadata"):
@@ -76,14 +76,74 @@ class NativeProfileReadTests(unittest.TestCase):
             with self.assertRaisesRegex(ott.Error, "may have executed"):
                 ott.profile_metadata(response, "profile", {"number": 1}, allow_no_active=True)
 
-    def test_vportal_mutation_preflight_sends_no_write_without_active_profile(self):
-        client = mock.Mock(timeout=45)
-        client.call.return_value = listing("vportal")
-        with self.assertRaisesRegex(ott.Error, "invalid profile metadata"):
-            ott.vportal_profile_command(client, "dev_tv", {"number": 1, "settings": {"vportal": "fixture"}}, 45)
-        client.call.assert_called_once_with("dev_tv", "profiles", {})
+    def test_vportal_setup_without_active_profile_writes_once_without_selecting(self):
+        params = {"number": 1, "settings": {"vportal": "https://portal.example/fixture"}}
+        for configured in (False, True):
+            with self.subTest(configured=configured):
+                data = listing("vportal", configured=configured)
+                before = copy.deepcopy(data)
+                row = dict(data["profiles"][0], name="VPortal 1", vportal_configured=True)
+                expected = {"provider": "vportal", "profile": row, "saved": True}
+                client = mock.Mock(timeout=45)
+                client.call.side_effect = [data, dict(expected, fields=["vportal"], reloaded=False)]
+                result = ott.vportal_profile_command(client, "dev_tv", params, 45)
+                self.assertEqual(result, expected)
+                self.assertIs(result["profile"]["active"], False)
+                self.assertEqual(data, before)
+                self.assertEqual(client.timeout, 45)
+                self.assertEqual(client.call.call_args_list, [mock.call("dev_tv", "profiles", {}),
+                                                              mock.call("dev_tv", "profile_settings", params)])
 
-    def test_preset_no_active_start_stops_before_any_m3u_write(self):
+    def test_vportal_setup_rejects_invalid_discovery_before_any_write(self):
+        for invalid in ("multiple-active", "short", "duplicate", "boolean-active", "missing-configured",
+                        "wrong-provider", "unknown-provider"):
+            data = listing("vportal")
+            if invalid == "multiple-active":
+                data["profiles"][0]["active"] = data["profiles"][1]["active"] = True
+            elif invalid == "short":
+                data["profiles"].pop()
+            elif invalid == "duplicate":
+                data["profiles"][1]["number"] = 1
+            elif invalid == "boolean-active":
+                data["profiles"][0]["active"] = 1
+            elif invalid == "missing-configured":
+                data["profiles"][0].pop("vportal_configured")
+            else:
+                data["provider"] = "m3u" if invalid == "wrong-provider" else "unknown"
+            with self.subTest(invalid=invalid):
+                client = mock.Mock(timeout=45)
+                client.call.return_value = data
+                with self.assertRaises(ott.Error):
+                    ott.vportal_profile_command(client, "dev_tv",
+                                               {"number": 1, "settings": {"vportal": "fixture"}}, 45)
+                client.call.assert_called_once_with("dev_tv", "profiles", {})
+                self.assertEqual(client.timeout, 45)
+
+    def test_vportal_first_setup_requires_matching_save_acknowledgement_without_retry(self):
+        data = listing("vportal")
+        row = dict(data["profiles"][0], name="VPortal 1", vportal_configured=True)
+        good = {"provider": "vportal", "profile": row, "saved": True}
+        for invalid in ("wrong-provider", "wrong-slot", "not-configured", "not-saved"):
+            response = copy.deepcopy(good)
+            if invalid == "wrong-provider":
+                response["provider"] = "m3u"
+            elif invalid == "wrong-slot":
+                response["profile"]["number"] = 2
+            elif invalid == "not-configured":
+                response["profile"]["vportal_configured"] = False
+            else:
+                response["saved"] = False
+            with self.subTest(invalid=invalid):
+                client = mock.Mock(timeout=45)
+                client.call.side_effect = [data, response]
+                params = {"number": 1, "settings": {"vportal": "fixture"}}
+                with self.assertRaisesRegex(ott.Error, "may have executed"):
+                    ott.vportal_profile_command(client, "dev_tv", params, 45)
+                self.assertEqual(client.call.call_args_list, [mock.call("dev_tv", "profiles", {}),
+                                                              mock.call("dev_tv", "profile_settings", params)])
+                self.assertEqual(client.timeout, 45)
+
+    def test_preset_nonempty_no_active_start_stops_before_any_m3u_write(self):
         player = presets.FakePlayer(active=None)
         name, preset = ott.validate_preset(presets.config(), "local")
         result = ott.load_preset(player, "dev_tv", name, preset)
