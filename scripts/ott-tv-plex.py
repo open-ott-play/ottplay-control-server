@@ -282,7 +282,7 @@ class Workflow:
             self.pause(until)
         raise ShortcutError("OttPlay or its Plex controls did not become ready within 60 seconds. " + INSPECT)
 
-    def confirm(self, queue):
+    def confirm(self, queue, *, state_version=1):
         self.progress.phase("Waiting for the requested Plex queue to play")
         until = min(self.deadline, self.clock() + 45)
         expected_runtime, expected_ids = queue["runtime"], list(queue["ids"])
@@ -295,7 +295,11 @@ class Workflow:
                 raise ShortcutError("The requested Plex queue stopped before playback was confirmed. " + INSPECT)
             self.pause(until)
             try:
-                queue = self.validate(self.api.plex_queue_metadata, self.read(["plex", "status"], until))
+                # The initial library receipt stays v1. Explicit queue reads can
+                # use the version advertised during this runtime's readiness.
+                options = {"expected_version": 2} if state_version == 2 else {}
+                queue = self.validate(self.api.plex_queue_metadata,
+                                      self.read(["plex", "status"], until), **options)
             except ReadPending:
                 continue
 
@@ -321,7 +325,7 @@ class Workflow:
             raise ShortcutError("The Plex shuffle request failed. " + INSPECT)
         if result.get("truncated"):
             self.progress.phase(f"Using the supported queue limit of {len(result['queue']['ids'])} items")
-        queue = self.confirm(result["queue"])
+        queue = self.confirm(result["queue"], state_version=2 if "plex_queue_state_v2" in caps else 1)
         self.progress.phase("Playback confirmed")
         return queue
 

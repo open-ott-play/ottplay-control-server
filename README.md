@@ -253,6 +253,9 @@ For an explicit Plex sequence using the player's saved Plex configuration:
 ott l plex preview 78777 78776 78775  # check availability without starting playback
 ott l plex play 78777 78776 78775     # starts the first item from zero, in this order
 ott l plex queue                     # current item and preparation/playback state
+ott l plex repeat                    # read queue state and repeat mode
+ott l plex repeat all                # repeat the current queue without reshuffling
+ott l plex repeat off                # stop naturally after the last item
 ott l plex next                      # advance once; no wrap at the last item
 ott l plex stop                      # stop and clear this queue
 ott l plex libraries                 # list libraries (requires plex_library support)
@@ -270,8 +273,12 @@ and what to do if a playback request times out.
 
 Plex queues require a CLI, controller and player implementing `plex_queue`.
 `plex play --shuffle ID...` shuffles supplied IDs once. Queues stop after the
-final item unless existing kiosk policy repeats them. While a queue remains,
-ordinary `next` and `prev` address it; `plex stop` clears it. A preview never
+final item unless repeat is `all` or existing kiosk policy repeats them.
+`plex repeat all` (alias `on`) and `plex repeat off` (alias `none`) require an
+active nonempty queue and separate `plex_queue_repeat` support. They do not
+save a profile or playlist, restart playback or change kiosk policy. Bare
+`plex repeat` only reads status. While a queue remains, ordinary `next` and
+`prev` address it; `plex stop` clears it. A preview never
 switches the provider or replaces current playback. See
 [Plex queue commands](docs/cli.md#ordered-plex-queues) for limits and readiness.
 Library lookup additionally requires an updated player and controller advertising

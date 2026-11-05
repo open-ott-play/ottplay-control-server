@@ -1986,6 +1986,10 @@ only preferences absent from that schema require their local workflow.
 
 ## Plex libraries by name
 
+Managed native server selection has a separate, capability-gated command family:
+[`plex servers`](managed-plex-servers.md). Its producer qualification is still
+pending; existing installed players may correctly report it as unsupported.
+
 Play items from a movie or show library using the player's saved Plex connection:
 
 ```sh
@@ -2069,8 +2073,8 @@ If acceptance is uncertain, inspect `plex status` before deciding to play again.
 Preview does not replace current playback. Play reuses the existing Plex queue,
 including parental and kiosk checks. It does not unlock controls, enable repeat
 or change saved settings. `preparing` confirms acceptance and preparation, not
-decoder playback. Existing kiosk policy determines whether the queue repeats;
-shuffle changes the order once, not on each loop.
+decoder playback. Use `plex repeat all` for ordinary queue repetition; kiosk
+policy remains separate. Shuffle changes the order once, not on each loop.
 
 ## Ordered Plex queues
 
@@ -2087,6 +2091,9 @@ ott l plex play 78777 78776 78775     # replace the queue and start the first fi
 ott l plex play --shuffle 78777 78776 78775 # shuffle the supplied IDs once
 ott l plex queue                     # same as plex status; does not start anything
 ott l plex status
+ott l plex repeat                    # read current queue state and repeat mode
+ott l plex repeat all                # repeat this queue in its current order
+ott l plex repeat off                # stop naturally after its last item
 ott l plex next                      # next item, starting at 0
 ott l plex prev                      # previous item, starting at 0
 ott l plex previous                  # long spelling of prev
@@ -2104,14 +2111,40 @@ guarantee later network availability or decoder compatibility.
 Playback starts at the first item from zero. `play --shuffle` shuffles all
 supplied IDs once in the CLI; ordinary `play` preserves the supplied order.
 Natural completion advances through the list and stops after the last item
-unless existing kiosk policy repeats it. Older players can advertise a lower
-item limit; the CLI rejects oversized requests before sending a queue command.
+unless repeat is `all` or existing kiosk policy repeats it. Older players can
+advertise a lower item limit; the CLI rejects oversized requests before sending
+a queue command.
 `next` at the last item and `prev` at the first are rejected without wrapping or
 stopping the current item. Ordinary `ott l next` and `ott l prev` use a retained
 Plex queue atomically inside the player, including while preparing or after it
 ends. They do not switch to a TV channel at a queue boundary. `plex stop` clears
 the queue; channel navigation otherwise retains its existing category/wrap rules.
 Queue state is local to the player runtime and is not a saved Plex playlist.
+
+`plex repeat` without a mode reads queue status. `all` (alias `on`) repeats the
+retained order without reshuffling; `off` (alias `none`) stops after the last
+item. Changes require a nonempty active ordinary queue, including a paused one,
+and the separate `plex_queue_repeat` capability with a successful controller
+probe. The command does not save a profile or playlist, restart playback, change
+the current position, or resume a paused item. Kiosk locking and repetition are
+a separate policy; this command does not enable or release kiosk. A failed probe
+sends no repeat change, and an uncertain result is never automatically repeated.
+See the [repeat contract](../contracts/plex-queue-repeat-v1.json).
+
+Some players can restore an internal queue with up to 1,000 entries. When the
+player advertises `plex_queue_state_v2` and the controller supports it, the CLI
+automatically negotiates version 2 for `plex play`, `status`, `next`, `prev` and
+`stop`. The returned state can contain all 1,000 entries, preserving duplicate
+occurrences and their index. New `play` requests still accept at most 500 IDs;
+library lookup and preview keep their existing limits and version 1 format.
+This optional capability is not enabled by installing the CLI alone.
+
+Negotiation includes a read-only controller probe before any version 2 queue
+command. Both capability reads and the command share one timeout and must name
+the same player runtime. An old controller, changed runtime, or failed probe
+stops the command without a queue change; the CLI does not fall back and resend
+it. Ordinary `next`/`prev` keep their existing player-side navigation contract.
+See the [version 2 wire fixture](../contracts/plex-queue-state-v2.json).
 
 `preparing` means the request was accepted and preparation is in progress, not
 that a decoder is playing. Query `plex status` for `playing`, `paused`, `ended`
@@ -2142,6 +2175,9 @@ does not prove that playback never started.
 
 - If the operation is missing or unsupported, update all three components and
   confirm `plex_queue.operations` in `caps` on the exact target player.
+- If a restored queue requires `plex_queue_state_v2`, update the controller and
+  CLI and confirm that the player advertises that capability. Repeated legacy
+  queue commands do not enable it or truncate the retained queue.
 - If configuration or access is rejected, check the player's saved Plex server
   and token, then use `plex preview` to verify readiness without interrupting it.
 - If an item is unavailable, check the IDs against that server's library. IDs
@@ -2936,8 +2972,9 @@ ott lg2 local sources --paths
 ```
 
 `local sources` lists known bindings, not all attached disks or their directories.
-There is currently no `local roots`, `local browse` or remote folder-picker
-command. Paths refer to the **TV**, not the Mac running `ott`. On the native LG
+For builds advertising the separate `local_browser` and `local_media_handles`
+capabilities, see [native folder browsing](local-browser.md). These capabilities
+must not be inferred from `local_media` alone. Paths refer to the **TV**, not the Mac running `ott`. On the native LG
 implementation, `local connect` does not grant access to an unknown USB folder:
 guessing a `/tmp/usb/...` path cannot replace selecting an accessible source in
 the player. Likewise, `local sources --path PATH` only looks up a known binding;

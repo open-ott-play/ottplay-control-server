@@ -798,6 +798,10 @@ the current queue, and use a new request only after assessing that state.
 
 ### Plex library extension
 
+The separate [`plex_servers` extension](managed-plex-servers.md#protocol) selects
+a retained managed native server temporarily. Its controller/CLI support does
+not advertise player support; native producer qualification remains required.
+
 `plex_library` is a separate administrator-authenticated RPC. It resolves library
 sections using the player's saved Plex credentials and reuses its existing queue
 implementation. It accepts no URL, token, preset or filesystem path. It neither
@@ -1760,8 +1764,10 @@ The new CLI sends this read-only combined controller probe before every Local
 {"action":"capabilities","params":{"local_media_session":true,"local_media_progressive":true}}
 ```
 
-A supporting controller accepts exactly `{}`, `{"local_media_session":true}`,
+A supporting controller accepts `{}`, `{"local_media_session":true}`,
 `{"local_media_progressive":true}`, or both flags set to literal `true`.
+Controllers implementing [native source handles](local-browser.md#wire-contract)
+also accept `local_media_handles:true`, alone or combined with those flags.
 It computes idempotency identity from the original parameters before consuming
 the probe flags and forwarding `capabilities` with `{}` to the player. False,
 null, numeric substitutes and additional fields are invalid.
@@ -1844,6 +1850,15 @@ metadata and unsolicited path disclosures are rejected without consuming the
 pending request. Operator credentials need an exact `local_media.sources`,
 `local_media.connect`, `local_media.play` or `local_media.shuffle` scope. There is
 no family-wide scope or automatic retry of uncertain mutations.
+
+### Native USB folder browsing and source handles
+
+The separate [native browser contract](local-browser.md#wire-contract) defines
+`local_browser` roots/list/more/select and `local_media_handles`. These operations
+use receiver-local opaque tokens, not filesystem paths. Browsing and selecting
+are transient; only explicit handle-based connect invokes the existing settings
+writer. Each operation requires its advertised capability and exact operator
+scope. The existing Local source and profile APIs remain available independently.
 
 ### Local videos profile transfer
 

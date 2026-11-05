@@ -20,6 +20,8 @@ import favorites_protocol as protocol
 import favorites_transfer as transfer
 
 ACTION = "favorites_transfer"
+RECEIPT_ACTIONS = frozenset((ACTION, "favorites_global", "favorites_global_items",
+                             "favorites_global_recovery", "capabilities"))
 POST_INTERVAL, HTTP_INTERVAL, POLL_INTERVAL = 1.5, 0.5, 1.5
 RECONCILE_RESERVE = 10.0
 MAX_RECOVERY_BYTES = 128 * 1024
@@ -31,6 +33,21 @@ ERROR_CODES = frozenset(("invalid_configuration", "invalid_snapshot", "invalid_d
                          "deadline_insufficient", "deadline", "clock_invalid", "already_started", "invalid_response",
                          "transport", "http_error", "pending_timeout", "player_rejected", "player_unsupported",
                          "not_ready", "context_not_saved"))
+
+
+def _emit_receipt(client, action, request_id, status):
+    """Publish only closed transport metadata; diagnostics cannot affect an RPC."""
+    callback = getattr(client, "on_receipt", None)
+    if callable(callback):
+        receipt = {
+            "action": action if type(action) is str and action in RECEIPT_ACTIONS else "unknown",
+            "request_id": request_id if type(request_id) is str and protocol.REQUEST_ID.fullmatch(request_id) else None,
+            "status": status if type(status) is str and status in ("ok", "rejected", "unsupported") else "unknown",
+        }
+        try:
+            callback(receipt)
+        except Exception:  # noqa: BLE001 - output cannot change or replay an operation
+            pass
 
 
 def valid_queue_ack(status, queued):
@@ -306,6 +323,7 @@ class _RequestTransport:
     def _rpc(self, params, *, deadline, context=None):
         params = self._params(params)
         request_id, phase = None, "enqueue"
+        receipt_status = "unknown"
         try:
             status, queued = self._api(self._query, {"action": self._action, "params": copy.deepcopy(params)}, deadline=deadline)
             if not valid_queue_ack(status, queued):
@@ -344,12 +362,15 @@ class _RequestTransport:
                                                         max_metadata_bytes=self.max_metadata_bytes)
                 except (self._protocol.ProtocolError, TypeError, ValueError, RecursionError):
                     raise RemoteError("invalid_response") from None
+                receipt_status = result.status
                 if result.status != "ok":
                     raise RemoteError("player_rejected" if result.status == "rejected" else "player_unsupported")
                 return result
             raise RemoteError(last_error or "pending_timeout")
         except RemoteError as error:
             raise RemoteError(error.code, request_id=request_id, phase=phase, http_status=error.http_status) from None
+        finally:
+            _emit_receipt(self.client, self._action, request_id, receipt_status)
 
     def _observe_unverified(self, record):
         saved, context = _restore(record)

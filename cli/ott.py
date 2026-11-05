@@ -149,6 +149,12 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME local shuffle /Volumes/data/Movies/  connect/play a path on a native player
   ott NAME local play Movies         play the connected source in its current order
   ott NAME local connect /Volumes/data/Movies/  connect a native folder without playback
+  ott NAME local roots               discover folders on a supported native player
+  ott NAME local browse ENTRY --generation GEN  open a returned folder entry
+  ott NAME local browse --cursor CURSOR --generation GEN  read a retained page
+  ott NAME local more SELECT_ID --generation GEN  expand a partial folder scan
+  ott NAME local select SELECT_ID --generation GEN  hold a folder without saving or playing
+  ott NAME local connect|play|shuffle --handle HANDLE  use a selected native source
   ott NAME tracks                    list current audio and subtitle tracks
   ott NAME tracks audio ID           request a current audio track by opaque ID
   ott NAME tracks subtitle ID|off     request a subtitle track or turn subtitles off
@@ -160,11 +166,12 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME plex token-file FILE      update the Plex token from a file
   ott NAME plex preview ID [ID ...]  check the listed Plex items without starting playback
   ott NAME plex play ID [ID ...]     play IDs in order from the start; stop after the last
-  ott NAME plex play --shuffle ID...  shuffle all IDs once; kiosk on repeats that order
+  ott NAME plex play --shuffle ID...  shuffle all IDs once; plex repeat all repeats that order
   ott NAME plex libraries            list movie/show libraries from the player's Plex server
   ott NAME plex shuffle NAME         shuffle up to 500 library items; warn if the library is larger
   ott NAME plex library [--shuffle] [--preview] NAME  play or preview a library (or id:16)
   ott NAME plex queue / status       show the Plex queue without changing it
+  ott NAME plex repeat [off|all]      read or change repeat for the current Plex queue
   ott NAME plex next / prev / stop   move within or clear the Plex queue (no wrapping)
   ott NAME playlist URL              update the M3U playlist
   ott NAME fav                       list saved favorites on this player
@@ -329,6 +336,22 @@ CHANNEL_OPERATIONS = frozenset((*CHANNEL_STEPS.values(), "step_channel"))
 PLAYBACK_OPERATIONS = frozenset(("pause", "resume", "seek", *CHANNEL_OPERATIONS))
 OFFLINE_PROFILE_OPERATIONS = frozenset(("list", "load", "save", "export", "import"))
 LOCAL_MEDIA_OPERATIONS = frozenset(("sources", "play", "shuffle", "connect"))
+LOCAL_BROWSER_OPERATIONS = frozenset(("roots", "list", "more", "select"))
+LOCAL_MEDIA_HANDLE_OPERATIONS = frozenset(("connect", "play", "shuffle"))
+MAX_LOCAL_BROWSER_ENTRIES = 64
+MAX_LOCAL_BROWSER_BYTES = 64 * 1024
+LOCAL_BROWSER_ERRORS = {
+    "invalid_request": "The player rejected the local browser request",
+    "unsupported": "Local browsing is unsupported by this player",
+    "busy": "The local browser is busy; finish the current player UI operation first",
+    "stale": "The local browser view is stale; start again with local roots",
+    "source_changed": "The local source changed; start again with local roots",
+    "unavailable": "The local source is unavailable; check the connected disk",
+    "restricted": "Local browsing is restricted by the player's current policy",
+    "expired": "The local browser request expired",
+    "cancelled": "The local browser request was cancelled",
+    "limit_exceeded": "The local browser reached its supported limit",
+}
 MAX_LOCAL_MEDIA_SOURCES = 32
 MAX_LOCAL_MEDIA_ITEMS = 50000
 LOCAL_MEDIA_ERRORS = {
@@ -361,11 +384,17 @@ RECEIPT_ACTIONS = frozenset((
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
-    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "local_media", "categories", "favorites", "aspect",
+    "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "plex_servers", "local_media", "local_browser", "categories", "favorites", "aspect",
+    "favorites_transfer", "favorites_global", "favorites_global_items", "favorites_global_recovery",
     "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer", "media_tracks",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
+PLEX_QUEUE_REPEAT_MODES = frozenset(("none", "all"))
 MAX_PLEX_QUEUE_ITEMS = 500
+PLEX_QUEUE_STATE_OPERATIONS = PLEX_QUEUE_OPERATIONS - {"preview"}
+MAX_PLEX_QUEUE_STATE_ITEMS = 1000
+MAX_PLEX_QUEUE_STATE_BYTES = 32768
+PLEX_QUEUE_UPGRADE_ERROR = "This queue requires plex_queue_state_v2 and state_version: 2; upgrade the controller"
 PLEX_QUEUE_ERRORS = frozenset((
     "Plex configuration is missing or invalid.",
     "Plex provider module could not be loaded.",
@@ -1236,6 +1265,10 @@ class Client:
             wait_options = ({"wait_ms": advertised_wait} if type(advertised_wait) is int
                             and 1 <= advertised_wait <= 1000 else {})
             try:
+                if action == "plex_servers":
+                    # This protocol bounds the entire original reply, not its
+                    # compacted data subtree after the generic projection.
+                    wait_options["response_validator"] = lambda raw, identity: plex_servers_receipt(raw, params, identity)
                 receipt = self._wait_receipt(query, request_id, deadline, **wait_options)
             except Error as exc:
                 exc.request_id = request_id
@@ -1262,7 +1295,7 @@ class Client:
                     # Output failure cannot replay or change a completed operation.
                     pass
 
-    def _wait_receipt(self, query, request_id, deadline, wait_ms=0):
+    def _wait_receipt(self, query, request_id, deadline, wait_ms=0, response_validator=None):
         last_failure = None
         last_transport_category = None
         pending_confirmed = False
@@ -1287,7 +1320,15 @@ class Client:
             suffix = "&wait_ms=" + str(wait) if wait else ""
             backoff = 0.8
             try:
-                status, result = self.api("/api/requests" + query + "&id=" + request_id + suffix, timeout=remaining)
+                path = "/api/requests" + query + "&id=" + request_id + suffix
+                if response_validator is None:
+                    status, result = self.api(path, timeout=remaining)
+                else:
+                    status, raw = self.api_raw(path, timeout=remaining)
+                    if status == 200:
+                        result = response_validator(raw, request_id)
+                    else:
+                        result = plex_servers_decode(raw, 65536)
             except TransportError as exc:
                 # A final long poll can exhaust the caller's deadline after
                 # healthy pending receipts. Preserve that known state unless
@@ -1587,6 +1628,8 @@ def parse_command(words):
         except module.InvalidReport as exc:
             raise Error(str(exc)) from None
     if verb in ("local", "offline"):
+        if tail and tail[0].casefold() in ("roots", "browse", "more", "select"):
+            return "local_browser", parse_local_browser(tail)
         return "local_media", parse_local_media(tail)
     if re.match(r"[+-](?:[0-9]|\.)", verb) and re.search(r"[hms]", verb):
         if tail:
@@ -1799,8 +1842,17 @@ def parse_command(words):
         return "provider_settings", data
     if verb == "plex":
         operation = tail[0].casefold() if tail else ""
+        if operation == "servers":
+            return "plex_servers", parse_plex_servers(tail[1:])
         if operation in ("libraries", "library", "shuffle"):
             return "plex_library", parse_plex_library(tail)
+        if operation == "repeat":
+            if len(tail) == 1:
+                return "plex_queue", {"op": "status"}
+            modes = {"none": "none", "off": "none", "all": "all", "on": "all"}
+            if len(tail) != 2 or tail[1].casefold() not in modes:
+                raise Error("Use plex repeat [off|none|all|on]")
+            return "plex_queue", {"op": "repeat", "repeat": modes[tail[1].casefold()]}
         operation = {"queue": "status", "prev": "previous"}.get(operation, operation)
         if operation in PLEX_QUEUE_OPERATIONS:
             ids = tail[1:]
@@ -4137,6 +4189,185 @@ def local_media_selector(value):
              (len(value.encode("utf-8")) <= 512 and "/" not in value and "\\" not in value and value not in (".", ".."))))
 
 
+def local_browser_token(value):
+    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", value) is not None
+
+
+def local_browser_name(value):
+    try:
+        return (isinstance(value, str) and 0 < len(value.encode("utf-8")) <= 512
+                and all(ord(char) >= 32 and not 127 <= ord(char) <= 159 for char in value))
+    except UnicodeEncodeError:
+        return False
+
+
+def parse_local_browser(words):
+    invalid = ("Use local roots, local browse ENTRY --generation GEN, local browse --cursor CURSOR --generation GEN, "
+               "local more SELECT_ID --generation GEN or local select SELECT_ID --generation GEN")
+    op = "list" if words[0].casefold() == "browse" else words[0].casefold()
+    params = {"op": op}
+    tail = words[1:]
+    while tail:
+        option = tail[0]
+        if option in ("--generation", "--cursor") and len(tail) >= 2:
+            key = option[2:]
+            if key in params or not local_browser_token(tail[1]):
+                raise Error(invalid)
+            params[key] = tail[1]
+            tail = tail[2:]
+        elif local_browser_token(option):
+            key = "entry_id" if op == "list" else "select_id"
+            if key in params:
+                raise Error(invalid)
+            params[key] = option
+            tail = tail[1:]
+        else:
+            raise Error(invalid)
+    if not local_browser_params(params):
+        raise Error(invalid)
+    return params
+
+
+def local_browser_params(params):
+    if not isinstance(params, dict):
+        return False
+    op = params.get("op")
+    if op == "roots":
+        return set(params) == {"op"}
+    fields = {"op", "generation"}
+    if op == "list":
+        valid = set(params) in (fields | {"entry_id"}, fields | {"cursor"})
+    else:
+        valid = op in ("more", "select") and set(params) == fields | {"select_id"}
+    return valid and all(local_browser_token(value) for key, value in params.items() if key != "op")
+
+
+def local_browser_metadata(data, runtime, params, status="ok"):
+    invalid = "Invalid local browser result. The request was not repeated; inspect local sources before another change"
+    try:
+        if len(_compact_json_text(data).encode("utf-8")) > MAX_LOCAL_BROWSER_BYTES:
+            raise Error(invalid)
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise Error(invalid) from None
+    base = {"version", "runtime", "op", "state"}
+    if (not isinstance(data, dict) or not base <= set(data)
+            or type(data["version"]) is not int or data["version"] != 1
+            or data["runtime"] != runtime or data["op"] != params["op"]):
+        raise Error(invalid)
+    if data["state"] == "error":
+        if (status not in ("rejected", "unsupported") or set(data) != base | {"error"}
+                or not isinstance(data["error"], str) or data["error"] not in LOCAL_BROWSER_ERRORS):
+            raise Error(invalid)
+        return dict(data)
+    if status != "ok" or data["state"] != "ready" or not local_browser_token(data.get("generation")):
+        raise Error(invalid)
+    if params["op"] == "select":
+        row = data.get("source")
+        if (set(data) != base | {"generation", "source", "persisted", "activated"}
+                or data["generation"] != params["generation"]
+                or data["persisted"] is not False or data["activated"] is not False
+                or not isinstance(row, dict) or set(row) != {"id", "name", "kind", "handle", "stable_identity"}
+                or not local_browser_token(row["id"]) or not local_browser_token(row["handle"])
+                or not local_browser_name(row["name"]) or row["kind"] != "folder"
+                or type(row["stable_identity"]) is not bool):
+            raise Error(invalid)
+        return dict(data, source=dict(row))
+    fields = base | {"generation", "kind", "entries", "parent_id", "select_id", "next_cursor", "partial", "limit_reached"}
+    if (set(data) != fields or data["kind"] not in ("roots", "directories")
+            or (params["op"] == "roots" and data["kind"] != "roots")
+            or (params["op"] == "more" and data["kind"] != "directories")
+            or (params["op"] in ("list", "more") and data["generation"] == params["generation"])
+            or type(data["partial"]) is not bool or type(data["limit_reached"]) is not bool
+            or (data["limit_reached"] and not data["partial"])
+            or not isinstance(data["entries"], list) or len(data["entries"]) > MAX_LOCAL_BROWSER_ENTRIES
+            or any(data[key] is not None and not local_browser_token(data[key]) for key in ("parent_id", "select_id", "next_cursor"))
+            or (data["kind"] == "roots" and (data["parent_id"] is not None or data["select_id"] is not None))
+            or (data["kind"] == "directories" and data["select_id"] is None)):
+        raise Error(invalid)
+    entries, identities = [], set()
+    kind = "root" if data["kind"] == "roots" else "directory"
+    for row in data["entries"]:
+        if (not isinstance(row, dict) or set(row) != {"id", "name", "kind"}
+                or not local_browser_token(row["id"]) or row["id"] in identities
+                or not local_browser_name(row["name"]) or row["kind"] != kind):
+            raise Error(invalid)
+        identities.add(row["id"])
+        entries.append(dict(row))
+    return dict(data, entries=entries)
+
+
+def local_browser_command(client, device, params, timeout):
+    if not local_browser_params(params):
+        raise Error("Invalid local browser arguments. No local browser command was sent")
+    deadline = time.monotonic() + timeout
+    previous_timeout, runtime, request, sent = client.timeout, None, None, False
+    try:
+        client.timeout = max(0, deadline - time.monotonic())
+        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        if params["op"] not in controls.get("local_browser", {}).get("operations", []):
+            raise Error("Local browsing requires updated player and controller support. No local browser command was sent")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Local browser capability discovery exceeded --timeout; no local browser command was sent")
+        runtime = controls["player"]["runtime"]
+        request = dict(params, version=1, runtime=runtime)
+        client.timeout = remaining
+        sent = True
+        data = client.call(device, "local_browser", request)
+        if time.monotonic() >= deadline:
+            raise Error("Local browser response exceeded --timeout. Acceptance is uncertain; the request was not repeated")
+        result = local_browser_metadata(data, runtime, request)
+        if result["state"] == "error":
+            raise Error(LOCAL_BROWSER_ERRORS[result["error"]] + ". The request was not repeated")
+        return result
+    except PlayerRejected as exc:
+        detail = "The player rejected the local browser request"
+        if request is not None:
+            try:
+                rejected = local_browser_metadata(exc.data, runtime, request, status="rejected")
+                if rejected["state"] == "error":
+                    detail = LOCAL_BROWSER_ERRORS[rejected["error"]]
+            except Error:
+                pass
+        raise Error(detail + ". The request was not repeated") from None
+    except PlayerUnsupported:
+        raise Error("Local browsing is unsupported by this player/controller. " +
+                    ("The request was not repeated" if sent else "No local browser command was sent")) from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("This controller does not accept local browser commands; update the controller and player. " +
+                        ("The request was not repeated" if sent else "No local browser command was sent")) from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_local_browser(data):
+    if data["op"] == "select":
+        row = data["source"]
+        print(f"Local source selected: {clean(row['name'])} ({row['id']})")
+        print("Handle: " + row["handle"])
+        print("Not saved or activated; playback was not started.")
+        if not row["stable_identity"]:
+            print("Stable identity is unavailable; automatic recovery after restart is not guaranteed.")
+        return
+    print("Generation: " + data["generation"])
+    for row in data["entries"]:
+        print(f"{row['id']}  {clean(row['name'])} ({row['kind']})")
+    if not data["entries"]:
+        print("No entries in this retained page.")
+    for field, label in (("parent_id", "Parent entry"), ("select_id", "Select ID"), ("next_cursor", "Next cursor")):
+        if data[field] is not None:
+            print(label + ": " + data[field])
+    if data["partial"]:
+        if data["limit_reached"]:
+            print("Scan is partial; the scan limit has been reached.")
+        elif data["kind"] == "directories":
+            print("Scan is partial; use local more with this Select ID to expand the directory scan.")
+        else:
+            print("Root discovery is partial; local roots starts a fresh discovery.")
+
+
 def parse_local_media(words):
     op = words[0].casefold() if words else "sources"
     op = "sources" if op == "list" else op
@@ -4155,6 +4386,8 @@ def parse_local_media(words):
                 raise Error("Use local sources [--path ABSOLUTE_TARGET_PATH] [--paths], with each option once")
         return params
     if op in ("connect", "play", "shuffle"):
+        if len(tail) == 2 and tail[0] == "--handle" and local_browser_token(tail[1]):
+            return {"op": op, "source_handle": tail[1]}
         if tail[:1] == ["--"]:
             tail = tail[1:]
         elif any(value.startswith("--") for value in tail):
@@ -4188,7 +4421,7 @@ def local_media_metadata(data, runtime, params, capability=None):
         fields = {"id", "name", "kind", "available"}
         if (not isinstance(row, dict) or set(row) not in (fields, fields | {"path"})
                 or not isinstance(row.get("id"), str) or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", row["id"]) is None
-                or not local_media_name(row.get("name")) or row.get("kind") not in ("folder", "file")
+                or not local_browser_name(row.get("name")) or row.get("kind") not in ("folder", "file")
                 or type(row.get("available")) is not bool
                 or ("path" in row and (not paths or not plex_library_text(row["path"], 4096) or not local_media_absolute(row["path"])))):
             raise Error(invalid)
@@ -4202,6 +4435,10 @@ def local_media_metadata(data, runtime, params, capability=None):
             raise Error(invalid)
         return dict(data, sources=rows)
     fields = base | {"source", "count", "shuffled", "accepted", "playback_confirmed"}
+    if "source_handle" in params:
+        if not local_browser_token(params["source_handle"]) or data.get("source_handle") != params["source_handle"]:
+            raise Error(invalid)
+        fields.add("source_handle")
     if params["op"] in ("play", "shuffle"):
         if params.get("session") is not True or data.get("session") is not True:
             raise Error(invalid)
@@ -4217,8 +4454,8 @@ def local_media_metadata(data, runtime, params, capability=None):
             or data["accepted"] is not True or data["playback_confirmed"] is not False):
         raise Error(invalid)
     selected = source(data["source"])
-    if (not selected["available"] or
-            (not local_media_absolute(params["source"]) and params["source"] not in (selected["id"], selected["name"]))):
+    if (not selected["available"] or ("source_handle" not in params and
+            not local_media_absolute(params["source"]) and params["source"] not in (selected["id"], selected["name"]))):
         raise Error(invalid)
     return dict(data, source=selected)
 
@@ -4237,6 +4474,10 @@ def local_media_capabilities(client, device, timeout):
 
 def local_media_command(client, device, params, timeout, session=None, *, controls=None):
     playback_session = params["op"] in ("play", "shuffle")
+    handle = "source_handle" in params
+    if handle and (params["op"] not in LOCAL_MEDIA_HANDLE_OPERATIONS or "source" in params
+                   or not local_browser_token(params["source_handle"])):
+        raise Error("Invalid local source handle arguments. No local media command was sent")
     if not playback_session and "session" in params:
         raise Error("Session playback flags are only valid for local play or shuffle. No local media command was sent")
     deadline = time.monotonic() + timeout
@@ -4249,15 +4490,20 @@ def local_media_command(client, device, params, timeout, session=None, *, contro
         # Reuse a validated runtime only for a bounded read-only preset phase.
         # Every mutation still discovers fresh capabilities before dispatch.
         if controls is None or params["op"] != "sources":
-            if playback_session:
+            if playback_session or handle:
+                probe = ({"local_media_session": True, "local_media_progressive": True} if playback_session else {})
+                if handle:
+                    probe["local_media_handles"] = True
                 try:
-                    raw_controls = client.call(device, "capabilities", {"local_media_session": True,
-                                                                         "local_media_progressive": True})
+                    raw_controls = client.call(device, "capabilities", probe)
                 except HTTPError as exc:
                     if exc.code != 400:
                         raise
                     # A legacy controller cannot guarantee temporary playback.
                     # Never fall back to a persistent Local mutation.
+                    if handle:
+                        raise Error("This controller does not support Local source handles; update the controller. "
+                                    "No local media command was sent") from None
                     raise Error("This controller does not support session-only Local playback; update the controller. "
                                 "No local media command was sent") from None
                 controls = capabilities_metadata(raw_controls)
@@ -4266,6 +4512,8 @@ def local_media_command(client, device, params, timeout, session=None, *, contro
         capability = controls.get("local_media", {})
         if params["op"] not in capability.get("operations", []):
             raise Error("Local media commands require an updated player and controller advertising local_media. No local media command was sent")
+        if handle and params["op"] not in controls.get("local_media_handles", {}).get("operations", []):
+            raise Error("This player does not support Local source handles; update the player. No local media command was sent")
         if playback_session and "local_media_session" not in controls:
             raise Error("This player does not support session-only Local playback; update the player. No local media command was sent")
         if (params.get("include_paths") is True or "path" in params or local_media_absolute(params.get("source"))) and capability.get("absolute_paths") is not True:
@@ -4331,6 +4579,187 @@ def print_local_media(data, params=None):
         else:
             print(f"Local source: {clean(data['source']['name'])}; {data['count']} items; " + ("shuffled once." if data["shuffled"] else "source order."))
         print("Playback request accepted; playback has not been confirmed.")
+
+
+PLEX_SERVERS_USAGE = "Use plex servers or plex servers select SERVER_ID --context CONTEXT"
+PLEX_SERVERS_ERRORS = {
+    "invalid_request": "The player rejected the Plex server request",
+    "unsupported": "Managed Plex server selection is unavailable on this player",
+    "busy": "The managed Plex server owner is busy",
+    "stale": "The player runtime or retained selection context changed",
+    "source_changed": "The retained Plex candidate changed",
+    "authorization_conflict": "The retained Plex candidate conflicts with existing server authorization",
+    "unavailable": "The retained Plex candidate is unavailable",
+    "restricted": "Player policy or the Providers PIN prevents this selection",
+    "expired": "The Plex server request or selection context expired before admission",
+    "cancelled": "The Plex server operation was cancelled",
+    "limit_exceeded": "The managed Plex server operation exceeded its bounds",
+    "activation_failed": "Managed Plex activation failed with the prior state retained or restored",
+    "outcome_unknown": "Managed Plex activation has an unknown outcome; inspect current player status",
+}
+
+
+def plex_servers_token(value, pattern):
+    return isinstance(value, str) and re.fullmatch(pattern, value) is not None
+
+
+def parse_plex_servers(words):
+    if not words:
+        return {"version": 1, "op": "list"}
+    if (len(words) != 4 or words[0].casefold() != "select" or words[2] != "--context"
+            or not plex_servers_token(words[1], r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}")
+            or not plex_servers_token(words[3], r"[A-Za-z0-9_.:-]{1,256}")):
+        raise Error(PLEX_SERVERS_USAGE)
+    return {"version": 1, "op": "select", "server_id": words[1], "context": words[3]}
+
+
+def plex_servers_capability(marker):
+    invalid = "The player returned invalid managed Plex server capabilities"
+    if (not isinstance(marker, dict) or set(marker) != {"version", "operations", "max_servers"}
+            or type(marker["version"]) is not int or marker["version"] != 1
+            or type(marker["max_servers"]) is not int or marker["max_servers"] != 1
+            or not isinstance(marker["operations"], list) or len(marker["operations"]) != 2
+            or not all(isinstance(op, str) for op in marker["operations"])
+            or set(marker["operations"]) != {"list", "select"}):
+        raise Error(invalid)
+    return {"version": 1, "operations": list(marker["operations"]), "max_servers": 1}
+
+
+def plex_servers_request(params):
+    if (not isinstance(params, dict) or type(params.get("version")) is not int
+            or params["version"] != 1 or params.get("op") not in ("list", "select")
+            or not plex_servers_token(params.get("runtime"), r"[a-z0-9-]{1,64}")):
+        raise Error("Invalid managed Plex server request")
+    expected = {"version", "runtime", "op"}
+    if params["op"] == "select":
+        expected |= {"server_id", "context"}
+        if (not plex_servers_token(params.get("server_id"), r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}")
+                or not plex_servers_token(params.get("context"), r"[A-Za-z0-9_.:-]{1,256}")):
+            raise Error("Invalid managed Plex server request")
+    if set(params) != expected:
+        raise Error("Invalid managed Plex server request")
+    return dict(params)
+
+
+def plex_servers_decode(raw, maximum=65536):
+    try:
+        if not isinstance(raw, (bytes, str)) or len(raw.encode("utf-8") if isinstance(raw, str) else raw) > maximum:
+            raise ValueError()
+        return decode_response_json(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    except (ValueError, RecursionError, UnicodeError):
+        raise Error("The player returned invalid managed Plex server JSON") from None
+
+
+def plex_servers_metadata(data, params, status="ok"):
+    invalid = "The player returned invalid managed Plex server metadata"
+    plex_servers_request(params)
+    if (not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1
+            or data.get("runtime") != params["runtime"] or data.get("op") != params["op"]):
+        raise Error(invalid)
+    common = {"version", "runtime", "op", "state"}
+    if status in ("rejected", "unsupported"):
+        if (set(data) != common | {"error"} or data["state"] != "error"
+                or not isinstance(data["error"], str) or data["error"] not in PLEX_SERVERS_ERRORS):
+            raise Error(invalid)
+        return dict(data)
+    if status != "ok" or data.get("state") != "ready":
+        raise Error(invalid)
+    if params["op"] == "list":
+        if set(data) != common | {"servers"} or not isinstance(data["servers"], list) or len(data["servers"]) > 1:
+            raise Error(invalid)
+        for row in data["servers"]:
+            if (not isinstance(row, dict) or set(row) != {"server_id", "name", "context", "expires_in_ms"}
+                    or not plex_servers_token(row["server_id"], r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}")
+                    or not plex_servers_token(row["context"], r"[A-Za-z0-9_.:-]{1,256}")
+                    or not isinstance(row["name"], str) or not row["name"]
+                    or re.search(r"[\x00-\x1f\x7f-\x9f]", row["name"])
+                    or type(row["expires_in_ms"]) is not int or not 1 <= row["expires_in_ms"] <= 120000):
+                raise Error(invalid)
+            try:
+                if len(row["name"].encode("utf-8")) > 512:
+                    raise Error(invalid)
+            except UnicodeError:
+                raise Error(invalid) from None
+    elif (set(data) != common | {"server_id", "context", "activated", "persisted", "playback_confirmed"}
+            or data["server_id"] != params["server_id"] or data["context"] != params["context"]
+            or data["activated"] is not True or data["persisted"] is not False
+            or data["playback_confirmed"] is not False):
+        raise Error(invalid)
+    return copy.deepcopy(data)
+
+
+def plex_servers_receipt(raw, params, request_id):
+    result = plex_servers_decode(raw)
+    if (not isinstance(result, dict) or set(result) != {"id", "status", "data"}
+            or not plex_servers_token(request_id, r"[a-f0-9]{32}") or result["id"] != request_id):
+        raise Error("The player returned an invalid managed Plex server receipt")
+    plex_servers_metadata(result["data"], params, result["status"])
+    return result
+
+
+def plex_servers_command(client, device, params, timeout):
+    deadline = time.monotonic() + timeout
+    previous_timeout = client.timeout
+    request = None
+    submitted = False
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Plex server capability discovery exceeded --timeout; no server command was sent")
+        client.timeout = remaining
+        raw_controls = client.call(device, "capabilities", {})
+        try:
+            controls = capabilities_metadata(raw_controls)
+        except Error as exc:
+            raise Error(str(exc) + ". No server command was sent") from None
+        if "plex_servers" not in controls:
+            raise Error("Managed Plex server commands require a player and controller advertising plex_servers. No server command was sent")
+        request = plex_servers_request(dict(params, runtime=controls["player"]["runtime"]))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Plex server capability discovery exceeded --timeout; no server command was sent")
+        client.timeout = remaining
+        submitted = True
+        result = client.call(device, "plex_servers", request)
+        if time.monotonic() >= deadline:
+            raise Error("Managed Plex server response exceeded --timeout")
+        return plex_servers_metadata(result, request)
+    except (PlayerRejected, PlayerUnsupported) as exc:
+        detail = "Managed Plex server request was rejected or unsupported"
+        if request is not None:
+            status = "unsupported" if isinstance(exc, PlayerUnsupported) else "rejected"
+            try:
+                result = plex_servers_metadata(exc.data, request, status)
+                detail = PLEX_SERVERS_ERRORS[result["error"]]
+            except Error:
+                detail = "The player returned invalid managed Plex server error metadata"
+        raise Error(detail + ". The request was not repeated") from None
+    except HTTPError as exc:
+        if exc.code in (400, 404):
+            raise Error("Managed Plex server commands require an updated controller and player advertising plex_servers. The request was not repeated") from None
+        raise
+    except RequestError:
+        # Keep the original action/request ID and the transport's uncertainty.
+        raise
+    except Error as exc:
+        if submitted:
+            suffix = (" Activation is uncertain; inspect current player status before another selection."
+                      if params["op"] == "select" else "")
+            raise Error(str(exc) + suffix + " The request was not repeated") from None
+        raise
+    finally:
+        client.timeout = previous_timeout
+
+
+def print_plex_servers(data):
+    if data["op"] == "select":
+        print("Managed Plex server activated temporarily; profile not saved and playback not confirmed.")
+        return
+    if not data["servers"]:
+        print("No eligible retained managed Plex server is available.")
+    for row in data["servers"]:
+        print(f"{clean(row['name'])} (server_id: {row['server_id']})")
+        print(f"  context: {row['context']}; expires in {row['expires_in_ms']} ms")
 
 
 def parse_plex_library(words):
@@ -4502,17 +4931,31 @@ def plex_queue_title(value):
     return epg_text(value, 512, "utf-8") and all(ord(char) >= 32 and ord(char) != 127 for char in value)
 
 
-def plex_queue_metadata(data, runtime=None, params=None):
+def plex_queue_metadata(data, runtime=None, params=None, *, expected_version=1):
     invalid = "The player returned invalid Plex queue metadata. The request may have executed; do not repeat the change blindly."
     preview = params is not None and params["op"] == "preview"
+    if type(expected_version) is not int or expected_version not in (1, 2) or (preview and expected_version != 1):
+        raise Error(invalid)
+    if expected_version == 2:
+        # The relay checks the received raw JSON subtree. A decoded CLI value
+        # can only check canonical UTF-8 size; whitespace/escapes are not retained.
+        try:
+            if len(json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) > MAX_PLEX_QUEUE_STATE_BYTES:
+                raise Error(invalid)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            raise Error(invalid) from None
     required = ({"version", "runtime", "state", "ids", "titles", "order"} if preview else
                 {"version", "runtime", "active", "state", "ids", "index", "repeat", "order"})
     optional = {"error"} if preview else {"title", "error"}
+    ids = data.get("ids") if isinstance(data, dict) else None
+    valid_ids = (isinstance(ids, list) and len(ids) <= MAX_PLEX_QUEUE_STATE_ITEMS
+                 and all(isinstance(item, str) and re.fullmatch(r"[1-9][0-9]{0,19}", item) for item in ids)
+                 if expected_version == 2 else plex_queue_ids(ids))
     if (not isinstance(data, dict) or not required <= set(data) or set(data) - required - optional
-            or type(data.get("version")) is not int or data["version"] != 1
+            or type(data.get("version")) is not int or data["version"] != expected_version
             or not isinstance(data.get("runtime"), str) or not re.fullmatch(r"[a-z0-9-]{1,64}", data["runtime"])
             or (runtime is not None and data["runtime"] != runtime)
-            or not plex_queue_ids(data.get("ids")) or data.get("order") != "listed"
+            or not valid_ids or data.get("order") != "listed"
             or ("error" in data and (data.get("state") != "error" or not isinstance(data["error"], str)
                                      or data["error"] not in PLEX_QUEUE_ERRORS))):
         raise Error(invalid)
@@ -4544,34 +4987,67 @@ def plex_queue_metadata(data, runtime=None, params=None):
         valid = False
     if not valid or (params and ((params["op"] == "play" and index != 0) or (params["op"] == "stop" and state != "idle"))):
         raise Error(invalid)
+    if params and params["op"] == "repeat" and (
+            not data["active"] or not ids or data["repeat"] != params.get("repeat")):
+        raise Error(invalid)
     return dict(data, ids=list(ids))
 
 
 def plex_queue_command(client, device, params, timeout):
+    repeating = params["op"] == "repeat"
+    if repeating and (not isinstance(params.get("repeat"), str)
+                      or params["repeat"] not in PLEX_QUEUE_REPEAT_MODES):
+        raise Error("Use plex repeat [off|none|all|on]")
     deadline = time.monotonic() + timeout
     previous_timeout = client.timeout
     try:
         client.timeout = max(0, deadline - time.monotonic())
         controls = capabilities_metadata(client.call(device, "capabilities", {}))
-        if params["op"] not in controls.get("plex_queue", {}).get("operations", []):
+        if repeating and "plex_queue_repeat" not in controls:
+            raise Error("Plex repeat is not supported by this player/controller; update both and check caps. No queue command was sent")
+        if not repeating and params["op"] not in controls.get("plex_queue", {}).get("operations", []):
             raise Error("Plex queues are not supported by this player/controller; update both and check caps. No queue command was sent")
         if len(params.get("ids", [])) > controls["plex_queue"]["max_items"]:
             raise Error("This player supports at most " + str(controls["plex_queue"]["max_items"]) + " Plex items; update it. No queue command was sent")
+        runtime = controls["player"]["runtime"]
+        version = 1
+        probes = {"plex_queue_repeat": True} if repeating else {}
+        if (params["op"] in PLEX_QUEUE_STATE_OPERATIONS or repeating) and "plex_queue_state_v2" in controls:
+            probes["plex_queue_state_v2"] = True
+            version = 2
+        if probes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Error("Plex capability discovery exceeded --timeout; no queue command was sent")
+            client.timeout = remaining
+            try:
+                confirmed = capabilities_metadata(client.call(device, "capabilities", probes))
+            except HTTPError as exc:
+                if exc.code == 400:
+                    if repeating:
+                        raise Error("This controller does not support Plex repeat; update it. No queue command was sent") from None
+                    raise Error("This controller does not support Plex queue state v2; update it. No queue command was sent") from None
+                raise
+            if (confirmed["player"]["runtime"] != runtime
+                    or any(confirmed.get(marker) != controls[marker] for marker in probes)):
+                raise Error("Plex capabilities changed during negotiation. No queue command was sent")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise Error("Plex capability discovery exceeded --timeout; no queue command was sent")
         client.timeout = remaining
-        runtime = controls["player"]["runtime"]
-        result = client.call(device, "plex_queue", dict(params, runtime=runtime))
+        request = dict(params, runtime=runtime)
+        if version == 2:
+            request["state_version"] = 2
+        result = client.call(device, "plex_queue", request)
         if time.monotonic() >= deadline:
             raise Error("Plex queue response exceeded --timeout. Acceptance is uncertain and the request may still execute before its server deadline; do not repeat it blindly. Inspect plex status")
-        result = plex_queue_metadata(result, runtime, params)
+        result = plex_queue_metadata(result, runtime, params, expected_version=version)
         if result["state"] == "error" and params["op"] != "status":
             raise Error(result.get("error", "Plex playback could not start.") + " Inspect plex status before another playback request")
         return result
     except PlayerRejected as exc:
         detail = exc.data.get("error") if isinstance(exc.data, dict) else None
-        if not isinstance(detail, str) or detail not in PLEX_QUEUE_ERRORS:
+        if not isinstance(detail, str) or (detail not in PLEX_QUEUE_ERRORS and detail != PLEX_QUEUE_UPGRADE_ERROR):
             detail = "Plex queue request was rejected; check saved Plex settings, the current player runtime and availability."
         raise Error(detail + " The request was not repeated") from None
     except PlayerUnsupported:
@@ -4748,6 +5224,10 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "plex_servers" in data:
+        if not plex_servers_token(player["runtime"], r"[a-z0-9-]{1,64}"):
+            raise Error(invalid)
+        result["plex_servers"] = plex_servers_capability(data["plex_servers"])
     if native_playback:
         result["native_playback_diagnostics"] = {"version": 1}
     if "media_tracks" in data:
@@ -4950,6 +5430,34 @@ def capabilities_metadata(data):
                 or len(set(operations)) != len(operations)):
             raise Error(invalid)
         result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": queue["max_items"]}
+    if "plex_queue_repeat" in data:
+        marker = data["plex_queue_repeat"]
+        modes = marker.get("modes") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "modes"}
+                or type(marker.get("version")) is not int or marker["version"] != 1
+                or not isinstance(modes, list) or len(modes) != 2
+                or any(not isinstance(mode, str) or mode not in PLEX_QUEUE_REPEAT_MODES for mode in modes)
+                or len(set(modes)) != 2
+                or "status" not in result.get("plex_queue", {}).get("operations", [])
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["plex_queue_repeat"] = {"version": 1, "modes": sorted(modes)}
+    if "plex_queue_state_v2" in data:
+        state = data["plex_queue_state_v2"]
+        operations = state.get("operations") if isinstance(state, dict) else None
+        if (not isinstance(state, dict)
+                or set(state) != {"version", "operations", "max_write_items", "max_state_items", "max_state_bytes"}
+                or any(type(state.get(key)) is not int or state[key] != value for key, value in
+                       (("version", 2), ("max_write_items", MAX_PLEX_QUEUE_ITEMS),
+                        ("max_state_items", MAX_PLEX_QUEUE_STATE_ITEMS), ("max_state_bytes", MAX_PLEX_QUEUE_STATE_BYTES)))
+                or not isinstance(operations, list) or len(operations) != len(PLEX_QUEUE_STATE_OPERATIONS)
+                or any(not isinstance(op, str) or op not in PLEX_QUEUE_STATE_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)
+                or "plex_queue" not in result or result["plex_queue"]["max_items"] != MAX_PLEX_QUEUE_ITEMS
+                or not PLEX_QUEUE_STATE_OPERATIONS <= set(result["plex_queue"]["operations"])
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["plex_queue_state_v2"] = dict(state, operations=sorted(operations))
     if "favorites" in data:
         favorites = data["favorites"]
         operations = favorites.get("operations") if isinstance(favorites, dict) else None
@@ -4993,6 +5501,26 @@ def capabilities_metadata(data):
                     or marker["version"] != 1):
                 raise Error(invalid)
             result[key] = {"version": 1}
+    if "local_browser" in data:
+        marker = data["local_browser"]
+        operations = marker.get("operations") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "operations", "max_entries"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or type(marker["max_entries"]) is not int or marker["max_entries"] != MAX_LOCAL_BROWSER_ENTRIES
+                or not isinstance(operations, list) or len(operations) != len(LOCAL_BROWSER_OPERATIONS)
+                or any(not isinstance(op, str) for op in operations) or set(operations) != LOCAL_BROWSER_OPERATIONS):
+            raise Error(invalid)
+        result["local_browser"] = dict(marker, operations=list(operations))
+    if "local_media_handles" in data:
+        marker = data["local_media_handles"]
+        operations = marker.get("operations") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "operations"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or not isinstance(operations, list) or len(operations) != len(LOCAL_MEDIA_HANDLE_OPERATIONS)
+                or any(not isinstance(op, str) for op in operations) or set(operations) != LOCAL_MEDIA_HANDLE_OPERATIONS
+                or not LOCAL_MEDIA_HANDLE_OPERATIONS <= set(result.get("local_media", {}).get("operations", []))):
+            raise Error(invalid)
+        result["local_media_handles"] = dict(marker, operations=list(operations))
     if "plex_library_truncation" in data:
         truncation = data["plex_library_truncation"]
         if ("plex_library" not in result or result["plex_library"]["max_items"] != MAX_PLEX_QUEUE_ITEMS
@@ -5239,6 +5767,15 @@ def print_player_help(data, name):
     if queue:
         print(f"  {prefix} plex " + " / ".join(op + " ID [ID ...]" if op in ("play", "preview") else op for op in queue))
         print("    next/prev use the retained Plex queue until plex stop clears it; kiosk can repeat its order.")
+    if "plex_queue_repeat" in controls:
+        print(f"  {prefix} plex repeat [off|none|all|on]  — read or change repeat for the current Plex queue")
+        print("    all/on repeats its listed order; off/none stops at the end. Does not save the profile or change playback position.")
+    if "plex_servers" in controls:
+        # Also validate callers that supply already-projected help metadata.
+        plex_servers_capability(controls["plex_servers"])
+        print(f"  {prefix} plex servers  — list the eligible retained managed Plex server")
+        print(f"  {prefix} plex servers select SERVER_ID --context CONTEXT  — activate temporarily on this player")
+        print("    Uses a fresh listed context; does not save the profile or confirm playback.")
     local = controls.get("local_media", {})
     local_operations = local.get("operations", [])
     if "sources" in local_operations:
@@ -5256,6 +5793,19 @@ def print_player_help(data, name):
         print(f"  {prefix} local connect Movies  — confirm a connected source without playback")
         if local.get("absolute_paths"):
             print(f"  {prefix} local connect /Volumes/data/Movies/  — connect a folder without playback")
+    browser = controls.get("local_browser", {}).get("operations", [])
+    if "roots" in browser:
+        print(f"  {prefix} local roots  — discover native root entries")
+    if "list" in browser:
+        print(f"  {prefix} local browse ENTRY --generation GEN  — open a returned entry")
+        print(f"  {prefix} local browse --cursor CURSOR --generation GEN  — read a retained page")
+    if "more" in browser:
+        print(f"  {prefix} local more SELECT_ID --generation GEN  — expand a partial directory scan")
+    if "select" in browser:
+        print(f"  {prefix} local select SELECT_ID --generation GEN  — hold a folder without saving or playing")
+    for operation in ("connect", "play", "shuffle"):
+        if operation in controls.get("local_media_handles", {}).get("operations", []):
+            print(f"  {prefix} local {operation} --handle HANDLE  — use a source selected on this player")
     libraries = controls.get("plex_library", {}).get("operations", [])
     if "list" in libraries:
         print(f"  {prefix} plex libraries  — list movie/show libraries on the player's Plex server")
@@ -5344,7 +5894,7 @@ def print_player_help(data, name):
         print(f"  {prefix} update install SHA256  — request installation of the staged APK")
         print("    Android confirmation may be required. Acceptance does not confirm installation; read update status after reopening the app.")
     if (not provider_commands and not any(controls[key] for key in ("lifecycle", "playback", "input"))
-            and shot.get("state") != "ready" and not queue and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
+            and shot.get("state") != "ready" and not queue and not local_operations and not browser and not libraries and not categories and not favorites and not aspect.get("operations") and not notifications and not update and "perf_capture" not in controls
             and not any(key in controls for key in ("media_tracks", "playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
@@ -6971,6 +7521,12 @@ def player_group_command(client, config, targets, args, argv):
     # validates ordinary commands once, before any target receives a request.
     prepared = parse_command(words) if route is None else None
     action = prepared[0] if prepared else (words[0].casefold() if words else "status")
+    if (len(targets) > 1 and prepared and
+            ((action == "local_browser" and prepared[1]["op"] != "roots")
+             or (action == "local_media" and "source_handle" in prepared[1]))):
+        raise Error("Local browser tokens and source handles belong to one player; choose a single target. No local command was sent")
+    if action == "plex_servers" and prepared[1]["op"] == "select" and len(targets) != 1:
+        raise Error("Managed Plex server selection requires exactly one player; contexts cannot be shared between receivers")
     if action in ("favorites_profile", "favorites_global") and prepared[1]["op"] == "acknowledge" and len(targets) != 1:
         raise Error("Favorites acknowledgement requires exactly one player")
     if action == "favorites_profile" and prepared[1]["op"] == "collect":
@@ -7251,8 +7807,12 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         data = plex_queue_command(client, device, params, args.timeout)
     elif action == "plex_library":
         data = plex_library_command(client, device, params, args.timeout)
+    elif action == "plex_servers":
+        data = plex_servers_command(client, device, params, args.timeout)
     elif action == "local_media":
         data = local_media_command(client, device, params, args.timeout)
+    elif action == "local_browser":
+        data = local_browser_command(client, device, params, args.timeout)
     elif action == "categories":
         data = categories_command(client, device, params, args.timeout)
     elif action == "channels":
@@ -7406,8 +7966,12 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         print_plex_queue(data, preview=params["op"] == "preview")
     elif action == "plex_library":
         print_plex_library(data)
+    elif action == "plex_servers":
+        print_plex_servers(data)
     elif action == "local_media":
         print_local_media(data, params)
+    elif action == "local_browser":
+        print_local_browser(data)
     elif action == "categories":
         print_categories(data)
     elif action == "favorites":

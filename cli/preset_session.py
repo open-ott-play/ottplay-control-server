@@ -104,7 +104,14 @@ class Session:
                 raise api.Error("Checkpoint exists; use resume or a new checkpoint path")
             query = "?" + urllib.parse.urlencode({"device_id": device})
             self.operations = "/api/operations" + query
-            code, caps = client.api(self.operations)
+            try:
+                code, caps = client.api(self.operations)
+            except api.HTTPError as exc:
+                if exc.code != 503:
+                    raise
+                raise api.Error("Controller command journal is unavailable (HTTP 503). "
+                                "No preset commands were sent by this attempt. Check the controller journal "
+                                "configuration and service availability before retrying.") from None
             self.ttl = caps.get("command_ttl_seconds") if isinstance(caps, dict) else None
             if code != 200 or not isinstance(caps, dict) or caps.get("enabled") is not True or type(self.ttl) is not int or not 1 <= self.ttl <= 3600:
                 raise api.Error("Resumable apply requires a controller with the command journal enabled")

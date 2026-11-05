@@ -9,6 +9,9 @@ import (
 const maxPlexQueueItems = 500
 const maxPlexQueueResultBytes = 16 * 1024
 const maxPlexPreviewResultBytes = 1024 * 1024
+const maxPlexQueueStateV2Items = 1000
+const maxPlexQueueStateV2ResultBytes = 32 * 1024
+const maxPlexQueueRepeatErrorBytes = 1024
 
 var plexQueueIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 
@@ -36,14 +39,20 @@ func validPlexQueueError(raw json.RawMessage) bool {
 }
 
 type plexQueueRequest struct {
-	Runtime string
-	Op      string
-	IDs     []string
+	Runtime      string
+	Op           string
+	IDs          []string
+	Repeat       string
+	StateVersion int
 }
 
 func plexQueueIDs(raw json.RawMessage, minimum int) ([]string, bool) {
+	return plexQueueIDsBounded(raw, minimum, maxPlexQueueItems)
+}
+
+func plexQueueIDsBounded(raw json.RawMessage, minimum, maximum int) ([]string, bool) {
 	var ids []string
-	if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &ids) != nil || len(ids) < minimum || len(ids) > maxPlexQueueItems {
+	if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &ids) != nil || len(ids) < minimum || len(ids) > maximum {
 		return nil, false
 	}
 	for _, id := range ids {
@@ -55,19 +64,31 @@ func plexQueueIDs(raw json.RawMessage, minimum int) ([]string, bool) {
 }
 
 func parsePlexQueueRequest(params map[string]json.RawMessage) *plexQueueRequest {
-	v := &plexQueueRequest{}
+	v := &plexQueueRequest{StateVersion: 1}
 	if json.Unmarshal(params["runtime"], &v.Runtime) != nil || !screenshotRuntimePattern.MatchString(v.Runtime) || json.Unmarshal(params["op"], &v.Op) != nil {
 		return nil
+	}
+	count := len(params)
+	if raw, exists := params["state_version"]; exists {
+		if !profileInteger(raw, 2, 2) || v.Op == "preview" {
+			return nil
+		}
+		v.StateVersion = 2
+		count--
 	}
 	switch v.Op {
 	case "play", "preview":
 		var valid bool
 		v.IDs, valid = plexQueueIDs(params["ids"], 1)
-		if len(params) != 3 || !valid {
+		if count != 3 || !valid {
 			return nil
 		}
 	case "status", "next", "previous", "stop":
-		if len(params) != 2 {
+		if count != 2 {
+			return nil
+		}
+	case "repeat":
+		if count != 3 || json.Unmarshal(params["repeat"], &v.Repeat) != nil || (v.Repeat != "none" && v.Repeat != "all") {
 			return nil
 		}
 	default:
@@ -76,11 +97,120 @@ func parsePlexQueueRequest(params map[string]json.RawMessage) *plexQueueRequest 
 	return v
 }
 
+// Only explicit queue requests may negotiate v2. Nil and zero-value request
+// contexts are used by the existing library and generic playback v1 receipts.
+func plexQueueStateLimits(request *plexQueueRequest) (version, items, bytes int) {
+	if request != nil && request.StateVersion == 2 {
+		return 2, maxPlexQueueStateV2Items, maxPlexQueueStateV2ResultBytes
+	}
+	return 1, maxPlexQueueItems, maxPlexQueueResultBytes
+}
+
+func validPlexQueueResponse(raw json.RawMessage, status string, request *plexQueueRequest) bool {
+	if status == "ok" {
+		return validPlexQueueResult(raw, request)
+	}
+	if request.Op == "repeat" {
+		// Common policy/expiry fences can reject before the Plex adapter runs.
+		// Keep their envelope closed and bounded without treating prose as an
+		// enum. CLI display still uses its fixed safe-message allowlist.
+		_, _, maximum := plexQueueStateLimits(request)
+		m, err := decodeObject(raw)
+		var message string
+		return len(raw) <= maximum && err == nil && len(m) == 1 &&
+			profileText(m["error"], maxPlexQueueRepeatErrorBytes) &&
+			json.Unmarshal(m["error"], &message) == nil && message != ""
+	}
+	if request.StateVersion != 2 {
+		// Preserve the legacy negative-envelope contract, including previews.
+		return len(raw) <= maxPlexPreviewResultBytes
+	}
+	// Rejected v2 requests may carry the fixed upgrade-required message rather
+	// than a queue state. Do not add it to the v1 queue-state error vocabulary.
+	_, _, maximum := plexQueueStateLimits(request)
+	if len(raw) > maximum {
+		return false
+	}
+	_, err := decodeObject(raw)
+	return err == nil && validFavoritesTransferJSON(raw)
+}
+
+func validPlexQueueRepeatCapability(raw, base json.RawMessage) bool {
+	m, err := decodeObject(raw)
+	var modes []string
+	if err != nil || len(m) != 2 || !profileInteger(m["version"], 1, 1) ||
+		json.Unmarshal(m["modes"], &modes) != nil || len(modes) != 2 ||
+		!((modes[0] == "none" && modes[1] == "all") || (modes[0] == "all" && modes[1] == "none")) {
+		return false
+	}
+	legacy, err := decodeObject(base)
+	if err != nil || len(legacy) != 3 || !profileInteger(legacy["version"], 1, 1) ||
+		!profileInteger(legacy["max_items"], 1, maxPlexQueueItems) {
+		return false
+	}
+	operations, valid := plexQueueCapabilityOperations(legacy["operations"], true)
+	return valid && operations["status"]
+}
+
+func validPlexQueueStateV2Capability(raw, base json.RawMessage) bool {
+	m, err := decodeObject(raw)
+	if err != nil || len(m) != 5 || !profileInteger(m["version"], 2, 2) ||
+		!profileInteger(m["max_write_items"], maxPlexQueueItems, maxPlexQueueItems) ||
+		!profileInteger(m["max_state_items"], maxPlexQueueStateV2Items, maxPlexQueueStateV2Items) ||
+		!profileInteger(m["max_state_bytes"], maxPlexQueueStateV2ResultBytes, maxPlexQueueStateV2ResultBytes) {
+		return false
+	}
+	operations, valid := plexQueueCapabilityOperations(m["operations"], false)
+	if !valid || len(operations) != 5 {
+		return false
+	}
+	legacy, err := decodeObject(base)
+	if err != nil || len(legacy) != 3 || !profileInteger(legacy["version"], 1, 1) ||
+		!profileInteger(legacy["max_items"], maxPlexQueueItems, maxPlexQueueItems) {
+		return false
+	}
+	baseOperations, valid := plexQueueCapabilityOperations(legacy["operations"], true)
+	if !valid {
+		return false
+	}
+	for operation := range operations {
+		if !baseOperations[operation] {
+			return false
+		}
+	}
+	return true
+}
+
+func plexQueueCapabilityOperations(raw json.RawMessage, allowPreview bool) (map[string]bool, bool) {
+	var operations []string
+	if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &operations) != nil {
+		return nil, false
+	}
+	seen := make(map[string]bool)
+	for _, operation := range operations {
+		switch operation {
+		case "play", "status", "next", "previous", "stop":
+		case "preview":
+			if !allowPreview {
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+		if seen[operation] {
+			return nil, false
+		}
+		seen[operation] = true
+	}
+	return seen, true
+}
+
 func validPlexQueueResult(raw json.RawMessage, request *plexQueueRequest) bool {
 	if request != nil && request.Op == "preview" {
 		return validPlexPreviewResult(raw, request)
 	}
-	if len(raw) > maxPlexQueueResultBytes {
+	version, maxItems, maxBytes := plexQueueStateLimits(request)
+	if len(raw) > maxBytes {
 		return false
 	}
 	m, err := decodeObject(raw)
@@ -102,12 +232,12 @@ func validPlexQueueResult(raw json.RawMessage, request *plexQueueRequest) bool {
 	}
 	var runtime, state, repeat, order string
 	var active *bool
-	if !profileInteger(m["version"], 1, 1) || json.Unmarshal(m["runtime"], &runtime) != nil || !screenshotRuntimePattern.MatchString(runtime) ||
+	if !profileInteger(m["version"], version, version) || json.Unmarshal(m["runtime"], &runtime) != nil || !screenshotRuntimePattern.MatchString(runtime) ||
 		json.Unmarshal(m["active"], &active) != nil || active == nil || json.Unmarshal(m["state"], &state) != nil ||
 		json.Unmarshal(m["repeat"], &repeat) != nil || (repeat != "none" && repeat != "all") || json.Unmarshal(m["order"], &order) != nil || order != "listed" {
 		return false
 	}
-	ids, valid := plexQueueIDs(m["ids"], 0)
+	ids, valid := plexQueueIDsBounded(m["ids"], 0, maxItems)
 	if !valid || (len(ids) == 0 && string(m["index"]) != "null") || (len(ids) > 0 && !profileInteger(m["index"], 0, len(ids)-1)) {
 		return false
 	}
@@ -137,6 +267,9 @@ func validPlexQueueResult(raw json.RawMessage, request *plexQueueRequest) bool {
 			return false
 		}
 		if request.Op == "stop" && state != "idle" {
+			return false
+		}
+		if request.Op == "repeat" && (repeat != request.Repeat || !*active || len(ids) == 0) {
 			return false
 		}
 	}

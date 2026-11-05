@@ -177,36 +177,41 @@ class _Target:
         """One paced, authenticated receipt; no favorites action is selected here."""
         query = "/api/requests?" + urllib.parse.urlencode({"device_id": self.device})
         self.wait(self.now() + remote.POST_INTERVAL)
-        status, queued = self.client.api(query, {"action": "capabilities", "params": {}}, timeout=min(10, self.remaining()))
-        self.remaining()
-        if not remote.valid_queue_ack(status, queued):
-            raise CommandError("invalid_capability_receipt")
-        request_id, delay = queued["id"], 1.5
-        while True:
-            # Discovery is also paced; one capabilities POST, bounded GETs.
-            self.wait(self.now() + delay)
-            try:
-                status, raw = self.client.api_raw(query + "&id=" + request_id, timeout=min(10, self.remaining()))
-            except Exception as error:  # noqa: BLE001 - only safe HTTP codes are inspected
-                if getattr(error, "code", None) in (429, 502, 503, 504):
-                    delay = min(8, delay * 2)
-                    continue
-                raise CommandError("capability_transport_failed",
-                    transport_category=error.category if isinstance(error, self.api.TransportError) else None,
-                    http_status=error.code if isinstance(error, self.api.HTTPError) else None) from None
+        request_id, receipt_status = None, "unknown"
+        try:
+            status, queued = self.client.api(query, {"action": "capabilities", "params": {}}, timeout=min(10, self.remaining()))
             self.remaining()
-            if type(raw) is not bytes or not 0 < len(raw) <= protocol.MAX_RESPONSE_BYTES:
+            if not remote.valid_queue_ack(status, queued):
                 raise CommandError("invalid_capability_receipt")
-            body = self.api.decode_response_json(raw.decode("utf-8"))
-            if status == 202 and body == {"status": "pending"}:
-                delay = 1.5
-                continue
-            if (status != 200 or type(body) is not dict or set(body) != {"id", "status", "data"}
-                    or body["id"] != request_id or body["status"] != "ok"):
-                raise CommandError("capability_unavailable")
-            controls = self.api.capabilities_metadata(body["data"])
-            self.runtime = controls["player"]["runtime"]
-            return controls, body["data"]
+            request_id, delay = queued["id"], 1.5
+            while True:
+                # Discovery is also paced; one capabilities POST, bounded GETs.
+                self.wait(self.now() + delay)
+                try:
+                    status, raw = self.client.api_raw(query + "&id=" + request_id, timeout=min(10, self.remaining()))
+                except Exception as error:  # noqa: BLE001 - only safe HTTP codes are inspected
+                    if getattr(error, "code", None) in (429, 502, 503, 504):
+                        delay = min(8, delay * 2)
+                        continue
+                    raise CommandError("capability_transport_failed",
+                        transport_category=error.category if isinstance(error, self.api.TransportError) else None,
+                        http_status=error.code if isinstance(error, self.api.HTTPError) else None) from None
+                self.remaining()
+                if type(raw) is not bytes or not 0 < len(raw) <= protocol.MAX_RESPONSE_BYTES:
+                    raise CommandError("invalid_capability_receipt")
+                body = self.api.decode_response_json(raw.decode("utf-8"))
+                if status == 202 and body == {"status": "pending"}:
+                    delay = 1.5
+                    continue
+                if (status != 200 or type(body) is not dict or set(body) != {"id", "status", "data"}
+                        or body["id"] != request_id or body["status"] != "ok"):
+                    raise CommandError("capability_unavailable")
+                controls = self.api.capabilities_metadata(body["data"])
+                self.runtime = controls["player"]["runtime"]
+                receipt_status = "ok"
+                return controls, body["data"]
+        finally:
+            remote._emit_receipt(self.client, "capabilities", request_id, receipt_status)
 
     def discover(self, *, status_recovery=False, recovery_only=False):
         controls, data = self.read_capabilities()
