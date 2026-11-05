@@ -109,22 +109,38 @@ class OfflineProfileTest(unittest.TestCase):
             self.assertIn('Local binding required', output)
             self.assertEqual(client.call.call_args_list[-1], mock.call('dev_tv', 'profile_import', {'number': 1, 'profile': document()}))
 
-    def test_unbound_import_guides_loading_before_local_binding(self):
+    def test_unbound_import_distinguishes_native_binding_from_web_loading(self):
         imported = {'provider': 'offline', 'profile': row(number=3, active=False, binding=True),
                     'saved': True, 'binding_required': True}
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'profile.json'
             target.write_text(json.dumps(document()), encoding='utf-8')
-            status, output, error, client = self.run_cli(
-                ['profile', 'import', '3', str(target)], [caps(), imported])
-        self.assertEqual((status, error), (0, ''))
-        self.assertLess(output.index('first load profile 3'),
-                        output.index('Bind loaded profile to connected sources'))
-        self.assertIn('wait for scanning to finish', output)
-        self.assertIn('Then load the same profile again', output)
-        self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}),
-                         mock.call('dev_tv', 'profile_import', {'number': 3, 'profile': document()})])
+            for platform in ('browser', 'tauri', 'webos-native'):
+                with self.subTest(platform=platform):
+                    capability = caps()
+                    capability['player']['platform'] = platform
+                    status, output, error, client = self.run_cli(
+                        ['profile', 'import', '3', str(target)], [capability, imported])
+                    self.assertEqual((status, error), (0, ''))
+                    native, web = output.split('Web/Tauri players:', 1)
+                    self.assertIn('Native player (single-folder profiles)', native)
+                    self.assertIn("Choose this device's folder", native)
+                    self.assertIn('Binding selects the profile', native)
+                    self.assertIn('an unbound profile cannot be loaded', native)
+                    self.assertNotIn('first load', native)
+                    self.assertLess(web.index('first load profile 3'),
+                                    web.index('Bind loaded profile to connected sources'))
+                    self.assertIn('wait for scanning to finish', web)
+                    self.assertIn('Then load the same profile again', web)
+                    self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}),
+                                     mock.call('dev_tv', 'profile_import', {'number': 3, 'profile': document()})])
 
+            status, output, error, client = self.run_cli(
+                ['profile', 'import', '3', str(target)], [caps(), imported], True)
+            self.assertEqual((status, error, json.loads(output)), (0, '', imported))
+            self.assertEqual(client.call.call_count, 2)
+
+        # Web-based players can acknowledge loading a profile that still needs binding.
         loaded = {'provider': 'offline', 'profile': row(number=3, binding=True),
                   'dispatched': True, 'binding_required': True}
         status, output, error, client = self.run_cli(['profile', 'load', '3'], [loaded])

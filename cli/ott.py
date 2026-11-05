@@ -8212,7 +8212,10 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action in ("profile_save", "profile_import"):
         print(f"Local videos profile saved: {data['profile']['number']}: {clean(data['profile']['name'])}. Playback was not started.")
         if data["binding_required"]:
-            print(f"Local binding required: first load profile {data['profile']['number']}. In Settings → Provider → Local videos, "
+            print("Local binding required. Native player (single-folder profiles): open Providers → Local → Profiles, "
+                  "choose the imported profile's 'Choose this device's folder' action and bind its folder. "
+                  "Binding selects the profile; an unbound profile cannot be loaded.")
+            print(f"Web/Tauri players: first load profile {data['profile']['number']}. In Settings → Provider → Local videos, "
                   "connect the original sources, wait for scanning to finish, and choose Bind loaded profile to connected sources. "
                   "Then load the same profile again.")
     elif action == "profiles":

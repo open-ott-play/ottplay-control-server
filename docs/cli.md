@@ -3075,7 +3075,7 @@ ott d1 profiles
 ott d1 profile save 1 "Family movies"
 ott d1 profile export 1 family-movies.json
 ott d1 profile import 2 family-movies.json
-ott d1 profile load 2
+ott d1 profile load 2          # follow the platform-specific binding steps below if required
 # The original selector and short command still work:
 ott d1 profile 1
 ott d1 prof load 1
@@ -3102,16 +3102,28 @@ access. Source/selected names themselves may be personal information.
 
 Import saves into an **inactive** slot and does not start playback. On the same
 installation, the original binding can be reused only while its matching sources
-and local permissions still exist. On another device, browser profile or origin,
-first run `ott PLAYER profile load N` for the imported slot. This selects the
-profile and opens local recovery when its binding is unavailable. In
+and local permissions still exist. When local binding is required, use the
+receiving player's flow:
+
+**Native player:** for a single-folder profile, open **Providers → Local →
+Profiles** and choose the imported profile's **Choose this device's folder**
+action. Bind it to the receiving device's folder. This binding action selects
+the profile; a separate load is not required. Loading an unbound imported profile
+is rejected. The native binding editor supports one folder, not a multi-source
+or individually granted file profile.
+
+**Web/Tauri players:** first run `ott PLAYER profile load N` for the imported
+slot. This selects the profile and opens local recovery when its binding is
+unavailable. In
 **Settings → Provider → Local videos**, connect the original files/folder,
 wait for scanning to finish, then choose
 **Bind loaded profile to connected sources**.
-The binding action is available only for a loaded profile. An import never guesses
-a folder by name or recreates an OS or browser permission. Browser permission
-prompts require local interaction. After binding, load the same profile again;
-the exact selected file must still exist.
+This web binding action is available only for a loaded profile. After binding,
+load the same profile again.
+
+An import never guesses a folder by name or recreates an OS or browser permission.
+Browser permission prompts require local interaction. The exact selected file
+must still exist.
 
 Portable documents are version 1, at most 12 KiB compact JSON, with at most 32
 sources. Unknown fields, credentials/access objects, absolute or traversal paths,
