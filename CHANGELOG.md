@@ -131,6 +131,67 @@
   explicit uncertainty recovery. Source examples do not establish that matching
   CLI, controller and player components are installed.
 
+## [0.1.11] - 2026-11-04
+
+### Added
+
+- Add `ott PLAYER shutdown` for an explicitly bound Android ADB target or an
+  existing controller-managed television. Include read-only status, identity-bound
+  ADB setup, single-device unbinding and parallel player groups. Supported projector
+  firmware can complete its specifically recognized system power-off confirmation.
+- Add capability-gated Local roots, folder paging, expanded scanning and selection
+  through opaque handles. Explicit Connect persists a source binding; Play and
+  Shuffle remain temporary. Existing source-name and path commands are preserved.
+- Negotiate Plex queue state v2 for larger restored queues and independently
+  negotiate queue repeat controls. Keep public queue creation capped at 500 items
+  and preserve v1 preview and legacy response contracts.
+- Add managed Plex server list and temporary selection protocols with fresh
+  runtime-bound capabilities and receiver-specific contexts. Players that do not
+  advertise managed server selection continue to refuse these commands safely.
+- Add bounded native CLI acceptance helpers and a runbook with exact supported
+  commands, private evidence, deadlines and process-group cleanup.
+
+### Fixed
+
+- Preserve genuine Favorites operation receipts across custom transports so a
+  later refusal cannot conceal an earlier uncertain write.
+- Preserve Local display labels containing spaces, dots and path punctuation.
+  Align stored Stalker comparisons with native MAC whitespace and bounded names.
+- Explain an unavailable controller command journal before a resumable preset
+  attempt sends any commands. Preserve non-503 errors and existing checkpoints.
+- Clean newly created acceptance staging after pre-launch errors or interruption.
+  Retain post-launch evidence, and classify managed selection refusals as uncertain
+  when the CLI receipt cannot distinguish an uncertain activation outcome.
+- Reconcile a lost release-create response only through bounded checks of that
+  invocation's matching empty draft, without replaying the create request. Recheck
+  the tag and automatic release source immediately before publication; changed
+  source leaves the draft unpublished. Run quality/security checks even when
+  release preparation fails, and validate source-bound changelog sections in CI.
+
+### Upgrade
+
+- Install the complete `cli/` directory from one reviewed revision, including
+  `device_power.py`; updating the controller alone does not update the CLI. Preserve
+  private configuration, device bindings, checkpoints and recovery evidence.
+- Update the controller and use a player advertising each requested extension.
+  This controller/CLI release does not install or enable those capabilities in
+  existing native players; consult the command runbooks for player requirements.
+- Configure ADB shutdown explicitly and verify the target with `shutdown status`.
+  Firmware may deny power-off; accepted or disconnected does not mean power-off
+  is confirmed. A powered-off projector may require its physical remote to wake.
+
+### Security
+
+- Keep device identity checks, separate managed list/select permissions, bounded
+  raw request/response validation and exact runtime/context/handle correlation.
+  Missing support fails closed. Ambiguous mutations are not automatically retried.
+- Shutdown never substitutes a power toggle, forced reboot or privilege escalation.
+  An explicit ADB failure does not silently switch to another television transport.
+  Unknown or changed system dialogs are left for manual confirmation.
+- Keep credentials and uncertain-operation journals in private evidence. Release
+  recovery preserves immutable tags, source/plan binding and the allocation ledger;
+  it does not overwrite releases or reset publication counters.
+
 ## [0.1.10] - 2026-11-03
 
 ### Fixed
