@@ -34,6 +34,8 @@ Each case needs its own new output directory. Parameterized cases take `--params
 
 After a successful response and reaped child the helper removes its staged code, credentials and temporary home; the private evidence directory remains. Unknown, rejected and unsupported outcomes retain staging, including any Favorites recovery journal. Preserve that evidence until the runtime owner reconciles the result; cleanup must not erase a possibly pending operation.
 
+For `plex_servers_select`, a rejected or unsupported receipt is conservatively reported as `unknown` with reason `managed_selection_unconfirmed`. Those wire statuses can carry an uncertain activation outcome, but the CLI receipt does not expose that typed detail. The helper preserves the original receipt and private evidence without parsing human error text or replaying the selection. Read-only server listing retains its ordinary refusal classification.
+
 If staging fails before process launch, the helper attempts to remove only the newly created case directory and reports the original error. Existing case directories are never removed or reused. A filesystem error can also prevent cleanup; inspect the private output path after such a failure.
 
 ### Supported helper cases

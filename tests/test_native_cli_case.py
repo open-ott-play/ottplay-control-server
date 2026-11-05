@@ -155,10 +155,11 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
 
     def test_prespawn_write_failure_removes_only_new_private_staging(self):
         prepared = self.prepare()
-        for failed_name in ("ca.pem", "cli.json"):
-            with self.subTest(failed_name=failed_name):
-                output = self.root / ("failed-" + failed_name)
-                failure = OSError("injected staging failure")
+        for failed_name, error_type in ((name, error) for name in ("ca.pem", "cli.json")
+                                        for error in (OSError, TypeError, KeyboardInterrupt)):
+            with self.subTest(failed_name=failed_name, error_type=error_type.__name__):
+                output = self.root / ("failed-" + failed_name + "-" + error_type.__name__)
+                failure = error_type("injected staging failure")
                 original_write = case.write_private
 
                 def fail_after_credentials(path, data):
@@ -169,7 +170,7 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
 
                 with mock.patch.object(case, "write_private", side_effect=fail_after_credentials), \
                         mock.patch.object(case, "capture") as capture:
-                    with self.assertRaises(OSError) as caught:
+                    with self.assertRaises(error_type) as caught:
                         case.run_case(prepared, execute=True, output=str(output), clock=lambda: 10)
                 self.assertIs(caught.exception, failure)
                 capture.assert_not_called()
@@ -277,6 +278,22 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
     def test_rejected_receipt_is_distinct_from_unknown(self):
         report, _, _, _ = self.run_inert(self.prepare("plex_servers_list"), b"", self.receipt("plex_servers", "rejected"), code=1)
         self.assertEqual(report["result"], "rejected")
+
+    def test_managed_selection_refusal_keeps_activation_uncertain(self):
+        prepared = self.prepare("plex_servers_select", {"server_id": "PMS-1", "context": "c1"}, True)
+        for status in ("rejected", "unsupported"):
+            for index, human_error in enumerate((b"", b"Error: The request was rejected; nothing changed.\n")):
+                output = self.root / ("select-" + status + "-" + str(index))
+                stderr = self.receipt("plex_servers", status) + human_error
+                with self.subTest(status=status, human_error=bool(human_error)), mock.patch.object(
+                        case, "capture", return_value=(1, b"", stderr, None, True, True)) as capture:
+                    report, response = case.run_case(prepared, execute=True, output=str(output), clock=lambda: 10)
+                self.assertEqual((report["result"], report.get("reason")), ("unknown", "managed_selection_unconfirmed"))
+                self.assertEqual(report["receipts"][0]["status"], status)
+                self.assertEqual((report["cli_invocations"], report["automatic_retries"]), (1, 0))
+                self.assertIsNone(response)
+                self.assertTrue((output / "cli.json").is_file())
+                capture.assert_called_once()
 
     def test_later_favorite_refusal_cannot_settle_earlier_unknown_commit(self):
         stderr = (self.receipt() + self.receipt("favorites_global", "unknown", "b") +

@@ -527,7 +527,7 @@ def run_case(prepared, *, execute=False, output=None, seconds=45, byte_limit=MAX
         env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(root / "home"), "TMPDIR": str(root / "tmp"),
                "LANG": "en_US.UTF-8", "SSL_CERT_FILE": str(root / "ca.pem"), "NO_PROXY": "127.0.0.1,localhost",
                "no_proxy": "127.0.0.1,localhost", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
-    except (OSError, CaseError):
+    except BaseException:
         # We own this newly created directory and have not launched a child.
         # Post-spawn uncertainty is handled separately and keeps its evidence.
         try:
@@ -559,7 +559,12 @@ def run_case(prepared, *, execute=False, output=None, seconds=45, byte_limit=MAX
                 "unconfirmed_operation")
         if target[-1]["status"] in ("rejected", "unsupported"):
             require(type(code) is int and code > 0, "unconfirmed_operation")
-            report["result"] = target[-1]["status"]
+            if prepared.case == "plex_servers_select":
+                # Both statuses may carry outcome_unknown. The CLI's receipt
+                # omits that typed detail, so do not infer a safe refusal from it.
+                report.update(result="unknown", reason="managed_selection_unconfirmed")
+            else:
+                report["result"] = target[-1]["status"]
         else:
             require(type(code) is int and code == 0 and
                     all(row["status"] == "ok" for row in rows),
