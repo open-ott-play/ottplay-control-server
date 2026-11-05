@@ -193,6 +193,24 @@ class PresetSessionTests(unittest.TestCase):
         if os.name != 'nt':
             self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
+    def test_unavailable_journal_stops_before_commands_and_releases_lock(self):
+        with mock.patch.object(self.player, 'api', side_effect=ott.HTTPError(503)):
+            with self.assertRaisesRegex(ott.Error, "Controller command journal is unavailable"):
+                session.Session(ott, self.player, 'dev_tv', self.name, self.preset, self.path, False)
+        self.assertEqual(self.player.calls, [])
+        self.assertFalse(self.path.exists())
+        current = session.Session(ott, self.player, 'dev_tv', self.name, self.preset, self.path, False)
+        current.close()
+
+    def test_other_journal_http_errors_are_not_reclassified(self):
+        failure = ott.HTTPError(401)
+        with mock.patch.object(self.player, 'api', side_effect=failure):
+            with self.assertRaises(ott.HTTPError) as caught:
+                session.Session(ott, self.player, 'dev_tv', self.name, self.preset, self.path, False)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(self.player.calls, [])
+        self.assertFalse(self.path.exists())
+
     def test_completed_steps_are_rechecked_after_drift(self):
         self.assertEqual(self.run_session()['status'], 'loaded')
         self.player.exact['m3u', 1]['playlist'] = 'https://other.example'
