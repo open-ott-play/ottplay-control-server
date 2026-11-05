@@ -771,8 +771,12 @@ ott l,lg2 status --details
 capabilities, then requests diagnostic version 3 when advertised. Unsupported
 players receive no versioned status request. Both reads share the command's
 timeout, and neither changes playback. Ordinary status remains unchanged.
+If the reply includes optional `video_evidence`, the details also show window
+presentation permission, callback counts and the raw sink report. These are
+diagnostic observations, not confirmation of visible video or audible sound.
 See [native playback diagnostics](native-playback-diagnostics.md#reading-the-last-failure-from-live-status)
-for the failure fields and their limits.
+for the failure fields and [callback evidence](native-playback-diagnostics.md#optional-callback-evidence-in-status)
+for its limits. No additional request is made for callback evidence.
 
 Illustrative output for a standby player; the advertised command list is
 shortened here, and the version is an example:

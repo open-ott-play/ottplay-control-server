@@ -96,6 +96,36 @@ suffix, up to 145 characters total. This prevents valid current playback from
 disappearing from the CLI summary. Retained `state` / `history` validation is
 unchanged. Neither an ID nor an accepted request confirms a visible picture.
 
+## Optional callback evidence in status
+
+When the player supplies `video_evidence` version 1, `status --details` also shows
+its window-present permission, position-callback count and latest raw sink
+report. This uses the same status response: there is no extra request, capability
+probe or controller upgrade for this additive field. Ordinary text status stays
+unchanged; JSON status preserves the object, including versions it cannot render.
+An unsupported or malformed object does not remove the existing playback status.
+
+For example, a supported reply can add these two lines:
+
+```text
+Video evidence: window present permission=allowed; position callbacks=12.
+Sink raw report: type=49; callbacks=3; firmware major=5; raw=0.
+```
+
+Window-present permission is the application's permission to draw its UI, not
+TV power or proof of a visible picture. Position callbacks and sink-report
+callbacks count handler arrivals, not decoded or displayed frames. The sink's
+raw value is a signed 64-bit decimal string; zero is an observed value, while
+`sink_report: null` means no report. Firmware major zero means unknown and uses
+the player's older callback mapping. `native: null` means no current owned native
+sample is available, including during replacement or teardown.
+
+These counters reset for each physical native load. Position callbacks can wrap
+at 32 bits; the sink callback count saturates. No physical-load identifier is
+exposed in this object, so two samples cannot establish a reliable counter delta
+or frame rate. Neither increasing counters nor window-present permission confirms
+the picture or sound on the television.
+
 ## Reading the measurements
 
 The phase describes the native playback pipeline. Counters and event ages belong

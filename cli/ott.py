@@ -6130,10 +6130,51 @@ def print_failure_details(data):
         print(f"  {key + ':':<22}{value}")
 
 
+def video_evidence_lines(value):
+    """Project the closed v1 observation fields without changing the raw status."""
+    invalid = ("Video evidence: unavailable (invalid metadata).",)
+
+    def uint32(number, minimum=0):
+        return type(number) is int and minimum <= number <= 4294967295
+
+    if (type(value) is not dict or value.keys() != {"version", "window_present_allowed", "native"}
+            or type(value["version"]) is not int or value["version"] != 1
+            or type(value["window_present_allowed"]) is not bool):
+        return invalid
+    permission = "allowed" if value["window_present_allowed"] else "not allowed"
+    first = "Video evidence: window present permission=" + permission
+    native = value["native"]
+    if native is None:
+        return (first + "; native callbacks not reported.",)
+    if (type(native) is not dict or native.keys() != {"position_callbacks", "sink_report"}
+            or not uint32(native["position_callbacks"])):
+        return invalid
+    first += "; position callbacks=" + str(native["position_callbacks"]) + "."
+    sink = native["sink_report"]
+    if sink is None:
+        return (first, "Sink raw report: not reported.")
+    if (type(sink) is not dict or sink.keys() != {"callback_type", "callback_count", "firmware_major", "raw_value"}
+            or not uint32(sink["callback_count"], 1) or not uint32(sink["firmware_major"])
+            or type(sink["callback_type"]) is not int
+            or sink["callback_type"] != (47 if sink["firmware_major"] < 5 else 49)):
+        return invalid
+    raw = sink["raw_value"]
+    if (type(raw) is not str or len(raw) > 20
+            or re.fullmatch(r"(?:0|-?[1-9][0-9]{0,18})", raw) is None
+            or not -(1 << 63) <= int(raw) < (1 << 63)):
+        return invalid
+    return (first, f"Sink raw report: type={sink['callback_type']}; callbacks={sink['callback_count']}; "
+            f"firmware major={sink['firmware_major']}; raw={raw}.")
+
+
 def print_player_status(data, name, *, details=False):
     print_player_help(data, name)
     print_player_summary(data, name)
     if details:
+        if "video_evidence" in data:
+            print()
+            for line in video_evidence_lines(data["video_evidence"]):
+                print("  " + line)
         print_failure_details(data)
 
 
