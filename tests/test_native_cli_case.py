@@ -1,4 +1,4 @@
-"""Unit tests for the attach-only helper; all CLI processes are inert doubles."""
+"""Unit tests for the attach-only helper; real processes use synthetic Python only."""
 import importlib.util
 import json
 from pathlib import Path
@@ -344,6 +344,76 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
         self.assertEqual(kill.call_args_list, [mock.call(12345, case.signal.SIGTERM), mock.call(12345, case.signal.SIGKILL)])
         process.stdout.close.assert_called_once()
         process.stderr.close.assert_called_once()
+
+    def test_capture_deadline_stops_real_child_and_descendant(self):
+        ps = case.shutil.which("ps")
+        if ps is None:
+            self.skipTest("POSIX ps is required to distinguish zombies from running descendants")
+        ready = self.root / "descendant-ready.json"
+        descendant = (
+            "import json, os, signal, sys\n"
+            "from pathlib import Path\n"
+            "ready = Path(sys.argv[1])\n"
+            "pending = ready.with_suffix('.pending')\n"
+            "pending.write_text(json.dumps({'pid': os.getpid(), 'ppid': os.getppid(), 'pgid': os.getpgrp()}))\n"
+            "pending.replace(ready)\n"
+            "signal.pause()\n"
+        )
+        parent = (
+            "import signal, subprocess, sys\n"
+            "signal.signal(signal.SIGTERM, lambda *_: None)\n"
+            f"child = subprocess.Popen([sys.executable, '-c', {descendant!r}, sys.argv[1]])\n"
+            "child.wait()\n"
+        )
+        spawned = []
+        real_spawn = case.subprocess.Popen
+
+        def launch(*args, **kwargs):
+            # Fail before launching if isolation regresses: never signal our test group.
+            self.assertIs(kwargs.get("start_new_session"), True)
+            process = real_spawn(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        end = case.time.monotonic() + 5
+
+        def handshake_clock():
+            # A complete, atomic readiness record triggers the deadline; no startup sleep.
+            return end if ready.exists() else case.time.monotonic()
+
+        try:
+            with mock.patch.object(case.subprocess, "Popen", side_effect=launch):
+                code, _, _, reason, cleanup, launched = case.capture(
+                    [sys.executable, "-B", "-c", parent, str(ready)],
+                    {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+                    str(self.root), end, end + 5, 1024, clock=handshake_clock)
+            self.assertTrue(ready.is_file(), "descendant did not publish readiness within five seconds")
+            identity = json.loads(ready.read_text())
+            self.assertEqual(len(spawned), 1)
+            self.assertEqual((identity["ppid"], identity["pgid"]), (spawned[0].pid, spawned[0].pid))
+            self.assertEqual((reason, cleanup, launched), ("deadline", True, True))
+            self.assertIsInstance(code, int)
+            self.assertIsNotNone(spawned[0].poll())
+            observation_end = case.time.monotonic() + 2
+            while True:
+                observed = case.subprocess.run([ps, "-o", "stat=", "-p", str(identity["pid"])],
+                                               capture_output=True, text=True, timeout=1)
+                self.assertIn(observed.returncode, (0, 1))
+                self.assertFalse(observed.stderr.strip())
+                state = observed.stdout.strip()
+                if not state or state.startswith("Z"):
+                    # An orphan zombie is already stopped; its reaping belongs to init.
+                    break
+                self.assertLess(case.time.monotonic(), observation_end, "descendant is still running")
+                case.time.sleep(0.01)  # Bounded state polling, not a guessed shutdown delay.
+        finally:
+            # Also clean up when an assertion or a deliberately broken implementation fails.
+            for process in spawned:
+                try:
+                    case.os.killpg(process.pid, case.signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=2)
 
     def test_capture_shared_deadline_does_not_start_a_second_process(self):
         process = mock.Mock(pid=12345, returncode=0)

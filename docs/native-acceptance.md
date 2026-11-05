@@ -20,7 +20,7 @@ native_case() {
 }
 ```
 
-Run each case through the reviewed acceptance harness with an agreed whole-run deadline and bounded stdout/stderr capture. Do not start a second Session or server. Keep raw output private; stop capture on its limit instead of treating truncated JSON as evidence. The CLI deadline is not a substitute for process cleanup and output limits.
+Use the reviewed helper only for the closed cases listed below. Other CLI templates require a separately reviewed runner that provides a whole-run deadline, bounded stdout/stderr capture, process-group cleanup and receipt validation; the shell function above supplies none of those guarantees. Do not start a second Session or server. Keep raw output private; stop capture on its limit instead of treating truncated JSON as evidence. The CLI deadline is not a substitute for process cleanup and output limits.
 
 The entry point is [native_cli_case.py](../scripts/native_cli_case.py). The runtime owner supplies a private handoff with the pinned CLI module set, configuration, credentials, CA, owner receipt, exact loopback HTTPS origin, one alias/device and an unexpired monotonic deadline from this Mac. Validate the plan before executing it:
 
@@ -32,7 +32,67 @@ python3 scripts/native_cli_case.py --handoff "$HANDOFF" --case caps \
 
 Each case needs its own new output directory. Parameterized cases take `--params-file "$PRIVATE_PARAMS"`; mutation cases additionally require `--allow-mutation`. Use the harness's closed case names and parameter validation, not arbitrary shell arguments. `response_received` means a validated CLI response was captured, never that Mac acceptance passed. Retain its binding, stdout, stderr and response files privately; export only the public `result.json` projection. A stale handoff must be replaced by the runtime owner, not extended by the caller. Existing Session-based acceptance may import the helper rather than start another session.
 
-After a successful response and reaped child the helper removes its private staging directory. Unknown, rejected and unsupported outcomes retain staging, including any Favorites recovery journal. Preserve that evidence until the runtime owner reconciles the result; cleanup must not erase a possibly pending operation.
+After a successful response and reaped child the helper removes its staged code, credentials and temporary home; the private evidence directory remains. Unknown, rejected and unsupported outcomes retain staging, including any Favorites recovery journal. Preserve that evidence until the runtime owner reconciles the result; cleanup must not erase a possibly pending operation.
+
+If staging fails before process launch, the helper attempts to remove only the newly created case directory and reports the original error. Existing case directories are never removed or reused. A filesystem error can also prevent cleanup; inspect the private output path after such a failure.
+
+### Supported helper cases
+
+Choose the exact `--case` name below. Braced values come from the named fields in the private `--params-file` JSON object; cases with no fields use `{}` (or omit that file). A star means `--allow-mutation` is required. These are the helper's emitted arguments after the target alias, not additional shell commands to execute.
+
+| Case | JSON fields | Emitted CLI arguments |
+| --- | --- | --- |
+| `caps` | None | `caps` |
+| `status` | None | `status` |
+| `profiles` | None | `profiles` |
+| `settings_schema` | None | `settings schema` |
+| `setting_read` | `setting` | `setting {setting}` |
+| `settings_write` * | `setting`, `value` | `setting {setting} {value}` |
+| `profile_select` * | `number` | `profile {number}` |
+| `plex_status` | None | `plex status` |
+| `plex_libraries` | None | `plex libraries` |
+| `plex_library_preview` | `library_id` | `plex library --preview id:{library_id}` |
+| `plex_preview` | `ids` | `plex preview {ids...}` |
+| `plex_play` * | `ids`, optional `shuffle` | `plex play [--shuffle] {ids...}` |
+| `plex_next` * | None | `plex next` |
+| `plex_previous` * | None | `plex prev` |
+| `plex_stop` * | None | `plex stop` |
+| `plex_repeat` * | `mode` | `plex repeat {mode}` |
+| `pause` * | None | `pause` |
+| `resume` * | None | `resume` |
+| `relative_seek` * | `seconds` | `seek {seconds:+d}s` |
+| `categories` | None | `categories` |
+| `channels_page` | `limit`, `offset` | `s --limit {limit} --offset {offset}` |
+| `tracks_list` | None | `tracks` |
+| `tracks_audio` * | `id` | `tracks audio id:{id}` |
+| `tracks_subtitle` * | `id` | `tracks subtitle id:{id}` |
+| `tracks_subtitle_off` * | None | `tracks subtitle off` |
+| `favorites_list` | None | `fav list` |
+| `favorites_global_current` | None | `fav global current` |
+| `favorites_add` * | None | `fav add` |
+| `favorites_play` * | `id` | `fav play id:{id}` |
+| `favorites_remove` * | `id` | `fav remove id:{id}` |
+| `plex_servers_list` | None | `plex servers` |
+| `plex_servers_select` * | `server_id`, `context` | `plex servers select {server_id} --context {context}` |
+| `local_roots` | None | `local roots` |
+| `local_sources` | None | `local sources` |
+| `local_browse` | `entry_id`, `generation` | `local browse {entry_id} --generation {generation}` |
+| `local_select` * | `select_id`, `generation` | `local select {select_id} --generation {generation}` |
+| `local_handle_play` * | `handle` | `local play --handle {handle}` |
+| `local_handle_shuffle` * | `handle` | `local shuffle --handle {handle}` |
+| `local_connect_handle` * | `handle` | `local connect --handle {handle}` |
+
+`ids` is an array of numeric ID strings; `shuffle` is a Boolean. `number`, `value`, `seconds`, `limit` and `offset` are integers; other fields are strings. The helper accepts only `interfaceMode`, `bufSize` and `uiFontScale` settings. Use the live descriptor's numeric setting value, not the raw CLI's `modern`/`classic` aliases. Repeat `mode` is `none` or `all`; positive and negative `seconds` become an explicitly signed seek. Token, range and capability checks still apply. Bare CLI `plex repeat` reads status; use helper case `plex_status` for that observation.
+
+For example, the private JSON `{"seconds":-10}` selects a ten-second backward seek:
+
+```sh
+python3 scripts/native_cli_case.py --handoff "$HANDOFF" --case relative_seek \
+  --params-file "$PRIVATE_PARAMS" --allow-mutation \
+  --execute --output "$NEW_PRIVATE_CASE_DIR" --seconds 45
+```
+
+The following raw templates elsewhere in this runbook are **outside this helper's case set**: `provider`, `profile-config`, `categories select`, `plex setup`, `kiosk`, named `fav add`, arbitrary settings/`--value-file`, and Local cursor paging or expanded scanning (`more`). For a nameless current-item favorite, the helper supports `favorites_add`; it cannot pass the template's custom name. `local_browse` accepts an entry ID and generation only. Do not pass unsupported templates as invented `--case` names or treat the shell function as a bounded harness. Their acceptance stays pending until the runtime owner supplies a reviewed bounded runner or the helper is explicitly extended.
 
 `--receipt` writes safe per-RPC receipts to stderr; discovery can produce several receipts for one command. Stderr can also contain progress and errors, so it is not a JSON-only stream. `--json` does not make all stdout public: names, paths and context tokens can still be present. Export only an allowlisted summary: case, action, request ID, status, runtime, schema version, counts/index, closed reason codes and relevant booleans. Never export tokens, URLs, file paths, arbitrary errors, settings values or source titles.
 
