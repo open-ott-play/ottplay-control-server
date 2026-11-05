@@ -3185,8 +3185,12 @@ player controls; the separate `ott l tv volume 30` command controls system volum
 
 Use the range reported by `ott lg-native settings` for interface text scale;
 different native versions can advertise different limits.
-The engine is fixed to Native and the interface to Modern; their settings are
-read-only. Browser buffering and hls.js examples do not apply to this application.
+The engine is fixed to Native. Read `ott lg-native setting interfaceMode` for
+the current interface and its supported choices and write access. Updated native
+builds offer Classic (`0`) and Modern (`1`); older builds may expose only a
+read-only interface setting. The `classic_active` provider-context flag describes
+source ownership, not the interface mode. Browser buffering and hls.js examples
+do not apply to this application.
 
 Plex, Xtream and Stalker support listing and selecting their native numbered
 profiles, in addition to M3U, VPortal and Local:

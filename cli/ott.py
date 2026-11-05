@@ -5760,7 +5760,7 @@ def print_player_help(data, name):
         if native:
             print(f"  {prefix} setting uiFontScale [100]  — read/save interface text scale (see settings for limits)")
             print(f"  {prefix} setting players  — read the fixed Native engine")
-            print(f"  {prefix} setting interfaceMode  — read the fixed Modern interface")
+            print(f"  {prefix} setting interfaceMode  — inspect the interface mode and supported choices")
         else:
             print(f"  {prefix} setting bufSize [3]  — read/save buffering seconds; applies to the next stream")
             print(f"  {prefix} setting players [hls.js]  — read/save a supported engine for this provider/profile")

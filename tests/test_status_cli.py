@@ -181,7 +181,7 @@ class StatusCliTest(unittest.TestCase):
                 self.assertNotIn('50–150', out)
                 self.assertNotIn('20–200', out)
                 self.assertIn('setting players  — read the fixed Native engine', out)
-                self.assertIn('setting interfaceMode  — read the fixed Modern interface', out)
+                self.assertIn('setting interfaceMode  — inspect the interface mode and supported choices', out)
                 self.assertNotIn('bufSize', out)
                 self.assertNotIn('hls.js', out)
             else:
