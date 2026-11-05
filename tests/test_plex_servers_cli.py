@@ -259,7 +259,7 @@ class PlexServersTest(unittest.TestCase):
             self.assertEqual((code, out, len(transport.posts)), (1, "", 2), failure)
             self.assertIn("may", err, failure)
             self.assertNotIn("activated temporarily", err)
-            self.assertNotIn("no server command was sent", err)
+            self.assertNotIn("no server command was sent", err.lower())
 
     def test_raw_negative_receipts_reach_transport_validation(self):
         names = ("whole-reply-bytes-65537", "duplicate-outer-data", "duplicate-runtime", "escaped-duplicate-row-name",
