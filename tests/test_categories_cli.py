@@ -244,6 +244,89 @@ class CategoriesCliTest(unittest.TestCase):
             'runtime': 'page-one', 'catalog': 'source-one', 'category': 'folder-42', 'offset': 0, 'limit': 200}))
         self.assertEqual(len(calls), 3)
 
+    def test_native_reordered_channels_keep_projection_order_and_exact_ids(self):
+        caps = capabilities()
+        caps['player']['platform'] = 'webos-native'
+        categories = category_page([{'id': 'all', 'name': 'All', 'count': 2}],
+                                   provider='m3u', selected='all')
+        # Native organization order is independent of the raw catalog numbers.
+        rows = [{'id': 'beta', 'number': 2, 'name': 'Beta'},
+                {'id': 'alpha', 'number': 1, 'name': 'Alpha'}]
+        page = channel_page(rows, category='all')
+        code, out, err, calls = self.run_cli(['s'], [caps, categories, page])
+        self.assertEqual((code, out, err), (0, '2: Beta\n1: Alpha\n', ''))
+        self.assertEqual([call.args[1] for call in calls], ['capabilities', 'categories', 'channels'])
+
+        ack = {'dispatched': True, 'channel': rows[1]}
+        code, _, err, calls = self.run_cli(['play', 'id:alpha'], [caps, categories, page, ack])
+        self.assertEqual((code, err), (0, 'Channel switch requested: 1: Alpha\n'))
+        self.assertEqual(calls[-1], mock.call('dev_tv', 'play_catalog',
+                                           {'catalog': 'category-one', 'id': 'alpha'}))
+        self.assertEqual(len(calls), 4)
+
+    def test_native_reordered_channels_keep_projection_order_across_pages(self):
+        caps = capabilities()
+        caps['player']['platform'] = 'webos-native'
+        caps['categories']['maxPageSize'] = 1
+        categories = category_page([{'id': 'all', 'name': 'All', 'count': 3}],
+                                   provider='m3u', selected='all')
+        rows = [{'id': 'gamma', 'number': 3, 'name': 'Gamma'},
+                {'id': 'alpha', 'number': 1, 'name': 'Alpha'},
+                {'id': 'beta', 'number': 2, 'name': 'Beta'}]
+        pages = [channel_page([row], category='all', offset=index, total=3, has_more=index < 2)
+                 for index, row in enumerate(rows)]
+        code, out, err, calls = self.run_cli(['s'], [caps, categories] + pages, True)
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(json.loads(out)['channels'], rows)
+        self.assertEqual([call.args[1] for call in calls],
+                         ['capabilities', 'categories', 'channels', 'channels', 'channels'])
+        self.assertEqual([call.args[2] for call in calls[2:]], [
+            {'runtime': 'page-one', 'catalog': 'source-one' if index == 0 else 'category-one',
+             'category': 'all', 'offset': index, 'limit': 1} for index in range(3)])
+
+    def test_native_nonzero_page_can_follow_a_higher_numbered_primer(self):
+        caps = capabilities()
+        caps['player']['platform'] = 'webos-native'
+        categories = category_page([{'id': 'all', 'name': 'All', 'count': 3}],
+                                   provider='m3u', selected='all')
+        primer = channel_page([{'id': 'gamma', 'number': 3, 'name': 'Gamma'}],
+                              category='all', total=3, has_more=True)
+        rows = [{'id': 'alpha', 'number': 1, 'name': 'Alpha'},
+                {'id': 'beta', 'number': 2, 'name': 'Beta'}]
+        page = channel_page(rows, category='all', offset=1, total=3)
+        code, out, err, calls = self.run_cli(['s', '--limit', '2', '--offset', '1'],
+                                           [caps, categories, primer, page], True)
+        self.assertEqual((code, err), (0, ''))
+        data = json.loads(out)
+        self.assertEqual((data['offset'], data['channels']), (1, rows))
+        self.assertEqual([call.args[1] for call in calls],
+                         ['capabilities', 'categories', 'channels', 'channels'])
+        self.assertEqual(calls[-1], mock.call('dev_tv', 'channels', {
+            'runtime': 'page-one', 'catalog': 'category-one', 'category': 'all',
+            'offset': 1, 'limit': 2}))
+
+    def test_channel_number_uniqueness_still_applies_within_pages_across_pages_and_primer(self):
+        rows = [{'id': 'beta', 'number': 2, 'name': 'Beta'},
+                {'id': 'alpha', 'number': 2, 'name': 'Alpha'}]
+        first = channel_page(rows[:1], category='all', total=2, has_more=True)
+        second = channel_page(rows[1:], category='all', offset=1, total=2)
+        for mode in ('one-page', 'all-pages', 'primer'):
+            with self.subTest(mode=mode):
+                caps = capabilities()
+                caps['player']['platform'] = 'webos-native'
+                if mode == 'one-page':
+                    words, pages = ['s'], [channel_page(rows, category='all')]
+                elif mode == 'all-pages':
+                    caps['categories']['maxPageSize'] = 1
+                    words, pages = ['s'], [first, second]
+                else:
+                    words, pages = ['s', '--limit', '1', '--offset', '1'], [first, second]
+                categories = category_page([{'id': 'all', 'name': 'All', 'count': 2}],
+                                           provider='m3u', selected='all')
+                code, out, _, calls = self.run_cli(words, [caps, categories] + pages)
+                self.assertEqual((code, out, len(calls)), (1, '', 2 + len(pages)))
+                self.assertTrue(all(call.args[1] in ('capabilities', 'categories', 'channels') for call in calls))
+
     def test_paging_parser_preserves_query_and_validates_bounds_before_requests(self):
         for words in (['s', '--limit', '20', '--offset', '40', 'Три', 'кота'],
                       ['s', '--offset', '40', '--limit', '20', '--', 'Три кота']):
@@ -535,7 +618,7 @@ class CategoriesCliTest(unittest.TestCase):
         caps = capabilities(); caps['categories']['maxPageSize'] = 2
         first = channel_page(total=3, has_more=True)
         for last in (channel_page([{'id': 'video-72', 'number': 1200, 'name': 'Три кота'}], offset=2, total=3),
-                     channel_page([{'id': 'new-id', 'number': 900, 'name': 'Три кота'}], offset=2, total=3),
+                     channel_page([{'id': 'new-id', 'number': 901, 'name': 'Три кота'}], offset=2, total=3),
                      channel_page([{'id': 'new-id', 'number': 1200, 'name': 'Три кота'}], offset=2, total=3, catalog='changed')):
             code, out, _, calls = self.run_cli(['Три кота'], [caps, category_page(), first, last])
             self.assertEqual((code, out, len(calls)), (1, '', 4))

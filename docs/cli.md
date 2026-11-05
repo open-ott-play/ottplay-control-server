@@ -1212,7 +1212,7 @@ ott tv s                    # selected media category; full catalogue on legacy 
 ott tv s HD                 # filter by channel name
 ott tv categories           # media categories; selected category marked
 ott tv cat "Tom and Jerry"  # browse a category without starting playback
-ott tv cat all               # browse all videos
+ott tv cat all               # select the current catalog's All category
 ott tv p                    # channel — current programme
 ott tv p news               # list programme matches and play a random matching channel
 ott tv p --list news        # filter programme titles without switching channels
@@ -1523,6 +1523,8 @@ number returned, total matches and whether more exist, then prints a next-page
 command. JSON preserves `offset`, `total`, `has_more` and only the requested
 `channels` page. An intentional page is successful even when `has_more` is
 true; `loading` still marks incomplete discovery and exits with code 3.
+The player's saved ordering is preserved: channel numbers may decrease within
+or across pages. IDs and channel numbers must still be unique in the snapshot.
 
 Each invocation reads the current catalog. A nonzero page request first
 obtains a category-bound receipt, then reads the requested offset using that
@@ -1543,6 +1545,8 @@ whose title is the command name `cat`.
 
 Selecting a category only changes browsing. It does not start a video,
 replace an explicit Plex queue, or change the category currently playing.
+`cat all` selects All in the current catalog; it does not promise to leave a
+Favorites catalog or switch providers.
 `next`, `prev` and signed offsets continue to use their existing playback
 context; `R`/`random` uses All. Starting a video from the selected category enters that
 category through the normal player admission and resume path. Local kiosk,
@@ -2754,6 +2758,13 @@ unbound channel number. The legacy TV/Local videos catalogue API is limited to
 Plex/VPortal use the paginated media catalogue. Increase the per-player budget
 with `-t 300` before the player names when a configured provider loads slowly.
 
+Native webOS build `620bcc28` does not advertise the random capability. On that
+build, use a channel number or one exact complete title after the provider;
+`R`/`random` and a name requiring random match selection are unsupported. The
+CLI does not bypass that restriction, and its player-specific help omits the
+random example when the capability is absent. Check `ott PLAYER caps` for the
+capabilities of a newer build.
+
 Complete provider names and unambiguous name fragments keep their existing
 meaning. Use `--` to make the boundary explicit when a provider name could be
 confused with a provider plus a channel selector:
@@ -3255,6 +3266,15 @@ then use `profile N vportal LINK` or a private `profile-config` file containing
 updates while M3U is selected are rejected before mutation. Previously saved
 portal links in M3U device profiles are inactive and remain stored.
 
+On a new native player, all VPortal slots may initially be inactive. This does
+not prevent configuring the first slot:
+
+```sh
+ott tv provider vportal
+ott tv profile 1 vp 'portal::[key:YOUR_KEY]https://provider.example/api/v1/'
+ott tv profile 1
+```
+
 Only supplied fields change. Editing an inactive profile leaves the active
 playlist running. Renaming a profile does not reload channels. Changing
 the active playlist or its archive depth reloads channels once.
@@ -3263,6 +3283,8 @@ is an integer 0–8760. Archive depth tells the player what history to offer; th
 provider must still supply that history. Names are limited to 256 UTF-8 bytes,
 playlist URLs to 8192 bytes, with no C0 or DEL control
 characters. Empty strings clear the corresponding name or link. Clearing the
+name on native webOS restores its default label, `M3U N` or `VPortal N`, where
+`N` is the same profile number; other players may keep an empty name. Clearing the
 active playlist also reloads that slot, so its previous stream does not remain
 active. The player validates links and applies changes through its normal driver.
 

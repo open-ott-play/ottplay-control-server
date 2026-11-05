@@ -1443,13 +1443,15 @@ def _play_channel(client, device, params, deadline, progress=None):
     invalid = "The player returned an invalid channel list; no switch was requested"
     if not isinstance(matches, list):
         raise Error(invalid)
-    previous, identities, rows = 0, set(), []
+    previous, identities, numbers, rows = 0, set(), set(), []
     for row in matches:
         if not isinstance(row, dict):
             raise Error(invalid)
         number, name = row.get("number"), row.get("name")
         identity = row.get("id") if modern and media_text(row.get("id"), 2048) else channel_identity(row.get("id"))
-        if (type(number) is not int or not previous < number <= 9007199254740991
+        if (type(number) is not int
+                or not (1 if modern else previous + 1) <= number <= (MAX_CATEGORY_TOTAL if modern else 9007199254740991)
+                or number in numbers
                 or identity is None or identity in identities
                 or not epg_text(name, 16384) or not name.strip()
                 or (exact_id is None and (media_search_key(text) not in media_search_key(name) if modern
@@ -1457,6 +1459,7 @@ def _play_channel(client, device, params, deadline, progress=None):
             raise Error(invalid)
         previous = number
         identities.add(identity)
+        numbers.add(number)
         if exact_id is None or row["id"] == exact_id:
             rows.append({key: row[key] for key in ("id", "number", "name")})
     data = dict(response, channels=rows) if modern else {"channels": rows}
@@ -2181,7 +2184,11 @@ def profile_metadata(data, action, params, *, expected_provider=None, allow_no_a
     for key, value in params["settings"].items():
         if key == "vportal" and provider != "vportal":
             fail()
-        if key in ("name", "history_hours"):
+        if key == "name" and provider in ("m3u", "vportal") and isinstance(value, str) and not value.strip():
+            default_name = {"m3u": "M3U", "vportal": "VPortal"}[provider] + " " + str(params["number"])
+            if row[key] not in (value, default_name):
+                fail()
+        elif key in ("name", "history_hours"):
             if row[key] != value:
                 fail()
         elif row[key + "_configured"] != bool(value):
@@ -2195,7 +2202,7 @@ def vportal_profile_command(client, device, params, timeout):
     previous_timeout = client.timeout
     sent = False
     try:
-        profiles = profile_metadata(client.call(device, "profiles", {}), "profiles", {})
+        profiles = profile_metadata(client.call(device, "profiles", {}), "profiles", {}, allow_no_active=True)
         if profiles["provider"] != "vportal":
             raise Error("VPortal links belong to standalone VPortal profiles. Select provider vportal first; no profile settings were sent")
         remaining = deadline - time.monotonic()
@@ -4016,17 +4023,18 @@ def media_page_metadata(data, runtime, kind, offset, limit, catalog=None, catego
             or data["has_more"] != (offset + len(rows) < data["total"])
             or (data["has_more"] and not rows)):
         raise Error(invalid)
-    identities, previous = set(), 0
+    identities, numbers = set(), set()
     for row in rows:
         number_key = "count" if kind == "categories" else "number"
         if (not isinstance(row, dict) or set(row) != {"id", "name", number_key}
                 or not media_text(row["id"], 1024 if kind == "categories" else 2048)
                 or row["id"] in identities or not media_text(row["name"], 512)
                 or type(row[number_key]) is not int
-                or not (0 if kind == "categories" else previous + 1) <= row[number_key] <= MAX_CATEGORY_TOTAL):
+                or not (0 if kind == "categories" else 1) <= row[number_key] <= MAX_CATEGORY_TOTAL
+                or (kind != "categories" and row[number_key] in numbers)):
             raise Error(invalid)
         identities.add(row["id"])
-        previous = row[number_key]
+        numbers.add(row[number_key])
     return dict(data, **{kind: [dict(row) for row in rows]})
 
 
@@ -4122,8 +4130,7 @@ def read_media_channels(client, device, search, deadline, require_modern=False, 
                     "Retry the title search when catalogue loading finishes.")
     runtime, category = categories["runtime"], category_override or categories["selected"]
     limit = maximum if page_limit is None else page_limit
-    result, rows, identities = None, [], set()
-    previous_number = 0
+    result, rows, identities, numbers = None, [], set(), set()
     # Only offset zero may exchange a source receipt for a category/query
     # receipt. A one-row primer binds nonzero page requests to that snapshot.
     priming = page_limit is not None and page_offset > 0
@@ -4141,12 +4148,11 @@ def read_media_channels(client, device, search, deadline, require_modern=False, 
         if result is not None and any(page[key] != result[key] for key in ("total", "loading")):
             raise Error("The video catalog changed between pages; no playback was requested")
         if (any(row["id"] in identities for row in page["channels"])
-                or (page["channels"] and page["channels"][0]["number"] <= previous_number)
+                or any(row["number"] in numbers for row in page["channels"])
                 or any(media_search_key(search) not in media_search_key(row["name"]) for row in page["channels"])):
             raise Error("The player returned an inconsistent video catalog; no playback was requested")
         identities.update(row["id"] for row in page["channels"])
-        if page["channels"]:
-            previous_number = page["channels"][-1]["number"]
+        numbers.update(row["number"] for row in page["channels"])
         result = page
         if priming:
             if page_offset > page["total"]:
@@ -5778,7 +5784,10 @@ def print_player_help(data, name):
             print(f"  {prefix} provider m3u  — request the M3U provider (alias: prov m3u)")
             print(f"  {prefix} provider local  — request Local videos (legacy alias: offline)")
             print(f"  {prefix} provider ID_OR_NAME  — select a listed provider by ID, index or name")
-            print(f"  {prefix} provider m3u 1 / R / NAME  — wait for loading, then play by number, random or name")
+            if "random" in controls:
+                print(f"  {prefix} provider m3u 1 / R / NAME  — wait for loading, then play by number, random or name")
+            else:
+                print(f"  {prefix} provider m3u 1 / EXACT_NAME  — wait for loading, then play by number or exact full name")
             print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request all players concurrently")
         if (provider in ("m3u", "vportal") or (native and provider in ("plex", "xtream", "stalker"))
                 or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", []))):
@@ -5884,7 +5893,7 @@ def print_player_help(data, name):
         print(f"  {prefix} s --limit {page_size} [--offset {page_size}] [TEXT]  — list one page of matching videos")
     if "select" in categories:
         print(f'  {prefix} category "NAME" / cat id:ID  — select a category without starting playback')
-        print(f"  {prefix} cat all  — show all videos again; use s to list the selected category")
+        print(f"  {prefix} cat all  — select the All category; use s to list its entries")
     favorites = controls.get("favorites", {}).get("operations", [])
     global_items = "favorites_global_items" in controls
     if global_items:
