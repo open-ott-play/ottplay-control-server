@@ -5230,6 +5230,12 @@ def capabilities_metadata(data):
         result["plex_servers"] = plex_servers_capability(data["plex_servers"])
     if native_playback:
         result["native_playback_diagnostics"] = {"version": 1}
+    if "playback_failure_versions" in data:
+        versions = data["playback_failure_versions"]
+        if (type(versions) is not list or versions != [2, 3]
+                or any(type(value) is not int for value in versions)):
+            raise Error(invalid)
+        result["playback_failure_versions"] = list(versions)
     if "media_tracks" in data:
         marker = data["media_tracks"]
         if (type(marker) is not dict or set(marker) != {"version"}

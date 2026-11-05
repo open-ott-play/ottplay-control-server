@@ -158,7 +158,11 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		default:
 			ok = false
 		}
-	case "status", "providers", "profiles", "epg_catalog":
+	case "status":
+		// An omitted version keeps the player's legacy status contract. Pass
+		// explicit diagnostic versions through without rewriting the result.
+		ok = len(params) == 0 || (len(params) == 1 && profileInteger(params["playback_failure_version"], 2, 3))
+	case "providers", "profiles", "epg_catalog":
 		ok = len(params) == 0
 	case "capabilities":
 		ok = validCapabilityProbe(params)

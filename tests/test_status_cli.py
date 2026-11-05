@@ -66,6 +66,50 @@ class StatusCliTest(unittest.TestCase):
                 self.assertEqual(out, json.dumps(dict(status, capabilities=caps), ensure_ascii=False, indent=2) + '\n')
                 self.assertNotIn('do-not-print', out)
 
+    def test_playback_failure_capability_is_optional_and_copied(self):
+        caps = self.capabilities()
+        self.assertEqual(ott.capabilities_metadata(caps), caps)
+        caps['playback_failure_versions'] = [2, 3]
+        before = copy.deepcopy(caps)
+        result = ott.capabilities_metadata(caps)
+        self.assertEqual(result, before)
+        result['playback_failure_versions'].append(4)
+        self.assertEqual(caps, before)
+
+    def test_playback_failure_capability_does_not_opt_in_default_status_or_change_text(self):
+        old_caps = self.capabilities()
+        caps = dict(copy.deepcopy(old_caps), playback_failure_versions=[2, 3])
+        status = {'ready': True, 'volume': 55, 'player': dict(caps['player']),
+                  'playback_failure': {'version': 2, 'play_generation': 5,
+                                       'code': 'media_source', 'context': None}}
+        before = copy.deepcopy(status)
+        for words in ([], ['status']):
+            with self.subTest(words=words):
+                code, out, err, _ = self.run_cli(words, status, caps, '--json')
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(json.loads(out), dict(before, capabilities=caps))
+                self.assertEqual(status, before)
+                _, baseline, _, _ = self.run_cli(words, status, old_caps)
+                code, text, err, _ = self.run_cli(words, status, caps)
+                self.assertEqual((code, text, err), (0, baseline, ''))
+
+    def test_invalid_playback_failure_capability_is_not_trusted_or_printed(self):
+        invalid = (None, False, {}, '[2,3]', (2, 3), [], [2], [3], [3, 2], [2, 2], [2, 3, 4],
+                   [True, 3], [2, True], [2.0, 3], [2, 3.0], [[2], 3], [2, 'private-marker-value'])
+        for marker in invalid:
+            with self.subTest(marker=marker):
+                caps = dict(self.capabilities(), playback_failure_versions=marker)
+                with self.assertRaisesRegex(ott.Error, '^The player returned invalid capabilities metadata$'):
+                    ott.capabilities_metadata(caps)
+                status = {'ready': True, 'volume': 55, 'player': dict(caps['player'])}
+                code, out, err, _ = self.run_cli(['status'], status, caps, '--json')
+                result = json.loads(out)
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual({key: result[key] for key in status}, status)
+                self.assertIsNone(result['capabilities'])
+                self.assertEqual(result['capabilities_error'], 'Available controls could not be read; run status again.')
+                self.assertNotIn('private-marker-value', out)
+
     def test_json_status_preserves_versioned_failure_examples_without_mutation(self):
         fixture_path = Path(__file__).resolve().parent / 'fixtures/status-playback-failure-examples.json'
         examples = json.loads(fixture_path.read_text())

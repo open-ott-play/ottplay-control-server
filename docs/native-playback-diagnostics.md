@@ -35,6 +35,20 @@ ott --json l status
 ott --json lg2
 ```
 
+These CLI commands keep the default request unchanged. On a player supporting
+version negotiation, the default failure format remains version 2. A diagnostic
+client can read the optional root capability `playback_failure_versions: [2,3]`
+and explicitly request version 3 using this RPC body:
+
+```json
+{"action":"status","params":{"playback_failure_version":3}}
+```
+
+An explicit integer `2` also selects the previous format. Other values and
+additional status parameters are rejected. Both controller and player must
+support negotiation; do not send the parameter to older components. Ordinary
+CLI status never silently opts an older player into a new format.
+
 This is separate from `debug --native-playback` and from the controller's
 `state` / `history` records. The controller and JSON CLI preserve this additive
 field, including versions they do not interpret. The plain-text status summary
