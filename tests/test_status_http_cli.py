@@ -42,9 +42,12 @@ def serve(handler):
 
 
 class StatusHttpCliTest(unittest.TestCase):
-    def run_status(self, redirect=None, *, status=None, capabilities=None):
+    def run_status(self, redirect=None, *, status=None, capabilities=None,
+                   args=('status',), expected_posts=None, expected_error=None):
         status = STATUS if status is None else status
         capabilities = CAPABILITIES if capabilities is None else capabilities
+        if expected_posts is None:
+            expected_posts = [{'action': 'status', 'params': {}}, {'action': 'capabilities', 'params': {}}]
         events, sink_requests, timeouts, clients = [], [], [], []
         receipts = {}
 
@@ -91,7 +94,8 @@ class StatusHttpCliTest(unittest.TestCase):
                     payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                     if self.validate_request(payload) is None:
                         return
-                    if payload == {'action': 'status', 'params': {}}:
+                    if payload in ({'action': 'status', 'params': {}},
+                                   {'action': 'status', 'params': {'playback_failure_version': 3}}):
                         request_id, data = 'a' * 32, status
                     elif payload == {'action': 'capabilities', 'params': {}}:
                         if redirect == 'enqueue':
@@ -147,10 +151,15 @@ class StatusHttpCliTest(unittest.TestCase):
                         mock.patch.object(ott.time, 'sleep', side_effect=lambda seconds: real_sleep(min(seconds, poll_pause))), \
                         mock.patch.dict(os.environ, {'NO_PROXY': '127.0.0.1', 'no_proxy': '127.0.0.1'}), \
                         contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-                    code = ott.main(['--config', str(config), '--timeout', '2', '--json', 'tv', 'status'])
+                    code = ott.main(['--config', str(config), '--timeout', '2', '--json', 'tv', *args])
                 self.assertEqual((config.read_bytes(), credentials.read_bytes()), before)
 
-        self.assertEqual((code, errors.getvalue()), (0, ''))
+        if expected_error is None:
+            self.assertEqual((code, errors.getvalue()), (0, ''))
+        else:
+            self.assertEqual(code, 1)
+            self.assertEqual(output.getvalue(), '')
+            self.assertIn(expected_error, errors.getvalue())
         self.assertNotIn(TOKEN, output.getvalue() + errors.getvalue())
         self.assertEqual(sink_requests, [], 'No redirected request or administrator token may reach the other origin')
         self.assertTrue(clients)
@@ -159,8 +168,8 @@ class StatusHttpCliTest(unittest.TestCase):
         self.assertTrue(all(event[1] == '/mounted/api/requests' and event[2]['device_id'] == [DEVICE]
                             and event[3] == 'Bearer ' + TOKEN for event in events))
         self.assertEqual([event[4] for event in events if event[0] == 'POST'],
-                         [{'action': 'status', 'params': {}}, {'action': 'capabilities', 'params': {}}])
-        return json.loads(output.getvalue()), events, timeouts
+                         expected_posts)
+        return (json.loads(output.getvalue()) if expected_error is None else errors.getvalue()), events, timeouts
 
     def test_status_then_capabilities_poll_exact_ids_with_one_shared_budget(self):
         result, events, budgets = self.run_status()
@@ -184,6 +193,49 @@ class StatusHttpCliTest(unittest.TestCase):
                 self.assertIsNone(result['capabilities'])
                 self.assertEqual(result['capabilities_error'], 'Available controls could not be read; run status again.')
                 expected = [('POST', None), ('GET', ['a' * 32]), ('GET', ['a' * 32]), ('POST', None)]
+                if phase == 'receipt':
+                    expected.append(('GET', ['b' * 32]))
+                self.assertEqual([(event[0], event[2].get('id')) for event in events], expected)
+
+    def test_status_details_negotiates_v3_with_exactly_two_read_rpcs(self):
+        examples = json.loads((Path(__file__).parent / 'fixtures' /
+                               'status-playback-failure-examples.json').read_text())
+        diagnostic = next(row['status'] for row in examples if row['name'] == 'v3_source_recv_error')
+        player = dict(PLAYER, version='0.3.0', platform='webos-native', runtime='native-one')
+        status = dict(STATUS, player=player, **diagnostic)
+        capabilities = dict(CAPABILITIES, player=player, playback_failure_versions=[2, 3])
+        expected_posts = [{'action': 'capabilities', 'params': {}},
+                          {'action': 'status', 'params': {'playback_failure_version': 3}}]
+        result, events, budgets = self.run_status(
+            status=status, capabilities=capabilities, args=('status', '--details'),
+            expected_posts=expected_posts)
+        self.assertEqual(result, dict(status, capabilities=capabilities))
+        self.assertEqual(result['playback_failure']['play_generation'], 2**64 - 1)
+        self.assertEqual([(event[0], event[2].get('id')) for event in events],
+                         [('POST', None), ('GET', ['b' * 32]), ('GET', ['b' * 32]),
+                          ('POST', None), ('GET', ['a' * 32]), ('GET', ['a' * 32])])
+        self.assertGreater(budgets[0], 0)
+        self.assertLessEqual(budgets[0], 2)
+        self.assertEqual(len(budgets), len(events))
+        self.assertTrue(all(0 < later <= earlier for earlier, later in zip(budgets, budgets[1:])))
+        self.assertLess(budgets[3], budgets[0])
+
+    def test_status_details_without_capability_stops_before_status_rpc(self):
+        _, events, _ = self.run_status(
+            args=('status', '--details'),
+            expected_error='Detailed status is not supported by this player/controller; update both and check caps. No status request was sent.',
+            expected_posts=[{'action': 'capabilities', 'params': {}}])
+        self.assertEqual([(event[0], event[2].get('id')) for event in events],
+                         [('POST', None), ('GET', ['b' * 32]), ('GET', ['b' * 32])])
+
+    def test_status_details_discovery_redirects_do_not_forward_credentials_or_request_status(self):
+        for phase in ('enqueue', 'receipt'):
+            with self.subTest(phase=phase):
+                _, events, _ = self.run_status(
+                    redirect=phase, args=('status', '--details'),
+                    expected_error='Available controls could not be read for detailed status. No status request was sent.',
+                    expected_posts=[{'action': 'capabilities', 'params': {}}])
+                expected = [('POST', None)]
                 if phase == 'receipt':
                     expected.append(('GET', ['b' * 32]))
                 self.assertEqual([(event[0], event[2].get('id')) for event in events], expected)

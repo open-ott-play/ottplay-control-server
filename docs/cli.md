@@ -759,6 +759,21 @@ capabilities fields; scripts should consume that JSON instead of parsing the
 human summary. Update the CLI installation to obtain this output format;
 updating only the controller or player does not replace the CLI.
 
+For a supported native player's extended failure report:
+
+```sh
+ott l status --details
+ott -t 20 --json lg2 status --details
+ott l,lg2 status --details
+```
+
+`--details` belongs after `status` (or its alias `st`). It first reads
+capabilities, then requests diagnostic version 3 when advertised. Unsupported
+players receive no versioned status request. Both reads share the command's
+timeout, and neither changes playback. Ordinary status remains unchanged.
+See [native playback diagnostics](native-playback-diagnostics.md#reading-the-last-failure-from-live-status)
+for the failure fields and their limits.
+
 Illustrative output for a standby player; the advertised command list is
 shortened here, and the version is an example:
 
@@ -1178,6 +1193,7 @@ name.
 
 ```sh
 ott tv                      # available control commands, then readable player status
+ott tv status --details     # extended failure details, when advertised by the player
 ott tv 12                   # one-based channel number from s
 ott tv prev                 # previous channel in the current category; wraps
 ott tv previous             # full spelling of prev

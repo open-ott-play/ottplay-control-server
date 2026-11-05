@@ -26,19 +26,36 @@ This command is separate from `--lane native`, which addresses a bound Android
 maintenance agent. Ordinary `debug`, `debug --engine`, existing inspection
 sections, and saved diagnostic bundles retain their existing behavior.
 
-## Reading a retained failure from live status
+## Reading the last failure from live status
 
-Native builds can also expose a root `playback_failure` in ordinary live status:
+Use `status --details` to read the extended failure report from a supported
+native player:
 
 ```sh
-ott --json l status
-ott --json lg2
+ott l status --details
+ott -t 20 --json lg2 status --details
+ott l,lg2 status --details
 ```
 
-These CLI commands keep the default request unchanged. On a player supporting
-version negotiation, the default failure format remains version 2. A diagnostic
-client can read the optional root capability `playback_failure_versions: [2,3]`
-and explicitly request version 3 using this RPC body:
+The command first checks capabilities, then requests version 3 only when the
+player advertises `playback_failure_versions: [2,3]`. These are two read-only
+RPCs within the command's timeout; capability discovery is not repeated after
+the status reply. An unsupported player gets a clear error without sending the
+versioned status request. The readable output adds failure details; `--json`
+preserves the returned fields for scripts. Neither form starts or changes
+playback.
+
+When the player reports `preplay`, the readable details also show preparation
+phase, last failure, attempt generation and phase elapsed time. For example,
+`inspect_failed` means media inspection returned an error before playback was
+admitted; `playback_failure` may still be `null`. An elapsed time near 15 seconds
+does not by itself establish a network timeout. Keep the original playback
+request's terminal error when diagnosing the cause.
+
+Ordinary `ott l`, `ott l status` and `ott --json l status` keep the default
+request unchanged. On a player supporting version negotiation, its default
+failure format remains version 2. Diagnostic API clients can explicitly request
+version 3 using this RPC body:
 
 ```json
 {"action":"status","params":{"playback_failure_version":3}}
@@ -51,8 +68,9 @@ CLI status never silently opts an older player into a new format.
 
 This is separate from `debug --native-playback` and from the controller's
 `state` / `history` records. The controller and JSON CLI preserve this additive
-field, including versions they do not interpret. The plain-text status summary
-does not render it. Availability depends on the installed player build.
+field, including versions they do not interpret. The ordinary plain-text status
+summary omits it unless `--details` was requested. Availability depends on the
+installed player build.
 
 Version 1 supplies `play_generation` and a fixed failure `code`. Version 2 adds
 `context` with `demux_exit` and `pipeline_error`. Version 3 adds

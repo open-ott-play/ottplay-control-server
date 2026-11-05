@@ -76,7 +76,7 @@ class StatusCliTest(unittest.TestCase):
         result['playback_failure_versions'].append(4)
         self.assertEqual(caps, before)
 
-    def test_playback_failure_capability_does_not_opt_in_default_status_or_change_text(self):
+    def test_playback_failure_capability_only_advertises_details_without_opting_in(self):
         old_caps = self.capabilities()
         caps = dict(copy.deepcopy(old_caps), playback_failure_versions=[2, 3])
         status = {'ready': True, 'volume': 55, 'player': dict(caps['player']),
@@ -91,7 +91,11 @@ class StatusCliTest(unittest.TestCase):
                 self.assertEqual(status, before)
                 _, baseline, _, _ = self.run_cli(words, status, old_caps)
                 code, text, err, _ = self.run_cli(words, status, caps)
-                self.assertEqual((code, text, err), (0, baseline, ''))
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(text.split('Player summary:', 1)[1], baseline.split('Player summary:', 1)[1])
+                self.assertNotIn('ott tv status --details', baseline)
+                self.assertIn('ott tv status --details', text)
+                self.assertNotIn('Playback failure details:', text)
 
     def test_invalid_playback_failure_capability_is_not_trusted_or_printed(self):
         invalid = (None, False, {}, '[2,3]', (2, 3), [], [2], [3], [3, 2], [2, 2], [2, 3, 4],

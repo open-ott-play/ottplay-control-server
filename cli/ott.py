@@ -73,6 +73,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott presets NAME fav global restore BACKUP [--dry-run]
                                      restore only the global favorites companion
   ott devices                        list devices and their last connection
+  ott NAME status --details          read negotiated playback failure details (alias: st)
   ott groups                         list saved player groups
   ott group add NAME t1,t2           create a local group (group set replaces it)
   ott group show NAME                inspect a local group's members
@@ -1818,8 +1819,10 @@ def parse_command(words):
             raise Error("Absolute volume must be between 0 and 100")
         return "command", {"command": "set_volume", "volume_step" if relative else "volume": value}
     if verb in ("status", "providers"):
+        if verb == "status" and tail == ["--details"]:
+            return "status", {"playback_failure_version": 3}
         if tail:
-            raise Error("Use " + verb + " without arguments")
+            raise Error("Use status or status --details" if verb == "status" else "Use " + verb + " without arguments")
         return verb, {}
     if verb == "provider":
         if not tail:
@@ -5610,7 +5613,7 @@ def playback_status_module():
     return module
 
 
-def status_capabilities(client, device, data, deadline):
+def status_capabilities(client, device, data, deadline, *, controls=None):
     """Enrich a successful status within the original timeout, without mutations."""
     if not isinstance(data, dict):
         raise Error("The player returned invalid status metadata")
@@ -5641,7 +5644,8 @@ def status_capabilities(client, device, data, deadline):
     previous_timeout = client.timeout
     try:
         client.timeout = remaining
-        controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        if controls is None:
+            controls = capabilities_metadata(client.call(device, "capabilities", {}))
         identity = data.get("player")
         if time.monotonic() >= deadline:
             result["capabilities_error"] = "Available controls did not arrive within --timeout; run status again."
@@ -5658,6 +5662,58 @@ def status_capabilities(client, device, data, deadline):
     finally:
         client.timeout = previous_timeout
     return result
+
+
+def detailed_status(client, device, deadline):
+    """Negotiate an explicit read within one budget; never retry or wake a player."""
+    unsupported = ("Detailed status is not supported by this player/controller; update both and check caps. "
+                   "No status request was sent.")
+    previous_timeout = client.timeout
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Detailed status exceeded --timeout")
+        client.timeout = remaining
+        try:
+            raw_controls = client.call(device, "capabilities", {})
+        except PlayerUnsupported:
+            raise Error(unsupported) from None
+        except Error:
+            raise Error("Available controls could not be read for detailed status. No status request was sent.") from None
+        try:
+            controls = capabilities_metadata(raw_controls)
+        except Error:
+            raise Error(unsupported) from None
+        if controls.get("playback_failure_versions") != [2, 3]:
+            raise Error(unsupported)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Error("Detailed status exceeded --timeout")
+        client.timeout = remaining
+        try:
+            data = client.call(device, "status", {"playback_failure_version": 3})
+        except (PlayerRejected, PlayerUnsupported):
+            raise Error("Detailed status was rejected or unsupported by this player/controller; update both and check caps.") from None
+        except HTTPError as exc:
+            if exc.code in (400, 404, 405):
+                raise Error("Detailed status was rejected or unsupported by this player/controller; update both and check caps.") from None
+            raise Error("Detailed status could not be read from the player; the request was not repeated.") from None
+        except Error:
+            raise Error("Detailed status could not be read from the player; the request was not repeated.") from None
+        if time.monotonic() >= deadline:
+            raise Error("Detailed status exceeded --timeout")
+        if not isinstance(data, dict):
+            raise Error("The player returned invalid status metadata")
+        identity = data.get("player")
+        if not isinstance(identity, dict) or any(
+                identity.get(key) != controls["player"][key] for key in ("version", "platform", "runtime")):
+            raise Error("The player changed while reading detailed status; run status again.")
+        result = status_capabilities(client, device, data, deadline, controls=controls)
+        if result["capabilities"] is None:
+            raise Error("Detailed status exceeded --timeout")
+        return result
+    finally:
+        client.timeout = previous_timeout
 
 
 def print_player_help(data, name):
@@ -5680,6 +5736,8 @@ def print_player_help(data, name):
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("Available controls now:")
+    if controls.get("playback_failure_versions") == [2, 3]:
+        print(f"  {prefix} status --details  — read negotiated playback failure details (alias: st)")
     if "media_tracks" in controls:
         print(f"  {prefix} tracks  — list current audio/subtitle tracks and observed selections")
         print(f"  {prefix} tracks audio ID / tracks subtitle ID|off  — select for current playback only")
@@ -5994,9 +6052,89 @@ def print_player_summary(data, name):
         print("  Playback details were not valid; current content is not reported.")
 
 
-def print_player_status(data, name):
+def print_failure_details(data):
+    """Render only bounded public fields; the JSON result remains opaque."""
+    def label(value, allowed):
+        return value if type(value) is str and value in allowed else "Not reported"
+
+    def number(value, low, high):
+        return str(value) if type(value) is int and low <= value <= high else "Not reported"
+
+    preplay = data.get("preplay")
+    if isinstance(preplay, dict):
+        elapsed = number(preplay.get("phase_elapsed_ms"), 0, (1 << 64) - 1)
+        preparation = [
+            ("Phase", label(preplay.get("phase"), {"idle", "resolving", "inspecting", "awaiting_quality",
+                                                 "admitting", "admitted", "failed", "cancelled"})),
+            ("Last failure", label(preplay.get("last_failure"), {"resolve_failed", "inspect_failed",
+                                                               "worker_unavailable", "admission_failed", "quality_save_failed"})),
+            ("App attempt generation", number(preplay.get("attempt_generation"), 0, (1 << 64) - 1)),
+            ("Phase elapsed", elapsed if elapsed == "Not reported" else elapsed + " ms"),
+        ]
+        print("\nPlayback preparation:")
+        for key, value in preparation:
+            print(f"  {key + ':':<24}{value}")
+
+    print("\nPlayback failure details:")
+    if "playback_failure" not in data:
+        print("  Version 3 details were not reported.")
+        return
+    failure = data["playback_failure"]
+    if failure is None:
+        print("  No retained failure reported (does not establish playback health).")
+        return
+    if not isinstance(failure, dict) or type(failure.get("version")) is not int or failure["version"] != 3:
+        print("  Version 3 details were not reported.")
+        return
+    codes = frozenset("decision_refused playback_policy no_video_transcode_target no_video_track media_source "
+                      "playback_interrupted tv_pipeline jail_missing_rtkmem load_timeout release_timeout "
+                      "resolve_failed preview_not_direct unspecified".split())
+    demux = frozenset("none https_reserve_failed https_open_failed http_open_failed open_input_failed "
+                     "find_stream_info_failed no_video_stream no_framing load_mismatch no_audio_au no_usable_video "
+                     "dts_core_missing hls_failed hls_not_ready demux_panicked no_access_units load_refused other "
+                     "hls_playlist_fetch_failed hls_playlist_invalid hls_playlist_window hls_transport_open_failed "
+                     "hls_segment_probe_failed hls_segment_codec hls_video_framing hls_first_idr hls_short_body "
+                     "hls_audio_identity hls_audio_empty hls_video_timestamp hls_audio_timestamp hls_audio_framing "
+                     "hls_no_video_au hls_size_limit hls_transport_failed".split())
+
+    rows = [("Format", "3"), ("Failure code", label(failure.get("code"), codes)),
+            ("App play generation", number(failure.get("play_generation"), 0, (1 << 64) - 1))]
+    context = failure.get("context")
+    if isinstance(context, dict):
+        rows.extend([("Demux exit", label(context.get("demux_exit"), demux)),
+                     ("Pipeline error", number(context.get("pipeline_error"), -(1 << 31), (1 << 31) - 1))])
+        cause = context.get("io_failure")
+        if "io_failure" not in context:
+            rows.append(("IO cause", "Not reported"))
+        elif cause is None:
+            rows.append(("IO cause", "No classified IO cause reported"))
+        elif isinstance(cause, dict) and len(cause) == 1:
+            tag, body = next(iter(cause.items()))
+            known = {"source_io", "hls", "auto_fallback", "audio_decode", "unclassified"}
+            rows.append(("IO cause", label(tag, known)))
+            if tag in known and isinstance(body, dict):
+                if tag == "source_io":
+                    value = label(body.get("transport"), {"none", "partial", "recv_error", "send_error", "got_nothing",
+                                                          "timeout", "http2", "reopen_failed", "other"})
+                    rows.append(("Transport", "none (no transport detail)" if value == "none" else value))
+                elif tag == "hls":
+                    rows.append(("HLS exit", label(body.get("exit"), {item for item in demux if item.startswith("hls_")} | {"other"})))
+                    rows.append(("HLS outcome", "Not reported" if body.get("outcome") is None else label(body.get("outcome"), {"deadline"})))
+                else:
+                    rows.append(("IO outcome", label(body.get("outcome"), {"refused" if tag == "auto_fallback" else "inconclusive"})))
+        else:
+            rows.append(("IO cause", "Not reported"))
+    else:
+        rows.append(("Context", "Not reported"))
+    for key, value in rows:
+        print(f"  {key + ':':<22}{value}")
+
+
+def print_player_status(data, name, *, details=False):
     print_player_help(data, name)
     print_player_summary(data, name)
+    if details:
+        print_failure_details(data)
 
 
 def deferred_control_metadata(data, action, params):
@@ -7789,8 +7927,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     if action == "favorites_global":
         return global_favorites_host_command(client, config, args, [(args.words[0], device)], params)
     status_overview = action == "status" and command_verb(words) != "v"
+    status_details = status_overview and params.get("playback_failure_version") == 3
     status_deadline = time.monotonic() + args.timeout if status_overview else None
-    if status_overview and not args.json:
+    if status_overview and not status_details and not args.json:
         device_power_module().overview_help(SimpleNamespace(**globals()), config, device, args.words[0])
         television_module().overview_help(SimpleNamespace(**globals()), client, device, args.words[0])
     catalog_play = None
@@ -7853,6 +7992,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                                                     progress=progress, fast=True, deadline=implicit_search_deadline)
                 action, params, words = "programs", {"search": query}, ["p", query]
                 playback_error = None
+    elif status_details:
+        data = detailed_status(client, device, status_deadline)
     elif status_overview and not args.json:
         previous_timeout = client.timeout
         try:
@@ -7901,7 +8042,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "status" and command_verb(words) == "v":
         data = volume_metadata(data)
     elif status_overview:
-        data = status_capabilities(client, device, data, status_deadline)
+        if not status_details:
+            data = status_capabilities(client, device, data, status_deadline)
     elif action == "command" and params.get("command") == "set_volume":
         data = volume_metadata(data, mutating=True)
     elif action == "capabilities":
@@ -8011,7 +8153,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     elif action == "status" and command_verb(words) == "v":
         print(f"{data['volume']:g}%")
     elif status_overview:
-        print_player_status(data, args.words[0])
+        print_player_status(data, args.words[0], details=status_details)
     elif action == "providers":
         for row in data["providers"]:
             print(f"{'*' if row['active'] else ' '} {row['index']}: {clean(row['id'])} — {clean(row['name'])}")
@@ -8163,6 +8305,9 @@ def main(argv=None):
         print(HELP)
         return 0
     try:
+        if (len(args.words) > 1 and args.words[0].casefold() not in TOP_LEVEL_COMMANDS
+                and command_verb(args.words[1:]) == "status"):
+            parse_command(args.words[1:])
         if args.words[0].casefold() in ("group", "groups"):
             return player_groups_module().management(SimpleNamespace(**globals()), args.config, args.words, args.json)
         if args.words[0].casefold() == "registry" and args.words[1:] in (["--help"], ["-h"]):
