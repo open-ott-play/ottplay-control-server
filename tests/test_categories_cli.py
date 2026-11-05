@@ -202,16 +202,50 @@ class CategoriesCliTest(unittest.TestCase):
         for reply in (old, readonly, ott.PlayerUnsupported('unsupported')):
             code, out, err, calls = self.run_cli(['cat', 'all'], [reply])
             self.assertEqual((code, out, len(calls)), (1, '', 1))
-            self.assertIn('updated player', err)
+            self.assertIn('category operation is not currently advertised', err)
+            self.assertNotIn('updated player', err)
 
-    def test_failed_partial_catalog_never_selects_or_plays(self):
+    def test_incomplete_catalog_error_does_not_claim_a_terminal_failure(self):
+        # Native uses this code both during discovery and after a failed scan.
         error = {'version': 1, 'runtime': 'page-one', 'op': 'list', 'state': 'error', 'error': 'catalog_incomplete'}
         for command in (['cats'], ['cat', 'all'], ['s'], ['Три кота']):
             with self.subTest(command=command):
                 code, out, err, calls = self.run_cli(command, [capabilities(), ott.PlayerRejected('private-token', error)])
                 self.assertEqual((code, out, len(calls)), (1, '', 2))
-                self.assertIn('Catalog discovery failed', err)
+                self.assertIn('may still be loading or may have failed', err)
+                self.assertNotIn('Catalog discovery failed', err)
                 self.assertNotIn('private-token', err)
+
+    def test_native_empty_loading_and_unadvertised_catalogs_remain_distinct(self):
+        for state in ('empty', 'loading', 'unadvertised'):
+            with self.subTest(state=state):
+                caps = capabilities()
+                caps['player']['platform'] = 'webos-native'
+                if state == 'unadvertised':
+                    del caps['categories']
+                    replies = [caps]
+                else:
+                    loading = state == 'loading'
+                    replies = [caps, category_page([{'id': 'all', 'name': 'All', 'count': 0}],
+                                                  selected='all', loading=loading),
+                               channel_page([], category='all', loading=loading)]
+                command = ['categories'] if state == 'unadvertised' else ['s', '--limit', '1']
+                code, out, err, calls = self.run_cli(command, replies, True)
+                self.assertEqual([call.args[1] for call in calls], ['capabilities'] if state == 'unadvertised'
+                                 else ['capabilities', 'categories', 'channels'])
+                if state == 'unadvertised':
+                    self.assertEqual((code, out), (1, ''))
+                    self.assertIn('Check provider/catalog state and player/controller support', err)
+                    self.assertNotIn('updated player', err)
+                else:
+                    data = json.loads(out)
+                    self.assertEqual((data['channels'], data['total'], data['loading']),
+                                     ([], 0, state == 'loading'))
+                    self.assertEqual(code, 3 if state == 'loading' else 0)
+                    if state == 'loading':
+                        self.assertIn('still loading', err)
+                    else:
+                        self.assertEqual(err, '')
 
     def test_stale_select_error_is_safe_and_never_retried(self):
         error = {'version': 1, 'runtime': 'page-one', 'op': 'select', 'state': 'error', 'error': 'catalog_changed'}

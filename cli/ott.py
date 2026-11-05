@@ -427,7 +427,7 @@ MAX_CATEGORY_PAGE_SIZE = 200
 MAX_CATEGORY_TOTAL = 1000000
 CATEGORY_ERRORS = {
     "catalog_changed": "The catalog changed. Run categories again before selecting.",
-    "catalog_incomplete": "Catalog discovery failed before completing. Check the provider connection and reload its catalog before retrying.",
+    "catalog_incomplete": "Catalog discovery is incomplete: it may still be loading or may have failed. Check player status before retrying.",
     "runtime_mismatch": "The player restarted. Run categories again before selecting.",
     "category_not_found": "The category is no longer available. Run categories again.",
     "restricted": "Current player policy does not allow this category operation.",
@@ -4069,7 +4069,7 @@ def categories_command(client, device, params, timeout):
         controls = media_capabilities(client, device, deadline)
         if (controls is None or "list" not in controls["categories"]["operations"]
                 or params["op"] not in controls["categories"]["operations"]):
-            raise Error("Category commands require an updated player and controller advertising categories; no category request was sent")
+            raise Error("The requested category operation is not currently advertised. Check provider/catalog state and player/controller support; no category request was sent")
         result = read_categories(client, device, controls, deadline)
         if params["op"] == "list":
             return result

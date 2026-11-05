@@ -1573,18 +1573,21 @@ pages. No matches in an incomplete result does not prove the video is absent.
 
 Troubleshooting:
 
-- No category controls: check the active provider and `caps`, then update
-  the player, controller and installed CLI. Reload the player after updating.
+- No category controls: the operation is not currently advertised. Check the
+  active provider, `caps` and `status`; an unavailable catalogue can also hide
+  these controls. Restore the source if discovery failed, or update the player
+  and controller if the operation is unsupported.
 - Unexpected videos in `s`: inspect the selected category in `categories`,
   or select `category all`.
 - A category switch is rejected: inspect `kiosk status` and the player's
   current UI; do not disable kiosk merely to inspect a catalogue.
 - Catalogue changed or expired: wait for discovery to settle, list again,
   and use the newly returned ID. Do not reuse an old numeric position.
-- Catalogue discovery failed: check the provider connection and reload its
-  catalogue. Already loaded videos can remain available in the player, but
-  remote category commands reject the failed partial scan rather than treat
-  missing videos as absent.
+- Incomplete catalogue: `catalog_incomplete` can mean discovery is still
+  running or has failed. Check `status` before retrying. If discovery failed,
+  check the provider connection and reload its catalogue. Already loaded videos
+  can remain available, but missing videos in a partial scan are not confirmed
+  absent.
 - Plex queue controls still navigate a previous queue: browsing preserves
   that queue deliberately; start the intended video or use the explicit
   [Plex queue commands](#ordered-plex-queues).
