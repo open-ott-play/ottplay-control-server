@@ -495,37 +495,46 @@ def run_case(prepared, *, execute=False, output=None, seconds=45, byte_limit=MAX
             "invalid_output_path")
     root = Path(output)
     root.mkdir(mode=0o700)  # Existing case directories are never overwritten/replayed.
-    write_private(root / "binding.private.json", encoded({
-        "version": 1, "cli_commit": prepared.handoff["cli_commit"],
-        "cli_files": prepared.handoff["cli_files"],
-        "owner_receipt_sha256": prepared.handoff["owner_receipt"]["sha256"],
-        "config_sha256": prepared.handoff["config"]["sha256"],
-        "credentials_sha256": prepared.handoff["credentials"]["sha256"],
-        "ca_sha256": prepared.handoff["ca"]["sha256"],
-        "origin": prepared.handoff["origin"], "alias": prepared.handoff["alias"],
-        "device_id": prepared.handoff["device_id"],
-        "deadline_monotonic": prepared.handoff["deadline_monotonic"],
-        "case": prepared.case, "params": prepared.params,
-    }))
-    source = root / "source"
-    for name, data in prepared.files.items():
-        target = source / name
-        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        write_private(target, data)
-    for name in ("home", "tmp"):
-        (root / name).mkdir(mode=0o700)
-    write_private(root / "credentials.json", encoded(prepared.credentials))
-    write_private(root / "ca.pem", prepared.ca)
-    config = {"server": prepared.handoff["origin"], "server_config": str(root / "credentials.json"),
-              "players": {prepared.handoff["alias"]: prepared.handoff["device_id"]}}
-    write_private(root / "cli.json", encoded(config))
-    end = min(prepared.handoff["deadline_monotonic"] - CLEANUP_SECONDS, clock() + seconds)
-    require(end > clock(), "deadline_before_spawn")
-    argv = [sys.executable, "-B", str(source / "cli/ott.py"), "-c", str(root / "cli.json"),
-            "-t", str(max(0.001, end - clock())), "--json", "--receipt", prepared.handoff["alias"], *prepared.words]
-    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(root / "home"), "TMPDIR": str(root / "tmp"),
-           "LANG": "en_US.UTF-8", "SSL_CERT_FILE": str(root / "ca.pem"), "NO_PROXY": "127.0.0.1,localhost",
-           "no_proxy": "127.0.0.1,localhost", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    try:
+        write_private(root / "binding.private.json", encoded({
+            "version": 1, "cli_commit": prepared.handoff["cli_commit"],
+            "cli_files": prepared.handoff["cli_files"],
+            "owner_receipt_sha256": prepared.handoff["owner_receipt"]["sha256"],
+            "config_sha256": prepared.handoff["config"]["sha256"],
+            "credentials_sha256": prepared.handoff["credentials"]["sha256"],
+            "ca_sha256": prepared.handoff["ca"]["sha256"],
+            "origin": prepared.handoff["origin"], "alias": prepared.handoff["alias"],
+            "device_id": prepared.handoff["device_id"],
+            "deadline_monotonic": prepared.handoff["deadline_monotonic"],
+            "case": prepared.case, "params": prepared.params,
+        }))
+        source = root / "source"
+        for name, data in prepared.files.items():
+            target = source / name
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            write_private(target, data)
+        for name in ("home", "tmp"):
+            (root / name).mkdir(mode=0o700)
+        write_private(root / "credentials.json", encoded(prepared.credentials))
+        write_private(root / "ca.pem", prepared.ca)
+        config = {"server": prepared.handoff["origin"], "server_config": str(root / "credentials.json"),
+                  "players": {prepared.handoff["alias"]: prepared.handoff["device_id"]}}
+        write_private(root / "cli.json", encoded(config))
+        end = min(prepared.handoff["deadline_monotonic"] - CLEANUP_SECONDS, clock() + seconds)
+        require(end > clock(), "deadline_before_spawn")
+        argv = [sys.executable, "-B", str(source / "cli/ott.py"), "-c", str(root / "cli.json"),
+                "-t", str(max(0.001, end - clock())), "--json", "--receipt", prepared.handoff["alias"], *prepared.words]
+        env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(root / "home"), "TMPDIR": str(root / "tmp"),
+               "LANG": "en_US.UTF-8", "SSL_CERT_FILE": str(root / "ca.pem"), "NO_PROXY": "127.0.0.1,localhost",
+               "no_proxy": "127.0.0.1,localhost", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    except (OSError, CaseError):
+        # We own this newly created directory and have not launched a child.
+        # Post-spawn uncertainty is handled separately and keeps its evidence.
+        try:
+            shutil.rmtree(root)
+        except OSError:
+            pass  # Cleanup failure must not replace the original staging error.
+        raise
     code, stdout, stderr, reason, cleanup_ok, spawned = capture(
         argv, env, str(root), end, prepared.handoff["deadline_monotonic"], byte_limit, clock)
     report.update(cli_invocations=int(spawned), exit_code=code, cleanup_ok=cleanup_ok,

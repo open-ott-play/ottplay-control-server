@@ -153,6 +153,61 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
         self.assertEqual(report["native_qualification"], "not_evaluated")
         self.assertNotIn("PASS", json.dumps(report))
 
+    def test_prespawn_write_failure_removes_only_new_private_staging(self):
+        prepared = self.prepare()
+        for failed_name in ("ca.pem", "cli.json"):
+            with self.subTest(failed_name=failed_name):
+                output = self.root / ("failed-" + failed_name)
+                failure = OSError("injected staging failure")
+                original_write = case.write_private
+
+                def fail_after_credentials(path, data):
+                    if path == output / failed_name:
+                        self.assertTrue((output / "credentials.json").is_file())
+                        raise failure
+                    return original_write(path, data)
+
+                with mock.patch.object(case, "write_private", side_effect=fail_after_credentials), \
+                        mock.patch.object(case, "capture") as capture:
+                    with self.assertRaises(OSError) as caught:
+                        case.run_case(prepared, execute=True, output=str(output), clock=lambda: 10)
+                self.assertIs(caught.exception, failure)
+                capture.assert_not_called()
+                self.assertFalse(output.exists())
+                self.assertTrue(self.credentials.is_file())
+
+    def test_prespawn_deadline_removes_private_staging_without_launch(self):
+        output = self.root / "expired"
+        moments = iter((10, 10, 56))  # Admission, end=55, then expiry before spawn.
+        with mock.patch.object(case, "capture") as capture:
+            with self.assertRaisesRegex(case.CaseError, "deadline_before_spawn"):
+                case.run_case(self.prepare(), execute=True, output=str(output), clock=lambda: next(moments))
+        capture.assert_not_called()
+        self.assertFalse(output.exists())
+        self.assertTrue(self.credentials.is_file())
+
+    def test_prespawn_cleanup_failure_preserves_original_error(self):
+        output = self.root / "cleanup-failed"
+        prepared = self.prepare()
+        failure = OSError("original staging failure")
+        original_write = case.write_private
+
+        def fail_after_credentials(path, data):
+            if path == output / "ca.pem":
+                self.assertTrue((output / "credentials.json").is_file())
+                raise failure
+            return original_write(path, data)
+
+        with mock.patch.object(case, "write_private", side_effect=fail_after_credentials), \
+                mock.patch.object(case.shutil, "rmtree", side_effect=OSError("cleanup failure")) as cleanup, \
+                mock.patch.object(case, "capture") as capture:
+            with self.assertRaises(OSError) as caught:
+                case.run_case(prepared, execute=True, output=str(output), clock=lambda: 10)
+        self.assertIs(caught.exception, failure)
+        cleanup.assert_called_once_with(output)
+        capture.assert_not_called()
+        self.assertTrue((output / "credentials.json").is_file())
+
     def test_staging_uses_verified_bytes_not_later_source_changes(self):
         prepared = self.prepare()
         self.write(self.source / "cli/ott.py", REDACTION_CANARY.encode())
@@ -251,10 +306,14 @@ class PosixCliFilesystemTests(CaseFixtures, unittest.TestCase):
     def test_existing_output_cannot_replay_or_overwrite_a_case(self):
         output = self.root / "exists"
         output.mkdir()
-        with mock.patch.object(case, "capture") as capture:
+        preserved = output / "existing.private"
+        preserved.write_bytes(b"existing case evidence")
+        with mock.patch.object(case, "capture") as capture, mock.patch.object(case.shutil, "rmtree") as cleanup:
             with self.assertRaises(FileExistsError):
                 case.run_case(self.prepare(), execute=True, output=str(output), clock=lambda: 10)
         capture.assert_not_called()
+        cleanup.assert_not_called()
+        self.assertEqual(preserved.read_bytes(), b"existing case evidence")
 
     def test_capture_spawn_error_is_reported_without_any_retry(self):
         with mock.patch.object(case.subprocess, "Popen", side_effect=OSError(REDACTION_CANARY)) as spawn:
