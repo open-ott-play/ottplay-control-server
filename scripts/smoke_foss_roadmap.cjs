@@ -116,6 +116,7 @@ function moduleOf(file, dependency, host) {
         };
         const execute = moduleOf('commands/remote-requests', dependency, host).executeRemoteRequest;
         const notificationDependency = name => {
+            if (name === '../ui/notification-banners') return moduleOf('ui/notification-banners', unexpected, host);
             if (name === './notification-media') return moduleOf('plugins/notification-media', unexpected, host);
             return unexpected();
         };
