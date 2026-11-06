@@ -70,7 +70,7 @@
     "required_paths": [
       "CHANGELOG.md"
     ],
-    "always_validate_workflows": []
+    "always_validate_workflows": ["dependency-review.yml"]
   },
   "nightly_cron": "52 5 * * *",
   "release_notes": "CHANGELOG.md",
