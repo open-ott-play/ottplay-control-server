@@ -37,7 +37,7 @@ jobs:
       - id: scope
         name: Classify documentation and build inputs
         env:
-          DOCUMENTATION_PATHS: '[]'
+          DOCUMENTATION_PATHS: "[\"GOVERNANCE.md\", \"README.ar.md\", \"README.bn.md\", \"README.cs.md\", \"README.de.md\", \"README.es.md\", \"README.fa.md\", \"README.fr.md\", \"README.he.md\", \"README.hi.md\", \"README.id.md\", \"README.it.md\", \"README.ja.md\", \"README.ko.md\", \"README.nl.md\", \"README.pl.md\", \"README.pt.md\", \"README.ru.md\", \"README.th.md\", \"README.tr.md\", \"README.uk.md\", \"README.vi.md\", \"README.zh-Hans.md\", \"README.zh-Hant.md\", \"ROADMAP.md\"]"
           REQUIRED_PATHS: "[\"CHANGELOG.md\"]"
           FORCE_FULL: ${{ inputs.force-full && 'true' || 'false' }}
         run: |
@@ -71,7 +71,6 @@ jobs:
     needs:
       - scope
       - workflow-contracts
-    if: ${{ needs.scope.outputs.run == 'true' }}
   workflow-contracts:
     name: CI configuration contracts
     runs-on: ${{ fromJSON((vars.CI_RUNNER_MODE == 'self-hosted' || vars.CI_RUNNER_MODE == 'k3s') && ((github.event_name
@@ -95,7 +94,6 @@ jobs:
       - run: python3 -m unittest discover -s .github/workflow-tests -p 'test_*.py'
     needs:
       - scope
-    if: ${{ needs.scope.outputs.run == 'true' }}
   release-contracts:
     name: Release tooling contracts
     runs-on: ${{ fromJSON((vars.CI_RUNNER_MODE == 'self-hosted' || vars.CI_RUNNER_MODE == 'k3s') && ((github.event_name
@@ -149,7 +147,7 @@ jobs:
           import json, os
           results = json.loads(os.environ['RESULTS'])
           expected = ['check-0', 'check-1', 'check-2', 'release-contracts', 'scope', 'workflow-contracts']
-          always = ['scope']
+          always = ['check-2', 'scope', 'workflow-contracts']
           if set(results) != set(expected):
               raise SystemExit('Validation job inventory differs')
           scope = results['scope']

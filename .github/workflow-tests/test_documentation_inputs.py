@@ -67,6 +67,41 @@ class DocumentationInputsTests(unittest.TestCase):
             (root / "README.md").write_text("Documentation")
             self.assertEqual(deployment_inputs(root), ["README.md"])
 
+    def test_every_actual_package_input_rejects_deletion_or_rename(self):
+        names = deployment_inputs(ROOT)
+        source = (ROOT / "scripts/package_deployment.py").read_text()
+        for missing in names:
+            with self.subTest(path=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "scripts").mkdir()
+                (root / "scripts/package_deployment.py").write_text(source)
+                for name in names:
+                    if (ROOT / name).is_dir():
+                        (root / name).mkdir()
+                    else:
+                        (root / name).write_text("Documentation")
+                self.assertEqual(deployment_inputs(root), names)
+                (root / missing).rename(root / (missing + ".renamed"))
+                with self.assertRaisesRegex(ValueError, "Missing or non-regular"):
+                    deployment_inputs(root)
+
+    def test_ordinary_document_edits_preserve_lightweight_validation(self):
+        names = deployment_inputs(ROOT)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "scripts").mkdir()
+            (root / "scripts/package_deployment.py").write_text(
+                (ROOT / "scripts/package_deployment.py").read_text()
+            )
+            for name in names:
+                if (ROOT / name).is_dir():
+                    (root / name).mkdir()
+                else:
+                    (root / name).write_text("Documentation")
+            for name in ("README.md", "README.ru.md"):
+                (root / name).write_text("Updated ordinary prose\n")
+            self.assertEqual(deployment_inputs(root), names)
+
     def test_dynamic_inventory_requires_explicit_review(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

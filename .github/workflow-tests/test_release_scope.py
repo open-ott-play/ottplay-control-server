@@ -1,5 +1,8 @@
 """Prevent an older generator from skipping main-branch release qualification."""
 
+import json
+import os
+import subprocess
 import unittest
 from copy import deepcopy
 from pathlib import Path
@@ -44,6 +47,38 @@ class ReleaseScopeTests(unittest.TestCase):
         self.workflow = yaml.safe_load(
             (ROOT / ".github/workflows/release-pipeline.yml").read_text()
         )
+
+    def test_documentation_route_retains_real_package_input_contracts(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/quality-gate.yml").read_text())
+        jobs = workflow["jobs"]
+        contracts = jobs["workflow-contracts"]
+        self.assertNotIn("if", contracts)
+        self.assertFalse(contracts.get("continue-on-error", False))
+        self.assertEqual(contracts["needs"], ["scope"])
+        command = "python3 -m unittest discover -s .github/workflow-tests -p 'test_*.py'"
+        checks = [step for step in contracts["steps"] if step.get("run") == command]
+        self.assertEqual(len(checks), 1)
+        self.assertNotIn("if", checks[0])
+        self.assertFalse(checks[0].get("continue-on-error", False))
+        self.assertEqual(jobs["check-2"]["uses"], "./.github/workflows/dependency-review.yml")
+        self.assertNotIn("if", jobs["check-2"])
+        results = {name: {"result": "skipped"} for name in jobs["gate"]["needs"]}
+        results["scope"] = {
+            "result": "success",
+            "outputs": {"run": "false", "reason": "documentation-only"},
+        }
+        results["check-2"] = {"result": "success"}
+        results["workflow-contracts"] = {"result": "success"}
+        gate = next(step["run"] for step in jobs["gate"]["steps"] if "run" in step)
+        for outcome in ("success", "skipped", "failure"):
+            with self.subTest(contracts=outcome):
+                results["workflow-contracts"]["result"] = outcome
+                checked = subprocess.run(
+                    ["bash", "-e", "-o", "pipefail", "-c", gate],
+                    env={**os.environ, "RESULTS": json.dumps(results)},
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(checked.returncode == 0, outcome == "success")
 
     def test_release_qualification_never_skips_documentation(self):
         require_full_release(self.workflow)
