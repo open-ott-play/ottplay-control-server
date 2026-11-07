@@ -141,6 +141,16 @@ class ReviewAutomationTests(unittest.TestCase):
             self.assertNotEqual(render(original), render(title_edit))
             self.assertEqual(render(original), render(base_edit))
             self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "true")
+            if name == "auto-merge":
+                for event in ("workflow_run", "status", "check_run", "schedule", "workflow_dispatch"):
+                    with self.subTest(event=event):
+                        first = context(event=event, **{
+                            "github.event.pull_request.number": "",
+                            "github.event.action": "",
+                            "github.run_id": 101,
+                        })
+                        second = {**first, "github.run_id": 102}
+                        self.assertNotEqual(render(first), render(second))
 
     def test_callers_delegate_only_metadata_with_minimum_permissions(self):
         events = {"opened", "synchronize", "reopened", "ready_for_review", "labeled", "unlabeled", "edited", "converted_to_draft"}
