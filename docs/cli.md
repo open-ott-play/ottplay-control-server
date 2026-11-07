@@ -1915,6 +1915,19 @@ Use `settings patch command_server|local_http [--value-file FILE]` to inspect or
 atomically change a connection. Use `setting plexFolderPaths` for the full Plex
 folder selection, with `add PATH TITLE`, `remove PATH`, or `clear` (all libraries).
 
+OTTPlay FOSS v1.1.68-beta.4 adds client-wide archive-resume and seek-notification
+preferences when listed by the player's schema:
+
+```sh
+ott t1 setting resumeArchiveAfterRestart 1   # automatically resume a valid archive
+ott t1 setting resumeArchiveAfterRestart 0   # default: live TV after restart
+ott t1 setting showSeekNotifications 0       # hide only compact seek notices
+ott t1 setting showSeekNotifications 1       # default: show seek notices
+```
+
+See [archive resume and seek notifications](player-settings.md#archive-resume-and-seek-notifications)
+for discovery, readback, saved-state guards and update requirements.
+
 For supported Torrent players, configure metadata and stream addons through
 `setting torrentCatalogLanguage`, `setting torrentCatalogEndpoint --value-file
 FILE`, and `setting torrentStreamAddons --value-file FILE`. See the
