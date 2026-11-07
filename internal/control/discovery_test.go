@@ -285,23 +285,159 @@ func TestDNSInstanceAndAnswerBounds(t *testing.T) {
 	}
 }
 
-func TestDNSTruncationUsesTCPAndHonorsTTL(t *testing.T) {
+func reserveDNSFixtureSockets(listen func(string, string) (net.Listener, error), listenPacket func(string, string) (net.PacketConn, error)) (net.Listener, net.PacketConn, error) {
 	// TCP and UDP have independent allocations and excluded port ranges on
-	// Windows. Keep both sockets reserved only after finding a usable pair.
-	var listener net.Listener
-	var packet net.PacketConn
+	// Windows. Alternate the allocator within the same bounded search: a port
+	// selected by one protocol need not be usable by the other. Keep the seed
+	// reserved until its matching socket is bound, then return both held.
 	var err error
 	for attempt := 0; attempt < 32; attempt++ {
-		packet, err = net.ListenPacket("udp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
+		if attempt%2 == 0 {
+			packet, seedErr := listenPacket("udp", "127.0.0.1:0")
+			if seedErr != nil {
+				return nil, nil, seedErr
+			}
+			var listener net.Listener
+			listener, err = listen("tcp", packet.LocalAddr().String())
+			if err == nil {
+				return listener, packet, nil
+			}
+			_ = packet.Close()
+		} else {
+			listener, seedErr := listen("tcp", "127.0.0.1:0")
+			if seedErr != nil {
+				return nil, nil, seedErr
+			}
+			var packet net.PacketConn
+			packet, err = listenPacket("udp", listener.Addr().String())
+			if err == nil {
+				return listener, packet, nil
+			}
+			_ = listener.Close()
 		}
-		listener, err = net.Listen("tcp", packet.LocalAddr().String())
-		if err == nil {
-			break
-		}
-		_ = packet.Close()
 	}
+	return nil, nil, err
+}
+
+type dnsFixtureTestSocket struct {
+	net.Listener
+	net.PacketConn
+	address net.Addr
+	closed  int
+}
+
+func (s *dnsFixtureTestSocket) Addr() net.Addr      { return s.address }
+func (s *dnsFixtureTestSocket) LocalAddr() net.Addr { return s.address }
+func (s *dnsFixtureTestSocket) Close() error {
+	s.closed++
+	return nil
+}
+
+func TestDNSFixtureSocketAllocation(t *testing.T) {
+	denied := errors.New("fixture protocol-specific port denial")
+	allocationError := errors.New("fixture initial allocation failed")
+	type bindStep struct {
+		network string
+		port    int // Zero asks this protocol to select a port.
+		chosen  int
+		err     error
+	}
+	cases := []struct {
+		name    string
+		steps   []bindStep
+		wantErr error
+	}{
+		{"udp_seed_usable", []bindStep{{"udp", 0, 12000, nil}, {"tcp", 12000, 12000, nil}}, nil},
+		{"udp_candidate_denied_tcp_seed_usable", []bindStep{
+			{"udp", 0, 12000, nil}, {"tcp", 12000, 0, denied},
+			{"tcp", 0, 13000, nil}, {"udp", 13000, 13000, nil},
+		}, nil},
+		{"tcp_candidate_denied_next_udp_seed_usable", []bindStep{
+			{"udp", 0, 12000, nil}, {"tcp", 12000, 0, denied},
+			{"tcp", 0, 13000, nil}, {"udp", 13000, 0, denied},
+			{"udp", 0, 12001, nil}, {"tcp", 12001, 12001, nil},
+		}, nil},
+		{"udp_initial_allocation_error", []bindStep{{"udp", 0, 0, allocationError}}, allocationError},
+		{"tcp_initial_allocation_error", []bindStep{
+			{"udp", 0, 12000, nil}, {"tcp", 12000, 0, denied}, {"tcp", 0, 0, allocationError},
+		}, allocationError},
+	}
+	var exhausted []bindStep
+	for attempt := 0; attempt < 32; attempt++ {
+		seed, match := "udp", "tcp"
+		if attempt%2 != 0 {
+			seed, match = match, seed
+		}
+		exhausted = append(exhausted, bindStep{seed, 0, 20000 + attempt, nil}, bindStep{match, 20000 + attempt, 0, denied})
+	}
+	cases = append(cases, struct {
+		name    string
+		steps   []bindStep
+		wantErr error
+	}{"all_32_candidates_denied", exhausted, denied})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var sockets []*dnsFixtureTestSocket
+			next := 0
+			bind := func(network, address string) (*dnsFixtureTestSocket, error) {
+				if next >= len(tc.steps) {
+					t.Fatalf("unexpected extra bind: %s %s", network, address)
+				}
+				step := tc.steps[next]
+				next++
+				want := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: step.port}
+				if network != step.network || address != want.String() {
+					t.Fatalf("bind %d = %s %s, want %s %s", next, network, address, step.network, want)
+				}
+				for index, socket := range sockets {
+					wantClosed := 1
+					if step.port != 0 && index == len(sockets)-1 {
+						wantClosed = 0
+						if socket.address.String() != address {
+							t.Fatal("matching bind changed the reserved address")
+						}
+					}
+					if socket.closed != wantClosed {
+						t.Fatalf("socket %d close count = %d before bind %d, want %d", index, socket.closed, next, wantClosed)
+					}
+				}
+				if step.err != nil {
+					return nil, step.err
+				}
+				socket := &dnsFixtureTestSocket{address: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: step.chosen}}
+				sockets = append(sockets, socket)
+				return socket, nil
+			}
+			listener, packet, err := reserveDNSFixtureSockets(
+				func(network, address string) (net.Listener, error) { return bind(network, address) },
+				func(network, address string) (net.PacketConn, error) { return bind(network, address) },
+			)
+			if !errors.Is(err, tc.wantErr) || next != len(tc.steps) {
+				t.Fatalf("allocation returned %v after %d binds, want %v after %d", err, next, tc.wantErr, len(tc.steps))
+			}
+			if err == nil {
+				if listener == nil || packet == nil || listener.Addr().String() != packet.LocalAddr().String() {
+					t.Fatal("successful pair did not retain the same address")
+				}
+				if sockets[len(sockets)-1].closed != 0 || sockets[len(sockets)-2].closed != 0 {
+					t.Fatal("successful sockets were closed before caller teardown")
+				}
+				_ = listener.Close()
+				_ = packet.Close()
+			} else if listener != nil || packet != nil {
+				t.Fatal("failed allocation returned a partial socket pair")
+			}
+			for _, socket := range sockets {
+				if socket.closed != 1 {
+					t.Fatalf("socket cleanup count = %d, want exactly one", socket.closed)
+				}
+			}
+		})
+	}
+}
+
+func TestDNSTruncationUsesTCPAndHonorsTTL(t *testing.T) {
+	listener, packet, err := reserveDNSFixtureSockets(net.Listen, net.ListenPacket)
 	if err != nil {
 		t.Fatalf("reserve matching UDP/TCP DNS fixture sockets: %v", err)
 	}
