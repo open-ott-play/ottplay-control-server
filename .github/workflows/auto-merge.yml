@@ -15,7 +15,7 @@ on:
 
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}-${{ (github.event.action != 'edited' || github.event.changes.base) && 'state' || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}-${{ contains(fromJSON('["workflow_run","status","check_run","schedule","workflow_dispatch"]'), github.event_name) && github.run_id || (github.event.action != 'edited' || github.event.changes.base) && 'state' || github.run_id }}
   cancel-in-progress: true
 
 permissions:
