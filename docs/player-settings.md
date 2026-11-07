@@ -162,6 +162,38 @@ they differ. For example, saved `1 (Modern)` with effective `0 (Classic)` means
 Classic is still active while loading or after fallback. A later read can show
 Modern without another write. The CLI does not poll or repeat the save.
 
+### Archive resume and seek notifications
+
+These preferences are available in OTTPlay FOSS
+[v1.1.68-beta.4](https://github.com/open-ott-play/ottplay-foss/releases/tag/v1.1.68-beta.4)
+and later builds that list them in `settings schema`. Both belong to this client,
+use integer `0` or `1`, persist across restarts, and participate in the player's
+normal settings export/import. Use the existing `setting` command:
+
+```sh
+ott t1 settings schema
+ott t1 setting resumeArchiveAfterRestart     # read the saved preference
+ott t1 setting resumeArchiveAfterRestart 1   # resume a valid archive after restart
+ott t1 setting resumeArchiveAfterRestart 0   # default: ordinary live TV startup
+ott t1 setting showSeekNotifications         # read the saved preference
+ott t1 setting showSeekNotifications 0       # hide compact seek notifications
+ott t1 setting showSeekNotifications 1       # default: show them
+```
+
+`resumeArchiveAfterRestart` defaults to **0**. Set it to **1** for automatic
+restoration of a valid saved archive position after restarting, without a
+confirmation dialog. Bookmark expiry, channel availability and parental PIN
+checks still apply. Local-file and VOD resume behavior is unchanged.
+
+`showSeekNotifications` defaults to **1**. Set it to **0** to hide only the compact
+seek notifications. Seeking, the timeline, Pause messages, errors and remote
+notification banners continue to work.
+
+If an ID is missing from the target player's schema, update that player and
+check its schema again. Publishing a release does not update an already running
+player. After a timeout or revision conflict, read the preference before deciding
+whether another save is needed; the CLI does not repeat the write automatically.
+
 ## Conditional saves and recovery
 
 Capability `player_settings` version 1 advertises `schema/get/set`. Discovery
