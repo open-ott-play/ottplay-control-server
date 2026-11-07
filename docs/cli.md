@@ -3496,6 +3496,16 @@ unrelated directory. A missing or ambiguous browser folder stops the load before
 provider settings are written. A native path that is missing, inaccessible or
 overlaps a different connected root is reported as an error.
 
+A running player does not imply that its saved network folders are mounted.
+After changing networks, a preset that includes an unavailable NAS folder can
+stop before any M3U/Plex settings are loaded. A `preflight_local` failure reports
+the safe cause and confirms that this attempt sent no preset settings or folder
+connections. A `connect_local_N` failure can follow a connection request: inspect
+`local sources` before repeating it. JSON results include a bounded `error_code`;
+private paths, provider URLs and arbitrary exception text are not printed.
+Reconnect the intended drive before retrying the complete preset. The CLI does
+not silently omit its Local section or replay an uncertain connection.
+
 Folder connections are applied before the other provider settings and verified
 again after the load. Other connected folders are retained. Loading a preset
 does not start a local movie or shuffle the library; the existing final M3U
