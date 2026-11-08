@@ -1359,8 +1359,9 @@ including Cyrillic text. A text channel query lists every channel whose name
 contains the query, including exact names and longer names. For example,
 `ott t1 zee` lists all names containing `zee`; `ott iphone "РЕН ТВ"` can include
 both `РЕН ТВ` and `РЕН ТВ HD`. The list stays in provider catalogue order. With
-an exact full-name match, that channel is selected directly. Otherwise the
-player chooses an eligible match using the random policy below, after the CLI
+an exact full-name match, that channel is selected directly. If several rows
+have the same full name, the first matching row in catalog order is selected.
+Otherwise the player chooses an eligible match using the random policy below, after the CLI
 validates the complete returned list. Duplicate exact names take precedence
 over longer partial matches. `ott iphone s РЕН` only lists matches.
 Numeric queries such as `ott tv 12` retain a single playback request.
@@ -1394,10 +1395,25 @@ error without playback. Eligibility and source identity are checked again by
 the player when playback is admitted; the CLI does not infer protection from
 channel names or cache private access settings.
 
-Random selection, including partial or ambiguous channel-name selection, needs
+Random selection, including channel-name selection with no full-name match, needs
 `capabilities.random.version = 1` and an updated controller. Older versions fail
-explicitly; the CLI never falls back to an unfiltered random command. Unique
-exact names, numbers and IDs retain their existing manual playback path.
+explicitly; the CLI never falls back to an unfiltered random command. Full-name
+matches, numbers and IDs retain their existing manual playback path.
+
+If only partial names match and the player does not advertise safe
+random selection, use `ott tv s "TITLE"` to inspect the matches and
+`ott --json tv s "TITLE"` to obtain their exact IDs. An explicit
+`ott tv play id:VIDEO_ID` selects one returned item through a fresh catalog
+read; the CLI never substitutes a channel number after a rejected request.
+
+For catalog-bound exact-title or `play id:VIDEO_ID` requests, failures distinguish
+a changed or expired selection, an incomplete catalog, an unavailable source
+and an invalid request when the
+player supplies a recognized error code. Other failures say that playback
+was rejected and recommend checking player status and local restrictions.
+That generic message does not establish a catalog change or a decoder
+failure. Inspect `ott tv status` before making another playback request;
+the CLI never repeats the rejected mutation or prints raw provider errors.
 
 `p` includes only programmes with a title and `start <= now < end`. Channels
 without current EPG are omitted. Plain `p` only lists programmes. `p TEXT`
@@ -2753,8 +2769,8 @@ provider indices shown by `providers` remain zero-based. `R`, `r` and `random`
 are case-insensitive aliases for the same safe, weighted random selection
 described above. A title selects a complete,
 case-insensitive name match in preference to partial matches. If several exact
-matches exist, one is chosen at random; if no exact match exists, one of the
-partial matches is chosen at random. No match is an error and sends no playback
+matches exist, the first in catalog order is selected; if no exact match exists,
+one of the partial matches is chosen at random. No match is an error and sends no playback
 request.
 
 The command waits for the requested provider and its complete catalogue within
@@ -2767,7 +2783,8 @@ roll it back or replay an uncertain request. Playback acknowledgement means
 the player dispatched the request, not that a picture has appeared.
 
 The player and controller must support catalogue-bound playback; random or
-ambiguous-name selection also requires the version-1 random capability. Older versions
+partial-name selection without a full match also requires the version-1 random
+capability. Older versions
 that lack it are reported as unsupported; the CLI does not substitute an
 unbound channel number. The legacy TV/Local videos catalogue API is limited to
 10,000 entries and its response-size limit; larger catalogues fail explicitly.
@@ -4367,8 +4384,9 @@ storage does not prove provider login, media availability or visible playback.
 
 Use `ott tv s "РЕН"` or `ott tv p --list "Кино"` to inspect results without
 switching. Channel queries use literal case-insensitive substrings: a full title
-can still list a longer title. A unique exact name wins; partial or duplicate
-exact names use the player's safe random policy. Kiosk title commands keep their
+can still list a longer title. The first full-name match in catalog order wins,
+including duplicate exact names. Only a search without a full-name match uses
+the player's safe random policy. Kiosk title commands keep their
 separate deterministic policy. Use the displayed catalogue number
 for a particular channel, keeping the provider/catalogue unchanged. Use
 `play TITLE` when the title is reserved by a command.

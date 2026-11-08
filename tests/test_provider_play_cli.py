@@ -115,8 +115,8 @@ class ProviderPlayTest(unittest.TestCase):
         self.assertEqual(data['playback']['channel']['id'], 'one')
         choice.assert_not_called()
 
-    def test_partial_names_and_duplicate_exact_names_choose_only_eligible_rows(self):
-        for query, rows in [('ре', self.rows[:2]), ('РЕН', [self.rows[0], dict(self.rows[1], name='рен')])]:
+    def test_partial_names_choose_only_eligible_rows_even_for_single_match(self):
+        for query, rows in [('ре', self.rows[:2]), ('РЕ', [self.rows[1]])]:
             with self.subTest(query=query):
                 self.rows = rows
                 with mock.patch.object(ott.secrets, 'choice', side_effect=lambda candidates: candidates[-1]) as choice:
@@ -125,6 +125,77 @@ class ProviderPlayTest(unittest.TestCase):
                 choice.assert_not_called()
                 self.assertEqual(self.mutations()[-1][2], {'catalog': 'source-snapshot', 'random': {'search': query}})
                 self.assertEqual(data['playback']['channel']['id'], 'two')
+
+    def test_modern_duplicate_exact_names_choose_first_catalog_row_without_random(self):
+        self.rows = [{'id': 'first-in-source', 'number': 978, 'name': 'Straße'},
+                     {'id': 'lower-number', 'number': 1, 'name': 'STRASSE'},
+                     {'id': 'partial', 'number': 115, 'name': 'STRASSE HD'}]
+        self.modern_catalog()
+        self.overrides['capabilities'].pop('random')
+        for provider in self.providers[:3]:
+            with self.subTest(provider=provider['id']):
+                self.calls.clear()
+                code, data, err = self.run_cli(['provider', provider['id'], 'STRASSE'])
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(data['playback']['channel'], self.rows[0])
+                self.assertEqual(self.mutations(), [('dev1', 'provider', {'query': provider['id']}),
+                    ('dev1', 'play_catalog', {'catalog': 'channel-snapshot', 'id': 'first-in-source'})])
+                self.assertEqual(sum(action == 'capabilities' for _, action, _ in self.calls), 1)
+
+    def test_legacy_duplicate_exact_names_use_bound_first_id_for_every_provider(self):
+        self.rows = [dict(self.rows[0], name='Straße'), dict(self.rows[1], name='STRASSE')]
+        self.overrides['capabilities'] = self.capabilities()
+        self.overrides['capabilities'].pop('random')
+        for provider in self.providers:
+            with self.subTest(provider=provider['id']):
+                self.calls.clear()
+                code, data, err = self.run_cli(['provider', provider['id'], 'STRASSE'])
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(data['playback']['channel'], self.rows[0])
+                self.assertEqual(self.mutations(), [('dev1', 'provider', {'query': provider['id']}),
+                    ('dev1', 'play_catalog', {'catalog': 'source-snapshot', 'id': 'one'})])
+                self.assertEqual(sum(action == 'capabilities' for _, action, _ in self.calls), 1)
+
+    def test_modern_normalized_exact_name_wins_amid_partial_matches(self):
+        self.rows = [{'id': 'partial-first', 'number': 978, 'name': 'Cafe\u0301 HD'},
+                     {'id': 'exact', 'number': 115, 'name': 'Cafe\u0301'},
+                     {'id': 'partial-last', 'number': 1, 'name': 'CAFÉ UHD'}]
+        self.modern_catalog()
+        self.overrides['capabilities'].pop('random')
+        code, data, err = self.run_cli(['provider', 'm3u', 'CAFÉ'])
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(data['playback']['channel'], self.rows[1])
+        self.assertEqual(self.mutations()[-1],
+                         ('dev1', 'play_catalog', {'catalog': 'channel-snapshot', 'id': 'exact'}))
+
+    def test_duplicate_exact_playback_failure_never_retries_provider_or_another_channel(self):
+        self.rows = [dict(self.rows[0], id='first', number=978), dict(self.rows[0], id='second')]
+        self.modern_catalog()
+        self.overrides['capabilities'].pop('random')
+        pending = ott.RequestError('request_pending_timeout', 'receipt', 'Outcome unknown', 'c' * 32)
+        for response, dispatched in ((ott.PlayerRejected('private-response', {'error': 'catalog_changed'}), False),
+                                     (pending, None)):
+            with self.subTest(response=response):
+                self.calls.clear()
+                self.overrides['play_catalog'] = response
+                code, data, err = self.run_cli(['provider', 'm3u', 'рен'])
+                self.assertEqual(code, 1)
+                self.assertEqual(data['playback']['stage'], 'playback')
+                self.assertIs(data['playback']['dispatched'], dispatched)
+                self.assertNotIn('private-response', str(data) + err)
+                self.assertEqual(self.mutations(), [('dev1', 'provider', {'query': 'm3u'}),
+                    ('dev1', 'play_catalog', {'catalog': 'channel-snapshot', 'id': 'first'})])
+
+    def test_partial_provider_match_without_random_never_plays_even_for_one_match(self):
+        self.rows = [self.rows[1]]
+        self.modern_catalog()
+        self.overrides['capabilities'].pop('random')
+        code, data, err = self.run_cli(['provider', 'm3u', 'рен'])
+        self.assertEqual(code, 1)
+        self.assertEqual(data['playback']['stage'], 'selection')
+        self.assertIs(data['playback']['dispatched'], False)
+        self.assertIn('Safe random selection is not supported', err)
+        self.assertEqual(self.mutations(), [('dev1', 'provider', {'query': 'm3u'})])
 
     def test_random_aliases_draw_from_complete_catalog(self):
         for word in ('R', 'r', 'random', 'RANDOM'):

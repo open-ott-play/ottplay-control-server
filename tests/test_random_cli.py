@@ -142,6 +142,44 @@ class RandomSelectionTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertNotIn('private', err)
 
+    def test_long_opaque_candidate_ids_must_match_exactly_without_replay(self):
+        for length in (513, 2048):
+            with self.subTest(length=length):
+                candidate = dict(self.row, id='a' * length)
+                self.row = dict(candidate, id='b' * length)
+                self.calls.clear()
+                with mock.patch.object(ott.time, 'monotonic', return_value=0), \
+                        self.assertRaisesRegex(ott.Error, 'Playback may have started; the request was not repeated'):
+                    ott.random_play(self.client, 'tv', 'source-123', {}, 45, [candidate])
+                self.assertEqual(self.calls, [('play_catalog', {'catalog': 'source-123', 'random': {}})])
+
+    def test_matching_opaque_candidate_ids_use_the_full_catalog_id_limit(self):
+        for identity in ('a' * 513, 'a' * 2048, 'é' * 1024):
+            with self.subTest(bytes=len(identity.encode('utf-8'))):
+                self.row = dict(self.row, id=identity)
+                self.calls.clear()
+                with mock.patch.object(ott.time, 'monotonic', return_value=0):
+                    result = ott.random_play(self.client, 'tv', 'source-123', {}, 45, [dict(self.row)])
+                self.assertEqual(result['channel'], self.row)
+                self.assertEqual(len(self.calls), 1)
+
+    def test_candidate_identity_preserves_legacy_integers_without_coercing_opaque_strings(self):
+        for identity, accepted in ((15, True), ('15', True), ('015', False),
+                                   (True, False), (None, False), (15.0, False),
+                                   (9007199254740992, False)):
+            with self.subTest(identity=identity):
+                self.row = dict(self.row, id='15')
+                candidate = dict(self.row, id=identity)
+                self.calls.clear()
+                with mock.patch.object(ott.time, 'monotonic', return_value=0):
+                    if accepted:
+                        result = ott.random_play(self.client, 'tv', 'source-123', {}, 45, [candidate])
+                        self.assertEqual(result['channel'], self.row)
+                    else:
+                        with self.assertRaisesRegex(ott.Error, 'did not confirm a valid random channel'):
+                            ott.random_play(self.client, 'tv', 'source-123', {}, 45, [candidate])
+                self.assertEqual(len(self.calls), 1)
+
     def test_fixed_empty_selection_rejection_is_clear_without_echoing_extra_data(self):
         self.replies['play_catalog'] = ott.PlayerRejected('private', {
             'error': 'No eligible channels are available, or playback is restricted by the player.', 'token': 'private'})

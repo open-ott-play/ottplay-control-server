@@ -646,13 +646,17 @@ tokens of at most 128 characters. Do not reconstruct them from source URLs
 or expose provider credentials.
 
 Receipts are bounded, expire after 120 seconds of inactivity and belong to a
-player runtime, provider, source/profile and catalogue revision. Successful,
+player runtime, provider, source/profile and a bounded catalogue snapshot. Successful,
 validated category-list and channel-page reads renew the same receipt token.
 Category selection, playback and rejected access do not renew it. A category receipt cannot
 be used for explicit-ID channel playback; the negotiated random selector below
-can use the category-list receipt for All. A reload, source change, append or
-membership/order edit invalidates a prior snapshot. Ordinary browsing does
-not. Pagination reports a fixed loaded snapshot; `loading:true` separately
+can use the category-list receipt for All. A reload or source/profile change
+invalidates a prior snapshot. Additional revision checks depend on the player:
+web players can invalidate on append or membership/order changes, while native
+immutable read snapshots can survive discovery or presentation enrichment.
+Native playback still checks the current source owner and the selected ID/media
+binding; an old row never authorizes a different target. Ordinary browsing does
+not invalidate the source. Pagination reports a fixed loaded snapshot; `loading:true` separately
 signals that provider discovery is incomplete. Clients must not combine
 pages across receipts or treat a partial title search as complete.
 
@@ -667,6 +671,15 @@ its existing success and rejection envelopes. A rejected or
 uncertain playback must not be repeated automatically or downgraded to a
 numeric switch. Existing peers may return the legacy unsupported envelope;
 clients require the capability before using this extension.
+
+For explicit-ID `play_catalog` rejections, the CLI recognizes the exact
+legacy data shape `{error:CODE}` with `invalid_request`, `catalog_changed`,
+`catalog_incomplete` or `unavailable`. It maps these codes to fixed playback
+diagnostics; other shapes or free-text errors produce a generic playback
+rejection without exposing their contents. This does not relax the strict
+runtime/operation envelope for category reads and does not make a failed
+playback retryable. Successful modern IDs are opaque strings and must be
+compared in full, including IDs longer than the legacy 512-unit limit.
 
 ### Player-owned random selection
 

@@ -435,6 +435,13 @@ CATEGORY_ERRORS = {
     "unavailable": "The media catalog is unavailable; check player status.",
     "invalid_request": "The player could not accept the category request; update the player and controller.",
 }
+MEDIA_PLAY_ERRORS = {
+    "invalid_request": "The player could not accept the catalog playback request; check player/controller versions and the catalog selection.",
+    "catalog_changed": "The playback catalog receipt is no longer current or its source changed; search again before another playback request.",
+    "catalog_incomplete": "The playback catalog is incomplete; check player status and search again after loading finishes.",
+    "unavailable": "The playback catalog or selected media is unavailable; check player status.",
+}
+MEDIA_PLAY_REJECTED = "The catalog playback request was rejected; check player status and local playback restrictions."
 
 
 FAVORITES_OPERATIONS = frozenset(("list", "add", "play", "remove"))
@@ -1472,7 +1479,7 @@ def _play_channel(client, device, params, deadline, progress=None):
         data["playback"] = {"error": str(error)}
         return data, error
     exact = [row for row in rows if exact_id is not None or media_search_key(row["name"]) == media_search_key(text)]
-    selected = exact[0] if len(exact) == 1 else None
+    selected = exact[0] if exact else None
     try:
         # One mutation follows the complete read-only search. Never replay it.
         remaining = deadline - time.monotonic()
@@ -4020,10 +4027,21 @@ def media_call(client, device, action, params, deadline):
                 delay = min(delay * 2, 8)
 
 
+def media_play_rejection(data):
+    # Native play_catalog uses a one-field error object, unlike runtime-bound
+    # category reads. Only its closed enum becomes diagnostic text; prose and
+    # richer objects stay generic. This never permits a playback retry.
+    if isinstance(data, dict) and set(data) == {"error"} and isinstance(data["error"], str):
+        return MEDIA_PLAY_ERRORS.get(data["error"], MEDIA_PLAY_REJECTED)
+    return MEDIA_PLAY_REJECTED
+
+
 def media_request(client, device, action, params, deadline):
     try:
         data = media_call(client, device, action, params, deadline)
     except PlayerRejected as exc:
+        if action == "play_catalog":
+            raise Error(media_play_rejection(exc.data) + " The request was not repeated.") from None
         detail = "The media catalog request was rejected; the catalog, provider or profile may have changed."
         error = exc.data
         if (isinstance(error, dict) and set(error) == {"version", "runtime", "op", "state", "error"}
@@ -7341,7 +7359,8 @@ def random_play(client, device, catalog, selector, deadline, candidates=None):
             or type(channel["number"]) is not int or not 0 < channel["number"] <= 9007199254740991
             or ("range" in selector and not selector["range"][0] <= channel["number"] <= selector["range"][1])
             or ("search" in selector and media_search_key(selector["search"]) not in media_search_key(channel["name"]))
-            or (candidates is not None and not any(channel_identity(channel["id"]) == channel_identity(row["id"])
+            or (candidates is not None and not any((channel["id"] == row["id"] if isinstance(row["id"], str)
+                else channel_identity(row["id"]) is not None and channel["id"] == channel_identity(row["id"]))
                 and all(channel[key] == row[key] for key in ("number", "name")) for row in candidates))):
         raise Error("The player did not confirm a valid random channel. Playback may have started; the request was not repeated")
     return {"dispatched": True, "channel": dict(channel)}
@@ -7409,7 +7428,7 @@ def provider_play_selection(rows, query):
             matches = [row for row in rows if key in media_search_key(row["name"])]
     if not matches:
         raise Error("No channels match in the selected provider's catalog; no playback was requested")
-    if len(matches) == 1 and (query.isdecimal() or media_search_key(matches[0]["name"]) == media_search_key(query)):
+    if (len(matches) == 1 and query.isdecimal()) or media_search_key(matches[0]["name"]) == media_search_key(query):
         return matches[0]
     return None
 
@@ -8356,7 +8375,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         sys.stdout.flush()
         exact = (sum(media_search_key(row["name"]) == media_search_key(params["query"].strip())
                      for row in data.get("channels", [])) if action == "play" else 0)
-        if len(data.get("programs", data.get("channels", []))) > 1 and exact != 1:
+        if len(data.get("programs", data.get("channels", []))) > 1 and exact == 0:
             print(f"Randomly selected channel: {channel['number']}: {clean(channel['name'])}", file=sys.stderr)
         if data["playback"].get("mode") == "archive":
             chosen = data["playback"]

@@ -387,8 +387,8 @@ class CategoriesCliTest(unittest.TestCase):
     def test_video_queries_need_only_first_category_page_even_if_selected_is_later(self):
         first = category_page([{'id': 'all', 'name': 'All', 'count': 40069}], total=2052, has_more=True)
         rows = channel_page()
-        ack = {'dispatched': True, 'channel': rows['channels'][-1]}
-        for words, extra in ((['s'], []), (['play', 'Три кота'], [capabilities(), ack])):
+        ack = {'dispatched': True, 'channel': rows['channels'][0]}
+        for words, extra in ((['s'], []), (['play', 'Три кота'], [ack])):
             with self.subTest(words=words):
                 code, _, _, calls = self.run_cli(words, [capabilities(), first, rows] + extra)
                 self.assertEqual(code, 0)
@@ -586,25 +586,25 @@ class CategoriesCliTest(unittest.TestCase):
                 self.assertEqual(client.call.call_count, 1)
                 wait.assert_not_called()
 
-    def test_paged_title_search_uses_category_bound_stable_id_once(self):
+    def test_paged_partial_title_search_uses_bound_random_once(self):
         caps = capabilities(); caps['categories']['maxPageSize'] = 2
         rows = channel_page()['channels'] + [{'id': 'last', 'number': 1200, 'name': 'Три кота'}]
         first = channel_page(rows[:2], total=3, has_more=True)
         second = channel_page(rows[2:], offset=2, total=3)
         ack = {'dispatched': True, 'channel': rows[2]}
-        code, out, err, calls = self.run_cli(['Три кота'], [caps, category_page(), first, second, caps, ack], True)
+        code, out, err, calls = self.run_cli(['Три'], [caps, category_page(), first, second, caps, ack], True)
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)['channels'], rows)
         self.assertEqual(calls[-3], mock.call('dev_tv', 'channels', {
             'runtime': 'page-one', 'catalog': 'category-one', 'category': 'folder-42',
-            'offset': 2, 'limit': 2, 'search': 'Три кота'}))
-        self.assertEqual(calls[-1], mock.call('dev_tv', 'play_catalog', {'catalog': 'category-one', 'random': {'search': 'Три кота'}}))
+            'offset': 2, 'limit': 2, 'search': 'Три'}))
+        self.assertEqual(calls[-1], mock.call('dev_tv', 'play_catalog', {'catalog': 'category-one', 'random': {'search': 'Три'}}))
 
     def test_stale_catalog_during_video_play_is_never_replayed_as_number(self):
         rejection = ott.PlayerRejected('private-server-token', {'error': 'catalog_changed'})
-        code, out, err, calls = self.run_cli(['Три кота'], [capabilities(), category_page(), channel_page(), capabilities(), rejection], True)
+        code, out, err, calls = self.run_cli(['Три'], [capabilities(), category_page(), channel_page(), capabilities(), rejection], True)
         self.assertEqual((code, len(calls)), (1, 5))
-        self.assertEqual(calls[-1], mock.call('dev_tv', 'play_catalog', {'catalog': 'category-one', 'random': {'search': 'Три кота'}}))
+        self.assertEqual(calls[-1], mock.call('dev_tv', 'play_catalog', {'catalog': 'category-one', 'random': {'search': 'Три'}}))
         self.assertIn('playback', json.loads(out))
         self.assertNotIn('private-server-token', out + err)
 
@@ -665,20 +665,20 @@ class CategoriesCliTest(unittest.TestCase):
             self.assertEqual((code, err, out), (0, '', '72: Три кота\n901: Три кота\n'))
             self.assertEqual(calls, [mock.call('dev_tv', 'capabilities', {}), mock.call('dev_tv', 'channels', {'search': 'Три кота'})])
 
-    def test_duplicate_video_titles_use_returned_global_number_and_stable_ack_id(self):
+    def test_partial_video_titles_use_bound_random_and_stable_ack_id(self):
         rows = [{'id': 'video-72', 'number': 72, 'name': 'Три кота'},
                 {'id': 'video-901', 'number': 901, 'name': 'Три кота'}]
         ack = {'dispatched': True, 'channel': copy.deepcopy(rows[1])}
         caps = capabilities(); del caps['categories']
         catalog = {'catalog': 'legacy-snapshot', 'channels': rows}
-        code, out, err, calls = self.run_cli(['Три кота'], [ott.PlayerUnsupported('Legacy player'), {'channels': rows}, caps, catalog, ack], True)
+        code, out, err, calls = self.run_cli(['Три'], [ott.PlayerUnsupported('Legacy player'), {'channels': rows}, caps, catalog, ack], True)
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out)['playback']['channel']['id'], 'video-901')
-        self.assertEqual(calls, [mock.call('dev_tv', 'capabilities', {}), mock.call('dev_tv', 'channels', {'search': 'Три кота'}),
+        self.assertEqual(calls, [mock.call('dev_tv', 'capabilities', {}), mock.call('dev_tv', 'channels', {'search': 'Три'}),
                                 mock.call('dev_tv', 'capabilities', {}), mock.call('dev_tv', 'epg_catalog', {}),
-                                mock.call('dev_tv', 'play_catalog', {'catalog': 'legacy-snapshot', 'random': {'search': 'Три кота'}})])
+                                mock.call('dev_tv', 'play_catalog', {'catalog': 'legacy-snapshot', 'random': {'search': 'Три'}})])
         ack['channel']['id'] = 'video-elsewhere'
-        code, _, err, calls = self.run_cli(['Три кота'], [ott.PlayerUnsupported('Legacy player'), {'channels': rows}, caps, catalog, ack])
+        code, _, err, calls = self.run_cli(['Три'], [ott.PlayerUnsupported('Legacy player'), {'channels': rows}, caps, catalog, ack])
         self.assertEqual((code, len(calls)), (1, 5))
         self.assertIn('not repeated', err)
 
