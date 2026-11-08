@@ -1,4 +1,4 @@
-"""Read-only player workbench. Fixed observations, no eval or repair effects."""
+"""Passive player observations and explicitly requested, bounded capture controls."""
 import argparse
 import datetime
 import hashlib
@@ -872,7 +872,9 @@ class Parser(argparse.ArgumentParser):
 
 def arguments(words, json_output):
     command = words[0]
-    parser = Parser(prog="ott PLAYER " + command, add_help=True)
+    parser = Parser(prog="ott PLAYER " + command, add_help=True,
+                    epilog="Native capture: debug capture start [--duration 30], status, read, stop."
+                    if command == "debug" else None)
     parser.add_argument("-j", "--json", action="store_true", default=json_output)
     lanes = {"debug": ("web",), "operation": ("web", "native")}.get(command, ("auto", "web", "native"))
     parser.add_argument("--lane", choices=lanes, default="web" if command in ("debug", "operation") else "auto")
@@ -988,10 +990,12 @@ def print_provider_summary(result):
 
 
 def run(api, client, device, words, timeout, json_output=False):
-    """CLI entry point with bounded, machine-readable failures and no mutations."""
+    """Passive observations, with explicitly requested capture controls routed separately."""
     command = words[0].casefold()
     command = "debug" if command == "dbg" else command
     json_output = json_output or any(word in ("-j", "--json") for word in words[1:])
+    if command == "debug" and len(words) > 1 and words[1].casefold() == "capture":
+        return api.native_playback_capture_module().run(api, client, device, words[2:], timeout, json_output)
     result = {"version": 1, "command": command, "device_id": device, "started_at": now(),
               "read_only": True, "physical_display_verified": False, "evaluator": "workbench-v2"}
     provider_mode = False

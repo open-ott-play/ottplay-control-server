@@ -26,6 +26,103 @@ This command is separate from `--lane native`, which addresses a bound Android
 maintenance agent. Ordinary `debug`, `debug --engine`, existing inspection
 sections, and saved diagnostic bundles retain their existing behavior.
 
+## Bounded native capture
+
+Native players can separately advertise `native_playback_capture` version 1.
+This capability enables an in-memory diagnostic ring through the existing
+remote-control connection. It does not require the passive snapshot capability;
+a player that only advertises capture still cannot serve `debug --native-playback`.
+The CLI, controller and player must all support the capture protocol.
+
+```sh
+ott l_ debug capture start
+ott l_ debug capture start --duration 60
+ott l_ debug capture status
+ott --json l_ debug capture read
+ott l_ debug capture stop
+ott l_,lg2 debug capture start --duration 10
+```
+
+`start` defaults to 30 seconds and accepts an integer from 5 through 60 seconds.
+The player samples approximately once per second and retains at most 64 records.
+Start acknowledges promptly; the CLI does not wait for the recording duration.
+The command timeout covers capability discovery and acknowledgement, while the
+player owns the capture timer. An active capture rejects another start with
+`capture_busy`; it is not restarted or extended automatically.
+
+`status` discovers the current or most recent capture without creating one.
+`read` and `stop` first discover its opaque ID, then address that exact capture.
+If another capture replaces it between those requests, the operation fails with
+`capture_not_found` instead of acting on the replacement. When discovery reports
+idle, the CLI reports that no capture is available and sends no read or stop.
+Read is non-destructive: it returns the retained ring, including a completed one.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Capturing: explicit start
+    Capturing --> Complete: duration reached
+    Capturing --> Stopped: explicit stop
+    Capturing --> SessionChanged: another playback item selected
+    Complete --> Capturing: explicit new start
+    Stopped --> Capturing: explicit new start
+    SessionChanged --> Capturing: explicit new start
+```
+
+Completion, stop and playback selection changes retain the captured records until
+the next start or application exit. Stopping an already completed or interrupted
+capture preserves its terminal state. An internal rebuffer or reopen retains the
+capture; individual native counters may reset, so a decrease is not proof of a
+measurement error. A new application runtime invalidates old capture requests.
+
+Capture contains only bounded numeric measurements and fixed status codes.
+It excludes media names, URLs, hosts, credentials, filesystem paths, playback
+position or duration, window IDs and raw native event strings. The opaque capture
+ID is the only capture identity exposed. Nullable measurements mean unavailable.
+A zero counter does not establish successful playback. `callback_error_code` is
+the last reported numeric error code, not an error counter. Callback and frame-related counters do not by
+themselves prove a visible picture or audible sound on the television.
+
+The player keeps the ring in memory. The CLI prints a validated report and creates
+no output file automatically. The controller retains its ordinary bounded RPC
+result in memory; its durable journal records request identity and outcome, not
+capture records. Start and stop are reported as diagnostic mutations
+(`read_only: false`); status, read and the existing passive snapshot remain
+read-only. None of these operations starts, seeks or restarts media playback.
+
+If start or stop loses its acknowledgement, the CLI reports an unknown outcome
+and does not replay it or issue an automatic cleanup command. Use an explicit
+`debug capture status` to reconcile before another change. Group requests remain
+independent and parallel: inspect each player's result rather than assuming one
+member's success applies to the entire group.
+
+### Capture troubleshooting and access
+
+- **Controller unsupported:** update the controller. Capture uses a dedicated
+  capability probe, so an older relay rejects it before any capture is queued.
+- **Player unsupported:** update or enable the matching native player. An
+  advertised passive snapshot alone does not imply capture support.
+- **No active playback:** start playback normally, then request a capture.
+- **Capture busy:** inspect the current capture, or explicitly stop it before
+  starting another. A failed start does not discard the existing ring.
+- **Capture not found or runtime mismatch:** request status again. Another start,
+  application restart or completed replacement may have invalidated the identity.
+- **Invalid response:** keep the rejected result as a protocol failure. Do not
+  interpret rejected or malformed measurements as a successful capture.
+
+Command-scoped operators need `capabilities` plus the appropriate action:
+`native_playback_diagnostics.start`, `native_playback_diagnostics.status`,
+`native_playback_diagnostics.read` or `native_playback_diagnostics.stop`.
+Read and stop also require `native_playback_diagnostics.status` for discovery.
+A family-wide wildcard is not accepted. Existing administrator credentials retain their normal access;
+no new per-player consent window is introduced.
+
+The exact synthetic wire examples and numeric limits are in
+[`native-playback-capture-v1.json`](../contracts/native-playback-capture-v1.json).
+They are contract tests, not observations from a physical television. The existing
+[`native-playback-v1.json`](../contracts/native-playback-v1.json) remains the
+separate passive snapshot contract.
+
 ## Reading the last failure from live status
 
 Use `status --details` to read the extended failure report from a supported

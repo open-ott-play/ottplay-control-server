@@ -17,6 +17,8 @@ type CommandOperator struct {
 
 // Composite actions require the exact operation, never a family-wide wildcard.
 var CommandOperations = map[string]string{
+	"native_playback_diagnostics": "start status read stop",
+
 	"command":   "popup_message channel_by_number channel_by_name random_channel change_provider change_provider_settings change_playlist set_volume exit_player",
 	"input":     "up down left right ok back menu settings channels guide info channel_up channel_down volume_up volume_down mute play_pause audio aspect zoom pip fullscreen",
 	"playback":  "pause resume previous_channel next_channel step_channel seek seek_relative",
