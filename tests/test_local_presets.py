@@ -135,6 +135,79 @@ class LocalPresetTests(unittest.TestCase):
         self.assertEqual(sum(c["op"] == "connect" for c in self.local_calls), 1)
         self.assertEqual(self.player.calls, [])
 
+    def test_unavailable_folder_preflight_reports_cause_without_mutation_warning(self):
+        error = ott.Error(ott.LOCAL_MEDIA_ERRORS["source_unavailable"] + ". The request was not repeated")
+        with mock.patch.object(ott, "local_preset_snapshot", side_effect=error):
+            result = self.load()
+        self.assertEqual(result["stage"], "preflight_local")
+        self.assertEqual(result["error_code"], "source_unavailable")
+        self.assertIn("reconnect the drive", result["error"])
+        self.assertIn("This attempt sent no preset settings or folder connections", result["error"])
+        self.assertNotIn("may have executed", result["error"])
+        self.assertEqual(self.player.calls, [])
+        self.assertEqual(self.local_calls, [])
+
+    def test_failed_connection_retains_uncertainty_and_never_replays(self):
+        self.connect_error = ott.Error(ott.LOCAL_MEDIA_ERRORS["source_unavailable"] + ". The request was not repeated")
+        result = self.load()
+        self.assertEqual(result["error_code"], "source_unavailable")
+        self.assertIn("A folder connection may have executed", result["error"])
+        self.assertIn("This attempt sent no provider settings", result["error"])
+        self.assertEqual(sum(c["op"] == "connect" for c in self.local_calls), 1)
+        self.assertEqual(self.player.calls, [])
+
+    def test_preflight_transport_code_survives_without_private_exception_text(self):
+        self.capability_error = ott.RequestError("request_pending_timeout", "private-stage", fixtures.TOKEN)
+        result = self.load()
+        self.assertEqual(result["error_code"], "request_pending_timeout")
+        self.assertIn("No player response", result["error"])
+        self.assertNotIn(fixtures.TOKEN, json.dumps(result))
+        self.assertNotIn("private-stage", json.dumps(result))
+        self.assertEqual(self.player.calls, [])
+
+    def test_unknown_failures_do_not_expose_text_paths_or_player_metadata(self):
+        private = fixtures.TOKEN + " /private/folders/Movies " + fixtures.PLAYLIST
+        for error in (ott.Error(private), ott.PlayerRejected(private, {"error": private}),
+                      ott.TransportError(private), OSError(private), KeyError(private),
+                      ValueError(private), ott.RequestError(private, private, private)):
+            with self.subTest(error=type(error).__name__):
+                self.capability_error = error
+                result = self.load()
+                self.assertEqual(result["error_code"], "local_preset_failed")
+                self.assertNotIn(private, json.dumps(result))
+                self.assertNotIn(fixtures.TOKEN, json.dumps(result))
+                self.assertEqual(self.player.calls, [])
+
+    def test_preflight_interrupt_does_not_claim_that_a_mutation_was_sent(self):
+        self.capability_error = KeyboardInterrupt()
+        result = self.load()
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(result["error_code"], "interrupted")
+        self.assertIn("This attempt sent no preset settings or folder connections", result["error"])
+        self.assertEqual(self.player.calls, [])
+
+    def test_final_verification_does_not_reuse_preflight_no_write_claim(self):
+        self.sources = [source()]
+        with mock.patch.object(ott, "local_preset_matches", side_effect=ott.Error(
+                "Local preset folder is ambiguous; no preset settings were sent")):
+            result = self.load()
+        self.assertEqual(result["stage"], "verify_local")
+        self.assertEqual(result["error_code"], "source_ambiguous")
+        self.assertTrue(self.player.saved)
+        self.assertIn("Earlier preset steps may already be applied", result["error"])
+        self.assertNotIn("no preset settings", result["error"].lower())
+
+    def test_plain_preset_output_includes_the_safe_folder_failure(self):
+        self.connect_error = ott.Error(ott.LOCAL_MEDIA_ERRORS["source_unavailable"] + ". The request was not repeated")
+        config = fixtures.config()
+        config["presets"]["local"]["local"] = {"sources": [{"name": "Movies", "path": "/Volumes/data/Movies"}]}
+        code, out, err, _, _ = fixtures.run(config, self.player, json_output=False)
+        self.assertEqual(code, 1)
+        self.assertIn("connect_local_1", err)
+        self.assertIn("reconnect the drive", err)
+        self.assertNotIn(fixtures.TOKEN, out + err)
+        self.assertNotIn("/Volumes", out + err)
+
     def test_unconfirmed_connection_stops_transaction(self):
         with mock.patch.object(ott, "local_preset_connected", return_value=False):
             result = self.load()

@@ -2559,6 +2559,55 @@ def require_preset_favorites_support(config, name, *, settings_only=False):
             raise Error("This preset contains saved favorites, but complete preset favorites delivery is not available yet; no preset settings were sent. Use --settings-only to explicitly skip favorites")
 
 
+def local_preset_failure(exc, stage):
+    """Explain Local phases without exposing arbitrary exception text or paths."""
+    code = "local_preset_failed"
+    detail = "Could not verify the Local folder configuration"
+    known = {
+        "Local preset folder is ambiguous; no preset settings were sent":
+            ("source_ambiguous", "Several connected folders match the Local preset"),
+        "Local preset folder identity differs from the player":
+            ("source_identity_mismatch", "Local preset folder identity differs from the player"),
+        "Connect each Local preset folder on this player before loading the preset":
+            ("source_not_connected", "Connect each Local preset folder on this player before loading the preset"),
+        "Local preset folder connection was not confirmed":
+            ("connection_unconfirmed", "Local preset folder connection was not confirmed"),
+        "Local preset folders differ from the player":
+            ("source_configuration_changed", "Local preset folders differ from the player"),
+        "This player cannot receive Local videos presets; no preset settings were sent":
+            ("unsupported", "This player cannot receive Local videos presets"),
+    }
+    if isinstance(exc, RequestError) and isinstance(exc.reason, str) and exc.reason in REQUEST_ERROR_REASONS:
+        code = exc.reason
+        detail = {
+            "controller_unavailable": "The controller could not be reached",
+            "controller_http_error": "The controller returned an HTTP error",
+            "invalid_response": "The controller returned an invalid response",
+            "receipt_missing": "The controller did not retain the request result",
+            "unauthorized": "The controller rejected authorization",
+            "rate_limited": "The controller rate limit was reached",
+            "request_pending_timeout": "No player response was received before the deadline",
+        }[code]
+    elif isinstance(exc, Error):
+        # Only exact, locally defined messages are safe. Player responses,
+        # exception arguments and filesystem errors may contain credentials.
+        message = str(exc)
+        if message in known:
+            code, detail = known[message]
+        for reason, safe in LOCAL_MEDIA_ERRORS.items():
+            if message in (safe, safe + ". The request was not repeated"):
+                code, detail = reason, safe
+                break
+    if stage == "preflight_local":
+        outcome = "This attempt sent no preset settings or folder connections."
+    elif stage.startswith("connect_local_"):
+        outcome = ("A folder connection may have executed; inspect local sources before retrying. "
+                   "This attempt sent no provider settings.")
+    else:
+        outcome = "Earlier preset steps may already be applied; inspect the player before retrying."
+    return {"error_code": code, "error": detail.rstrip(".") + ". " + outcome}
+
+
 def load_preset(client, device, name, preset, session=None):
     """Apply acknowledged steps; repeat only proven pre-write mount rejections."""
     completed = []
@@ -2724,9 +2773,16 @@ def load_preset(client, device, name, preset, session=None):
                 raise Error("Local preset folders differ from the player")
             completed.append(stage)
     except KeyboardInterrupt:
+        if stage == "preflight_local":
+            return {"preset": name, "status": "interrupted", "stage": stage, "completed": completed,
+                    "error_code": "interrupted",
+                    "error": "Local folder verification interrupted. This attempt sent no preset settings or folder connections."}
         return {"preset": name, "status": "interrupted", "stage": stage, "completed": completed,
                 "error": "Loading interrupted. A request may have executed; inspect the player before retrying."}
-    except (Error, KeyError, TypeError, ValueError, OSError):
+    except (Error, KeyError, TypeError, ValueError, OSError) as exc:
+        if stage in ("preflight_local", "verify_local") or stage.startswith("connect_local_"):
+            return {"preset": name, "status": "failed", "stage": stage, "completed": completed,
+                    **local_preset_failure(exc, stage)}
         return {"preset": name, "status": "failed", "stage": stage, "completed": completed,
                 "error": "Loading stopped. A request may have executed; inspect the player before retrying."}
     return {"preset": name, "status": "loaded", "provider": "m3u", "active_profile": desired,
