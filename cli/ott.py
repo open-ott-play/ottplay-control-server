@@ -211,6 +211,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME doctor --provider [--out DIR]  explain provider lookup with safe runtime evidence
   ott NAME debug [--engine] [-j]      read bounded runtime/native diagnostics (alias: dbg)
   ott NAME debug --native-playback [-j]  read native playback counters and event ages
+  ott NAME debug capture start [--duration 30] [-j]  record bounded native playback diagnostics
+  ott NAME debug capture status / read / stop [-j]  inspect or stop the current native capture
   ott NAME perf --help               opt-in bounded performance capture and safe notification trials
   ott NAME inspect --view ui,media    observe the interface and media without changing playback
   ott NAME operation REQUEST_ID      read a web operation receipt without repeating its effect
@@ -381,7 +383,7 @@ ASPECT_MODES = {"fit": "Fit to screen", "fill": "Fill screen"}
 SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
 MAX_SCREENSHOT_BYTES = 1024 * 1024
 RECEIPT_ACTIONS = frozenset((
-    "status", "capabilities", "screenshot", "inspect", "providers", "profiles",
+    "status", "capabilities", "screenshot", "inspect", "native_playback_diagnostics", "providers", "profiles",
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
@@ -1277,6 +1279,10 @@ class Client:
                     # This protocol bounds the entire original reply, not its
                     # compacted data subtree after the generic projection.
                     wait_options["response_validator"] = lambda raw, identity: plex_servers_receipt(raw, params, identity)
+                elif action == "native_playback_diagnostics":
+                    capture = native_playback_capture_module()
+                    wait_options["response_validator"] = lambda raw, identity: capture.receipt(SimpleNamespace(**globals()), raw, params, identity)
+                    wait_options["response_decoder"] = lambda raw: capture.decode_response(SimpleNamespace(**globals()), raw)
                 receipt = self._wait_receipt(query, request_id, deadline, **wait_options)
             except Error as exc:
                 exc.request_id = request_id
@@ -1303,7 +1309,7 @@ class Client:
                     # Output failure cannot replay or change a completed operation.
                     pass
 
-    def _wait_receipt(self, query, request_id, deadline, wait_ms=0, response_validator=None):
+    def _wait_receipt(self, query, request_id, deadline, wait_ms=0, response_validator=None, response_decoder=None):
         last_failure = None
         last_transport_category = None
         pending_confirmed = False
@@ -1336,7 +1342,7 @@ class Client:
                     if status == 200:
                         result = response_validator(raw, request_id)
                     else:
-                        result = plex_servers_decode(raw, 65536)
+                        result = response_decoder(raw) if response_decoder else plex_servers_decode(raw, 65536)
             except TransportError as exc:
                 # A final long poll can exhaust the caller's deadline after
                 # healthy pending receipts. Preserve that known state unless
@@ -5291,6 +5297,10 @@ def print_notifications(data):
     print("Notifications: " + ("on" if data["enabled"] else "off") + " (saved on player; banners and camera media).", flush=True)
 
 
+def valid_player_build_sha(value):
+    return isinstance(value, str) and (value == "unknown" or re.fullmatch(r"[0-9a-f]{4,40}", value) is not None)
+
+
 def capabilities_metadata(data):
     invalid = "The player returned invalid capabilities metadata"
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
@@ -5300,19 +5310,31 @@ def capabilities_metadata(data):
         marker = data["native_playback_diagnostics"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
             raise Error(invalid)
+    native_capture = None
+    if "native_playback_capture" in data:
+        try:
+            native_capture = native_playback_capture_module().capability(data["native_playback_capture"])
+        except ValueError:
+            raise Error(invalid) from None
     player = data.get("player")
     patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}",
-                "runtime": r"[A-Za-z0-9_.-]{1,96}" if native_playback else r"[a-z0-9-]{1,64}"}
+                "runtime": r"[A-Za-z0-9_.-]{1,96}" if native_playback or native_capture is not None else r"[a-z0-9-]{1,64}"}
     if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "build_sha" in player:
+        if not valid_player_build_sha(player["build_sha"]):
+            raise Error(invalid)
+        result["player"]["build_sha"] = player["build_sha"]
     if "plex_servers" in data:
         if not plex_servers_token(player["runtime"], r"[a-z0-9-]{1,64}"):
             raise Error(invalid)
         result["plex_servers"] = plex_servers_capability(data["plex_servers"])
     if native_playback:
         result["native_playback_diagnostics"] = {"version": 1}
+    if native_capture is not None:
+        result["native_playback_capture"] = native_capture
     if "playback_failure_versions" in data:
         versions = data["playback_failure_versions"]
         if (type(versions) is not list or versions != [2, 3]
@@ -5683,6 +5705,16 @@ def capabilities_metadata(data):
     return result
 
 
+def native_playback_capture_module():
+    path = Path(__file__).resolve().with_name("native_playback_capture.py")
+    if not path.is_file():
+        raise Error("Install native_playback_capture.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_native_playback_capture", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def playback_status_module():
     path = Path(__file__).resolve().with_name("playback_status.py")
     if not path.is_file():
@@ -5701,6 +5733,8 @@ def status_capabilities(client, device, data, deadline, *, controls=None):
     player = data.get("player")
     if isinstance(player, dict):
         player = dict(player)
+        if "build_sha" in player and not valid_player_build_sha(player["build_sha"]):
+            raise Error("The player returned invalid build SHA metadata")
         if "standby" in player and type(player["standby"]) is not bool:
             raise Error("The player returned invalid standby metadata")
         if "background" in player:
@@ -6045,7 +6079,7 @@ def print_player_help(data, name):
             and not any(key in controls for key in ("media_tracks", "playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
-    if sections or any(key in controls for key in ("debug", "provider_diagnostics", "native_playback_diagnostics", "local_source_diagnostics")):
+    if sections or any(key in controls for key in ("debug", "provider_diagnostics", "native_playback_diagnostics", "native_playback_capture", "local_source_diagnostics")):
         print("\nAvailable diagnostics now:")
         if "provider_diagnostics" in controls:
             print(f"  {prefix} doctor --provider [--out DIR]  — explain provider lookup and correlate runtime evidence")
@@ -6053,6 +6087,9 @@ def print_player_help(data, name):
             print(f"  {prefix} debug  — read bounded runtime and native diagnostics")
         if "native_playback_diagnostics" in controls:
             print(f"  {prefix} debug --native-playback  — read native playback counters and event ages")
+        if "native_playback_capture" in controls:
+            print(f"  {prefix} debug capture start [--duration 30]  — record native playback diagnostics for 5–60 seconds")
+            print(f"  {prefix} debug capture status / read / stop  — inspect or stop the current native capture")
         if "local_source_diagnostics" in controls:
             print(f"  {prefix} debug --local-source  — compare assigned and attached Local sources without reading media")
         if "doctor" in sections:
@@ -6081,6 +6118,16 @@ def status_text(value, pattern=None):
     value = " ".join("".join(" " if unicodedata.category(char)[0] == "C" else char
                              for char in value).split())
     return (value[:157] + "..." if len(value) > 160 else value) or "Not reported"
+
+
+def player_version_text(player):
+    version = status_text(player.get("version"), r"[0-9][A-Za-z0-9_.+\-]{0,63}")
+    build_sha = player.get("build_sha")
+    if build_sha == "unknown":
+        return version + " (build SHA not reported)"
+    if valid_player_build_sha(build_sha):
+        return version + " (build " + build_sha[:12] + ")"
+    return version
 
 
 def print_player_summary(data, name):
@@ -6120,7 +6167,7 @@ def print_player_summary(data, name):
         ("Volume", volume),
         ("Channels", channels + " (catalog " + catalog + ")"),
         ("Platform", status_text(player.get("platform"), r"[a-z0-9_-]{1,32}")),
-        ("Version", status_text(player.get("version"), r"[0-9][A-Za-z0-9_.+\-]{0,63}")),
+        ("Version", player_version_text(player)),
         ("Background", activity + " (" + pending + " pending)"),
         ("Kiosk", kiosk_state),
     ]

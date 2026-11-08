@@ -1,0 +1,1096 @@
+{
+  "version": 1,
+  "synthetic": true,
+  "action": "native_playback_diagnostics",
+  "capability": {
+    "version": 1,
+    "operations": [
+      "start",
+      "status",
+      "read",
+      "stop"
+    ],
+    "default_duration_s": 30,
+    "min_duration_s": 5,
+    "max_duration_s": 60,
+    "sample_interval_ms": 1000,
+    "max_records": 64
+  },
+  "capability_name": "native_playback_capture",
+  "relay_probe": {
+    "native_playback_capture": true
+  },
+  "runtime": "native_fixture_1",
+  "capture_id_pattern": "cap_[0-9a-f]{32}",
+  "max_outer_bytes": 65536,
+  "limits": {
+    "elapsed_ms": 60000,
+    "records": 64,
+    "dropped": 4294967295
+  },
+  "states": [
+    "idle",
+    "capturing",
+    "complete",
+    "stopped",
+    "session_changed",
+    "expired"
+  ],
+  "stop_states": [
+    "stopped",
+    "complete",
+    "session_changed",
+    "expired"
+  ],
+  "errors": [
+    "unsupported",
+    "invalid_request",
+    "runtime_mismatch",
+    "no_active_playback",
+    "capture_not_found",
+    "policy_denied",
+    "capture_busy"
+  ],
+  "record_fields": {
+    "t_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000,
+      "nullable": false
+    },
+    "stage": {
+      "type": "enum",
+      "values": [
+        "loading",
+        "playing",
+        "bound",
+        "streaming"
+      ],
+      "nullable": false
+    },
+    "load_state": {
+      "type": "enum",
+      "values": [
+        "pending",
+        "complete",
+        "failed"
+      ],
+      "nullable": false
+    },
+    "frames": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "nullable": false
+    },
+    "video_queue_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "nullable": false
+    },
+    "audio_queue_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "nullable": false
+    },
+    "callback_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "nullable": false
+    },
+    "fps_milli": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "nullable": false
+    },
+    "frame_age_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000,
+      "nullable": true
+    },
+    "playable_buffer_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000,
+      "nullable": true
+    },
+    "callback_error_age_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000,
+      "nullable": true
+    },
+    "fed_video_units": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "nullable": false
+    },
+    "fed_audio_units": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "nullable": false
+    },
+    "network_rx_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "nullable": false
+    },
+    "fed_pts_skew_ms": {
+      "type": "integer",
+      "minimum": -600000,
+      "maximum": 600000,
+      "nullable": true
+    },
+    "feed_state": {
+      "type": "enum",
+      "values": [
+        "none",
+        "accepting",
+        "full",
+        "refused",
+        "holding",
+        "empty"
+      ],
+      "nullable": false
+    },
+    "callback_error_code": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "nullable": true
+    },
+    "http_status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599,
+      "nullable": true
+    },
+    "video_width": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "nullable": false
+    },
+    "video_height": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "nullable": false
+    }
+  },
+  "cases": [
+    {
+      "name": "start",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "start",
+        "duration_s": 30
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "start",
+        "state": "capturing",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "idle_discovery",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "state": "idle",
+        "capture_id": null,
+        "elapsed_ms": 0,
+        "records": 0,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "active_discovery",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "state": "capturing",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "active_bound_status",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "state": "capturing",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "read_active",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "state": "capturing",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": [
+          {
+            "t_ms": 1000,
+            "stage": "playing",
+            "load_state": "complete",
+            "frames": 7,
+            "frame_age_ms": 40,
+            "video_queue_bytes": 4096,
+            "audio_queue_bytes": 1024,
+            "fed_video_units": 11,
+            "fed_audio_units": 24,
+            "fed_pts_skew_ms": -12,
+            "playable_buffer_ms": 2500,
+            "feed_state": "accepting",
+            "callback_count": 18,
+            "callback_error_code": null,
+            "callback_error_age_ms": null,
+            "http_status": 206,
+            "network_rx_bytes": 65536,
+            "video_width": 1920,
+            "video_height": 1080,
+            "fps_milli": 29970
+          }
+        ],
+        "dropped": 0
+      }
+    },
+    {
+      "name": "read_before_first_sample",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "state": "capturing",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 0,
+        "records": [],
+        "dropped": 0
+      }
+    },
+    {
+      "name": "stop_active",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "state": "stopped",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "status_complete",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "state": "complete",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "read_complete",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "state": "complete",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": [
+          {
+            "t_ms": 1000,
+            "stage": "playing",
+            "load_state": "complete",
+            "frames": 7,
+            "frame_age_ms": 40,
+            "video_queue_bytes": 4096,
+            "audio_queue_bytes": 1024,
+            "fed_video_units": 11,
+            "fed_audio_units": 24,
+            "fed_pts_skew_ms": -12,
+            "playable_buffer_ms": 2500,
+            "feed_state": "accepting",
+            "callback_count": 18,
+            "callback_error_code": null,
+            "callback_error_age_ms": null,
+            "http_status": 206,
+            "network_rx_bytes": 65536,
+            "video_width": 1920,
+            "video_height": 1080,
+            "fps_milli": 29970
+          }
+        ],
+        "dropped": 0
+      }
+    },
+    {
+      "name": "stop_complete",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "state": "complete",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "status_stopped",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "state": "stopped",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "read_stopped",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "state": "stopped",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": [
+          {
+            "t_ms": 1000,
+            "stage": "playing",
+            "load_state": "complete",
+            "frames": 7,
+            "frame_age_ms": 40,
+            "video_queue_bytes": 4096,
+            "audio_queue_bytes": 1024,
+            "fed_video_units": 11,
+            "fed_audio_units": 24,
+            "fed_pts_skew_ms": -12,
+            "playable_buffer_ms": 2500,
+            "feed_state": "accepting",
+            "callback_count": 18,
+            "callback_error_code": null,
+            "callback_error_age_ms": null,
+            "http_status": 206,
+            "network_rx_bytes": 65536,
+            "video_width": 1920,
+            "video_height": 1080,
+            "fps_milli": 29970
+          }
+        ],
+        "dropped": 0
+      }
+    },
+    {
+      "name": "stop_stopped",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "state": "stopped",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "status_session_changed",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "state": "session_changed",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "read_session_changed",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "state": "session_changed",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": [
+          {
+            "t_ms": 1000,
+            "stage": "playing",
+            "load_state": "complete",
+            "frames": 7,
+            "frame_age_ms": 40,
+            "video_queue_bytes": 4096,
+            "audio_queue_bytes": 1024,
+            "fed_video_units": 11,
+            "fed_audio_units": 24,
+            "fed_pts_skew_ms": -12,
+            "playable_buffer_ms": 2500,
+            "feed_state": "accepting",
+            "callback_count": 18,
+            "callback_error_code": null,
+            "callback_error_age_ms": null,
+            "http_status": 206,
+            "network_rx_bytes": 65536,
+            "video_width": 1920,
+            "video_height": 1080,
+            "fps_milli": 29970
+          }
+        ],
+        "dropped": 0
+      }
+    },
+    {
+      "name": "stop_session_changed",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "state": "session_changed",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "status_expired",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "state": "expired",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    },
+    {
+      "name": "read_expired",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "state": "expired",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": [
+          {
+            "t_ms": 1000,
+            "stage": "playing",
+            "load_state": "complete",
+            "frames": 7,
+            "frame_age_ms": 40,
+            "video_queue_bytes": 4096,
+            "audio_queue_bytes": 1024,
+            "fed_video_units": 11,
+            "fed_audio_units": 24,
+            "fed_pts_skew_ms": -12,
+            "playable_buffer_ms": 2500,
+            "feed_state": "accepting",
+            "callback_count": 18,
+            "callback_error_code": null,
+            "callback_error_age_ms": null,
+            "http_status": 206,
+            "network_rx_bytes": 65536,
+            "video_width": 1920,
+            "video_height": 1080,
+            "fps_milli": 29970
+          }
+        ],
+        "dropped": 0
+      }
+    },
+    {
+      "name": "stop_expired",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "ok",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "state": "expired",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "elapsed_ms": 1000,
+        "records": 1,
+        "dropped": 0
+      }
+    }
+  ],
+  "error_cases": [
+    {
+      "name": "start_unsupported",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "start",
+        "duration_s": 30
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "operation": "start",
+        "error": "unsupported"
+      }
+    },
+    {
+      "name": "start_invalid_request",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "start",
+        "duration_s": 30
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "start",
+        "error": "invalid_request"
+      }
+    },
+    {
+      "name": "start_runtime_mismatch",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "start",
+        "duration_s": 30
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "start",
+        "error": "runtime_mismatch"
+      }
+    },
+    {
+      "name": "start_no_active_playback",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "start",
+        "duration_s": 30
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "start",
+        "error": "no_active_playback"
+      }
+    },
+    {
+      "name": "start_capture_not_found",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "start",
+        "duration_s": 30
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "start",
+        "error": "capture_not_found"
+      }
+    },
+    {
+      "name": "start_policy_denied",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "start",
+        "duration_s": 30
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "start",
+        "error": "policy_denied"
+      }
+    },
+    {
+      "name": "start_capture_busy",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "start",
+        "duration_s": 30
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "start",
+        "error": "capture_busy"
+      }
+    },
+    {
+      "name": "status_unsupported",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "error": "unsupported"
+      }
+    },
+    {
+      "name": "status_invalid_request",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "error": "invalid_request"
+      }
+    },
+    {
+      "name": "status_runtime_mismatch",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "error": "runtime_mismatch"
+      }
+    },
+    {
+      "name": "status_no_active_playback",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "error": "no_active_playback"
+      }
+    },
+    {
+      "name": "status_capture_not_found",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "error": "capture_not_found"
+      }
+    },
+    {
+      "name": "status_policy_denied",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "error": "policy_denied"
+      }
+    },
+    {
+      "name": "status_capture_busy",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "status",
+        "capture_id": null
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "status",
+        "error": "capture_busy"
+      }
+    },
+    {
+      "name": "read_unsupported",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "error": "unsupported"
+      }
+    },
+    {
+      "name": "read_invalid_request",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "error": "invalid_request"
+      }
+    },
+    {
+      "name": "read_runtime_mismatch",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "error": "runtime_mismatch"
+      }
+    },
+    {
+      "name": "read_no_active_playback",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "error": "no_active_playback"
+      }
+    },
+    {
+      "name": "read_capture_not_found",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "error": "capture_not_found"
+      }
+    },
+    {
+      "name": "read_policy_denied",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "error": "policy_denied"
+      }
+    },
+    {
+      "name": "read_capture_busy",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "read",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "read",
+        "error": "capture_busy"
+      }
+    },
+    {
+      "name": "stop_unsupported",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "unsupported",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "error": "unsupported"
+      }
+    },
+    {
+      "name": "stop_invalid_request",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "error": "invalid_request"
+      }
+    },
+    {
+      "name": "stop_runtime_mismatch",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "error": "runtime_mismatch"
+      }
+    },
+    {
+      "name": "stop_no_active_playback",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "error": "no_active_playback"
+      }
+    },
+    {
+      "name": "stop_capture_not_found",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "error": "capture_not_found"
+      }
+    },
+    {
+      "name": "stop_policy_denied",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "error": "policy_denied"
+      }
+    },
+    {
+      "name": "stop_capture_busy",
+      "request": {
+        "version": 1,
+        "runtime": "native_fixture_1",
+        "operation": "stop",
+        "capture_id": "cap_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "status": "rejected",
+      "data": {
+        "version": 1,
+        "operation": "stop",
+        "error": "capture_busy"
+      }
+    }
+  ],
+  "notes": [
+    "Synthetic wire fixtures, not measurements from a device.",
+    "The runtime is fenced by the request and is not echoed in response data.",
+    "Only status with capture_id:null may return idle; read/stop require a discovered exact capture ID.",
+    "An error response has exactly version, operation and error; unsupported uses transport status unsupported, other errors use rejected.",
+    "Expired is a reserved accepted terminal state; the current producer retains complete/session_changed/stopped data until next start or process exit.",
+    "Record timestamps are nondecreasing, bounded by elapsed_ms; callback/native counters may reset during an internal reopen.",
+    "Stop of an already terminal capture retains its terminal state; only an active capture becomes stopped.",
+    "The complete serialized controller receipt, including outer envelope and whitespace, is limited to65536bytes."
+  ]
+}
