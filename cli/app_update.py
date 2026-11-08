@@ -69,8 +69,10 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, response, code, message, headers, new_url)
 
 
-def request_json(url, error, limit=1024 * 1024, deadline=None, *, group_cancelled=None):
+def request_json(url, error, limit=1024 * 1024, deadline=None, *, group_cancelled=None, expected_sha256=None):
     """Public GitHub requests never receive controller credentials."""
+    if expected_sha256 is not None and (not isinstance(expected_sha256, str) or not HASH.fullmatch(expected_sha256)):
+        raise error("Invalid official release metadata digest")
     if group_cancelled is not None and group_cancelled.is_set():
         raise KeyboardInterrupt
     budget = min(15, (deadline - time.monotonic()) if deadline is not None else 15)
@@ -94,6 +96,8 @@ def request_json(url, error, limit=1024 * 1024, deadline=None, *, group_cancelle
                         raise ValueError("Oversized release metadata")
                 if cancelled.is_set():
                     return
+            if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+                raise ValueError("Release metadata digest mismatch")
             def unique(pairs):
                 value = {}
                 for key, item in pairs:
@@ -130,10 +134,70 @@ def request_json(url, error, limit=1024 * 1024, deadline=None, *, group_cancelle
     return result
 
 
+def payload_asset_index(entries, error, *, closed=False):
+    """Validate a bounded manifest's full asset index without downloading payloads."""
+    invalid = "Invalid official release payload index"
+    if not isinstance(entries, list) or not entries:
+        raise error(invalid)
+    result = {}
+    for entry in entries:
+        if (not isinstance(entry, dict) or not {"name", "size", "sha256"} <= set(entry)
+                or (closed and set(entry) != {"name", "size", "sha256"})):
+            raise error(invalid)
+        name = entry["name"]
+        if (not isinstance(name, str) or not name or name in (".", "..") or name in result
+                or "/" in name or "\\" in name or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name)
+                or type(entry["size"]) is not int or entry["size"] <= 0
+                or not isinstance(entry["sha256"], str) or not HASH.fullmatch(entry["sha256"])):
+            raise error(invalid)
+        try:
+            if len(name.encode("utf-8")) > 255:
+                raise error(invalid)
+        except UnicodeEncodeError:
+            raise error(invalid) from None
+        result[name] = {key: entry[key] for key in ("name", "size", "sha256")}
+    return result
+
+
+def compact_payloads(manifest, error):
+    """Project authenticated RC evidence; this does not attest CI or fuzz success."""
+    invalid = "Official RC has invalid declared validation or build receipts"
+    assets = payload_asset_index(manifest.get("assets"), error)
+    build = manifest.get("build_receipts")
+    validation = manifest.get("validation_receipts", [])
+    if not isinstance(build, list) or not build or not isinstance(validation, list):
+        raise error(invalid)
+    omitted = set()
+    for receipt in build + validation:
+        if not isinstance(receipt, dict):
+            raise error(invalid)
+        name = receipt.get("name")
+        if (not isinstance(name, str) or not re.fullmatch(r"release-inputs-[A-Za-z0-9._-]+\.json", name)
+                or name in omitted or name not in assets or receipt.get("sha256") != assets[name]["sha256"]):
+            raise error(invalid)
+        omitted.add(name)
+    declared_names = {name for name in assets if name.startswith("release-inputs-") and name.endswith(".json")}
+    if declared_names != omitted:
+        raise error(invalid)
+    has_fuzz = "fuzz-report.json" in assets
+    if has_fuzz != any(receipt["name"] == "release-inputs-fuzz.json" for receipt in validation):
+        raise error(invalid)
+    if has_fuzz:
+        if not manifest.get("fuzzing_profile"):
+            raise error(invalid)
+        omitted.add("fuzz-report.json")
+    shipped = [assets[name] for name in sorted(assets) if name not in omitted]
+    if not shipped:
+        raise error("Official RC has no stable payloads")
+    return shipped
+
+
 def release_target(opts, error, deadline=None, *, group_cancelled=None):
-    def fetch(url, limit=1024 * 1024):
-        cancellation = {} if group_cancelled is None else {"group_cancelled": group_cancelled}
-        return request_json(url, error, limit, deadline, **cancellation)
+    def fetch(url, limit=1024 * 1024, expected_sha256=None):
+        kwargs = {} if group_cancelled is None else {"group_cancelled": group_cancelled}
+        if expected_sha256 is not None:
+            kwargs["expected_sha256"] = expected_sha256
+        return request_json(url, error, limit, deadline, **kwargs)
     tag = opts["version"]
     if tag:
         release = fetch(API + "/releases/tags/" + tag)
@@ -185,8 +249,45 @@ def release_target(opts, error, deadline=None, *, group_cancelled=None):
     source = tag_source(tag)
     if not isinstance(manifest, dict):
         raise error("Invalid official release manifest")
-    plan = manifest.get("version_plan", {})
     expected_channel = next((channel for channel in ("beta", "rc", "nightly") if "-" + channel + "." in tag), "stable")
+    compact_assets = None
+    candidate = None
+    if type(manifest.get("schema")) is int and manifest["schema"] == 2:
+        expected_keys = {"schema", "kind", "repository", "version", "channel", "tag", "source_sha", "assets", "rc_evidence"}
+        evidence = manifest.get("rc_evidence")
+        evidence_keys = {"tag", "manifest_sha256", "source_sha", "run_id", "run_attempt"}
+        if (set(manifest) != expected_keys or manifest.get("kind") != "rc-payloads-v1"
+                or expected_channel != "stable" or release.get("prerelease") is not False
+                or manifest.get("repository") != REPOSITORY or manifest.get("version") != tag[1:]
+                or manifest.get("channel") != "stable" or manifest.get("tag") != tag
+                or manifest.get("source_sha") != source
+                or not isinstance(evidence, dict) or set(evidence) != evidence_keys
+                or not isinstance(evidence.get("tag"), str)
+                or not re.fullmatch(re.escape(tag) + r"-rc\.([1-9][0-9]*)", evidence["tag"])
+                or evidence.get("source_sha") != source
+                or not isinstance(evidence.get("manifest_sha256"), str) or not HASH.fullmatch(evidence["manifest_sha256"])
+                or any(type(evidence.get(key)) is not int or evidence[key] <= 0 for key in ("run_id", "run_attempt"))):
+            raise error("Official stable release has invalid compact RC evidence")
+        compact_assets = payload_asset_index(manifest["assets"], error, closed=True)
+        candidate_tag = evidence["tag"]
+        candidate = fetch(API + "/releases/tags/" + candidate_tag)
+        if (not isinstance(candidate, dict) or candidate.get("draft") is not False
+                or candidate.get("prerelease") is not True or candidate.get("tag_name") != candidate_tag
+                or not candidate.get("published_at") or not isinstance(candidate.get("assets"), list)):
+            raise error("Official stable release has no published RC evidence")
+        candidate_manifest = asset("release-manifest.json", candidate, candidate_tag)
+        if (candidate_manifest["size"] > 1024 * 1024
+                or candidate_manifest.get("digest") != "sha256:" + evidence["manifest_sha256"]):
+            raise error("Official stable release has invalid RC manifest evidence")
+        # Follow exactly one same-repository evidence link, retaining the outer
+        # stable identity. Promoted RC packages already have the final version.
+        manifest = fetch(candidate_manifest["browser_download_url"], expected_sha256=evidence["manifest_sha256"])
+        if (not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or manifest["schema"] != 1
+                or manifest.get("channel") != "rc" or manifest.get("tag") != candidate_tag
+                or manifest.get("source_sha") != source
+                or any(type(manifest.get(key)) is not int or manifest[key] != evidence[key] for key in ("run_id", "run_attempt"))):
+            raise error("Official stable release has mismatched RC provenance")
+    plan = manifest.get("version_plan", {})
     evidence_tag = tag
     promoted = expected_channel == "stable" and manifest.get("channel") == "rc"
     if promoted:
@@ -230,7 +331,14 @@ def release_target(opts, error, deadline=None, *, group_cancelled=None):
     if (len(found) != 1 or not isinstance(found[0].get("sha256"), str) or
             not HASH.fullmatch(found[0]["sha256"]) or found[0].get("size") != apk["size"] or apk["size"] > 128 * 1024 * 1024):
         raise error("Official APK size/hash does not match the release manifest")
-    if promoted:
+    if promoted and compact_assets is not None:
+        candidate_apk = asset(name, candidate, evidence_tag)
+        if (compact_assets.get(name) != {key: found[0][key] for key in ("name", "size", "sha256")}
+                or candidate_apk.get("digest") != "sha256:" + found[0]["sha256"]
+                or apk.get("digest") != candidate_apk.get("digest") or candidate_apk["size"] != apk["size"]
+                or tag_source(evidence_tag) != source):
+            raise error("Official stable release differs from its RC source or assets")
+    elif promoted:
         # Promotion copies the RC bytes, including its unchanged manifest. Keep
         # the stable download URL, but bind both publications to that evidence.
         manifest_content = digest(manifest)
@@ -258,6 +366,8 @@ def release_target(opts, error, deadline=None, *, group_cancelled=None):
                 (not promoted or rows[0].get("plan_sha256") == manifest["plan_sha256"]))
     if not value("versionCode", str(plan["build_number"])) or not value("version", tag[1:]):
         raise error("Official APK version metadata does not match its version plan")
+    if compact_assets is not None and list(compact_assets.values()) != compact_payloads(manifest, error):
+        raise error("Official stable release differs from its RC payload index")
     return {"tag": tag, "variant": opts["variant"], "version_code": plan["build_number"],
             "source_sha": source, "sha256": found[0]["sha256"], "url": apk["browser_download_url"]}
 

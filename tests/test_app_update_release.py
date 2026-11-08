@@ -2,9 +2,11 @@
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -68,6 +70,60 @@ def promotion_metadata():
         release["assets"][1]["digest"] = "sha256:" + SHA
     return dict(stable=stable, candidate=candidate, manifest=manifest,
                 candidate_manifest=copy.deepcopy(manifest), stable_source=SOURCE, candidate_source=SOURCE)
+
+
+def bind_candidate_bytes(proof):
+    # The published digest covers bytes, including formatting and trailing newline.
+    raw = (json.dumps(proof['candidate_manifest'], indent=3, ensure_ascii=False) + '\n').encode()
+    proof['candidate_raw'] = raw
+    digest = hashlib.sha256(raw).hexdigest()
+    proof['manifest']['rc_evidence']['manifest_sha256'] = digest
+    proof['candidate']['assets'][0].update(size=len(raw), digest='sha256:' + digest)
+
+
+def compact_metadata():
+    proof = promotion_metadata()
+    candidate = proof['candidate_manifest']
+    candidate.update(run_id=123456, run_attempt=2)
+    full = dict(name=ota.VARIANTS['full'], size=13000000, sha256='c' * 64)
+    candidate['assets'].append(full)
+    for row in copy.deepcopy(candidate['package_versions']):
+        row['path'] = full['name']
+        candidate['package_versions'].append(row)
+    for release in (proof['stable'], proof['candidate']):
+        prefix = 'https://github.com/' + ota.REPOSITORY + '/releases/download/' + release['tag_name'] + '/'
+        release['assets'].append(dict(name=full['name'], size=full['size'],
+                                      digest='sha256:' + full['sha256'], browser_download_url=prefix + full['name']))
+    proof['manifest'] = dict(schema=2, kind='rc-payloads-v1', repository=ota.REPOSITORY,
+                             version='1.1.60', channel='stable', tag='v1.1.60', source_sha=SOURCE,
+                             assets=copy.deepcopy(candidate['assets']),
+                             rc_evidence=dict(tag='v1.1.60-rc.1', manifest_sha256='', source_sha=SOURCE,
+                                              run_id=123456, run_attempt=2))
+    receipt = dict(name='release-inputs-android.json', size=1000, sha256='e' * 64)
+    candidate['assets'].append(receipt)
+    candidate['build_receipts'] = [{key: receipt[key] for key in ('name', 'sha256')}]
+    proof['candidate']['assets'].append(dict(name=receipt['name'], size=receipt['size'],
+        digest='sha256:' + receipt['sha256'], browser_download_url='https://github.com/' + ota.REPOSITORY +
+        '/releases/download/v1.1.60-rc.1/' + receipt['name']))
+    bind_candidate_bytes(proof)
+    raw = (json.dumps(proof['manifest'], indent=2) + '\n').encode()
+    proof['stable']['assets'][0].update(size=len(raw), digest='sha256:' + hashlib.sha256(raw).hexdigest())
+    return proof
+
+
+def add_compact_asset(proof, name, *, shipped=True):
+    row = dict(name=name, size=1000, sha256='f' * 64)
+    proof['candidate_manifest']['assets'].append(copy.deepcopy(row))
+    releases = [proof['candidate']]
+    if shipped:
+        proof['manifest']['assets'].append(copy.deepcopy(row))
+        proof['manifest']['assets'].sort(key=lambda value: value['name'])
+        releases.append(proof['stable'])
+    for release in releases:
+        release['assets'].append(dict(name=name, size=row['size'], digest='sha256:' + row['sha256'],
+            browser_download_url='https://github.com/' + ota.REPOSITORY +
+            '/releases/download/' + release['tag_name'] + '/' + name))
+    return row
 
 
 class Client:
@@ -413,6 +469,230 @@ class ReleaseTests(unittest.TestCase):
                 patch.object(ott.importlib.util, "module_from_spec", return_value=module):
             self.assertEqual(ott.main(["k8a", "update"]), 0)
         self.assertEqual(invoked[0][3], ["update"])
+
+
+class CompactReleaseTests(unittest.TestCase):
+    def opts(self, variant='api22'):
+        return ota.options(['update', '--variant', variant, '--version', 'v1.1.60'], ott.Error)
+
+    def fetcher(self, proof, *, deadline=123, cancelled=None):
+        stable_url = 'https://github.com/' + ota.REPOSITORY + '/releases/download/v1.1.60/'
+        candidate_url = 'https://github.com/' + ota.REPOSITORY + '/releases/download/v1.1.60-rc.1/'
+        rc_manifest_url = candidate_url + 'release-manifest.json'
+        replies = {
+            ota.API + '/releases/tags/v1.1.60': proof['stable'],
+            ota.API + '/releases/tags/v1.1.60-rc.1': proof['candidate'],
+            stable_url + 'release-manifest.json': proof['manifest'],
+            rc_manifest_url: proof['candidate_manifest'],
+            ota.API + '/git/ref/tags/v1.1.60': {'object': {'type': 'commit', 'sha': proof['stable_source']}},
+            ota.API + '/git/ref/tags/v1.1.60-rc.1': {'object': {'type': 'commit', 'sha': proof['candidate_source']}},
+        }
+        expected_deadline = deadline
+        def fetch(url, error, limit=None, deadline=None, *, group_cancelled=None, expected_sha256=None):
+            self.assertEqual(deadline, expected_deadline)
+            self.assertIs(group_cancelled, cancelled)
+            self.assertIn(url, replies, 'Unexpected release metadata URL')
+            if url == rc_manifest_url:
+                self.assertEqual(expected_sha256, proof['manifest']['rc_evidence']['manifest_sha256'])
+                if expected_sha256 != hashlib.sha256(proof['candidate_raw']).hexdigest():
+                    raise error('Cannot read verified official release metadata; no update was requested')
+            else:
+                self.assertIsNone(expected_sha256)
+            return replies[url]
+        return fetch
+
+    def test_compact_stable_resolves_both_variants_without_recursing_into_rc_release(self):
+        for variant in ota.VARIANTS:
+            with self.subTest(variant=variant):
+                proof = compact_metadata()
+                cancelled = threading.Event()
+                with patch.object(ota, 'request_json', side_effect=self.fetcher(proof, cancelled=cancelled)) as fetch, \
+                        patch.object(ota, 'release_target', wraps=ota.release_target) as resolve:
+                    target = ota.release_target(self.opts(variant), ott.Error, deadline=123, group_cancelled=cancelled)
+                resolve.assert_called_once()
+                row = next(row for row in proof['manifest']['assets'] if row['name'] == ota.VARIANTS[variant])
+                self.assertEqual(target, dict(tag='v1.1.60', variant=variant, version_code=10497,
+                    source_sha=SOURCE, sha256=row['sha256'], url='https://github.com/' + ota.REPOSITORY +
+                    '/releases/download/v1.1.60/' + row['name']))
+                hashes = [call.kwargs['expected_sha256'] for call in fetch.call_args_list if 'expected_sha256' in call.kwargs]
+                self.assertEqual(hashes, [proof['manifest']['rc_evidence']['manifest_sha256']])
+
+    def assert_proof_rejected_before_update(self, proof):
+        client = Client([state()])
+        client.group_cancelled = threading.Event()
+        opts = self.opts()
+        with patch.object(ota.time, 'monotonic', return_value=100), \
+                patch.object(ota, 'request_json', side_effect=self.fetcher(
+                    proof, deadline=100 + opts['wait'], cancelled=client.group_cancelled)), \
+                self.assertRaises(ott.Error):
+            ota.update(client, 'fixture-player', opts, ott)
+        self.assertEqual(client.calls, [('fixture-player', 'app_update', {'operation': 'status'})])
+        self.assertEqual(client.timeout, 45)
+
+    def test_compact_identity_failures_never_prepare_or_install(self):
+        changes = {
+            'schema boolean': lambda p: p['manifest'].update(schema=True),
+            'wrong kind': lambda p: p['manifest'].update(kind='other'),
+            'extra top field': lambda p: p['manifest'].update(extra='not-allowed'),
+            'repository': lambda p: p['manifest'].update(repository='other/repository'),
+            'nonstable channel': lambda p: p['manifest'].update(channel='beta'),
+            'wrong stable version': lambda p: p['manifest'].update(version='1.1.61'),
+            'wrong stable tag': lambda p: p['manifest'].update(tag='v1.1.61'),
+            'stable prerelease': lambda p: p['stable'].update(prerelease=True),
+            'stable source': lambda p: p.update(stable_source='d' * 40),
+            'outer source': lambda p: p['manifest'].update(source_sha='d' * 40),
+            'RC tag source': lambda p: p.update(candidate_source='d' * 40),
+            'evidence source': lambda p: p['manifest']['rc_evidence'].update(source_sha='d' * 40),
+            'RC base mismatch': lambda p: p['manifest']['rc_evidence'].update(tag='v1.1.61-rc.1'),
+            'RC beta tag': lambda p: p['manifest']['rc_evidence'].update(tag='v1.1.60-beta.1'),
+            'RC hash': lambda p: p['manifest']['rc_evidence'].update(manifest_sha256='d' * 64),
+            'RC hash syntax': lambda p: p['manifest']['rc_evidence'].update(manifest_sha256='BAD'),
+            'run id mismatch': lambda p: p['manifest']['rc_evidence'].update(run_id=123457),
+            'run attempt mismatch': lambda p: p['manifest']['rc_evidence'].update(run_attempt=3),
+            'run id boolean': lambda p: p['manifest']['rc_evidence'].update(run_id=True),
+            'attempt boolean': lambda p: p['manifest']['rc_evidence'].update(run_attempt=True),
+            'zero run': lambda p: p['manifest']['rc_evidence'].update(run_id=0),
+            'zero attempt': lambda p: p['manifest']['rc_evidence'].update(run_attempt=0),
+            'extra evidence field': lambda p: p['manifest']['rc_evidence'].update(url='https://private.test/token'),
+            'missing RC': lambda p: p.update(candidate=None),
+            'RC draft': lambda p: p['candidate'].update(draft=True),
+            'RC unpublished': lambda p: p['candidate'].update(published_at=None),
+            'RC not prerelease': lambda p: p['candidate'].update(prerelease=False),
+        }
+        for name, mutate in changes.items():
+            with self.subTest(name=name):
+                proof = compact_metadata()
+                mutate(proof)
+                self.assert_proof_rejected_before_update(proof)
+
+    def test_compact_asset_failures_never_prepare_or_install(self):
+        changes = {
+            'missing stable row': lambda p: p['manifest']['assets'].pop(0),
+            'duplicate stable row': lambda p: p['manifest']['assets'].append(copy.deepcopy(p['manifest']['assets'][0])),
+            'unexpected row key': lambda p: p['manifest']['assets'][0].update(url='https://private.test/token'),
+            'stable row size': lambda p: p['manifest']['assets'][0].update(size=12000001),
+            'stable row size boolean': lambda p: p['manifest']['assets'][0].update(size=True),
+            'stable row hash': lambda p: p['manifest']['assets'][0].update(sha256='d' * 64),
+            'missing stable APK': lambda p: p['stable']['assets'].pop(1),
+            'duplicate stable APK': lambda p: p['stable']['assets'].append(copy.deepcopy(p['stable']['assets'][1])),
+            'stable APK digest': lambda p: p['stable']['assets'][1].update(digest='sha256:' + 'd' * 64),
+            'RC APK digest': lambda p: p['candidate']['assets'][1].update(digest='sha256:' + 'd' * 64),
+            'RC APK size': lambda p: p['candidate']['assets'][1].update(size=12000001),
+            'missing RC APK': lambda p: p['candidate']['assets'].pop(1),
+            'duplicate RC APK': lambda p: p['candidate']['assets'].append(copy.deepcopy(p['candidate']['assets'][1])),
+            'stable APK untrusted URL': lambda p: p['stable']['assets'][1].update(browser_download_url='https://private.test/app.apk'),
+            'RC APK untrusted URL': lambda p: p['candidate']['assets'][1].update(browser_download_url='https://private.test/app.apk'),
+            'RC manifest untrusted URL': lambda p: p['candidate']['assets'][0].update(browser_download_url='https://private.test/manifest.json'),
+            'RC manifest digest': lambda p: p['candidate']['assets'][0].update(digest='sha256:' + 'd' * 64),
+            'oversize stable manifest': lambda p: p['stable']['assets'][0].update(size=1024 * 1024 + 1),
+            'oversize RC manifest': lambda p: p['candidate']['assets'][0].update(size=1024 * 1024 + 1),
+            'oversize APK': lambda p: p['stable']['assets'][1].update(size=128 * 1024 * 1024 + 1),
+        }
+        for name, mutate in changes.items():
+            with self.subTest(name=name):
+                proof = compact_metadata()
+                mutate(proof)
+                self.assert_proof_rejected_before_update(proof)
+
+    def test_compact_revalidates_rc_contents_after_raw_digest_matches(self):
+        changes = {
+            'manifest source': lambda m: m.update(source_sha='d' * 40),
+            'manifest schema': lambda m: m.update(schema=2),
+            'manifest tag': lambda m: m.update(tag='v1.1.60-rc.2'),
+            'manifest channel': lambda m: m.update(channel='beta'),
+            'plan source': lambda m: m['version_plan'].update(source_sha='d' * 40),
+            'plan hash': lambda m: m.update(plan_sha256='d' * 64),
+            'wrong package version': lambda m: m['package_versions'][0].update(version='1.1.60-rc.1'),
+            'wrong versionCode': lambda m: m['package_versions'][1].update(version='10498'),
+            'wrong package plan': lambda m: m['package_versions'][1].update(plan_sha256='d' * 64),
+            'duplicate package field': lambda m: m['package_versions'].append(copy.deepcopy(m['package_versions'][0])),
+            'missing package field': lambda m: m['package_versions'].pop(0),
+            'duplicate RC asset': lambda m: m['assets'].append(copy.deepcopy(m['assets'][0])),
+            'missing RC asset': lambda m: m['assets'].pop(0),
+        }
+        for name, mutate in changes.items():
+            with self.subTest(name=name):
+                proof = compact_metadata()
+                mutate(proof['candidate_manifest'])
+                bind_candidate_bytes(proof)
+                self.assert_proof_rejected_before_update(proof)
+
+    def test_compact_projection_omits_only_declared_receipts_and_exact_fuzz_report(self):
+        proof = compact_metadata()
+        receipt = add_compact_asset(proof, 'release-inputs-fuzz.json', shipped=False)
+        proof['candidate_manifest']['validation_receipts'] = [{key: receipt[key] for key in ('name', 'sha256')}]
+        proof['candidate_manifest']['fuzzing_profile'] = {'fixture': True}
+        add_compact_asset(proof, 'fuzz-report.json', shipped=False)
+        for name in ('latest.json', 'latest.json.sig', 'build-metadata.json',
+                     'release-inputs-ui.png', 'release-inputs-android.json.sig', 'fuzz-report-extra.json'):
+            add_compact_asset(proof, name)
+        bind_candidate_bytes(proof)
+        with patch.object(ota, 'request_json', side_effect=self.fetcher(proof)):
+            target = ota.release_target(self.opts(), ott.Error, deadline=123)
+        self.assertEqual(target['tag'], 'v1.1.60')
+
+    def test_compact_projection_rejects_missing_payloads_and_unproven_omissions(self):
+        def declaration(proof, **values):
+            proof['candidate_manifest']['build_receipts'][0].update(values)
+        def fuzz_receipt(proof):
+            row = add_compact_asset(proof, 'release-inputs-fuzz.json', shipped=False)
+            proof['candidate_manifest']['validation_receipts'] = [{key: row[key] for key in ('name', 'sha256')}]
+        def fuzz_without_profile(proof):
+            fuzz_receipt(proof)
+            add_compact_asset(proof, 'fuzz-report.json', shipped=False)
+        changes = {
+            'missing build declarations': lambda p: p['candidate_manifest'].pop('build_receipts'),
+            'empty build declarations': lambda p: p['candidate_manifest'].update(build_receipts=[]),
+            'invalid declaration collection': lambda p: p['candidate_manifest'].update(validation_receipts={}),
+            'wrong receipt digest': lambda p: declaration(p, sha256='d' * 64),
+            'missing declared receipt': lambda p: declaration(p, name='release-inputs-missing.json'),
+            'untrusted receipt name': lambda p: declaration(p, name='build-metadata.json'),
+            'duplicate receipt declaration': lambda p: p['candidate_manifest'].update(
+                validation_receipts=copy.deepcopy(p['candidate_manifest']['build_receipts'])),
+            'undeclared receipt': lambda p: add_compact_asset(p, 'release-inputs-extra.json', shipped=False),
+            'undeclared fuzz report': lambda p: add_compact_asset(p, 'fuzz-report.json', shipped=False),
+            'fuzz receipt without report': fuzz_receipt,
+            'fuzz report without profile': fuzz_without_profile,
+            'missing latest payload': lambda p: add_compact_asset(p, 'latest.json', shipped=False),
+            'missing signature payload': lambda p: add_compact_asset(p, 'latest.json.sig', shipped=False),
+            'prefix lookalike omission': lambda p: add_compact_asset(p, 'release-inputs-android.json.sig', shipped=False),
+            'fuzz lookalike omission': lambda p: add_compact_asset(p, 'fuzz-report-extra.json', shipped=False),
+            'unsorted stable payloads': lambda p: p['manifest']['assets'].reverse(),
+            'invented stable payload': lambda p: p['manifest']['assets'].append(
+                dict(name='not-in-rc.json', size=1000, sha256='f' * 64)),
+        }
+        for name, mutate in changes.items():
+            with self.subTest(name=name):
+                proof = compact_metadata()
+                mutate(proof)
+                bind_candidate_bytes(proof)
+                self.assert_proof_rejected_before_update(proof)
+
+    def test_request_json_hashes_downloaded_bytes_not_reserialized_json(self):
+        values = [b'{"answer":42,"name":"fixture"}', b'{\n  "name": "fixture",\n  "answer": 42\n}\n']
+        for raw in values:
+            with self.subTest(raw=raw):
+                opener = SimpleNamespace(open=lambda *args, **kwargs: io.BytesIO(raw))
+                with patch.object(ota.urllib.request, 'build_opener', return_value=opener):
+                    value = ota.request_json(ota.API, ott.Error, expected_sha256=hashlib.sha256(raw).hexdigest())
+                self.assertEqual(value, {'answer': 42, 'name': 'fixture'})
+        opener = SimpleNamespace(open=lambda *args, **kwargs: io.BytesIO(values[1]))
+        with patch.object(ota.urllib.request, 'build_opener', return_value=opener), self.assertRaises(ott.Error):
+            ota.request_json(ota.API, ott.Error, expected_sha256=hashlib.sha256(values[0]).hexdigest())
+
+    def test_verified_digest_does_not_bypass_json_or_size_validation(self):
+        for raw, limit in ((b'{"key":1,"key":2}', 1024), (b'{not-json}', 1024), (b'{"a":1}', 6)):
+            with self.subTest(raw=raw):
+                opener = SimpleNamespace(open=lambda *args, **kwargs: io.BytesIO(raw))
+                with patch.object(ota.urllib.request, 'build_opener', return_value=opener), self.assertRaises(ott.Error):
+                    ota.request_json(ota.API, ott.Error, limit=limit, expected_sha256=hashlib.sha256(raw).hexdigest())
+
+    def test_raw_manifest_download_honors_cancel_before_opening(self):
+        cancelled = threading.Event()
+        cancelled.set()
+        with patch.object(ota.urllib.request, 'build_opener') as opener, self.assertRaises(KeyboardInterrupt):
+            ota.request_json(ota.API, ott.Error, group_cancelled=cancelled, expected_sha256='a' * 64)
+        opener.assert_not_called()
 
 
 if __name__ == "__main__":

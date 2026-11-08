@@ -4535,11 +4535,21 @@ APK's package, signature and strictly increasing versionCode. Selecting an older
 version fails; selecting the already installed versionCode does nothing and is
 not proof of byte-for-byte equality.
 
-Stable releases promoted from an RC retain the original RC manifest and version
-plan. The CLI accepts this only for a matching `promote-bytes` plan, published RC
-and stable tags pointing to the same source, identical manifest evidence, and
-matching APK size/digests. The APK keeps the final package version and original
-versionCode; its download URL uses the selected stable tag. For example:
+Stable releases support both the legacy schema-1 manifest and the compact
+schema-2 `rc-payloads-v1` manifest. A legacy promotion retains its original RC
+manifest. A compact promotion references the full public RC manifest by tag and
+SHA-256 of its exact downloaded bytes. The CLI verifies that evidence against
+the published RC, its source and run identity, the `promote-bytes` plan, and the
+stable payload inventory. Both formats require matching RC/stable source commits
+and APK sizes/digests. Build and validation receipts can remain on the RC release;
+their absence from the compact stable release does not require downloading an
+unverified APK or bypassing metadata checks.
+
+The APK keeps the final package version and original Android versionCode from
+the verified RC evidence; its download URL uses the selected stable tag. Missing
+or inconsistent RC evidence stops the request before APK preparation or
+installation. Older CLI versions that only accept schema 1 need a CLI update to
+use a compact stable release. For example:
 
 ```sh
 ott k8c update --version v1.1.60 --variant api22 --prepare-only
