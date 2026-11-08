@@ -163,7 +163,7 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
-[`ee46aedfb6746349d7d5daac974ce3f01b87612d`](https://github.com/open-ott-play/ottplay-control-server/commit/ee46aedfb6746349d7d5daac974ce3f01b87612d).
+[`3b5260557ef90d7e2467524ecb0619ee9800c778`](https://github.com/open-ott-play/ottplay-control-server/commit/3b5260557ef90d7e2467524ecb0619ee9800c778).
 This is an exact source pin, not a claim about the latest published release.
 It includes [indexer diagnostics and per-request child selection](torrent-indexer.md):
 `ott t1 torrent indexer doctor jackett` checks capabilities without a tracker search.
@@ -280,8 +280,8 @@ contacting a controller:
 ```sh
 (
   set -eu
-  ott_ref=ee46aedfb6746349d7d5daac974ce3f01b87612d
-  ott_source="$HOME/.local/share/ottplay-control-server-ee46aedfb674"
+  ott_ref=3b5260557ef90d7e2467524ecb0619ee9800c778
+  ott_source="$HOME/.local/share/ottplay-control-server-3b5260557ef9"
   python3 --version
   mkdir -p "$HOME/.local/share"
   if [ -e "$ott_source" ] || [ -L "$ott_source" ]; then
@@ -304,7 +304,7 @@ contacting a controller:
 Run this installation directly, including when an older `ott` is already on PATH:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-ee46aedfb674/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-3b5260557ef9/cli/ott.py"
 python3 "$ott_script" --help
 # Once your existing configuration is ready:
 python3 "$ott_script" a1 doctor --json
@@ -318,7 +318,7 @@ mkdir -p "$HOME/.local/bin"
 if [ -e "$HOME/.local/bin/ott" ] || [ -L "$HOME/.local/bin/ott" ]; then
   printf '%s\n' 'Existing ott preserved; use the direct Python invocation.'
 else
-  ln -s "$HOME/.local/share/ottplay-control-server-ee46aedfb674/cli/ott.py" "$HOME/.local/bin/ott"
+  ln -s "$HOME/.local/share/ottplay-control-server-3b5260557ef9/cli/ott.py" "$HOME/.local/bin/ott"
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v ott
@@ -340,8 +340,8 @@ reviewed commit in a new directory without replacing an existing checkout or
 creating/changing a launcher:
 
 ```powershell
-$ottRef = 'ee46aedfb6746349d7d5daac974ce3f01b87612d'
-$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-ee46aedfb674'
+$ottRef = '3b5260557ef90d7e2467524ecb0619ee9800c778'
+$ottSource = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-3b5260557ef9'
 if ($null -ne (Get-Item -LiteralPath $ottSource -Force -ErrorAction SilentlyContinue)) {
     throw "Already exists: $ottSource; inspect it or choose a new directory."
 }
@@ -388,12 +388,12 @@ the normal default configuration; put `--config /absolute/path/to/cli.json` or
 `--config C:\private\cli.json` before `a1` if that is how you already run it:
 
 ```sh
-ott_script="$HOME/.local/share/ottplay-control-server-ee46aedfb674/cli/ott.py"
+ott_script="$HOME/.local/share/ottplay-control-server-3b5260557ef9/cli/ott.py"
 python3 "$ott_script" a1 doctor --json
 ```
 
 ```powershell
-$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-ee46aedfb674\cli\ott.py'
+$ottScript = Join-Path $env:LOCALAPPDATA 'ottplay-control-server-3b5260557ef9\cli\ott.py'
 py -3 $ottScript a1 doctor --json
 ```
 
@@ -436,7 +436,7 @@ import sys
 launcher = Path.home() / ".local/bin/ott"
 backup = launcher.with_name("ott.before-local-c76cb9b728b8")
 staged = launcher.with_name("ott.switch-local-c76cb9b728b8")
-reviewed = Path.home() / ".local/share/ottplay-control-server-ee46aedfb674/cli/ott.py"
+reviewed = Path.home() / ".local/share/ottplay-control-server-3b5260557ef9/cli/ott.py"
 if not launcher.is_symlink() or launcher.is_dir():
     raise SystemExit("Expected an existing ott symlink to a file; inspect it first.")
 if os.path.lexists(staged):
@@ -812,6 +812,11 @@ not the selected catalogue row or kiosk target. `Now playing: Not reported`
 means this response does not report usable current-content metadata. On older players,
 `Connected (standby not reported)` leaves standby unknown. The provider label `Local videos`
 names the local-file provider; it does not mean the player is disconnected.
+
+When the player reports a separate `player.build_sha`, the Version line adds
+`(build 1a2b3c4d5e6f)` using at most 12 characters. JSON keeps the reported version
+and full SHA as separate fields. An `unknown` SHA is shown as "build SHA not
+reported"; older players without this field keep their existing version output.
 
 For retained reports, including when a player is offline:
 
