@@ -3842,6 +3842,6 @@
       }
     }
   },
-  "publication_floor": 255,
+  "publication_floor": 256,
   "schema": 1
 }
