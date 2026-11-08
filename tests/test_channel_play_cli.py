@@ -113,12 +113,15 @@ class ChannelPlayTest(unittest.TestCase):
 
     def test_unicode_casefold_duplicate_exact_names_and_numeric_ids(self):
         rows = [{'id': 15, 'number': 2, 'name': 'Straße'}, {'id': 16, 'number': 10, 'name': 'STRASSE'}]
-        reply = self.acknowledgement(rows[-1])
-        reply['channel']['id'] = '16'
+        reply = self.acknowledgement(rows[0])
+        reply['channel']['id'] = '15'
         status, output, errors, calls = self.run_play(['STRASSE'], [{'channels': rows}, reply])
         self.assertEqual(status, 0, errors)
         self.assertEqual(output, '2: Straße\n10: STRASSE\n')
-        self.assertEqual(calls[-1], mock.call('dev_iphone', 'play_catalog', {'catalog': 'snapshot', 'random': {'search': 'STRASSE'}}))
+        self.assertEqual(calls[-1], mock.call('dev_iphone', 'play', {'query': '2'}))
+        self.assertNotIn('Randomly selected', errors)
+        self.assertIn('Channel switch requested: 2: Straße', errors)
+        self.choice.assert_not_called()
 
     def test_numeric_and_empty_rejections_do_not_search_or_retry(self):
         for query in ['706', ' 706 ', '+706', '-706', '7.06', '7e2', '７０６', '']:
