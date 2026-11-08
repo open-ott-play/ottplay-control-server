@@ -34,6 +34,12 @@ remote-control connection. It does not require the passive snapshot capability;
 a player that only advertises capture still cannot serve `debug --native-playback`.
 The CLI, controller and player must all support the capture protocol.
 
+Capture reports include the player's reported build version and, when available,
+its separate Git `build_sha`. Text shows up to 12 SHA characters; JSON retains
+the full reported value. A source-archive build may report `unknown`, displayed as
+"build SHA not reported". These fields identify the reporting build; they do not
+attest to its source or confirm physical playback.
+
 ```sh
 ott l_ debug capture start
 ott l_ debug capture start --duration 60

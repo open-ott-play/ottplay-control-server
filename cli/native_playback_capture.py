@@ -300,6 +300,7 @@ class Capture:
         if "native_playback_capture" not in caps:
             raise Failure("unsupported")
         capability(caps["native_playback_capture"])
+        self.player = dict(caps["player"])
         self.runtime = caps["player"]["runtime"]
 
 
@@ -319,6 +320,7 @@ def run(api, client, device, words, timeout, json_output=False):
         result["requests"] = capture.requests
         capture.setup()
         result["runtime"] = capture.runtime
+        result["player"] = dict(capture.player)
         if args.operation == "start":
             data = capture.call("start", duration_s=args.duration)
         else:
@@ -354,6 +356,8 @@ def run(api, client, device, words, timeout, json_output=False):
         print(json.dumps(result, ensure_ascii=True, allow_nan=False, indent=2))
     else:
         print("Native playback capture " + (result["operation"] or "command") + ": " + result["verdict"])
+        if "player" in result:
+            print("Player version: " + api.player_version_text(result["player"]))
         if "reason" in result:
             print("Reason: " + result["reason"])
         if result.get("no_capture"):

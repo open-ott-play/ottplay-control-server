@@ -5297,6 +5297,10 @@ def print_notifications(data):
     print("Notifications: " + ("on" if data["enabled"] else "off") + " (saved on player; banners and camera media).", flush=True)
 
 
+def valid_player_build_sha(value):
+    return isinstance(value, str) and (value == "unknown" or re.fullmatch(r"[0-9a-f]{4,40}", value) is not None)
+
+
 def capabilities_metadata(data):
     invalid = "The player returned invalid capabilities metadata"
     if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
@@ -5319,6 +5323,10 @@ def capabilities_metadata(data):
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
     result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "build_sha" in player:
+        if not valid_player_build_sha(player["build_sha"]):
+            raise Error(invalid)
+        result["player"]["build_sha"] = player["build_sha"]
     if "plex_servers" in data:
         if not plex_servers_token(player["runtime"], r"[a-z0-9-]{1,64}"):
             raise Error(invalid)
@@ -5725,6 +5733,8 @@ def status_capabilities(client, device, data, deadline, *, controls=None):
     player = data.get("player")
     if isinstance(player, dict):
         player = dict(player)
+        if "build_sha" in player and not valid_player_build_sha(player["build_sha"]):
+            raise Error("The player returned invalid build SHA metadata")
         if "standby" in player and type(player["standby"]) is not bool:
             raise Error("The player returned invalid standby metadata")
         if "background" in player:
@@ -6110,6 +6120,16 @@ def status_text(value, pattern=None):
     return (value[:157] + "..." if len(value) > 160 else value) or "Not reported"
 
 
+def player_version_text(player):
+    version = status_text(player.get("version"), r"[0-9][A-Za-z0-9_.+\-]{0,63}")
+    build_sha = player.get("build_sha")
+    if build_sha == "unknown":
+        return version + " (build SHA not reported)"
+    if valid_player_build_sha(build_sha):
+        return version + " (build " + build_sha[:12] + ")"
+    return version
+
+
 def print_player_summary(data, name):
     """Project only known public status fields; catalog readiness is not playback."""
     player = data.get("player") if isinstance(data.get("player"), dict) else {}
@@ -6147,7 +6167,7 @@ def print_player_summary(data, name):
         ("Volume", volume),
         ("Channels", channels + " (catalog " + catalog + ")"),
         ("Platform", status_text(player.get("platform"), r"[a-z0-9_-]{1,32}")),
-        ("Version", status_text(player.get("version"), r"[0-9][A-Za-z0-9_.+\-]{0,63}")),
+        ("Version", player_version_text(player)),
         ("Background", activity + " (" + pending + " pending)"),
         ("Kiosk", kiosk_state),
     ]
