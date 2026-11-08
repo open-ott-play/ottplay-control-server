@@ -151,7 +151,7 @@ def payload_asset_index(entries, error, *, closed=False):
         name = entry["name"]
         if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,199}", name, re.ASCII)
                 or name.casefold() == "release-manifest.json" or name.casefold() in names
-                or type(entry["size"]) is not int or entry["size"] <= 0
+                or type(entry["size"]) is not int or entry["size"] < 0
                 or not isinstance(entry["sha256"], str) or not HASH.fullmatch(entry["sha256"])):
             raise error(invalid)
         names.add(name.casefold())
