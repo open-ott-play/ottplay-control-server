@@ -105,7 +105,10 @@ def request_json(url, error, limit=1024 * 1024, deadline=None, *, group_cancelle
                         raise ValueError("Duplicate metadata key")
                     value[key] = item
                 return value
-            finished.put((True, json.loads(raw, object_pairs_hook=unique)))
+            def finite_constant(_value):
+                raise ValueError("Non-finite release evidence value")
+            parse_options = {"parse_constant": finite_constant} if expected_sha256 is not None else {}
+            finished.put((True, json.loads(raw, object_pairs_hook=unique, **parse_options)))
         except Exception:
             finished.put((False, None))
     threading.Thread(target=read, daemon=True).start()
@@ -140,21 +143,18 @@ def payload_asset_index(entries, error, *, closed=False):
     if not isinstance(entries, list) or not entries:
         raise error(invalid)
     result = {}
+    names = set()
     for entry in entries:
         if (not isinstance(entry, dict) or not {"name", "size", "sha256"} <= set(entry)
                 or (closed and set(entry) != {"name", "size", "sha256"})):
             raise error(invalid)
         name = entry["name"]
-        if (not isinstance(name, str) or not name or name in (".", "..") or name in result
-                or "/" in name or "\\" in name or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name)
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,199}", name, re.ASCII)
+                or name.casefold() == "release-manifest.json" or name.casefold() in names
                 or type(entry["size"]) is not int or entry["size"] <= 0
                 or not isinstance(entry["sha256"], str) or not HASH.fullmatch(entry["sha256"])):
             raise error(invalid)
-        try:
-            if len(name.encode("utf-8")) > 255:
-                raise error(invalid)
-        except UnicodeEncodeError:
-            raise error(invalid) from None
+        names.add(name.casefold())
         result[name] = {key: entry[key] for key in ("name", "size", "sha256")}
     return result
 
@@ -183,7 +183,7 @@ def compact_payloads(manifest, error):
     if has_fuzz != any(receipt["name"] == "release-inputs-fuzz.json" for receipt in validation):
         raise error(invalid)
     if has_fuzz:
-        if not manifest.get("fuzzing_profile"):
+        if not isinstance(manifest.get("fuzzing_profile"), dict) or not manifest["fuzzing_profile"]:
             raise error(invalid)
         omitted.add("fuzz-report.json")
     shipped = [assets[name] for name in sorted(assets) if name not in omitted]
@@ -259,6 +259,8 @@ def release_target(opts, error, deadline=None, *, group_cancelled=None):
         if (set(manifest) != expected_keys or manifest.get("kind") != "rc-payloads-v1"
                 or expected_channel != "stable" or release.get("prerelease") is not False
                 or manifest.get("repository") != REPOSITORY or manifest.get("version") != tag[1:]
+                or not isinstance(manifest.get("version"), str)
+                or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", manifest["version"], re.ASCII)
                 or manifest.get("channel") != "stable" or manifest.get("tag") != tag
                 or manifest.get("source_sha") != source
                 or not isinstance(evidence, dict) or set(evidence) != evidence_keys

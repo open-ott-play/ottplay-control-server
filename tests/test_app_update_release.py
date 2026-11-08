@@ -472,20 +472,22 @@ class ReleaseTests(unittest.TestCase):
 
 
 class CompactReleaseTests(unittest.TestCase):
-    def opts(self, variant='api22'):
-        return ota.options(['update', '--variant', variant, '--version', 'v1.1.60'], ott.Error)
+    def opts(self, variant='api22', version='v1.1.60'):
+        return ota.options(['update', '--variant', variant, '--version', version], ott.Error)
 
     def fetcher(self, proof, *, deadline=123, cancelled=None):
-        stable_url = 'https://github.com/' + ota.REPOSITORY + '/releases/download/v1.1.60/'
-        candidate_url = 'https://github.com/' + ota.REPOSITORY + '/releases/download/v1.1.60-rc.1/'
+        stable_tag = proof['stable']['tag_name']
+        candidate_tag = proof['manifest']['rc_evidence']['tag']
+        stable_url = 'https://github.com/' + ota.REPOSITORY + '/releases/download/' + stable_tag + '/'
+        candidate_url = 'https://github.com/' + ota.REPOSITORY + '/releases/download/' + candidate_tag + '/'
         rc_manifest_url = candidate_url + 'release-manifest.json'
         replies = {
-            ota.API + '/releases/tags/v1.1.60': proof['stable'],
-            ota.API + '/releases/tags/v1.1.60-rc.1': proof['candidate'],
+            ota.API + '/releases/tags/' + stable_tag: proof['stable'],
+            ota.API + '/releases/tags/' + candidate_tag: proof['candidate'],
             stable_url + 'release-manifest.json': proof['manifest'],
             rc_manifest_url: proof['candidate_manifest'],
-            ota.API + '/git/ref/tags/v1.1.60': {'object': {'type': 'commit', 'sha': proof['stable_source']}},
-            ota.API + '/git/ref/tags/v1.1.60-rc.1': {'object': {'type': 'commit', 'sha': proof['candidate_source']}},
+            ota.API + '/git/ref/tags/' + stable_tag: {'object': {'type': 'commit', 'sha': proof['stable_source']}},
+            ota.API + '/git/ref/tags/' + candidate_tag: {'object': {'type': 'commit', 'sha': proof['candidate_source']}},
         }
         expected_deadline = deadline
         def fetch(url, error, limit=None, deadline=None, *, group_cancelled=None, expected_sha256=None):
@@ -520,7 +522,7 @@ class CompactReleaseTests(unittest.TestCase):
     def assert_proof_rejected_before_update(self, proof):
         client = Client([state()])
         client.group_cancelled = threading.Event()
-        opts = self.opts()
+        opts = self.opts(version=proof['stable']['tag_name'])
         with patch.object(ota.time, 'monotonic', return_value=100), \
                 patch.object(ota, 'request_json', side_effect=self.fetcher(
                     proof, deadline=100 + opts['wait'], cancelled=client.group_cancelled)), \
@@ -617,14 +619,62 @@ class CompactReleaseTests(unittest.TestCase):
                 bind_candidate_bytes(proof)
                 self.assert_proof_rejected_before_update(proof)
 
+    def test_compact_rejects_noncanonical_asset_names_and_casefold_collisions(self):
+        names = ['.hidden', '-leading', 'contains space.json', 'nested/payload.json',
+                 'nested\\payload.json', 'méta.json', 'a' * 201, 'RELEASE-MANIFEST.JSON']
+        for name in names:
+            with self.subTest(name=name):
+                proof = compact_metadata()
+                add_compact_asset(proof, name)
+                bind_candidate_bytes(proof)
+                self.assert_proof_rejected_before_update(proof)
+        proof = compact_metadata()
+        add_compact_asset(proof, 'latest.json')
+        add_compact_asset(proof, 'LATEST.JSON')
+        bind_candidate_bytes(proof)
+        self.assert_proof_rejected_before_update(proof)
+
+    def test_compact_rejects_leading_zero_versions_even_when_all_references_agree(self):
+        def replace_version(value, version):
+            if isinstance(value, dict):
+                return {key: replace_version(item, version) for key, item in value.items()}
+            if isinstance(value, list):
+                return [replace_version(item, version) for item in value]
+            return value.replace('1.1.60', version) if isinstance(value, str) else value
+        for version in ('01.1.60', '1.01.60', '1.1.060'):
+            with self.subTest(version=version):
+                proof = replace_version(compact_metadata(), version)
+                candidate = proof['candidate_manifest']
+                plan_hash = hashlib.sha256(json.dumps(candidate['version_plan'], sort_keys=True,
+                                                     separators=(',', ':')).encode()).hexdigest()
+                candidate['plan_sha256'] = plan_hash
+                for row in candidate['package_versions']:
+                    row['plan_sha256'] = plan_hash
+                bind_candidate_bytes(proof)
+                self.assert_proof_rejected_before_update(proof)
+
+    def test_compact_fuzz_profile_must_be_a_nonempty_object(self):
+        for profile in (True, 1, 'enabled', ['enabled'], {}):
+            with self.subTest(profile=profile):
+                proof = compact_metadata()
+                receipt = add_compact_asset(proof, 'release-inputs-fuzz.json', shipped=False)
+                proof['candidate_manifest']['validation_receipts'] = [
+                    {key: receipt[key] for key in ('name', 'sha256')}]
+                add_compact_asset(proof, 'fuzz-report.json', shipped=False)
+                proof['candidate_manifest']['fuzzing_profile'] = profile
+                bind_candidate_bytes(proof)
+                self.assert_proof_rejected_before_update(proof)
+
     def test_compact_projection_omits_only_declared_receipts_and_exact_fuzz_report(self):
         proof = compact_metadata()
+        proof['candidate_manifest']['assets'][0]['build_metadata'] = {'fixture': 'retained RC evidence'}
         receipt = add_compact_asset(proof, 'release-inputs-fuzz.json', shipped=False)
         proof['candidate_manifest']['validation_receipts'] = [{key: receipt[key] for key in ('name', 'sha256')}]
         proof['candidate_manifest']['fuzzing_profile'] = {'fixture': True}
         add_compact_asset(proof, 'fuzz-report.json', shipped=False)
         for name in ('latest.json', 'latest.json.sig', 'build-metadata.json',
-                     'release-inputs-ui.png', 'release-inputs-android.json.sig', 'fuzz-report-extra.json'):
+                     'release-inputs-ui.png', 'release-inputs-android.json.sig', 'fuzz-report-extra.json',
+                     'A+v1.2-foo_bar.bin', 'a' * 200):
             add_compact_asset(proof, name)
         bind_candidate_bytes(proof)
         with patch.object(ota, 'request_json', side_effect=self.fetcher(proof)):
@@ -686,6 +736,14 @@ class CompactReleaseTests(unittest.TestCase):
                 opener = SimpleNamespace(open=lambda *args, **kwargs: io.BytesIO(raw))
                 with patch.object(ota.urllib.request, 'build_opener', return_value=opener), self.assertRaises(ott.Error):
                     ota.request_json(ota.API, ott.Error, limit=limit, expected_sha256=hashlib.sha256(raw).hexdigest())
+
+    def test_hash_pinned_json_rejects_nonfinite_unknown_metadata(self):
+        for constant in (b'NaN', b'Infinity', b'-Infinity'):
+            raw = b'{"schema":1,"unknown_metadata":{"nested":[' + constant + b']}}'
+            with self.subTest(constant=constant):
+                opener = SimpleNamespace(open=lambda *args, **kwargs: io.BytesIO(raw))
+                with patch.object(ota.urllib.request, 'build_opener', return_value=opener), self.assertRaises(ott.Error):
+                    ota.request_json(ota.API, ott.Error, expected_sha256=hashlib.sha256(raw).hexdigest())
 
     def test_raw_manifest_download_honors_cancel_before_opening(self):
         cancelled = threading.Event()
