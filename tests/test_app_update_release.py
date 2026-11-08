@@ -111,8 +111,8 @@ def compact_metadata():
     return proof
 
 
-def add_compact_asset(proof, name, *, shipped=True):
-    row = dict(name=name, size=1000, sha256='f' * 64)
+def add_compact_asset(proof, name, *, shipped=True, size=1000, sha256='f' * 64):
+    row = dict(name=name, size=size, sha256=sha256)
     proof['candidate_manifest']['assets'].append(copy.deepcopy(row))
     releases = [proof['candidate']]
     if shipped:
@@ -519,10 +519,10 @@ class CompactReleaseTests(unittest.TestCase):
                 hashes = [call.kwargs['expected_sha256'] for call in fetch.call_args_list if 'expected_sha256' in call.kwargs]
                 self.assertEqual(hashes, [proof['manifest']['rc_evidence']['manifest_sha256']])
 
-    def assert_proof_rejected_before_update(self, proof):
+    def assert_proof_rejected_before_update(self, proof, variant='api22'):
         client = Client([state()])
         client.group_cancelled = threading.Event()
-        opts = self.opts(version=proof['stable']['tag_name'])
+        opts = self.opts(variant=variant, version=proof['stable']['tag_name'])
         with patch.object(ota.time, 'monotonic', return_value=100), \
                 patch.object(ota, 'request_json', side_effect=self.fetcher(
                     proof, deadline=100 + opts['wait'], cancelled=client.group_cancelled)), \
@@ -530,6 +530,48 @@ class CompactReleaseTests(unittest.TestCase):
             ota.update(client, 'fixture-player', opts, ott)
         self.assertEqual(client.calls, [('fixture-player', 'app_update', {'operation': 'status'})])
         self.assertEqual(client.timeout, 45)
+
+    def test_compact_empty_auxiliary_payload_preserves_both_apk_targets(self):
+        empty_hash = hashlib.sha256(b'').hexdigest()
+        for variant, name in ota.VARIANTS.items():
+            with self.subTest(variant=variant):
+                proof = compact_metadata()
+                row = add_compact_asset(proof, 'empty-marker.txt', size=0, sha256=empty_hash)
+                bind_candidate_bytes(proof)
+                with patch.object(ota, 'request_json', side_effect=self.fetcher(proof)):
+                    target = ota.release_target(self.opts(variant), ott.Error, deadline=123)
+                selected = next(item for item in proof['manifest']['assets'] if item['name'] == name)
+                self.assertIn(row, proof['manifest']['assets'])
+                self.assertEqual(row, dict(name='empty-marker.txt', size=0, sha256=empty_hash))
+                self.assertEqual(target, dict(tag='v1.1.60', variant=variant, version_code=10497,
+                    source_sha=SOURCE, sha256=selected['sha256'], url='https://github.com/' + ota.REPOSITORY +
+                    '/releases/download/v1.1.60/' + name))
+
+    def test_compact_auxiliary_size_still_requires_a_nonnegative_integer(self):
+        for size in (-1, True, False, 0.0, 1.0, '0', '1'):
+            with self.subTest(size=size, kind=type(size).__name__):
+                proof = compact_metadata()
+                add_compact_asset(proof, 'auxiliary-marker.txt', size=size)
+                bind_candidate_bytes(proof)
+                self.assert_proof_rejected_before_update(proof)
+
+    def test_compact_empty_selected_apk_or_manifest_never_prepares_or_installs(self):
+        for variant, name in ota.VARIANTS.items():
+            for publication in ('stable', 'candidate', 'all-bindings'):
+                with self.subTest(variant=variant, publication=publication):
+                    proof = compact_metadata()
+                    if publication == 'all-bindings':
+                        for section in ('stable', 'candidate', 'manifest', 'candidate_manifest'):
+                            next(row for row in proof[section]['assets'] if row['name'] == name)['size'] = 0
+                        bind_candidate_bytes(proof)
+                    else:
+                        next(row for row in proof[publication]['assets'] if row['name'] == name)['size'] = 0
+                    self.assert_proof_rejected_before_update(proof, variant)
+        for publication in ('stable', 'candidate'):
+            with self.subTest(manifest=publication):
+                proof = compact_metadata()
+                next(row for row in proof[publication]['assets'] if row['name'] == 'release-manifest.json')['size'] = 0
+                self.assert_proof_rejected_before_update(proof)
 
     def test_compact_identity_failures_never_prepare_or_install(self):
         changes = {
