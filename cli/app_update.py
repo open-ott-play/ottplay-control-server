@@ -179,11 +179,11 @@ def compact_payloads(manifest, error):
     declared_names = {name for name in assets if name.startswith("release-inputs-") and name.endswith(".json")}
     if declared_names != omitted:
         raise error(invalid)
-    has_fuzz = "fuzz-report.json" in assets
-    if has_fuzz != any(receipt["name"] == "release-inputs-fuzz.json" for receipt in validation):
-        raise error(invalid)
-    if has_fuzz:
-        if not isinstance(manifest.get("fuzzing_profile"), dict) or not manifest["fuzzing_profile"]:
+    fuzz_receipt = any(receipt["name"] == "release-inputs-fuzz.json" for receipt in validation)
+    # A filename alone does not declare validation evidence; retain ordinary payloads.
+    if fuzz_receipt or "fuzzing_profile" in manifest:
+        if ("fuzz-report.json" not in assets or not fuzz_receipt
+                or not isinstance(manifest.get("fuzzing_profile"), dict) or not manifest["fuzzing_profile"]):
             raise error(invalid)
         omitted.add("fuzz-report.json")
     shipped = [assets[name] for name in sorted(assets) if name not in omitted]

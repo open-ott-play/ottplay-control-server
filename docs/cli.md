@@ -4544,6 +4544,8 @@ stable payload inventory. Both formats require matching RC/stable source commits
 and APK sizes/digests. Build and validation receipts can remain on the RC release;
 their absence from the compact stable release does not require downloading an
 unverified APK or bypassing metadata checks.
+An ordinary `fuzz-report.json` without declared fuzz evidence remains a payload;
+its filename alone does not authorize omission from the stable release.
 
 The APK keeps the final package version and original Android versionCode from
 the verified RC evidence; its download URL uses the selected stable tag. Missing

@@ -696,7 +696,7 @@ class CompactReleaseTests(unittest.TestCase):
                 self.assert_proof_rejected_before_update(proof)
 
     def test_compact_fuzz_profile_must_be_a_nonempty_object(self):
-        for profile in (True, 1, 'enabled', ['enabled'], {}):
+        for profile in (None, False, True, 1, '', 'enabled', [], ['enabled'], {}):
             with self.subTest(profile=profile):
                 proof = compact_metadata()
                 receipt = add_compact_asset(proof, 'release-inputs-fuzz.json', shipped=False)
@@ -706,6 +706,58 @@ class CompactReleaseTests(unittest.TestCase):
                 proof['candidate_manifest']['fuzzing_profile'] = profile
                 bind_candidate_bytes(proof)
                 self.assert_proof_rejected_before_update(proof)
+
+    def test_ordinary_fuzz_report_is_retained_for_both_variants_including_empty_file(self):
+        for variant, apk_name in ota.VARIANTS.items():
+            for raw in (b'', b'ordinary diagnostic report'):
+                for other_validation in (False, True):
+                    with self.subTest(variant=variant, size=len(raw), other_validation=other_validation):
+                        proof = compact_metadata()
+                        row = add_compact_asset(proof, 'fuzz-report.json', size=len(raw),
+                                                sha256=hashlib.sha256(raw).hexdigest())
+                        if other_validation:
+                            receipt = add_compact_asset(proof, 'release-inputs-lint.json', shipped=False)
+                            proof['candidate_manifest']['validation_receipts'] = [
+                                {key: receipt[key] for key in ('name', 'sha256')}]
+                        bind_candidate_bytes(proof)
+                        with patch.object(ota, 'request_json', side_effect=self.fetcher(proof)):
+                            target = ota.release_target(self.opts(variant), ott.Error, deadline=123)
+                        self.assertIn(row, proof['manifest']['assets'])
+                        self.assertEqual(target['variant'], variant)
+                        self.assertEqual(target['url'], 'https://github.com/' + ota.REPOSITORY +
+                                         '/releases/download/v1.1.60/' + apk_name)
+
+    def test_partial_declared_fuzz_evidence_never_prepares_or_installs(self):
+        # No declaration, or an ordinary report alone, is valid. Any declaration
+        # requires all three parts, with the report omitted from stable payloads.
+        combinations = [(False, False, True), (False, True, False), (False, True, True),
+                        (True, False, True), (True, True, False), (True, True, True)]
+        for report, receipt, profile in combinations:
+            with self.subTest(report=report, receipt=receipt, profile=profile):
+                proof = compact_metadata()
+                if receipt:
+                    row = add_compact_asset(proof, 'release-inputs-fuzz.json', shipped=False)
+                    proof['candidate_manifest']['validation_receipts'] = [
+                        {key: row[key] for key in ('name', 'sha256')}]
+                if report:
+                    # Complete evidence also rejects retaining its report as an
+                    # ordinary stable file; its declaration requires omission.
+                    add_compact_asset(proof, 'fuzz-report.json', shipped=receipt and profile)
+                if profile:
+                    proof['candidate_manifest']['fuzzing_profile'] = {'fixture': True}
+                bind_candidate_bytes(proof)
+                self.assert_proof_rejected_before_update(proof)
+
+    def test_fuzz_profile_key_presence_cannot_be_treated_as_ordinary_payload(self):
+        for profile in (None, False, {}, [], '', True):
+            for report in (False, True):
+                with self.subTest(profile=profile, report=report):
+                    proof = compact_metadata()
+                    proof['candidate_manifest']['fuzzing_profile'] = profile
+                    if report:
+                        add_compact_asset(proof, 'fuzz-report.json')
+                    bind_candidate_bytes(proof)
+                    self.assert_proof_rejected_before_update(proof)
 
     def test_compact_projection_omits_only_declared_receipts_and_exact_fuzz_report(self):
         proof = compact_metadata()
@@ -719,9 +771,11 @@ class CompactReleaseTests(unittest.TestCase):
                      'A+v1.2-foo_bar.bin', 'a' * 200):
             add_compact_asset(proof, name)
         bind_candidate_bytes(proof)
-        with patch.object(ota, 'request_json', side_effect=self.fetcher(proof)):
-            target = ota.release_target(self.opts(), ott.Error, deadline=123)
-        self.assertEqual(target['tag'], 'v1.1.60')
+        for variant in ota.VARIANTS:
+            with self.subTest(variant=variant), patch.object(ota, 'request_json', side_effect=self.fetcher(proof)):
+                target = ota.release_target(self.opts(variant), ott.Error, deadline=123)
+            self.assertEqual(target['tag'], 'v1.1.60')
+            self.assertNotIn('fuzz-report.json', [row['name'] for row in proof['manifest']['assets']])
 
     def test_compact_projection_rejects_missing_payloads_and_unproven_omissions(self):
         def declaration(proof, **values):
@@ -742,7 +796,7 @@ class CompactReleaseTests(unittest.TestCase):
             'duplicate receipt declaration': lambda p: p['candidate_manifest'].update(
                 validation_receipts=copy.deepcopy(p['candidate_manifest']['build_receipts'])),
             'undeclared receipt': lambda p: add_compact_asset(p, 'release-inputs-extra.json', shipped=False),
-            'undeclared fuzz report': lambda p: add_compact_asset(p, 'fuzz-report.json', shipped=False),
+            'ordinary fuzz report omitted from stable': lambda p: add_compact_asset(p, 'fuzz-report.json', shipped=False),
             'fuzz receipt without report': fuzz_receipt,
             'fuzz report without profile': fuzz_without_profile,
             'missing latest payload': lambda p: add_compact_asset(p, 'latest.json', shipped=False),
