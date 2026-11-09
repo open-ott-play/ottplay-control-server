@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "capability": {"catalog_random": {"version": 2, "scope": "receipt", "request_field": "receipt_random"}},
+  "request": {"action": "play_catalog", "params": {"catalog": "channel-page-123", "receipt_random": {"version": 2, "scope": "receipt"}}},
+  "result": {"dispatched": true, "channel": {"id": "native-video-7", "number": 8, "name": "Video eight"}},
+  "rejected_result": {"error": "The complete random-selection catalog is unavailable"},
+  "unsupported_result": {"error": "Receipt-scoped playback is not supported"}
+}

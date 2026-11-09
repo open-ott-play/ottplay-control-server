@@ -300,6 +300,14 @@ token together:
 {"action":"provider_settings","params":{"provider":"plex","settings":{"server":"http://nas.example:32400","token":"YOUR_PLEX_TOKEN"}}}
 ```
 
+Native Edem and named-operator configuration uses the separate negotiated
+[`native_provider_settings` version 1 contract](design/native-provider-settings-v1.md)
+on the same `settings_compare` / `provider_settings` actions. A versioned request
+requires an explicit slot, runtime and closed provider-specific patch; saving
+also requires the exact opaque receipt from comparison. It never falls through
+to the unversioned envelope. Native replies are closed and credential-free.
+See [CLI schema, check and save examples](native-catalog.md#configure-an-explicit-native-provider-profile).
+
 Only the selected device's authenticated command poll receives these settings.
 The normal player result contains `{fields:["server","token"],provider:"plex",saved:true}`,
 without the server URL or token values. The controller relays the player's result;
@@ -684,8 +692,10 @@ compared in full, including IDs longer than the legacy 512-unit limit.
 ### Player-owned random selection
 
 Compatible players advertise `"random":{"version":1}` in `capabilities`.
-The controller accepts an additive `play_catalog` union: either the existing
-`{catalog,id}` or `{catalog,random:{...}}`, never both. Check the capability
+The controller accepts distinct `play_catalog` union arms: the existing
+`{catalog,id}`, `{catalog,random:{...}}`, or the separately negotiated
+[receipt-scoped selector](#receipt-scoped-random-selection-version-2) below.
+Never combine selector arms. Check the capability
 before sending a random request; an old player/controller must fail closed,
 without retrying through a legacy random command or numeric playback.
 
@@ -725,6 +735,42 @@ requested range. It confirms dispatch, not visible playback. Rejection or an
 uncertain response is never automatically replayed. Requests retain ordinary
 `play_catalog` ownership, operator grants, queue and expiry rules. Shared wire
 fixtures live in [`contracts/random-v1.json`](../contracts/random-v1.json).
+
+### Receipt-scoped random selection (version 2)
+
+Native players can independently advertise
+`catalog_random: {"version":2,"scope":"receipt","request_field":"receipt_random"}`.
+This does not imply support for the legacy `random` capability or its content
+classification, AceStream exclusion, range or weighting policy. Negotiate the
+exact marker before sending a request. The CLI exposes this explicit opt-in as
+`random --receipt [SEARCH]`; see [examples and troubleshooting](native-catalog.md).
+
+Read categories, then a channel page in the selected category and optional
+search. Use the returned channel-page receipt, not the category-list receipt:
+
+```json
+{"action":"play_catalog","params":{"catalog":"CHANNEL_RECEIPT","receipt_random":{"version":2,"scope":"receipt"}}}
+```
+
+Both objects have exactly the shown keys. Version is integer `2`; scope is
+`receipt`. The population is the complete immutable receipt selection, including
+rows beyond the transferred page. Discovery and snapshot must both be complete.
+An empty, loading, expired, changed or category-only receipt fails. Normal
+parental, kiosk and playback admission still apply. A rejected item is terminal;
+the player does not draw a replacement.
+
+The bounded success envelope has the same
+`{dispatched:true,channel:{id,number,name}}` shape as legacy random selection.
+This arm uses native catalog bounds: nonempty ID up to 2,048 UTF-8 bytes,
+nonempty name up to 512 UTF-8 bytes, and integer number 1–1,000,000. Strings
+exclude control characters. Legacy random result limits remain unchanged.
+Controller result validation does not prove that a TV displayed the media or
+that a row has any content classification. Existing `play_catalog` operator
+scope, queue ownership and expiry rules remain. No mutation is replayed after
+an uncertain result, and no protocol fallback is attempted.
+For this new arm, negative replies must contain only a bounded `error` string.
+The controller validates the reply and retains a fixed rejection/unsupported
+message so private resolver or decoder details are not copied into results.
 
 ### Current-playback media tracks
 

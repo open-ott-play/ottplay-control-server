@@ -11,7 +11,19 @@ const maxCategoryItems = 1000000
 const maxCategoryResultBytes = 1024 * 1024
 
 var categoryCatalogPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
-var categoryProviderPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+var categoryProviderPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+)*$`)
+
+func validCategoryProvider(provider string) bool {
+	if len(provider) > 64 || !categoryProviderPattern.MatchString(provider) {
+		return false
+	}
+	for _, segment := range strings.Split(provider, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
+}
 
 type categoryRequest struct {
 	Runtime, Op, Catalog, Category string
@@ -140,7 +152,7 @@ func validCategoryResult(raw json.RawMessage, status string, expected *categoryR
 	} else {
 		var provider string
 		selected, valid := categoryText(m["selected"], 1024)
-		if !valid || !inspectEnum(m["op"], expected.Op) || json.Unmarshal(m["provider"], &provider) != nil || !categoryProviderPattern.MatchString(provider) {
+		if !valid || !inspectEnum(m["op"], expected.Op) || json.Unmarshal(m["provider"], &provider) != nil || !validCategoryProvider(provider) {
 			return false
 		}
 		if expected.Op == "select" {

@@ -4,6 +4,22 @@
 
 ### Added
 
+- Add explicit `random --receipt [SEARCH]` for negotiated native catalog random
+  version 2. Draw on the player from a complete category/search receipt, retain
+  legacy safe-random semantics, and never replay or substitute a failed selection.
+- Support native Edem and named-operator profile metadata without collapsing
+  provider brands; accept dotted/slash catalog provider IDs and resolve
+  advertised Edem aliases in combined provider/playback commands.
+- Accept native Edem embedded-portal portable Favorites while preserving exact
+  provider, playlist/category subprofile and attested locator identity.
+- Show canonical typed-setting values when a player's schema supplies no aliases,
+  and cover native subtitle mode/language conditional saves and conflict handling.
+- Add negotiated native Edem/operator configuration for explicit profile slots,
+  with private file inputs, read-only comparison, one-use conditional saves,
+  closed credential-free replies and no legacy fallback or automatic replay.
+  Named presets can include these explicit native slots in ordinary loads and
+  plan/apply/resume/verify without exposing credentials in output or checkpoints.
+
 - Report current playback automatically when a player connects or changes media.
   Show reported media in live CLI status and add `state` / `history` reads from
   the controller, with explicit age, stale and ambiguous-runtime indicators.

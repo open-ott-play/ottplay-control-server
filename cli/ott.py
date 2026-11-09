@@ -160,6 +160,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME tracks audio ID           request a current audio track by opaque ID
   ott NAME tracks subtitle ID|off     request a subtitle track or turn subtitles off
   ott NAME provider-config FILE      update active provider settings from JSON
+  ott NAME provider-config --check FILE  compare a bound native profile; no save
+  ott NAME provider-config --schema [ID]  list negotiated native credential fields
   ott NAME plex setup URL [TOKEN]    set Plex address and token (hidden prompt if omitted)
   ott NAME plex setup URL --token-file FILE  set Plex address and token from a file
   ott NAME plex server URL           update the saved Plex server address
@@ -263,6 +265,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME kiosk set CHANNEL         replace by number or first name match
   ott NAME kiosk off                 release the kiosk lock
   ott NAME R / random [FROM TO]      play a safe random channel from All
+  ott NAME random --receipt [TEXT]   uniform choice from current category/search
   ott NAME msg TEXT                  show an on-screen message
   ott NAME exit / quit / close        exit the app only when the platform supports it
 
@@ -273,7 +276,9 @@ Add a channel number, R/random or name to switch and play from the provider's co
 Use provider "Local videos" -- NAME to separate a multiword provider from a channel explicitly.
 An exact full channel name wins; otherwise a random partial-name match is selected. Playback wakes standby.
 R/random uses All: 80% from channel numbers 1–1000 and 20% from higher numbers when both pools are available.
-An explicit FROM TO range is inclusive and uniform. Random selection excludes AceStream and parental-protected channels.
+An explicit FROM TO range is inclusive and uniform. R/random excludes AceStream and parental-protected channels.
+random --receipt explicitly uses the complete current category/search without R's classification or weighting.
+It requires catalog_random version 2; normal parental and kiosk restrictions still apply.
 All player names are checked first. A player failure does not stop the remaining players.
 --timeout applies to each player; completed switches are not rolled back or automatically retried.
 An exact saved player name containing commas retains its existing single-player meaning.
@@ -1845,9 +1850,20 @@ def parse_command(words):
             raise Error("provider requires a provider ID, index or name")
         return "provider", {"query": "offline" if text.strip().casefold() == "local" else text}
     if verb == "provider-config":
-        if len(tail) != 1:
+        if tail[:1] == ["--schema"]:
+            try:
+                return "native_provider_settings", native_provider_settings_module().schema_request(tail[1:])
+            except ValueError:
+                raise Error("Use provider-config --schema [CANONICAL_PROVIDER_ID]") from None
+        check = tail[:1] == ["--check"]
+        if len(tail) != (2 if check else 1):
             raise Error("Use provider-config FILE.json")
-        data = read_settings_json(tail[0], "provider")
+        data = read_settings_json(tail[-1], "provider")
+        if check or isinstance(data, dict) and set(data) == {"provider", "number", "settings"}:
+            try:
+                return "native_provider_settings", native_provider_settings_module().document(data, check=check)
+            except ValueError:
+                raise Error("Bound native provider configuration requires a canonical provider, number 1–15 and a nonempty valid settings patch") from None
         if not isinstance(data, dict) or set(data) != {"provider", "settings"} or not isinstance(data["settings"], dict):
             raise Error('Expected {"provider":"xtream","settings":{...}}')
         if data["provider"] == "plex":
@@ -1897,6 +1913,13 @@ def parse_command(words):
             raise Error("message requires text")
         return "command", {"command": "popup_message", "message": text}
     if verb in ("random", "rr"):
+        if verb == "random" and tail[:1] == ["--receipt"]:
+            search = " ".join(tail[1:]).strip()
+            if (any(word.startswith("--") for word in tail[1:])
+                    or (len(tail) == 3 and all(re.fullmatch(r"[0-9]+", word) for word in tail[1:]))
+                    or (len(tail) > 1 and not media_text(search, 1024))):
+                raise Error("Use random --receipt [SEARCH] without range or mode options")
+            return "catalog_random", {"search": search}
         params = {"command": "random_channel"}
         if verb == "rr":
             params["random_mode"] = "adult"
@@ -1927,7 +1950,7 @@ def read_settings_json(path, kind):
         if len(raw.encode("utf-8")) > 16 * 1024:
             raise ValueError("Oversized settings")
         return json.loads(raw, object_pairs_hook=unique_fields)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         raise Error(f"Could not read {kind} settings: use a valid JSON object without duplicate fields, at most 16 KiB") from None
 
 
@@ -2128,6 +2151,19 @@ def offline_profile_command(client, device, action, params, timeout):
         client.timeout = previous_timeout
 
 
+# Native provider registry IDs whose numbered slots use the source-profile
+# metadata shape. Keep actual brand identity; no synthetic "operator" family.
+# These grant read/select metadata compatibility, never M3U configuration writes.
+NATIVE_SOURCE_PROFILE_PROVIDERS = frozenset((
+    "plex", "xtream", "stalker", "edem", "antifriz", "kb-team", "itv", "ottclub", "shura", "1ott",
+    "bestlist/stalker", "only4", "shara-tv", "tvteam", "all4you", "bestlist", "cbilling", "d/maxtv",
+    "diamondtv", "dosug", "dragon", "drvao", "fabryka", "fox", "fxml", "great", "ipstream",
+    "iptv-ott.ru", "korona", "moidom", "newlook", "ottg", "ottprime", "polmedia", "prost",
+    "raduga", "rd", "russkoetv", "shara.club", "sharavoz", "shocktv", "tabox", "top", "topiptv",
+    "tvclub", "ultifl1x", "vidok",
+))
+
+
 def profile_metadata(data, action, params, *, expected_provider=None, allow_no_active=False):
     message = "The player returned invalid profile metadata"
     if action != "profiles":
@@ -2135,7 +2171,7 @@ def profile_metadata(data, action, params, *, expected_provider=None, allow_no_a
     def fail():
         raise Error(message)
     provider = data.get("provider") if isinstance(data, dict) else None
-    source_profiles = provider in ("plex", "xtream", "stalker")
+    source_profiles = isinstance(provider, str) and provider in NATIVE_SOURCE_PROFILE_PROVIDERS
     def profile(row):
         if provider == "offline":
             return offline_profile_metadata(row, fail)
@@ -2445,8 +2481,8 @@ def validate_preset(config, requested):
     name = resolve_preset_name(config, requested)
     value = config["presets"][name]
     if (not isinstance(value, dict) or not {"m3u", "plex", "active_profile"} <= set(value)
-            or set(value) - {"m3u", "plex", "active_profile", "stalker", "vportal", "local"}):
-        raise Error("A preset must contain m3u, plex and active_profile, with optional stalker, vportal and local settings")
+            or set(value) - {"m3u", "plex", "active_profile", "stalker", "vportal", "local", "native_provider_settings"}):
+        raise Error("A preset must contain m3u, plex and active_profile, with optional stalker, vportal, local and native_provider_settings")
     if not isinstance(value["m3u"], list) or not 1 <= len(value["m3u"]) <= 15:
         raise Error("A preset must contain 1–15 complete M3U profiles")
     profiles = []
@@ -2509,6 +2545,29 @@ def validate_preset(config, requested):
             seen.add(row["number"])
             stalker.append({"profile": row["number"], **{key: row[key] for key in ("name", "server", "mac")}})
         stalker.sort(key=lambda row: row["profile"])
+    native_rows = []
+    if "native_provider_settings" in value:
+        native = native_provider_settings_module()
+        rows = value["native_provider_settings"]
+        if not isinstance(rows, list) or not 1 <= len(rows) <= len(native.PROVIDERS) * 15:
+            raise Error("Native provider settings require 1–660 explicit provider/profile entries")
+        seen = set()
+        for row in rows:
+            try:
+                parsed = native.document(row)
+                identity = parsed["provider"], parsed["number"]
+                native.require(identity not in seen)
+                row = {key: parsed[key] for key in ("provider", "number", "settings")}
+                # Preflight the complete write, including the largest negotiated
+                # tokens, before any earlier preset step can mutate the player.
+                request = {"version": 1, **row,
+                           **{key: "x" * 128 for key in ("runtime", "context", "revision")}}
+                native.require(native.request_size("provider_settings", request) <= native.MAX_REQUEST_BYTES)
+            except (ValueError, TypeError, KeyError, UnicodeError):
+                raise Error("Invalid native provider settings: use unique canonical providers and explicit slots 1–15 within the 16 KiB request limit") from None
+            seen.add(identity)
+            native_rows.append(row)
+        native_rows.sort(key=lambda row: (row["provider"], row["number"]))
     requests = [("provider_settings", {"provider": "plex", "settings": plex})]
     requests.extend(("profile_settings", row) for row in profiles)
     requests.extend(("provider_settings", {"provider": "stalker", "settings": row}) for row in stalker)
@@ -2524,6 +2583,8 @@ def validate_preset(config, requested):
         result["vportal"] = [{"number": number, "settings": settings} for number, settings in sorted(portals.items())]
     if "local" in value:
         result["local"] = validate_local_preset(value["local"])
+    if native_rows:
+        result["native_provider_settings"] = native_rows
     return name, result
 
 
@@ -2621,6 +2682,48 @@ def local_preset_failure(exc, stage):
     return {"error_code": code, "error": detail.rstrip(".") + ". " + outcome}
 
 
+def native_preset_settings_command(client, device, row, *, check=False, session=None, label=None):
+    """Negotiate each slot afresh; journal only the conditional write, never reads."""
+    native = native_provider_settings_module()
+    params = native.document(row, check=check)
+    deadline = time.monotonic() + client.timeout
+
+    class JournalClient:
+        @property
+        def timeout(self):
+            return client.timeout
+
+        @timeout.setter
+        def timeout(self, value):
+            client.timeout = value
+
+        def __getattr__(self, name):
+            return getattr(client, name)
+
+        def call(self, target, action, request):
+            if action == "provider_settings":
+                # Tokens exist only in memory. Record intent before the sole
+                # write; a lost acknowledgement must be reconciled on resume.
+                session.retry(label, action, request)
+                cancelled = getattr(client, "group_cancelled", None)
+                if cancelled is not None and cancelled.is_set():
+                    raise KeyboardInterrupt
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise Error("Native preset save exceeded --timeout before dispatch")
+                client.timeout = remaining
+                return session.call(action, request)
+            return client.call(target, action, request)
+
+    if session is not None and session.state["pending"] is not None:
+        raise Error("A previous preset request remains unresolved; no native settings were sent")
+    adapted = JournalClient() if session is not None and not check else client
+    result = native.run(SimpleNamespace(**globals()), adapted, device, params, client.timeout)
+    if session is not None and not check:
+        session.complete(label)
+    return result
+
+
 def load_preset(client, device, name, preset, session=None):
     """Apply acknowledged steps; repeat only proven pre-write mount rejections."""
     completed = []
@@ -2706,6 +2809,9 @@ def load_preset(client, device, name, preset, session=None):
         for row in preset.get("vportal", []):
             stage = "preflight_vportal_" + str(row["number"])
             vportal_compare(client, device, row)
+        for row in preset.get("native_provider_settings", []):
+            stage = "preflight_native_" + row["provider"] + "_" + str(row["number"])
+            native_preset_settings_command(client, device, row, check=True)
         for index, row in enumerate(local_plan, 1):
             stage = "connect_local_" + str(index)
             params = {"op": "connect", "source": row["selector"]}
@@ -2720,6 +2826,10 @@ def load_preset(client, device, name, preset, session=None):
                     raise Error("Local preset folder connection was not confirmed")
             if session is not None:
                 session.complete(stage)
+            completed.append(stage)
+        for row in preset.get("native_provider_settings", []):
+            stage = "save_native_" + row["provider"] + "_" + str(row["number"])
+            native_preset_settings_command(client, device, row, session=session, label=stage)
             completed.append(stage)
         for row in preset.get("vportal", []):
             stage = "save_vportal_" + str(row["number"])
@@ -2780,12 +2890,20 @@ def load_preset(client, device, name, preset, session=None):
             if not vportal_compare(client, device, row)["matched"]:
                 raise Error("VPortal saved settings differ from the preset")
             completed.append(stage)
+        for row in preset.get("native_provider_settings", []):
+            stage = "verify_native_" + row["provider"] + "_" + str(row["number"])
+            if not native_preset_settings_command(client, device, row, check=True)["matched"]:
+                raise Error("Native provider saved settings differ from the preset")
+            completed.append(stage)
         if "local" in preset:
             stage = "verify_local"
             if not local_preset_matches(client, device, preset["local"]):
                 raise Error("Local preset folders differ from the player")
             completed.append(stage)
     except KeyboardInterrupt:
+        if stage.startswith("preflight_native_"):
+            return {"preset": name, "status": "interrupted", "stage": stage, "completed": completed,
+                    "error": "Native provider preflight interrupted. This attempt sent no preset settings or folder connections."}
         if stage == "preflight_local":
             return {"preset": name, "status": "interrupted", "stage": stage, "completed": completed,
                     "error_code": "interrupted",
@@ -2793,6 +2911,9 @@ def load_preset(client, device, name, preset, session=None):
         return {"preset": name, "status": "interrupted", "stage": stage, "completed": completed,
                 "error": "Loading interrupted. A request may have executed; inspect the player before retrying."}
     except (Error, KeyError, TypeError, ValueError, OSError) as exc:
+        if stage.startswith("preflight_native_"):
+            return {"preset": name, "status": "failed", "stage": stage, "completed": completed,
+                    "error": "Native provider preflight failed. This attempt sent no preset settings or folder connections."}
         if stage in ("preflight_local", "verify_local") or stage.startswith("connect_local_"):
             return {"preset": name, "status": "failed", "stage": stage, "completed": completed,
                     **local_preset_failure(exc, stage)}
@@ -4092,8 +4213,7 @@ def media_page_metadata(data, runtime, kind, offset, limit, catalog=None, catego
             or type(data["has_more"]) is not bool or type(data["loading"]) is not bool):
         raise Error(invalid)
     if kind == "categories":
-        if (data["op"] != "list" or not isinstance(data["provider"], str)
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", data["provider"])
+        if (data["op"] != "list" or not provider_identifier(data["provider"])
                 or not media_text(data["selected"], 1024)):
             raise Error(invalid)
     elif data["category"] != category or not media_text(data["category"], 1024):
@@ -5316,9 +5436,16 @@ def capabilities_metadata(data):
             native_capture = native_playback_capture_module().capability(data["native_playback_capture"])
         except ValueError:
             raise Error(invalid) from None
+    native_provider = None
+    if "native_provider_settings" in data:
+        try:
+            native_provider = native_provider_settings_module().capability(data["native_provider_settings"])
+        except ValueError:
+            raise Error(invalid) from None
     player = data.get("player")
     patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}",
-                "runtime": r"[A-Za-z0-9_.-]{1,96}" if native_playback or native_capture is not None else r"[a-z0-9-]{1,64}"}
+                "runtime": (r"[A-Za-z0-9_.:-]{1,128}" if native_provider is not None else
+                            r"[A-Za-z0-9_.-]{1,96}" if native_playback or native_capture is not None else r"[a-z0-9-]{1,64}")}
     if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
@@ -5335,6 +5462,8 @@ def capabilities_metadata(data):
         result["native_playback_diagnostics"] = {"version": 1}
     if native_capture is not None:
         result["native_playback_capture"] = native_capture
+    if native_provider is not None:
+        result["native_provider_settings"] = native_provider
     if "playback_failure_versions" in data:
         versions = data["playback_failure_versions"]
         if (type(versions) is not list or versions != [2, 3]
@@ -5478,6 +5607,13 @@ def capabilities_metadata(data):
         if not isinstance(random, dict) or set(random) != {"version"} or type(random["version"]) is not int or random["version"] != 1:
             raise Error(invalid)
         result["random"] = {"version": 1}
+    if "catalog_random" in data:
+        marker = data["catalog_random"]
+        if (not isinstance(marker, dict) or set(marker) != {"version", "scope", "request_field"}
+                or type(marker["version"]) is not int or marker["version"] != 2
+                or marker["scope"] != "receipt" or marker["request_field"] != "receipt_random"):
+            raise Error(invalid)
+        result["catalog_random"] = dict(marker)
     if data.get("offline_profiles") is not None:
         offline = data["offline_profiles"]
         operations = offline.get("operations") if isinstance(offline, dict) else None
@@ -5715,6 +5851,16 @@ def native_playback_capture_module():
     return module
 
 
+def native_provider_settings_module():
+    path = Path(__file__).resolve().with_name("native_provider_settings.py")
+    if not path.is_file():
+        raise Error("Install native_provider_settings.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_native_provider_settings", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def playback_status_module():
     path = Path(__file__).resolve().with_name("playback_status.py")
     if not path.is_file():
@@ -5850,6 +5996,9 @@ def print_player_help(data, name):
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("Available controls now:")
+    if "native_provider_settings" in controls:
+        print(f"  {prefix} provider-config --schema [ID]  — list supported native provider fields")
+        print(f"  {prefix} provider-config --check FILE / provider-config FILE  — compare/save a numbered native profile with source guards")
     if controls.get("playback_failure_versions") == [2, 3]:
         print(f"  {prefix} status --details  — read negotiated playback failure details (alias: st)")
     if "media_tracks" in controls:
@@ -5897,7 +6046,7 @@ def print_player_help(data, name):
             else:
                 print(f"  {prefix} provider m3u 1 / EXACT_NAME  — wait for loading, then play by number or exact full name")
             print("    Multiple players: ott t1,t2,t3,t4 provider m3u  — request all players concurrently")
-        if (provider in ("m3u", "vportal") or (native and provider in ("plex", "xtream", "stalker"))
+        if (provider in ("m3u", "vportal") or (native and provider in NATIVE_SOURCE_PROFILE_PROVIDERS)
                 or (provider == "offline" and "list" in controls.get("offline_profiles", {}).get("operations", []))):
             print(f"  {prefix} profiles  — show profile names; * marks the active profile (alias: profs)")
             if not kiosk_locked and (provider != "offline" or "load" in controls.get("offline_profiles", {}).get("operations", [])):
@@ -5935,6 +6084,9 @@ def print_player_help(data, name):
     if "random" in controls:
         print(f"  {prefix} R / random  — safe random channel from All; prefer numbers 1–1000")
         print(f"  {prefix} random 1 1000  — safe uniform choice within an inclusive range")
+    if "catalog_random" in controls and "list" in controls.get("categories", {}).get("operations", []):
+        print(f"  {prefix} random --receipt [SEARCH]  — uniform choice from current category/search; no R filtering or weighting")
+        print("    Requires a complete catalog; normal parental and kiosk restrictions apply.")
     if controls["input"]:
         print(f"  {prefix} key KEY  — " + ", ".join(controls["input"]))
     shot = controls.get("screenshot", {})
@@ -7262,7 +7414,8 @@ def provider_request(client, device, action, params, deadline):
 
 def provider_identifier(value):
     return (isinstance(value, str) and 1 <= len(value) <= 64
-            and re.fullmatch(r"[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+)*", value) is not None)
+            and re.fullmatch(r"[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+)*", value) is not None
+            and all(segment not in (".", "..") for segment in value.split("/")))
 
 
 def provider_play_plan(client, device, words, deadline):
@@ -7294,6 +7447,8 @@ def provider_play_plan(client, device, words, deadline):
         if key == "local":
             key = "offline"
         exact = [row for row in rows if row["id"].casefold() == key or str(row["index"]) == key]
+        if not exact and key in ("ilook", "ilooktv"):
+            exact = [row for row in rows if row["id"] == "edem"]
         exact = exact or [row for row in rows if media_search_key(row["name"]) == media_search_key(key)]
         matches = exact or [row for row in rows if media_search_key(key) in media_search_key(row["name"])]
         if len(matches) > 1:
@@ -7425,6 +7580,52 @@ def random_command(client, device, params, timeout):
         if "random_mode" in params:
             selector["mode"] = params["random_mode"]
         return random_play(client, device, catalog, selector, deadline)
+    finally:
+        client.timeout = previous_timeout
+
+
+def receipt_random_play(client, device, page, search, deadline):
+    # The channel-page receipt covers its entire category/search population,
+    # including items beyond this page. Only the player samples that population.
+    request = {"catalog": page["catalog"], "receipt_random": {"version": 2, "scope": "receipt"}}
+    try:
+        result = media_request(client, device, "play_catalog", request, deadline)
+    except HTTPError as exc:
+        if exc.code in (400, 404, 405):
+            raise Error("This controller does not support receipt-scoped random playback; update the controller and player. The request was not repeated") from None
+        raise
+    channel = result.get("channel") if isinstance(result, dict) else None
+    if (not isinstance(result, dict) or set(result) != {"dispatched", "channel"}
+            or result["dispatched"] is not True or not isinstance(channel, dict)
+            or set(channel) != {"id", "number", "name"}
+            or not media_text(channel["id"], 2048) or not media_text(channel["name"], 512)
+            or type(channel["number"]) is not int or not 1 <= channel["number"] <= MAX_CATEGORY_TOTAL
+            or (search and media_search_key(search) not in media_search_key(channel["name"]))
+            or any((row["id"] == channel["id"] or row["number"] == channel["number"])
+                   and row != channel for row in page["channels"])
+            or (not page["has_more"] and channel not in page["channels"])):
+        raise Error("The player did not confirm a valid receipt-scoped random item. Playback may have started; the request was not repeated")
+    return {"dispatched": True, "channel": dict(channel)}
+
+
+def receipt_random_command(client, device, params, timeout):
+    previous_timeout = client.timeout
+    deadline = time.monotonic() + timeout
+    try:
+        try:
+            controls = capabilities_metadata(media_call(client, device, "capabilities", {}, deadline))
+        except (PlayerUnsupported, PlayerRejected):
+            raise Error("Receipt-scoped random playback is not supported by this player/controller; no playback was requested") from None
+        if ("catalog_random" not in controls
+                or "list" not in controls.get("categories", {}).get("operations", [])):
+            raise Error("Receipt-scoped random playback is not supported by this player/controller; no playback was requested")
+        page = read_media_channels(client, device, params["search"], deadline, require_modern=True,
+                                   page_limit=1, controls=controls, complete_only=True, allow_loading=False)
+        if page["loading"]:
+            raise Error("The media catalog is still loading; no receipt-scoped random playback was requested")
+        if not page["total"]:
+            raise Error("No items match the current category/search; no playback was requested")
+        return receipt_random_play(client, device, page, params["search"], deadline)
     finally:
         client.timeout = previous_timeout
 
@@ -8118,6 +8319,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         row = {"number": params["settings"]["profile"],
                "settings": {key: value for key, value in params["settings"].items() if key != "profile"}}
         data = vportal_settings_command(client, device, row)
+    elif action == "native_provider_settings":
+        data = native_provider_settings_module().run(SimpleNamespace(**globals()), client, device, params, args.timeout)
     elif action == "screenshot":
         data = screenshot_command(client, device, args.words[0], params.get("output"), args.timeout)
     elif action == "plex_queue":
@@ -8142,6 +8345,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
         data = notifications_command(client, device, params, args.timeout)
     elif action == "command" and params.get("command") == "random_channel":
         data = random_command(client, device, params, args.timeout)
+    elif action == "catalog_random":
+        data = receipt_random_command(client, device, params, args.timeout)
     elif action == "programs" and "epg" in config:
         with SearchProgress(args.words[0], progress_stream) as progress:
             data, catalog_play = server_programs(client, device, config["epg"], params["search"], refresh=args.refresh,
@@ -8271,6 +8476,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                   "No current programmes match the search.", file=sys.stderr)
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
+    elif action == "native_provider_settings":
+        native_provider_settings_module().print_result(data)
     elif action == "app_update":
         if params["operation"] == "install":
             print("Installer request accepted. Android may require confirmation on the device; use update status to check completion.")
@@ -8413,7 +8620,7 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
             print(f"Volume request dispatched: {data['desired_volume']:g}%; measured volume is not reported.")
         else:
             print(f"{data['volume']:g}%")
-    elif action == "command" and params.get("command") == "random_channel":
+    elif action == "catalog_random" or action == "command" and params.get("command") == "random_channel":
         print(f"Random channel requested: {data['channel']['number']}: {clean(data['channel']['name'])}")
     else:
         print(json.dumps(data, ensure_ascii=False, indent=2))
