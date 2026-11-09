@@ -109,8 +109,9 @@ func favoritesGlobalPortableIdentity(raw json.RawMessage) (string, bool) {
 				return "", false
 			}
 		}
-	case provider == "vportal" || (provider == "m3u" && inspectEnum(locator["kind"], "vportal-media")):
-		// The receiver must separately prove that an M3U profile owns its embedded portal.
+	case provider == "vportal" || ((provider == "m3u" || provider == "edem") && inspectEnum(locator["kind"], "vportal-media")):
+		// The receiver must separately prove that the named profile owns its
+		// embedded portal. Portable origins do not grant playback authority.
 		if !favoritesTransferFields(locator, "kind", "idField", "id") || !inspectEnum(locator["kind"], "vportal-media") || !inspectEnum(locator["idField"], "id", "fid", "stream_id", "itemId", "media_id", "episode_id") || !favoritesGlobalPortablePattern(locator["id"], favoritesGlobalIdentifierPattern) {
 			return "", false
 		}

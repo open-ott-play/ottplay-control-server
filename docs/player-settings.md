@@ -12,6 +12,10 @@ is required. Existing player policies, PIN restrictions and platform limits appl
 
 ## Discover, read and save
 
+For native LG automatic/forced subtitle selection and preferred language, see
+[native subtitle preferences](native-catalog.md#native-subtitle-selection).
+Availability and write access come from the target's live schema.
+
 ```sh
 ott f settings
 ott f settings list

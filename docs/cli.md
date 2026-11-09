@@ -3,7 +3,7 @@
 The CLI uses CPython 3.12 or newer and its standard library; no `pip install` is needed.
 Keep all files from the same `cli/` revision together: `ott.py`, `programme_search.py`, `epg_search.py`, `epg_fallback.py`, `playlist_search.py`,
 `diagnostics.py`, `diagnostics_mcp.py`, `workbench.py`, `native_playback_capture.py`, `report_verify.py`, `preset_session.py`,
-`player_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`, `player_groups.py`, `playback_status.py`,
+`player_settings.py`, `native_provider_settings.py`, `app_update.py`, `device_registry.py`, `performance.py`, `fleet.py`, `player_groups.py`, `playback_status.py`,
 `favorites_document.py`, `favorites_transfer.py`, `favorites_protocol.py`,
 `favorites_operations.py`, `favorites_remote.py`, `favorites_commands.py`, `preset_favorites.py`,
 `global_favorites_document.py`, `preset_global_favorites.py`, `global_favorites_protocol.py`,
@@ -172,7 +172,7 @@ capability from a compatible player and companion; this CLI does not install it.
 It includes [direct LG television controls](television.md), named app launches
 such as `ott -t 90 lg2 tv go plex`, and the optional
 [`coco` / `cocop` Bash startup helpers](shell-shortcuts.md). The helpers have a
-separate installation and native Plex dependencies. Keep all 40 Python
+separate installation and native Plex dependencies. Keep all 41 Python
 modules together, including `television.py` and `media_tracks.py`; updating the Go server alone does
 not add `tv` commands to an older local CLI. The installation checks below include
 `tv --help`, which runs without configuration or contacting a television.
@@ -244,7 +244,7 @@ requires matching controller and player support. Upgrade those components before
 installing this CLI for Local playback; the CLI refuses unsupported combinations
 without starting a Local command.
 
-The current CLI contains 40 Python modules, including `device_power.py` for
+The current CLI contains 41 Python modules, including `device_power.py` for
 [device shutdown](device-power.md). This command requires a source revision
 containing that module; the source pin above includes it. Run
 `ott PLAYER shutdown --help` to check the installed command without contacting
@@ -1494,6 +1494,12 @@ restarting the player. With the standalone VPortal provider selected, use
 
 ## Media categories and stable video selection
 
+Native players advertising `catalog_random` version 2 also support the explicit
+`ott tv random --receipt [SEARCH]` mode for the current category. See
+[native catalog selection](native-catalog.md) for its distinct semantics,
+capability requirements, group examples and troubleshooting. Ordinary `R`
+retains its safe-selection contract and does not silently switch protocols.
+
 On compatible Plex and standalone VPortal players, videos are available in
 the **All** category without first choosing folders. Libraries, sections,
 folders and series also appear as categories. A video can belong to several
@@ -1927,6 +1933,12 @@ archive query is reported as `not_requested` and does not claim archive coverage
 
 ## Provider settings
 
+For native Edem and named operators, use an explicit numbered private file and
+the negotiated [native profile configuration workflow](native-catalog.md#configure-an-explicit-native-provider-profile):
+`provider-config --schema [PROVIDER]`, `provider-config --check FILE`, and
+`provider-config FILE`. It compares before saving and never retries a lost
+write. The two-key legacy formats below remain separate.
+
 To diagnose a provider failure before changing settings, run
 `ott -t 45 t1 doctor --provider`. The [provider diagnostics guide](provider-diagnostics.md)
 explains lookup stages, addon HTTP outcomes, freshness and private saved reports.
@@ -1960,7 +1972,7 @@ FILE`, and `setting torrentStreamAddons --value-file FILE`. See the
 for private files, manifest URLs, the eight-addon/4096-byte limit and recovery.
 These preferences do not start playback or change the manual Torrent catalog.
 
-A `provider-config` file contains `provider` and `settings`. Except for the new
+A legacy `provider-config` file contains `provider` and `settings`. Except for the
 bound VPortal slot API, select the intended provider with `provider` first.
 VPortal files contain `profile`, `vportal`, and optional `name`; they can save an
 inactive slot without selecting VPortal. Supplied fields are updated; others are
@@ -2652,8 +2664,11 @@ requires global support explicitly.
 Command-line titles/selectors retain the 1–160 UTF-8 byte input limit; use the
 listed UUID when an imported favorite has a longer title.
 
-Favorites from a configured VPortal inside M3U retain their M3U profile and
-source alias, including the actual portal folder when present. The receiving
+Favorites from a configured VPortal inside M3U or native Edem retain their actual
+outer provider, profile and source alias, including the actual portal folder
+when present. Native Edem live entries instead retain their configured
+`Playlist N` subprofile. See [native Edem identity](native-catalog.md#edem-favorites-identity).
+The receiving
 player must have the matching embedded portal configured; imports do not copy
 portal URLs or credentials or silently switch to a top-level VPortal profile.
 Provider IDs are preserved exactly, including valid digits, dots and slash
@@ -3249,14 +3264,28 @@ read-only interface setting. The `classic_active` provider-context flag describe
 source ownership, not the interface mode. Browser buffering and hls.js examples
 do not apply to this application.
 
-Plex, Xtream and Stalker support listing and selecting their native numbered
-profiles, in addition to M3U, VPortal and Local:
+Plex, Xtream, Stalker, Edem/iLook and registered named operators support listing
+and selecting their native numbered profiles, in addition to M3U, VPortal and
+Local. Named operators retain their actual provider IDs, such as
+`bestlist/stalker`, `d/maxtv` and `iptv-ott.ru`:
 
 ```sh
 ott lg-native provider plex
 ott lg-native profiles
 ott lg-native profile 2
+ott lg-native provider ilook
+ott lg-native profiles
+ott lg-native provider ilooktv 1
+ott lg-native provider d/maxtv
+ott lg-native profiles
 ```
+
+`ilook` and `ilooktv` resolve to an advertised `edem` provider for combined
+provider/playback commands; an exact advertised provider ID takes precedence.
+The player's returned canonical identity remains `edem`. A native Edem profile
+slot and its provider playlist template are separate values: `profile 2` selects
+the saved slot, not Edem playlist template 2. Favorites and playlist template
+interpretation remain owned by the player.
 
 Select the provider before listing its slots. The list contains 15 numbered
 names, with `*` marking the active slot if one is selected. It does not infer
@@ -3415,6 +3444,15 @@ the selected Stalker slot. It still finishes on the setup's `active_profile`
 in M3U. The player must support numbered Stalker settings; an older player
 rejects the request and loading stops without substituting the active slot.
 The output does not include portal URLs or MACs.
+
+Native Edem and named-operator slots can also be included through an optional
+`native_provider_settings` array of `{provider,number,settings}` entries. Each
+canonical provider/slot pair is unique, and `number` is explicitly 1–15.
+Loading negotiates support and compares every native entry before the first
+preset mutation, then uses a fresh conditional save for each changed slot.
+`plan`, `apply`, `resume` and `verify` include these entries without printing
+credentials or storing native write receipts in checkpoints. The final selected
+M3U profile is unchanged. See the [private preset example and native rules](native-catalog.md#include-native-credentials-in-load-local).
 
 ```sh
 ott presets

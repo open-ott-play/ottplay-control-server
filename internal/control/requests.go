@@ -27,6 +27,7 @@ type requestResult struct {
 	perfCapture             *perfCaptureRequest
 	nativePlaybackCapture   *nativePlaybackCaptureRequest
 	vportalSettings         *vportalSettingsRequest
+	nativeProviderSettings  *nativeProviderSettingsRequest
 	category                *categoryRequest
 	randomPlay              *randomPlayRequest
 	plexQueue               *plexQueueRequest
@@ -49,7 +50,7 @@ type requestResult struct {
 func validCapabilityProbe(params map[string]json.RawMessage) bool {
 	local := make(map[string]json.RawMessage, len(params))
 	for name, value := range params {
-		if name == "plex_queue_state_v2" || name == "plex_queue_repeat" || name == "native_playback_capture" {
+		if name == "plex_queue_state_v2" || name == "plex_queue_repeat" || name == "native_playback_capture" || name == "native_provider_settings" {
 			if string(value) != "true" {
 				return false
 			}
@@ -140,6 +141,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	var mediaTracksBound *mediaTracksRequest
 	var localBrowserBound *localBrowserRequest
 	var plexServersBound *plexServersRequest
+	var nativeProviderSettingsBound *nativeProviderSettingsRequest
 	switch action {
 	case "kiosk":
 		var mode string
@@ -239,7 +241,12 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	case "profile_settings":
 		ok = len(params) == 2 && profileInteger(params["number"], 1, 15) && validProfileSettings(params["settings"])
 	case "settings_compare":
-		ok = validSettingsCompare(params)
+		if _, versioned := params["version"]; versioned {
+			nativeProviderSettingsBound = parseNativeProviderSettingsRequest(action, params)
+			ok = nativeProviderSettingsBound != nil && validFavoritesTransferJSON(b)
+		} else {
+			ok = validSettingsCompare(params)
+		}
 	case "playback_handoff_export", "playback_handoff_import":
 		ok = parseHandoffRequest(action, params) != nil
 	case "restart":
@@ -250,6 +257,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		_, validID := textValue(params["id"], 2048)
 		ok = len(params) == 2 && validCatalog && validID
 		if _, random := params["random"]; random {
+			ok = parseRandomPlayRequest(params) != nil
+		}
+		if _, receiptRandom := params["receipt_random"]; receiptRandom {
 			ok = parseRandomPlayRequest(params) != nil
 		}
 	case "resolve_archive", "play_archive_catalog":
@@ -283,6 +293,11 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		_, err = validateCommand(m["params"])
 		ok = err == nil
 	case "provider_settings":
+		if _, versioned := params["version"]; versioned {
+			nativeProviderSettingsBound = parseNativeProviderSettingsRequest(action, params)
+			ok = nativeProviderSettingsBound != nil && validFavoritesTransferJSON(b)
+			break
+		}
 		// Provider-specific validation and parental/distribution policy live in
 		// the player. No credentials are returned by status or provider listing.
 		var provider string
@@ -321,6 +336,11 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	m["id"], _ = json.Marshal(id)
 	m["expires_at"], _ = json.Marshal(float64(expires.UnixNano()) / 1e9)
 	data, _ := json.Marshal(m)
+	if nativeProviderSettingsBound != nil && len(data) > MaxBodyBytes {
+		// Include controller IDs/expiry before any journal or queue mutation.
+		failure(w, 413, "native provider settings envelope is too large")
+		return
+	}
 	if action == "torrent_indexer" && !validTorrentIndexerEnvelope(data) {
 		failure(w, 413, "torrent indexer envelope is too large or invalid")
 		return
@@ -366,6 +386,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	e.mediaTracks = mediaTracksBound
 	e.localBrowser = localBrowserBound
 	e.plexServers = plexServersBound
+	e.nativeProviderSettings = nativeProviderSettingsBound
 	if action == "notifications" {
 		e.notificationSettings = parseNotificationsRequest(params)
 	}
@@ -547,6 +568,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var nativePlaybackCapture *nativePlaybackCaptureRequest
 	capabilitiesResult := d.results[id].permission == "capabilities"
 	var vportalSettings *vportalSettingsRequest
+	var nativeProviderSettings *nativeProviderSettingsRequest
 	var category *categoryRequest
 	var randomPlay *randomPlayRequest
 	var relativeSeek *relativeSeekRequest
@@ -581,6 +603,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			nativePlaybackCapture = pending.nativePlaybackCapture
 			capabilitiesResult = pending.permission == "capabilities"
 			vportalSettings = pending.vportalSettings
+			nativeProviderSettings = pending.nativeProviderSettings
 			category = pending.category
 			randomPlay = pending.randomPlay
 			break
@@ -621,6 +644,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if vportalSettings == nil {
 		vportalSettings = d.results[id].vportalSettings
+	}
+	if nativeProviderSettings == nil {
+		nativeProviderSettings = d.results[id].nativeProviderSettings
 	}
 	if category == nil {
 		category = d.results[id].category
@@ -710,6 +736,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		}
 		if marker, exists := capabilities["native_playback_capture"]; exists && !validNativePlaybackCaptureCapability(marker) {
 			failure(w, 400, "invalid native playback capture capability")
+			return
+		}
+		if marker, exists := capabilities["native_provider_settings"]; exists && (!validFavoritesTransferJSON(b) || !validNativeProviderSettingsCapability(marker)) {
+			failure(w, 400, "invalid native provider settings capability")
 			return
 		}
 		if marker, exists := capabilities["plex_servers"]; exists && (!validFavoritesTransferJSON(b) || !validPlexServersCapability(marker)) {
@@ -818,6 +848,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid VPortal settings result")
 		return
 	}
+	if nativeProviderSettings != nil && (!validFavoritesTransferJSON(b) || !validNativeProviderSettingsResult(m["data"], status, nativeProviderSettings)) {
+		failure(w, 400, "invalid native provider settings result")
+		return
+	}
 	if category != nil && !validCategoryResult(m["data"], status, category) {
 		failure(w, 400, "invalid category result")
 		return
@@ -825,6 +859,12 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	if randomPlay != nil && !validRandomPlayResult(m["data"], status, randomPlay) {
 		failure(w, 400, "invalid random playback result")
 		return
+	}
+	if randomPlay != nil && randomPlay.ReceiptScoped && status != "ok" {
+		// Native playback failures may include private resolver/decoder details.
+		// Validate the complete error first, then retain only the safe outcome.
+		m["data"], _ = json.Marshal(map[string]string{"error": "Receipt-scoped playback was " + status})
+		b, _ = json.Marshal(m)
 	}
 	if screenshotRuntime != "" && status == "ok" && !validScreenshotResult(m["data"], screenshotRuntime) {
 		failure(w, 400, "invalid screenshot result")
@@ -919,7 +959,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, nativePlaybackCapture: e.nativePlaybackCapture, vportalSettings: e.vportalSettings, category: e.category, randomPlay: e.randomPlay, plexQueue: e.plexQueue, plexLibrary: e.plexLibrary, plexServers: e.plexServers, localMedia: e.localMedia, localBrowser: e.localBrowser, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, nativePlaybackCapture: e.nativePlaybackCapture, vportalSettings: e.vportalSettings, nativeProviderSettings: e.nativeProviderSettings, category: e.category, randomPlay: e.randomPlay, plexQueue: e.plexQueue, plexLibrary: e.plexLibrary, plexServers: e.plexServers, localMedia: e.localMedia, localBrowser: e.localBrowser, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

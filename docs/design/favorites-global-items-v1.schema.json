@@ -254,7 +254,7 @@
           ]
         }
       },
-      "$comment": "Structural envelope only: normative V4 portable codec additionally enforces UTF-16 text bounds, well-formed Unicode, exact JS trim, text/path exclusions and reserved channel:<digits> rejection. The m3u+vportal-media combination requires receiver-owned embedded-portal provenance; kind support alone is not proof of ownership. No normalization or private receiver mapping.",
+      "$comment": "Structural envelope only: normative portable codec additionally enforces UTF-16 text bounds, well-formed Unicode, exact JS trim, text/path exclusions and reserved channel:<digits> rejection. The m3u/edem+vportal-media combinations require receiver-owned embedded-portal provenance; kind support alone is not proof of ownership. Exact provider and subprofile identities remain unchanged. No normalization or private receiver mapping.",
       "allOf": [
         {
           "if": {
@@ -339,7 +339,8 @@
                         "plex",
                         "local",
                         "vportal",
-                        "m3u"
+                        "m3u",
+                        "edem"
                       ]
                     }
                   }
@@ -368,7 +369,10 @@
               "origin": {
                 "properties": {
                   "provider": {
-                    "const": "m3u"
+                    "enum": [
+                      "m3u",
+                      "edem"
+                    ]
                   }
                 }
               }

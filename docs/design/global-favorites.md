@@ -18,9 +18,11 @@ with an optional exact group, Plex, Local relative paths, and VPortal IDs.
 Channel-name resolution requires one exact match in a verified receiver context;
 it is never a fuzzy or ordinal fallback. Missing or ambiguous entries remain data.
 
-A configured VPortal embedded in M3U keeps its outer `m3u` origin and uses a
-`vportal-media` locator. Its subprofile is the actual folder path, or `null` at
-the root. The receiver must verify that the matched M3U configuration owns that
+A configured VPortal embedded in M3U or native Edem keeps its actual outer
+`m3u` or `edem` origin and uses a `vportal-media` locator. Its subprofile is the
+actual folder path, or `null` at the root. Native Edem live entries instead use
+the configured `Playlist N` subprofile, independent of the saved profile slot.
+The receiver must verify that the matched provider configuration owns that
 portal and folder; the portable document carries no endpoint or credentials.
 Other channel providers do not gain this provider/locator combination.
 

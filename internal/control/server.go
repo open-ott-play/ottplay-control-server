@@ -59,6 +59,7 @@ type entry struct {
 	perfCapture             *perfCaptureRequest
 	nativePlaybackCapture   *nativePlaybackCaptureRequest
 	vportalSettings         *vportalSettingsRequest
+	nativeProviderSettings  *nativeProviderSettingsRequest
 	category                *categoryRequest
 	randomPlay              *randomPlayRequest
 }

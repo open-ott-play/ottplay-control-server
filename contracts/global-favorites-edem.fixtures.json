@@ -1,0 +1,17 @@
+{
+  "live_entry": {
+    "title": "News",
+    "origin": {"provider": "edem", "profile": "Home", "subprofile": "Playlist 3", "sourceAlias": "Home"},
+    "locator": {"kind": "channel-name", "name": "News", "group": "News"}
+  },
+  "portal_entry": {
+    "title": "Comedy film",
+    "origin": {"provider": "edem", "profile": "Home", "subprofile": "Movies / Comedy", "sourceAlias": "Home"},
+    "locator": {"kind": "vportal-media", "idField": "id", "id": "00047"}
+  },
+  "portal_without_category_entry": {
+    "title": "Film",
+    "origin": {"provider": "edem", "profile": "Home", "subprofile": null, "sourceAlias": "Home"},
+    "locator": {"kind": "vportal-media", "idField": "episode_id", "id": "episode:001"}
+  }
+}

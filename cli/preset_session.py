@@ -27,9 +27,13 @@ def comparisons(preset):
             "settings": {k: row[k] for k in ("name", "server", "mac")}}
     for row in preset.get("vportal", []):
         yield "vportal_" + str(row["number"]), {"provider": "vportal", **row}
+    for row in preset.get("native_provider_settings", []):
+        yield "native_" + row["provider"] + "_" + str(row["number"]), {"native_provider_settings": row}
 
 
 def compare(api, client, device, params):
+    if "native_provider_settings" in params:
+        return api.native_preset_settings_command(client, device, params["native_provider_settings"], check=True)["matched"]
     if params["provider"] == "local":
         return api.local_preset_matches(client, device, params["settings"])
     if params["provider"] == "vportal":
@@ -46,7 +50,9 @@ def verify(api, client, device, preset):
             for name, params in comparisons(preset)]
     status = client.call(device, "status", {})
     provider = status.get("provider") if isinstance(status, dict) else None
-    if not isinstance(provider, str) or not re.fullmatch(r"[a-z0-9_-]{1,32}", provider):
+    if (not isinstance(provider, str) or not re.fullmatch(r"[a-z0-9_-]{1,32}", provider)) and not (
+            preset.get("native_provider_settings") and api.provider_identifier(provider)
+            and provider in api.native_provider_settings_module().PROVIDERS):
         raise api.Error("The player returned invalid provider status")
     active = None
     if provider == "m3u":
@@ -69,6 +75,9 @@ class Session:
         self.lock = None
         self.state = {"version": 1, "device": device, "preset": name, "revision": digest(preset),
                       "server": digest(client.server), "completed": [], "pending": None}
+        # Native entries add one journaled save each (at most 44 * 15). The
+        # existing 64-character labels keep the largest checkpoint below 64 KiB.
+        self.completed_limit = 100 + len(preset.get("native_provider_settings", []))
         if settings_only:
             self.state["settings_only"] = True
         try:
@@ -96,7 +105,7 @@ class Session:
                 if (not isinstance(saved, dict) or set(saved) != set(self.state)
                         or any(saved.get(k) != self.state[k] for k in self.state if k not in ("completed", "pending"))
                         or settings_only and saved.get("settings_only") is not True
-                        or not isinstance(saved["completed"], list) or len(saved["completed"]) > 100
+                        or not isinstance(saved["completed"], list) or len(saved["completed"]) > self.completed_limit
                         or any(not isinstance(x, str) or len(x) > 64 for x in saved["completed"])):
                     raise api.Error("Checkpoint does not match this server, player, preset revision and settings-only mode")
                 self.state = saved

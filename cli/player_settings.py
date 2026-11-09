@@ -299,7 +299,20 @@ def print_result(data, descriptor=None):
                 detail += " " + str(constraints["minimum"]) + ".." + str(constraints["maximum"])
             if "unit" in row:
                 detail += " " + row["unit"]
-            choices = ["/".join(choice["aliases"]) for choice in row.get("choices", []) if choice["aliases"]]
+            advertised = row.get("choices", [])
+            values = constraints.get("values", [choice["value"] for choice in advertised])
+            choices, seen = [], set()
+            for value in values:
+                canonical = json.dumps(value, ensure_ascii=False)
+                if canonical in seen:
+                    continue
+                seen.add(canonical)
+                aliases = [alias for choice in advertised if choice["value"] == value
+                           for alias in choice["aliases"]]
+                if aliases:
+                    choices.append("/".join(aliases))
+                elif not row["sensitive"]:
+                    choices.append(canonical)
             if choices:
                 detail += "; " + ", ".join(choices)
             access = row["access"]
