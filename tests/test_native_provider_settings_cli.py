@@ -58,7 +58,7 @@ class NativeProviderSettingsTest(unittest.TestCase):
 
     def run_cli(self, tail=None, *, document=None, target='l', json_output=True, raw=None):
         if raw is not None:
-            self.path.write_text(raw)
+            self.path.write_text(raw, encoding='utf-8')
         else:
             value = self.doc if document is None else document
             serialized = json.dumps(value, ensure_ascii=False)
@@ -66,7 +66,7 @@ class NativeProviderSettingsTest(unittest.TestCase):
                 serialized.encode('utf-8')
             except UnicodeError:
                 serialized = json.dumps(value, ensure_ascii=True)
-            self.path.write_text(serialized)
+            self.path.write_text(serialized, encoding='utf-8')
         words = ['provider-config', *(tail if tail is not None else [str(self.path)])]
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(ott, 'Client', return_value=self.client), \
