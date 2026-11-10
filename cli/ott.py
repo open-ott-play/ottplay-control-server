@@ -6401,7 +6401,7 @@ def print_failure_details(data):
                     rows.append(("Transport", "none (no transport detail)" if value == "none" else value))
                 elif tag == "hls":
                     rows.append(("HLS exit", label(body.get("exit"), {item for item in demux if item.startswith("hls_")} | {"other"})))
-                    rows.append(("HLS outcome", "Not reported" if body.get("outcome") is None else label(body.get("outcome"), {"deadline"})))
+                    rows.append(("HLS outcome", label(body.get("outcome"), {"deadline", "transport", "server_state", "refused", "inconclusive"})))
                 else:
                     rows.append(("IO outcome", label(body.get("outcome"), {"refused" if tag == "auto_fallback" else "inconclusive"})))
         else:

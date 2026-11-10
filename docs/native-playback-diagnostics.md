@@ -180,7 +180,9 @@ Version 1 supplies `play_generation` and a fixed failure `code`. Version 2 adds
 `context.io_failure`, either `null` or one of these fixed branches:
 
 - `source_io`: a `transport` code; `none` means no transport detail, not success.
-- `hls`: an `exit` code and an `outcome` of `null` or `deadline`.
+- `hls`: an `exit` code and an `outcome` of `null`, `deadline`, `transport`,
+  `server_state`, `refused` or `inconclusive`. Readable details display these
+  closed codes; missing, null or unknown outcomes display `Not reported`.
 - `auto_fallback`: `outcome: "refused"`.
 - `audio_decode`: `outcome: "inconclusive"` after an observed decode error.
 - `unclassified`: `outcome: "inconclusive"`.

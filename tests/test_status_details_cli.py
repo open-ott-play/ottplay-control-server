@@ -192,6 +192,41 @@ class StatusDetailsTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('No retained failure reported', out)
 
+    def test_hls_closed_outcomes_are_visible_and_json_is_unchanged(self):
+        for outcome in ('deadline', 'transport', 'server_state', 'refused', 'inconclusive'):
+            with self.subTest(outcome=outcome):
+                status = self.status()
+                status['playback_failure']['context']['io_failure'] = {
+                    'hls': {'exit': 'hls_transport_failed', 'outcome': outcome}}
+                before = copy.deepcopy(status)
+                code, out, err, client = self.run_cli([self.caps(), status], machine=False)
+                self.assertEqual((code, err), (0, ''))
+                line = next(line.strip() for line in out.splitlines() if 'HLS outcome:' in line)
+                self.assertEqual(line.split(':', 1)[1].strip(), outcome)
+                self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'capabilities', {}),
+                                 mock.call('dev_tv', 'status', {'playback_failure_version': 3})])
+                code, out, err, _ = self.run_cli([self.caps(), status])
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(json.loads(out)['playback_failure'], before['playback_failure'])
+                self.assertEqual(status, before)
+
+    def test_hls_unknown_or_missing_outcomes_are_not_displayed(self):
+        bodies = [{'exit': 'hls_transport_failed'}]
+        bodies.extend({'exit': 'hls_transport_failed', 'outcome': outcome} for outcome in
+                      (None, True, 1, [], {}, 'started', 'no_body', 'TRANSPORT',
+                       'https://secret.invalid', 'SECRET_TOKEN\ntransport'))
+        for body in bodies:
+            with self.subTest(body=body):
+                status = self.status()
+                status['playback_failure']['context']['io_failure'] = {'hls': body}
+                code, out, err, client = self.run_cli([self.caps(), status], machine=False)
+                self.assertEqual((code, err), (0, ''))
+                line = next(line.strip() for line in out.splitlines() if 'HLS outcome:' in line)
+                self.assertEqual(line.split(':', 1)[1].strip(), 'Not reported')
+                for forbidden in ('secret.invalid', 'SECRET_TOKEN', 'TRANSPORT'):
+                    self.assertNotIn(forbidden, out)
+                self.assertEqual(client.call.call_count, 2)
+
     def test_preplay_failure_is_visible_when_playback_failure_is_null(self):
         status = self.status()
         status.update(playback_failure=None, preplay={'version': 1, 'phase': 'failed',
