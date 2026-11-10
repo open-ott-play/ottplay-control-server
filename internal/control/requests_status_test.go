@@ -53,6 +53,40 @@ func TestStatusDiagnosticVersionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStatusDiagnosticV3PreservesHLSOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome string
+	}{
+		{"transport", `"transport"`},
+		{"server_state", `"server_state"`},
+		{"refused", `"refused"`},
+		{"inconclusive", `"inconclusive"`},
+		{"deadline", `"deadline"`},
+		{"none", `null`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t)
+			id := rpcID(t, s, `{"action":"status","params":{"playback_failure_version":3}}`)
+			// Status is opaque to the relay. Preserve the player's HLS outcome,
+			// wide generation and whitespace without interpreting or rewriting them.
+			data := `{ "playback_failure":{"version":3,"play_generation":18446744073709551615,"code":"playback_interrupted","context":{"demux_exit":"none","pipeline_error":0,"io_failure":{"hls":{"exit":"other","outcome":` + tc.outcome + `}}}} }`
+			body := `{"id":"` + id + `","status":"ok","data":` + data + `}`
+			expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
+			for _, wait := range []string{"", "&wait_ms=100"} {
+				result := request(s, "GET", "/api/requests?device_id=first&id="+id+wait, adminToken, "", nil)
+				expect(t, result, 200)
+				if result.Body.String() != body || result.Header().Get("Content-Type") != "application/json" {
+					t.Fatal("status receipt changed HLS diagnostic JSON")
+				}
+			}
+			if len(s.devices[0].queue) != 0 || s.bytes != 0 || s.resultBytes != len(body) {
+				t.Fatal("completed HLS status request has invalid queue or receipt accounting")
+			}
+		})
+	}
+}
+
 func TestStatusDiagnosticVersionRejectsInvalidParams(t *testing.T) {
 	for _, params := range []string{
 		`null`, `[]`, `3`,
