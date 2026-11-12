@@ -140,6 +140,42 @@ allowed. It cannot pair a TV, change volume/power, launch arbitrary apps or acce
 another television. No administrator token or SSAP client key belongs in player
 storage. This opt-in and TV pairing grant are separate requirements.
 
+### Additional players on the same TV
+
+Keep the existing canonical `device_id` when a web player and native player use
+the same physical television. Add the native player identity to
+`channel_player_ids` on that one binding:
+
+```json
+{
+  "device_id": "living-room-web-player",
+  "channel_player_ids": ["living-room-native-player"],
+  "player_channel_control": true,
+  "host": "192.168.1.50",
+  "client_key_file": "/var/lib/ottplay-control/private/televisions/living-room.json"
+}
+```
+
+This is an excerpt from the existing `televisions` array. Retain its existing
+TLS pin, launch, wake and fallback configuration. Do not create another TV entry,
+duplicate the endpoint, copy its pairing key or move the canonical identity just
+to connect a second presentation.
+
+Each additional identity is channel-only. Its administrator TV commands permit
+`channels`, `channel`, `program`, `tune`, `tune-number` and explicit `pair`;
+status, volume, power, apps and launch remain available only through the
+canonical identity. An alias's ordinary paired player token still needs
+`player_channel_control: true` and can only use the four channel actions at
+`/api/television-channels`; it cannot pair. Administrator pairing through either
+identity updates the same canonical key after TV consent.
+
+All identities share one physical-TV command lock, saved key and TLS pin. IDs
+must be unique across canonical bindings and channel aliases. There may be at
+most 16 additional identities per TV and 64 TV identities in total. Static
+configuration requires each ID to be a configured device; with a durable device
+registry, that identity still must be admitted and authenticate normally before
+it can use the route. Revocation is not bypassed by an alias.
+
 System playback is a handoff: the television owns its video, audio and controls.
 An OttPlay strict kiosk must not use this route, because the system application's
 navigation is outside the player's kiosk/PIN enforcement. Existing OttPlay

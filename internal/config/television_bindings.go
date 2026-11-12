@@ -43,8 +43,10 @@ func (c Config) validateTelevisions() error {
 	endpoints := make(map[string]bool)
 	keys := make(map[string]bool)
 	for _, tv := range c.Televisions {
-		if !configured[tv.DeviceID] && c.DeviceRegistry == nil {
-			return errors.New("television must name a configured player device_id")
+		for _, id := range append([]string{tv.DeviceID}, tv.ChannelPlayerIDs...) {
+			if !configured[id] && c.DeviceRegistry == nil {
+				return errors.New("television must name configured canonical and channel player device_ids")
+			}
 		}
 		host := strings.ToLower(tv.Host)
 		if ip := net.ParseIP(host); ip != nil {

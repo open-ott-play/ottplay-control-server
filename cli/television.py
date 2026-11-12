@@ -11,6 +11,7 @@ READ_ACTIONS = frozenset(("status", "apps", "channels", "channel_current", "chan
 TRANSPORTS = frozenset(("webos", "home_assistant", "wake_on_lan"))
 OUTCOMES = frozenset(("confirmed", "accepted", "uncertain"))
 ERRORS = {
+    "channel_alias_restricted": "This identity has channel-only TV access; use the canonical player for power, volume and apps",
     "channel_pairing_required": "System TV channels need renewed pairing permissions; run tv pair and accept the request on the TV",
     "channel_changed": "The system TV channel changed while programme information was being read; inspect tv channel",
     "channel_not_current": "Programme metadata can only be requested for the currently tuned system channel",

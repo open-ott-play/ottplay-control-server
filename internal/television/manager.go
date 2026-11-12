@@ -141,7 +141,11 @@ func New(configs []config.Television) (*Manager, error) {
 	for _, c := range items {
 		gate := make(chan struct{}, 1)
 		gate <- struct{}{}
-		m.devices[c.DeviceID] = &boundTV{config: c, gate: gate}
+		bound := &boundTV{config: c, gate: gate}
+		m.devices[c.DeviceID] = bound
+		for _, id := range c.ChannelPlayerIDs {
+			m.devices[id] = bound
+		}
 	}
 	return m, nil
 }
@@ -168,6 +172,12 @@ func (m *Manager) Binding(id string) Binding {
 			b.Paired = false
 		}
 	}
+	if id != d.config.DeviceID {
+		// Alias metadata must not advertise canonical physical-TV privileges.
+		b.Capabilities = []string{"channels", "channel_current", "channel_program", "channel_select", "pair"}
+		b.FallbackConfigured = false
+		return b
+	}
 	b.Capabilities = []string{"status", "volume", "mute", "off", "apps", "pair", "channels", "channel_current", "channel_program", "channel_select"}
 	if d.config.MAC != "" || d.config.Fallback != nil {
 		b.Capabilities = append(b.Capabilities, "on")
@@ -190,6 +200,9 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 	}
 	d := m.devices[id]
 	c := d.config
+	if id != c.DeviceID && !isChannelAction(cmd.Action) && cmd.Action != "pair" {
+		return r, failure("channel_alias_restricted")
+	}
 	if isChannelAction(cmd.Action) {
 		key, err := readCredentials(c.ClientKeyFile)
 		if err != nil {
