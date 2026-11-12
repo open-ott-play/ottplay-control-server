@@ -128,9 +128,13 @@ conflict, read the setting before deciding whether to submit another save.
 
 ### Playback preferences
 
-`bufSize` is an application integer from **0 to 3600**. The playback engine uses
-**1–120 seconds** as an explicit buffer; **0 and values above 120 select automatic
-buffering**. Saving does not restart the current stream. `players` is a
+Use playback preferences only when the target's live schema lists them, and
+follow that descriptor's constraints and application behavior. Native and web
+players can expose different settings.
+
+In the web player, `bufSize` is an application integer from **0 to 3600**. Its
+playback engine uses **1–120 seconds** as an explicit buffer; **0 and values above
+120 select automatic buffering**. Saving does not restart the current stream. `players` is a
 provider/profile preference; LG may force automatic mode. These changes apply
 to the next stream. Stored preference and effective platform behavior are
 reported separately. A successful save does not assert that current playback
@@ -171,8 +175,10 @@ Modern without another write. The CLI does not poll or repeat the save.
 These preferences are available in OTTPlay FOSS
 [v1.1.68-beta.4](https://github.com/open-ott-play/ottplay-foss/releases/tag/v1.1.68-beta.4)
 and later builds that list them in `settings schema`. Both belong to this client,
-use integer `0` or `1`, persist across restarts, and participate in the player's
-normal settings export/import. Use the existing `setting` command:
+use integer `0` or `1`, persist across restarts, and participate in the supporting
+player's own settings export/import workflow. That workflow is separate from CLI
+named setups and Local media-profile import/export. Use the existing `setting`
+command:
 
 ```sh
 ott t1 settings schema
@@ -193,10 +199,12 @@ checks still apply. Local-file and VOD resume behavior is unchanged.
 seek notifications. Seeking, the timeline, Pause messages, errors and remote
 notification banners continue to work.
 
-If an ID is missing from the target player's schema, update that player and
-check its schema again. Publishing a release does not update an already running
-player. After a timeout or revision conflict, read the preference before deciding
-whether another save is needed; the CLI does not repeat the write automatically.
+If an ID is missing from the target player's schema, it may be unsupported by
+that platform or build. Check support for the target before updating; an update
+does not guarantee that the ID becomes available. Publishing a release does not
+update an already running player. After a timeout or revision conflict, read the
+preference before deciding whether another save is needed; the CLI does not
+repeat the write automatically.
 
 ## Conditional saves and recovery
 
@@ -415,7 +423,10 @@ every object visible in Settings. Other configuration uses explicit workflows:
 | Kiosk, lifecycle, notifications | `kiosk`, `standby`, `go`, `restart`, `notifications on/off` |
 | Remote connection, pairing, native permissions, identity | Existing connection/pairing/native workflow; schema reports generic access restrictions |
 
-Missing capability: update the controller, player and complete CLI installation.
+Missing capability or setting: check support on the target platform and build.
+Update the controller, player and complete CLI installation when a compatible
+implementation is available, then inspect the live schema again. Updates do not
+add settings that the target does not implement.
 Source/revision changed: read again and review the current provider/profile.
 Policy restricted: use the existing authorized unlock or dedicated settings
 workflow; the CLI does not bypass it. Storage failed: check player storage and
