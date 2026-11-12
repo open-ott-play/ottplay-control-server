@@ -14,19 +14,22 @@ import (
 // Addresses and credentials come only from administrator-owned configuration,
 // never from remote command parameters.
 type Television struct {
-	DeviceID          string              `json:"device_id"`
-	Host              string              `json:"host"`
-	Port              int                 `json:"port,omitempty"`
-	TLS               *bool               `json:"tls,omitempty"`
-	CertificateSHA256 string              `json:"certificate_sha256,omitempty"`
-	ClientKeyFile     string              `json:"client_key_file"`
-	MAC               string              `json:"mac,omitempty"`
-	Broadcast         string              `json:"broadcast,omitempty"`
-	WOLPort           int                 `json:"wol_port,omitempty"`
-	AppID             string              `json:"app_id,omitempty"`
-	LaunchURL         string              `json:"launch_url,omitempty"`
-	AppAliases        map[string]string   `json:"app_aliases,omitempty"`
-	Fallback          *TelevisionFallback `json:"fallback,omitempty"`
+	// PlayerChannelControl explicitly delegates only channel browsing/tuning to
+	// the paired player identity bound to this TV. It grants no power/app/pairing access.
+	PlayerChannelControl bool                `json:"player_channel_control,omitempty"`
+	DeviceID             string              `json:"device_id"`
+	Host                 string              `json:"host"`
+	Port                 int                 `json:"port,omitempty"`
+	TLS                  *bool               `json:"tls,omitempty"`
+	CertificateSHA256    string              `json:"certificate_sha256,omitempty"`
+	ClientKeyFile        string              `json:"client_key_file"`
+	MAC                  string              `json:"mac,omitempty"`
+	Broadcast            string              `json:"broadcast,omitempty"`
+	WOLPort              int                 `json:"wol_port,omitempty"`
+	AppID                string              `json:"app_id,omitempty"`
+	LaunchURL            string              `json:"launch_url,omitempty"`
+	AppAliases           map[string]string   `json:"app_aliases,omitempty"`
+	Fallback             *TelevisionFallback `json:"fallback,omitempty"`
 }
 
 type TelevisionFallback struct {

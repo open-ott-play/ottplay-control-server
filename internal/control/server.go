@@ -389,6 +389,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		methods = "GET,POST"
 	case "/api/televisions":
 		methods = "GET,POST"
+	case televisionChannelsPath:
+		methods = "POST"
 	case "/api/responses":
 		methods = "POST"
 	case wire.LegacyNotifyPath, wire.AckPath:
@@ -401,7 +403,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if intendedMethod == http.MethodOptions {
 		intendedMethod = r.Header.Get("Access-Control-Request-Method")
 	}
-	deviceRoute := (path == playerStatePath && intendedMethod == http.MethodPost) || path == "/api/notifications" || path == "/api/notifications/media" || path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
+	deviceRoute := path == televisionChannelsPath || (path == playerStatePath && intendedMethod == http.MethodPost) || path == "/api/notifications" || path == "/api/notifications/media" || path == "/api/responses" || path == wire.LegacyPollPath || path == wire.AckPath || (path == wire.CommandPath && intendedMethod == http.MethodGet)
 	if path == "/api/discovery" || (path == "/api/pairings" && (intendedMethod == "POST" || r.URL.Query().Has("id"))) {
 		deviceRoute = true
 	}
@@ -452,7 +454,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := (path == playerStatePath && r.Method == http.MethodGet) || path == "/api/televisions" || path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses" && path != playerStatePath)
+	requiresAdmin := (path == playerStatePath && r.Method == http.MethodGet) || path == "/api/televisions" || path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses" && path != playerStatePath && path != televisionChannelsPath)
 	operatorRoute := operator != nil && ((path == playerStatePath && r.Method == http.MethodGet) || path == "/api/home-assistant/status" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
 	if (!operatorRoute && requiresAdmin != admin) || (operator != nil && !operatorRoute) {
 		failure(w, 403, "credential role is not allowed")
@@ -493,6 +495,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/home-assistant/status" {
 		s.notificationStatus(w, r, now)
+		return
+	}
+	if path == televisionChannelsPath {
+		s.serveTelevisionChannels(w, r, d)
 		return
 	}
 	if path == "/api/televisions" {

@@ -3594,7 +3594,8 @@ A configured LG television has a separate `tv` control path that works even
 when its OttPlay page is closed. It uses direct webOS control first and an
 explicitly configured Home Assistant fallback when needed. This lane requires
 the controller's `admin_token` in the CLI's private `server_config`; scoped
-operator and player tokens cannot control the physical TV.
+operator and player tokens cannot use this administrator CLI lane. A separate
+opt-in, device-bound channel-only lane is described in [TV integration](television.md#channel-permission-and-player-integration).
 
 ```sh
 ott l tv status
@@ -3604,6 +3605,11 @@ ott l tv mute off
 ott -t 60 l tv go               # wake the TV and open its configured OttPlay app/URL
 ott l tv off                   # physical TV power-off; ordinary standby stops the player
 ott l,lg2 tv volume 20          # ordinary lists and named groups are supported
+ott l tv channels              # list the system TV catalogue
+ott l tv channel               # observe the currently tuned channel
+ott l tv program               # current programme only, if supplied by the TV
+ott l tv tune CHANNEL_ID       # use an opaque ID returned by tv channels
+ott l tv tune-number 100       # explicit regional LG Channels/FAST number
 ott -t 60 l tv pair             # pair one TV; accept the prompt on its screen
 ```
 

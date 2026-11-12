@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 )
@@ -67,5 +68,19 @@ func TestTelevisionDefaultsAndValidation(t *testing.T) {
 	c.AppAliases = map[string]string{"plex": "cdp-30", "media_station-x": "de.benzac.msx"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid named applications rejected: %v", err)
+	}
+}
+
+func TestPlayerTVChannelDelegationDefaultsOff(t *testing.T) {
+	var c Television
+	if err := json.Unmarshal([]byte(`{"device_id":"living","host":"tv.example","client_key_file":"/private/key.json"}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	c.Defaults()
+	if c.PlayerChannelControl {
+		t.Fatal("channel delegation must require administrator opt-in")
+	}
+	if err := json.Unmarshal([]byte(`{"player_channel_control":true}`), &c); err != nil || !c.PlayerChannelControl {
+		t.Fatal("explicit channel delegation was not preserved")
 	}
 }

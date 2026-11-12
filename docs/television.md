@@ -35,6 +35,12 @@ ott -t 60 lg2 tv start          # alias for tv go
 ott -t 90 lg2 tv go plex        # wake and open the configured Plex app alias
 ott lg2 tv launch plex          # open that app on an already-awake TV
 ott l tv apps                  # list applications reported by webOS
+ott l tv channels              # list system TV channels (ID, number, name)
+ott l tv channel               # read the currently tuned system channel
+ott l tv program               # read its current programme, if supplied by the TV
+ott l tv program CHANNEL_ID    # read only if this is still the current channel
+ott l tv tune CHANNEL_ID       # select an opaque ID from tv channels
+ott l tv tune-number 100       # explicit regional LG Channels / FAST number
 ott -t 60 l tv pair             # accept the connection prompt on this TV
 ott l tv --help                # local help; no credentials or connection needed
 ott -j l tv status             # validated JSON, including the selected transport
@@ -67,6 +73,80 @@ members or repeat uncertain requests.
 When a television binding exists, the ordinary `ott l` overview prints the TV
 commands before querying the player. This help remains visible if the OttPlay
 page is disconnected. `ott l tv status` bypasses the page entirely.
+
+## System tuner and LG Channels
+
+The channel commands control the television's **system TV source**, not an M3U
+provider or the OttPlay decoder. `tv channels` lists what that particular TV
+reports. Tune using its returned `id`; a displayed channel number is not a
+portable identity. The ID may change after a retune or region change, so obtain
+a fresh list instead of replaying a stale catalogue.
+
+`tv tune-number NUMBER` is an explicit fallback for regional LG Channels/FAST
+services. It sends `channelMode: Terrestrial` and the supplied number, without
+inventing a stream URL. Valid numbers have one to eight digits and optionally a
+`.` or `-` followed by one to eight digits. The number depends on the TV's region
+and installed services; this route does not guarantee that all LG Channels are
+listed or playable on every model. `tv tune` accepts a single opaque channel ID,
+including IDs containing spaces when shell-quoted.
+
+A successful selection can be `accepted` while tuning is still in progress. Only
+an observed matching current channel yields `confirmed`; this does not prove
+that a broadcast signal, decoded video or audio is present. Check `tv channel`
+after an accepted receipt. The controller never repeats a potentially applied
+tune and never substitutes a different channel after failure. Channel commands
+use direct webOS control; they are not translated into arbitrary Home Assistant
+service calls when direct control is unavailable.
+
+`tv program` requests the **current** system programme. `tv program CHANNEL_ID`
+first checks that this channel is currently tuned; it does not select it or
+provide a full guide for all channels. Missing programme details remain missing.
+Empty channel lists can mean that no broadcast channels were scanned, rather
+than that the API is unsupported. No archive, seek, raw tuner/FAST stream URL or
+full EPG availability is implied by this interface.
+
+### Channel permission and player integration
+
+Channel access requires the TV pairing permissions `READ_TV_CHANNEL_LIST`,
+`CONTROL_INPUT_TV` and `READ_CURRENT_CHANNEL`. Older pairing files remain valid
+for their original controls but are not silently promoted. The binding reports
+`channel_pairing_required`; run `ott -t 60 NAME tv pair` deliberately and accept
+the updated permission request while the TV is visible. Existing TLS certificate
+pins remain enforced during re-pairing. The saved credential must record the
+expanded permission grant before channel operations are enabled.
+
+The administrator-only CLI endpoint remains `/api/televisions`. An administrator
+can separately opt a bound player's own token into **channel-only** access:
+
+```json
+{
+  "televisions": [
+    {
+      "device_id": "living-room-player",
+      "host": "192.168.1.50",
+      "client_key_file": "/var/lib/ottplay-control/private/televisions/living-room.json",
+      "player_channel_control": true
+    }
+  ]
+}
+```
+
+Merge this field into the existing binding; retain its TLS, launch and network
+configuration. It defaults to `false`. The dedicated
+`POST /api/television-channels` endpoint authenticates that player's Bearer token,
+derives its TV binding from the token, and rejects caller-selected `device_id`.
+Only `channels`, `channel_current`, `channel_program` and `channel_select` are
+allowed. It cannot pair a TV, change volume/power, launch arbitrary apps or access
+another television. No administrator token or SSAP client key belongs in player
+storage. This opt-in and TV pairing grant are separate requirements.
+
+System playback is a handoff: the television owns its video, audio and controls.
+An OttPlay strict kiosk must not use this route, because the system application's
+navigation is outside the player's kiosk/PIN enforcement. Existing OttPlay
+playback and its bookmark must be released/preserved before the handoff;
+returning to OttPlay is separate from confirming system tuning. An overlay HUD
+or embedding the tuner stream in the native decoder is not supplied by this
+controller feature.
 
 ## Controller configuration
 

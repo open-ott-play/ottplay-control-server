@@ -14,11 +14,14 @@ import (
 )
 
 type Command struct {
-	Action string `json:"action"`
-	App    string `json:"app,omitempty"`
-	Volume *int   `json:"volume,omitempty"`
-	Delta  *int   `json:"delta,omitempty"`
-	Muted  *bool  `json:"muted,omitempty"`
+	Action        string `json:"action"`
+	App           string `json:"app,omitempty"`
+	Volume        *int   `json:"volume,omitempty"`
+	Delta         *int   `json:"delta,omitempty"`
+	Muted         *bool  `json:"muted,omitempty"`
+	ChannelID     string `json:"channel_id,omitempty"`
+	ChannelNumber string `json:"channel_number,omitempty"`
+	ChannelMode   string `json:"channel_mode,omitempty"`
 }
 
 type State struct {
@@ -36,23 +39,29 @@ type Pairing struct {
 	Paired bool `json:"paired"`
 }
 type Result struct {
-	Version   int      `json:"version"`
-	DeviceID  string   `json:"device_id"`
-	Action    string   `json:"action"`
-	Transport string   `json:"transport"`
-	Outcome   string   `json:"outcome"`
-	State     *State   `json:"state,omitempty"`
-	Apps      []App    `json:"apps"`
-	Pairing   *Pairing `json:"pairing,omitempty"`
+	Version   int       `json:"version"`
+	DeviceID  string    `json:"device_id"`
+	Action    string    `json:"action"`
+	Transport string    `json:"transport"`
+	Outcome   string    `json:"outcome"`
+	State     *State    `json:"state,omitempty"`
+	Apps      []App     `json:"apps"`
+	Pairing   *Pairing  `json:"pairing,omitempty"`
+	Channels  []Channel `json:"channels"`
+	Channel   *Channel  `json:"channel,omitempty"`
+	Program   *Program  `json:"program,omitempty"`
 }
 
 type Binding struct {
-	Version            int      `json:"version"`
-	DeviceID           string   `json:"device_id"`
-	Configured         bool     `json:"configured"`
-	Capabilities       []string `json:"capabilities"`
-	Paired             bool     `json:"paired"`
-	FallbackConfigured bool     `json:"fallback_configured"`
+	Version                int      `json:"version"`
+	DeviceID               string   `json:"device_id"`
+	Configured             bool     `json:"configured"`
+	Capabilities           []string `json:"capabilities"`
+	Paired                 bool     `json:"paired"`
+	FallbackConfigured     bool     `json:"fallback_configured"`
+	PlayerChannelControl   bool     `json:"player_channel_control"`
+	ChannelPairingRequired bool     `json:"channel_pairing_required"`
+	PairingPermissions     []string `json:"pairing_permissions"`
 }
 
 // Error is deliberately limited to stable codes: transport errors can contain
@@ -67,6 +76,9 @@ func failure(code string) error   { return &Error{Code: code} }
 func uncertain(code string) error { return &Error{Code: code, Uncertain: true} }
 
 func (c Command) Validate() error {
+	if err := c.validateChannels(); err != nil {
+		return err
+	}
 	if c.App != "" && ((c.Action != "launch" && c.Action != "go") || !config.ValidTelevisionAppAlias(c.App)) {
 		return failure("invalid_command")
 	}
@@ -85,7 +97,7 @@ func (c Command) Validate() error {
 		if c.Muted == nil || c.Volume != nil || c.Delta != nil {
 			return failure("invalid_command")
 		}
-	case "status", "on", "off", "launch", "go", "apps", "pair":
+	case "status", "on", "off", "launch", "go", "apps", "pair", "channels", "channel_current", "channel_program", "channel_select":
 		if c.Volume != nil || c.Delta != nil || c.Muted != nil {
 			return failure("invalid_command")
 		}
@@ -144,16 +156,19 @@ func (m *Manager) Binding(id string) Binding {
 		return b
 	}
 	b.Configured = true
+	b.PlayerChannelControl = d.config.PlayerChannelControl
+	b.PairingPermissions = append([]string{}, channelPermissions...)
 	b.FallbackConfigured = d.config.Fallback != nil
 	key, err := readCredentials(d.config.ClientKeyFile)
 	b.Paired = err == nil && key.ClientKey != ""
+	b.ChannelPairingRequired = !key.TVChannels
 	if d.config.Secure() {
 		b.Paired = b.Paired && (d.config.CertificateSHA256 != "" || key.CertificateSHA256 != "")
 		if d.config.CertificateSHA256 != "" && key.CertificateSHA256 != "" && d.config.CertificateSHA256 != key.CertificateSHA256 {
 			b.Paired = false
 		}
 	}
-	b.Capabilities = []string{"status", "volume", "mute", "off", "apps", "pair"}
+	b.Capabilities = []string{"status", "volume", "mute", "off", "apps", "pair", "channels", "channel_current", "channel_program", "channel_select"}
 	if d.config.MAC != "" || d.config.Fallback != nil {
 		b.Capabilities = append(b.Capabilities, "on")
 	}
@@ -175,6 +190,15 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 	}
 	d := m.devices[id]
 	c := d.config
+	if isChannelAction(cmd.Action) {
+		key, err := readCredentials(c.ClientKeyFile)
+		if err != nil {
+			return r, err
+		}
+		if !key.TVChannels {
+			return r, failure("channel_pairing_required")
+		}
+	}
 	if cmd.App != "" {
 		app, ok := c.AppAliases[cmd.App]
 		if !ok {
@@ -225,7 +249,7 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 		}
 	}
 	nativeCancel()
-	if cmd.Action != "pair" && c.Fallback != nil && ctx.Err() == nil {
+	if cmd.Action != "pair" && !isChannelAction(cmd.Action) && c.Fallback != nil && ctx.Err() == nil {
 		return executeFallback(ctx, c, cmd, r)
 	}
 	return r, err
