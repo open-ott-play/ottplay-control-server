@@ -39,6 +39,7 @@ type Pairing struct {
 	Paired bool `json:"paired"`
 }
 type Result struct {
+	Warnings  []string  `json:"warnings,omitempty"`
 	Version   int       `json:"version"`
 	DeviceID  string    `json:"device_id"`
 	Action    string    `json:"action"`
@@ -112,6 +113,7 @@ type boundTV struct {
 	gate   chan struct{}
 }
 type Manager struct {
+	lgLineup          *lgLineupCache
 	devices           map[string]*boundTV
 	wakeWait          time.Duration
 	wakeInterval      time.Duration
@@ -137,7 +139,7 @@ func New(configs []config.Television) (*Manager, error) {
 	if config.ValidateTelevisions(items) != nil {
 		return nil, failure("invalid_configuration")
 	}
-	m := &Manager{devices: map[string]*boundTV{}, wakeWait: 90 * time.Second, wakeInterval: 500 * time.Millisecond, wakeRetryInterval: defaultWakeRetryInterval, sendWake: sendMagicPacket}
+	m := &Manager{lgLineup: newLGLineupCache(), devices: map[string]*boundTV{}, wakeWait: 90 * time.Second, wakeInterval: 500 * time.Millisecond, wakeRetryInterval: defaultWakeRetryInterval, sendWake: sendMagicPacket}
 	for _, c := range items {
 		gate := make(chan struct{}, 1)
 		gate <- struct{}{}
@@ -252,7 +254,11 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 			r.Pairing = &Pairing{Paired: true}
 			return r, nil
 		}
-		err = s.execute(nativeCtx, c, cmd, &r)
+		if isChannelAction(cmd.Action) {
+			err = m.executeRegionalChannels(nativeCtx, s, c, cmd, &r)
+		} else {
+			err = s.execute(nativeCtx, c, cmd, &r)
+		}
 		if err == nil {
 			return r, nil
 		}

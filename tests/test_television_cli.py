@@ -121,6 +121,24 @@ class TelevisionCliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("SECRET", out)
 
+    def test_regional_catalogue_warnings_and_physical_identity_are_projected(self):
+        client = self.client()
+        client.api.side_effect = None
+        client.api.return_value = 200, {"version": 1, "device_id": "living", "action": "channels",
+                                       "outcome": "confirmed", "transport": "webos",
+                                       "channels": [{"id": "lgfast:US:120", "name": "News", "number": "120",
+                                                     "source": "lg_channels", "physical_id": "observed/physical"}],
+                                       "warnings": ["Regional catalogue is stale metadata"]}
+        code, out, err, _ = self.run_cli(["-j", "l", "tv", "channels"], client)
+        self.assertEqual((code, err), (0, ""))
+        receipt = json.loads(out)
+        self.assertEqual(receipt["channels"][0]["source"], "lg_channels")
+        self.assertEqual(receipt["warnings"], ["Regional catalogue is stale metadata"])
+        code, out, err, _ = self.run_cli(["l", "tv", "channels"], client)
+        self.assertIn("Warning: Regional catalogue is stale metadata", out)
+        client.api.return_value[1]["warnings"] = ["bad\nwarning"]
+        self.assertEqual(self.run_cli(["l", "tv", "channels"], client)[0], 1)
+
     def test_confirmed_number_selection_requires_matching_mode(self):
         client = self.client()
         client.api.side_effect = None

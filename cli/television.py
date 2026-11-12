@@ -11,6 +11,7 @@ READ_ACTIONS = frozenset(("status", "apps", "channels", "channel_current", "chan
 TRANSPORTS = frozenset(("webos", "home_assistant", "wake_on_lan"))
 OUTCOMES = frozenset(("confirmed", "accepted", "uncertain"))
 ERRORS = {
+    "channel_not_found": "That regional channel is not in the configured LG Channels catalogue; refresh tv channels",
     "channel_alias_restricted": "This identity has channel-only TV access; use the canonical player for power, volume and apps",
     "channel_pairing_required": "System TV channels need renewed pairing permissions; run tv pair and accept the request on the TV",
     "channel_changed": "The system TV channel changed while programme information was being read; inspect tv channel",
@@ -58,7 +59,7 @@ def help_text(name="NAME"):
   {prefix} launch [APP]          open OttPlay or an administrator-configured app alias
   {prefix} go / start [APP]      wake, wait for the TV, then open that app
   {prefix} apps                  list applications reported by the television
-  {prefix} channels              list system tuner / available LG Channels
+  {prefix} channels              list tuner / configured regional LG Channels metadata
   {prefix} channel               read the current system TV channel
   {prefix} program [CHANNEL_ID]  read current programme metadata, if available
   {prefix} tune CHANNEL_ID       select an ID returned by tv channels
@@ -160,9 +161,9 @@ def binding_metadata(api, raw, device):
 def project_channel(api, raw, mutating=False):
     require(api, isinstance(raw, dict) and channel_identifier(raw.get("id")), mutating)
     result = {"id": raw["id"]}
-    for key in ("name", "number", "mode"):
+    for key in ("name", "number", "mode", "source", "physical_id"):
         if key in raw:
-            require(api, isinstance(raw[key], str) and len(raw[key].encode("utf-8")) <= (512 if key == "name" else 64)
+            require(api, isinstance(raw[key], str) and len(raw[key].encode("utf-8")) <= (512 if key in ("name", "physical_id") else 64)
                     and not any(ord(c) < 32 or ord(c) == 127 for c in raw[key]), mutating)
             result[key] = raw[key]
     return result
@@ -182,6 +183,12 @@ def result_metadata(api, raw, device, action, params=None):
             and isinstance(raw.get("outcome"), str) and raw["outcome"] in OUTCOMES, mutating)
     result = {"version": 1, "device_id": device, "action": action,
               "transport": raw["transport"], "outcome": raw["outcome"]}
+    if "warnings" in raw:
+        require(api, isinstance(raw["warnings"], list) and len(raw["warnings"]) <= 8, mutating)
+        for warning in raw["warnings"]:
+            require(api, isinstance(warning, str) and len(warning) <= 512
+                    and not any(ord(c) < 32 or ord(c) == 127 for c in warning), mutating)
+        result["warnings"] = list(raw["warnings"])
     if "state" in raw:
         state = raw["state"]
         require(api, isinstance(state, dict), mutating)
@@ -303,6 +310,8 @@ def print_result(result):
             print(f"  {title}: {value}")
     if "pairing" in result:
         print("  Pairing: " + ("paired" if result["pairing"]["paired"] else "not completed"))
+    for warning in result.get("warnings", []):
+        print("  Warning: " + warning)
     for app in result.get("apps", []):
         print(f"  {app['id']}: {app['title']}")
     for channel in result.get("channels", []):

@@ -12,10 +12,12 @@ var channelNumberPattern = regexp.MustCompile(`^[0-9]{1,8}([.-][0-9]{1,8})?$`)
 
 // Channel identifies a system-owned source. It deliberately has no playable URL.
 type Channel struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Number string `json:"number"`
-	Mode   string `json:"mode,omitempty"`
+	Source     string `json:"source,omitempty"`
+	PhysicalID string `json:"physical_id,omitempty"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Number     string `json:"number"`
+	Mode       string `json:"mode,omitempty"`
 }
 
 type Program struct {

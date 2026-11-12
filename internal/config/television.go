@@ -14,6 +14,7 @@ import (
 // Addresses and credentials come only from administrator-owned configuration,
 // never from remote command parameters.
 type Television struct {
+	LGChannelsCountry string `json:"lg_channels_country,omitempty"`
 	// PlayerChannelControl explicitly delegates only channel browsing/tuning to
 	// the paired player identity bound to this TV. It grants no power/app/pairing access.
 	PlayerChannelControl bool `json:"player_channel_control,omitempty"`
@@ -88,6 +89,9 @@ func televisionURL(value string, base bool) bool {
 }
 
 func (c Television) Validate() error {
+	if c.LGChannelsCountry != "" && c.LGChannelsCountry != "US" {
+		return errors.New("television lg_channels_country supports US only")
+	}
 	if !deviceID.MatchString(c.DeviceID) {
 		return errors.New("television requires a valid device_id")
 	}

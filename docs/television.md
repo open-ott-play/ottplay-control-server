@@ -411,3 +411,33 @@ OttPlay is closed, or OttPlay may be in standby while the TV remains on.
 
 See also [CLI commands](cli.md), [player lifecycle controls](cli.md#restarting-playback-or-the-player)
 and the separate [Home Assistant notification bridge](home-assistant.md).
+
+### Optional US LG Channels catalogue
+
+Set `"lg_channels_country": "US"` on the administrator-owned television binding
+alongside its existing player/host/key configuration. This initial implementation
+supports only US; omit the field to keep the TV-reported tuner list unchanged.
+It grants no new pairing or player permissions.
+
+`ott l tv channels` then appends the public regional LG Channels metadata, for
+example `lgfast:US:120`. These rows are labelled `LG Channels (US catalogue)`:
+they describe the US service lineup, **not channels verified as enabled on this
+particular TV**. Select a returned ID with `ott l tv tune lgfast:US:120`.
+The controller validates catalogue membership and hands the number to webOS.
+Only observing the matching physical channel number/mode confirms the tune;
+acceptance alone is not confirmation, and uncertain mutations are never replayed.
+The response preserves an observed physical ID separately as `physical_id`.
+Programme requests use actual current-TV EPG, never a fabricated listing.
+
+The controller fetches metadata from the fixed official endpoint
+`https://api.lgchannels.com/api/v1.0/channellist?deviceType=All`, also used by
+[LG's US channel list](https://www.lg.com/us/lg-channels), with US/en headers.
+No caller-supplied URL or channel logo is fetched. Requests have a four-second
+budget; wire bodies and decoded/inflated bodies are capped at 2 MiB and lists at
+2,000 unique numeric entries. The shared cache lasts six hours, coalesces parallel
+refreshes and throttles failed refreshes for one minute. A failed refresh retains
+tuner rows; cached regional rows remain explicitly stale metadata with a warning.
+The CLI displays warnings. Older native clients can use the opaque IDs unchanged
+and retain tuner rows, though they may not display the additional warning field.
+No media URLs, stream extraction, DRM handling or service availability guarantees
+are provided by this catalogue.
