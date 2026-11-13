@@ -26,6 +26,7 @@ type multiviewContract struct {
 	Capability   map[string]json.RawMessage `json:"capability"`
 	ZeroCapacity map[string]json.RawMessage `json:"zero_capacity_capability"`
 	EmptyStatus  json.RawMessage            `json:"empty_status"`
+	PausedStatus json.RawMessage            `json:"paused_status"`
 }
 
 func multiviewFixture(t testing.TB) multiviewContract {
@@ -94,6 +95,9 @@ func TestMultiviewSharedContractAndBoundHTTPReceipts(t *testing.T) {
 	}
 	if !validMultiviewResult(f.EmptyStatus, "ok", parseMultiviewRequest(f.Requests["status"].Params)) {
 		t.Fatal("empty status rejected")
+	}
+	if !validMultiviewResult(f.PausedStatus, "ok", parseMultiviewRequest(f.Requests["status"].Params)) {
+		t.Fatal("paused status rejected")
 	}
 }
 
@@ -282,11 +286,15 @@ func TestMultiviewSourcePages(t *testing.T) {
 func TestMultiviewSnapshotShapeAndOwnership(t *testing.T) {
 	f := multiviewFixture(t)
 	base := transferObject(t, f.Results["status"])["snapshot"]
-	for _, state := range []string{"starting", "playing", "stalled"} {
+	for _, state := range []string{"starting", "playing", "paused", "stalled"} {
 		m := transferObject(t, base)
 		var rows []map[string]json.RawMessage
 		_ = json.Unmarshal(m["slots"], &rows)
 		rows[0]["state"] = transferJSON(t, state)
+		m["slots"] = transferJSON(t, rows)
+		if !validMultiviewSnapshot(transferJSON(t, m)) {
+			t.Fatalf("%s with source rejected", state)
+		}
 		rows[0]["source"] = json.RawMessage(`null`)
 		m["slots"] = transferJSON(t, rows)
 		if validMultiviewSnapshot(transferJSON(t, m)) {

@@ -38,6 +38,7 @@
     "empty",
     "starting",
     "playing",
+    "paused",
     "stalled",
     "ended",
     "failed",
@@ -254,7 +255,7 @@
     "Geometry is generated once by native and transferred privately to backend as exact even pixel rectangles. Public CLI has no arbitrary rectangle or HLS URI fields.",
     "source_id uses token grammar1..64; ticket and cursor use ticket grammar1..256. Provider and profile are nonempty strings, never null; profile is a saved authority identity even for Local sources.",
     "Query may be empty; label must be nonblank. Both exclude controls, formatting characters, malformed Unicode and private URL/path/credential patterns.",
-    "Snapshot slot order is immaterial. Resolve by slot_id, never by array position. source must be nonnull for starting,playing,stalled.",
+    "Snapshot slot order is immaterial. Resolve by slot_id, never by array position. source must be nonnull for starting,playing,paused,stalled. paused represents intentional suspension, not stalled or stopped playback.",
     "Snapshot error is null or a STRING from reasons, not an open error object. failed requires a reason string.",
     "audio_policy slot requires nonnull audio_slot naming an existing slot. audio_slot is the configured owner, not proof of audible samples."
   ],
@@ -1091,6 +1092,65 @@
             "kind": "live"
           },
           "error": "source_unavailable"
+        },
+        {
+          "slot_id": 1,
+          "slot_generation": "slot-1-generation-1",
+          "source_revision": "slot-1-source-1",
+          "state": "empty",
+          "source": null,
+          "error": null
+        },
+        {
+          "slot_id": 2,
+          "slot_generation": "slot-2-generation-1",
+          "source_revision": "slot-2-source-1",
+          "state": "empty",
+          "source": null,
+          "error": null
+        },
+        {
+          "slot_id": 3,
+          "slot_generation": "slot-3-generation-1",
+          "source_revision": "slot-3-source-1",
+          "state": "empty",
+          "source": null,
+          "error": null
+        }
+      ]
+    }
+  },
+  "paused_status": {
+    "version": 1,
+    "runtime": "native-runtime-1",
+    "op": "status",
+    "binding": {},
+    "snapshot": {
+      "context": {
+        "scene": "scene-1",
+        "layout_revision": "layout-1",
+        "focus_revision": "focus-1",
+        "audio_revision": "audio-1"
+      },
+      "layout": "grid4",
+      "satellites": 0,
+      "focus_slot": 0,
+      "audio_policy": "follows_focus",
+      "audio_slot": 0,
+      "slots": [
+        {
+          "slot_id": 0,
+          "slot_generation": "slot-0-generation-1",
+          "source_revision": "slot-0-source-1",
+          "state": "paused",
+          "source": {
+            "source_id": "source_1",
+            "label": "Fixture news",
+            "provider": "m3u",
+            "profile": "profile-home",
+            "kind": "live"
+          },
+          "error": null
         },
         {
           "slot_id": 1,

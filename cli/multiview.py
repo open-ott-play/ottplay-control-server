@@ -125,7 +125,7 @@ OPERATIONS = frozenset(("status", "sources", "layout", "play", "focus", "audio",
 AUDIO_POLICIES = frozenset(("follows_focus", "muted", "slot"))
 OFF_MODES = frozenset(("promote_active", "restore_previous"))
 SOURCE_KINDS = frozenset(("live", "vod", "file"))
-SLOT_STATES = frozenset(("empty", "starting", "playing", "stalled", "ended", "failed", "stopped"))
+SLOT_STATES = frozenset(("empty", "starting", "playing", "paused", "stalled", "ended", "failed", "stopped"))
 CONTEXT = ("scene", "layout_revision", "focus_revision", "audio_revision")
 SLOT_BINDING = ("slot_id", "slot_generation", "source_revision")
 REASONS = frozenset(("invalid_request", "unsupported", "runtime_changed", "scene_changed", "layout_changed",
@@ -269,7 +269,7 @@ def snapshot_valid(value):
                 or not integer(row["slot_id"], 0, 8) or not binding_token(row["slot_generation"])
                 or not binding_token(row["source_revision"]) or not enum(row["state"], SLOT_STATES)
                 or row["source"] is not None and not source_valid(row["source"])
-                or row["state"] in ("starting", "playing", "stalled") and row["source"] is None
+                or row["state"] in ("starting", "playing", "paused", "stalled") and row["source"] is None
                 or row["error"] is not None and not enum(row["error"], REASONS)
                 or row["state"] == "failed" and row["error"] is None):
             return False

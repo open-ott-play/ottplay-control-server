@@ -252,6 +252,22 @@ class MultiviewProtocolTest(unittest.TestCase):
             with self.assertRaises(mv.InvalidResponse):
                 mv.metadata(value, request)
 
+    def test_paused_status_preserves_intent_and_requires_a_source(self):
+        request = FIXTURE["requests"]["status_bound"]["params"]
+        response = copy.deepcopy(FIXTURE["paused_status"])
+        before = copy.deepcopy(response)
+        self.assertEqual(mv.metadata(response, request), response)
+        self.assertEqual(response, before)
+        row = next(row for row in response["snapshot"]["slots"] if row["state"] == "paused")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            mv.render(response)
+        self.assertIn(f"Window {row['slot_id'] + 1}:", output.getvalue())
+        self.assertIn("player reports paused", output.getvalue())
+        row["source"] = None
+        with self.assertRaises(mv.InvalidResponse):
+            mv.metadata(response, request)
+
     def test_sources_page_limits_tokens_and_private_labels(self):
         request = FIXTURE["requests"]["sources"]["params"]
         response = copy.deepcopy(FIXTURE["results"]["sources"])

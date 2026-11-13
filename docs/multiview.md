@@ -88,6 +88,13 @@ asynchronous source resolution. A result reports an operation as requested or
 applied; it does not prove visible playback. Inspect `mv status` for per-window
 progress and closed failure reasons.
 
+Per-window states are `empty`, `starting`, `playing`, `paused`, `stalled`,
+`ended`, `failed` and `stopped`. `paused` means intentional suspension while
+retaining the selected source; it is distinct from a stalled stream or a stopped
+window. Starting, playing, paused and stalled windows must identify their source.
+The configured audio owner can remain selected while paused; that selection does
+not establish audible sound.
+
 ## Groups and uncertain outcomes
 
 ```sh

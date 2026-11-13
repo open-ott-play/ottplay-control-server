@@ -263,7 +263,7 @@ func validMultiviewSnapshot(raw json.RawMessage) bool {
 	for _, rawSlot := range slots {
 		row, valid := inspectObject(rawSlot, "slot_id", "slot_generation", "source_revision", "state", "source", "error")
 		if !valid || !multiviewInteger(row["slot_id"], 0, count-1) || !multiviewPattern(row["slot_generation"], multiviewToken, 64) ||
-			!multiviewPattern(row["source_revision"], multiviewToken, 64) || !inspectEnum(row["state"], "empty", "starting", "playing", "stalled", "ended", "failed", "stopped") {
+			!multiviewPattern(row["source_revision"], multiviewToken, 64) || !inspectEnum(row["state"], "empty", "starting", "playing", "paused", "stalled", "ended", "failed", "stopped") {
 			return false
 		}
 		var id int
@@ -272,7 +272,7 @@ func validMultiviewSnapshot(raw json.RawMessage) bool {
 			return false
 		}
 		seen[id] = true
-		if inspectEnum(row["state"], "starting", "playing", "stalled") && inspectNull(row["source"]) {
+		if inspectEnum(row["state"], "starting", "playing", "paused", "stalled") && inspectNull(row["source"]) {
 			return false
 		}
 		if !inspectNull(row["source"]) && !validMultiviewSource(row["source"], false) {
