@@ -169,6 +169,86 @@ class MultiviewParserTest(unittest.TestCase):
 
 
 class MultiviewProtocolTest(unittest.TestCase):
+    def test_public_text_matches_native_shared_corpus_without_changing_labels(self):
+        corpus = FIXTURE["public_text_cases"]
+        request = FIXTURE["requests"]["sources"]["params"]
+        for value in corpus["accepted_queries"] + ["Bearer ", "Authorization documentary", "apiKey=fixture"]:
+            with self.subTest(accepted=value):
+                self.assertTrue(mv.search_text(value))
+                self.assertEqual(mv.parse(["sources", "1", "--search", value])["query"], value)
+                if value.strip():
+                    response = copy.deepcopy(FIXTURE["results"]["sources"])
+                    response["items"][0]["label"] = value
+                    self.assertEqual(mv.metadata(response, request)["items"][0]["label"], value)
+        for value in corpus["rejected"] + ["Authorization\u202f=fixture"]:
+            with self.subTest(rejected=value):
+                self.assertFalse(mv.search_text(value))
+                with self.assertRaises(ValueError):
+                    mv.parse(["sources", "1", "--search", value])
+                response = copy.deepcopy(FIXTURE["results"]["sources"])
+                response["items"][0]["label"] = value
+                with self.assertRaises(mv.InvalidResponse):
+                    mv.metadata(response, request)
+                response = copy.deepcopy(FIXTURE["results"]["status_bound"])
+                response["snapshot"]["slots"][0]["source"]["label"] = value
+                with self.assertRaises(mv.InvalidResponse):
+                    mv.metadata(response, FIXTURE["requests"]["status_bound"]["params"])
+
+    def test_native_delivery_fallbacks_remain_typed_bound_rejections(self):
+        for row in FIXTURE["native_delivery_rejections"]:
+            with self.subTest(name=row["name"]):
+                response, request = row["response"], row["request"]["params"]
+                self.assertEqual(mv.metadata(response["data"], request, response["status"]), response["data"])
+                with self.assertRaises(mv.InvalidResponse):
+                    mv.metadata({"reason": response["data"]["reason"]}, request, response["status"])
+
+    def test_raw_capabilities_admit_only_the_exact_player_version_string_path(self):
+        identity = "1" * 32
+        value = {"id": identity, "status": "ok", "data": {
+            "version": 1, "player": {"version": "1.2.3-beta.1", "runtime": "native-runtime-1",
+                                      "platform": "webos-native"},
+            "multiview": copy.deepcopy(FIXTURE["capability"]["multiview"])}}
+
+        def wire(data):
+            return json.dumps(data, separators=(",", ":")).encode("utf-8")
+
+        raw = wire(value)
+        self.assertEqual(mv.decode_response(API, raw, capabilities=True), value)
+        self.assertEqual(mv.capabilities_receipt(API, raw, identity), value)
+        # The capability-specific exception must never leak into MV receipts.
+        with self.assertRaises(Error):
+            mv.decode_response(API, raw)
+        for path in (("data", "version"), ("data", "multiview", "version")):
+            for invalid in (1.0, True, "1"):
+                changed = copy.deepcopy(value)
+                target = changed
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = invalid
+                with self.subTest(path=path, invalid=invalid):
+                    with self.assertRaises(Error):
+                        mv.decode_response(API, wire(changed), capabilities=True)
+                    with self.assertRaises(Error):
+                        mv.capabilities_receipt(API, wire(changed), identity)
+        for invalid in (1, 1.0, True, None, {}, ["1.2.3"], "bad\ud800"):
+            changed = copy.deepcopy(value)
+            changed["data"]["player"]["version"] = invalid
+            with self.subTest(player_version=invalid), self.assertRaises(Error):
+                mv.capabilities_receipt(API, wire(changed), identity)
+        for extra in ({"version": "other"}, [{"version": "other"}], {"player": {"version": "other"}}):
+            changed = copy.deepcopy(value)
+            changed["data"]["extra"] = extra
+            with self.subTest(extra=extra), self.assertRaises(Error):
+                mv.capabilities_receipt(API, wire(changed), identity)
+        # Equality with integer zero/one cannot admit float, bool or string bindings.
+        for name, key, values in (("focus", "slot_id", (0.0, False, "0")),
+                                  ("layout_perimeter", "satellites", (8.0, True, "8"))):
+            for invalid in values:
+                changed = {"id": identity, "status": "ok", "data": copy.deepcopy(FIXTURE["results"][name])}
+                changed["data"]["binding"][key] = invalid
+                with self.subTest(name=name, invalid=invalid), self.assertRaises(Error):
+                    mv.receipt(API, wire(changed), FIXTURE["requests"][name]["params"], identity)
+
     def test_shared_fixture_success_rejections_and_capabilities(self):
         self.assertEqual(set(FIXTURE["requests"]), set(FIXTURE["results"]))
         for name, envelope in FIXTURE["requests"].items():

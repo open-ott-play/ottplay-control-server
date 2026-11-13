@@ -27,6 +27,21 @@ type multiviewContract struct {
 	ZeroCapacity map[string]json.RawMessage `json:"zero_capacity_capability"`
 	EmptyStatus  json.RawMessage            `json:"empty_status"`
 	PausedStatus json.RawMessage            `json:"paused_status"`
+	PublicText   struct {
+		Accepted []string `json:"accepted_queries"`
+		Rejected []string `json:"rejected"`
+	} `json:"public_text_cases"`
+	NativeDeliveryRejections []struct {
+		Name    string `json:"name"`
+		Request struct {
+			Action string          `json:"action"`
+			Params json.RawMessage `json:"params"`
+		} `json:"request"`
+		Response struct {
+			Status string          `json:"status"`
+			Data   json.RawMessage `json:"data"`
+		} `json:"response"`
+	} `json:"native_delivery_rejections"`
 }
 
 func multiviewFixture(t testing.TB) multiviewContract {
@@ -182,6 +197,75 @@ func TestMultiviewStrictJSONAndPrivateText(t *testing.T) {
 		if validMultiviewResult(transferJSON(t, data), "ok", parseMultiviewRequest(f.Requests["sources"].Params)) {
 			t.Fatal("private/invalid label accepted")
 		}
+	}
+}
+
+func TestMultiviewNativePublicTextCorpus(t *testing.T) {
+	f := multiviewFixture(t)
+	if len(f.PublicText.Accepted) == 0 || len(f.PublicText.Rejected) != 18 {
+		t.Fatal("missing shared native public-text corpus")
+	}
+	for _, accepted := range []bool{true, false} {
+		values := append(append([]string{}, f.PublicText.Accepted...), "Bearer ", "Authorization documentary", "apiKey=fixture")
+		if !accepted {
+			values = append(append([]string{}, f.PublicText.Rejected...), "Authorization\u202f=fixture")
+		}
+		for _, value := range values {
+			t.Run(strconv.FormatBool(accepted)+"/"+value, func(t *testing.T) {
+				m := transferObject(t, f.Requests["sources"].Params)
+				m["query"] = transferJSON(t, value)
+				if (parseMultiviewRequest(transferJSON(t, m)) != nil) != accepted {
+					t.Fatal("query classification differs from native")
+				}
+				data := transferObject(t, f.Results["sources"])
+				var items []map[string]json.RawMessage
+				if err := json.Unmarshal(data["items"], &items); err != nil {
+					t.Fatal(err)
+				}
+				items[0]["label"] = transferJSON(t, value)
+				data["items"] = transferJSON(t, items)
+				wantLabel := accepted && strings.TrimSpace(value) != ""
+				if validMultiviewResult(transferJSON(t, data), "ok", parseMultiviewRequest(f.Requests["sources"].Params)) != wantLabel {
+					t.Fatal("source label classification differs from native")
+				}
+			})
+		}
+	}
+}
+
+func TestMultiviewNativeDeliveryFallbackHTTPReceipts(t *testing.T) {
+	f := multiviewFixture(t)
+	if len(f.NativeDeliveryRejections) != 4 {
+		t.Fatal("missing native fallback corpus")
+	}
+	for _, row := range f.NativeDeliveryRejections {
+		t.Run(row.Name, func(t *testing.T) {
+			s := newTestServer(t)
+			id := rpcID(t, s, globalRPC(t, row.Request.Action, row.Request.Params, ""))
+			q := parseMultiviewRequest(row.Request.Params)
+			response := transferResponse(t, id, row.Response.Status, row.Response.Data)
+			generic := []string{
+				transferResponse(t, id, "rejected", json.RawMessage(`{"reason":"unavailable"}`)),
+				transferResponse(t, id, "rejected", json.RawMessage(`{"error":"limit_exceeded"}`)),
+			}
+			for _, wrong := range generic {
+				expect(t, request(s, "POST", "/api/responses", firstToken, wrong, nil), 400)
+			}
+			if len(s.devices[0].queue) != 1 || s.resultBytes != 0 {
+				t.Fatal("generic fallback consumed pending typed request")
+			}
+			expect(t, request(s, "POST", "/api/responses", firstToken, response, nil), 200)
+			for _, wrong := range generic {
+				expect(t, request(s, "POST", "/api/responses", firstToken, wrong, nil), 400)
+			}
+			expect(t, request(s, "POST", "/api/responses", firstToken, response, nil), 200)
+			got := request(s, "GET", "/api/requests?device_id=first&id="+id, adminToken, "", nil)
+			expect(t, got, 200)
+			if got.Body.String() != response || !reflect.DeepEqual(s.devices[0].results[id].multiview, q) ||
+				len(s.devices[0].queue) != 0 || s.bytes != 0 || s.resultBytes != len(response) {
+				t.Fatal("typed fallback changed after duplicate delivery or lost original admission binding")
+			}
+		})
 	}
 }
 

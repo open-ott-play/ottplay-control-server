@@ -1294,7 +1294,8 @@ class Client:
                         wait_options["response_validator"] = lambda raw, identity: views.receipt(SimpleNamespace(**globals()), raw, params, identity)
                     else:
                         wait_options["response_validator"] = lambda raw, identity: views.capabilities_receipt(SimpleNamespace(**globals()), raw, identity)
-                    wait_options["response_decoder"] = lambda raw: views.decode_response(SimpleNamespace(**globals()), raw)
+                    wait_options["response_decoder"] = lambda raw: views.decode_response(
+                        SimpleNamespace(**globals()), raw, capabilities=(action == "capabilities"))
                 receipt = self._wait_receipt(query, request_id, deadline, **wait_options)
             except Error as exc:
                 exc.request_id = request_id

@@ -1178,5 +1178,171 @@
         }
       ]
     }
-  }
+  },
+  "public_text_cases": {
+    "accepted_queries": [
+      "",
+      " ",
+      "Fixture news",
+      "Token",
+      "Secret Window",
+      "Password",
+      "API key documentary",
+      "Bearer",
+      "Bearerfixture",
+      "mytoken=fixture",
+      "News / Weather",
+      "\u041d\u043e\u0432\u043e\u0441\u0442\u0438",
+      "\u65e5\u672c\u8a9e",
+      "\u2065"
+    ],
+    "rejected": [
+      "Bearer fixture",
+      "prefix Bearer fixture",
+      "Bearer\u00a0fixture",
+      "blob:fixture",
+      "  blob:fixture ",
+      "\\fixture",
+      "~\\fixture",
+      "/",
+      " / ",
+      "api key=fixture",
+      "api key : fixture",
+      "token\u00a0=fixture",
+      "Authorization\u202f:fixture",
+      "\u65e5\u672c://fixture",
+      "\ue000/private/movie",
+      "to\u0301ken=fixture",
+      "api\u00a0key=fixture",
+      "token\u00e9=fixture"
+    ]
+  },
+  "native_delivery_rejections": [
+    {
+      "name": "status_bound_unavailable",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "status"
+        }
+      },
+      "response": {
+        "status": "rejected",
+        "data": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "status",
+          "binding": {},
+          "reason": "unavailable"
+        }
+      }
+    },
+    {
+      "name": "status_bound_limit_exceeded",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "status"
+        }
+      },
+      "response": {
+        "status": "rejected",
+        "data": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "status",
+          "binding": {},
+          "reason": "limit_exceeded"
+        }
+      }
+    },
+    {
+      "name": "play_unavailable",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "play",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 0,
+          "slot_generation": "slot-0-generation-1",
+          "source_revision": "slot-0-source-1",
+          "source_ticket": "source_ticket_1"
+        }
+      },
+      "response": {
+        "status": "rejected",
+        "data": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "play",
+          "binding": {
+            "expected": {
+              "scene": "scene-1",
+              "layout_revision": "layout-1",
+              "focus_revision": "focus-1",
+              "audio_revision": "audio-1"
+            },
+            "slot_id": 0,
+            "slot_generation": "slot-0-generation-1",
+            "source_revision": "slot-0-source-1",
+            "source_ticket": "source_ticket_1"
+          },
+          "reason": "unavailable"
+        }
+      }
+    },
+    {
+      "name": "play_limit_exceeded",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "play",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 0,
+          "slot_generation": "slot-0-generation-1",
+          "source_revision": "slot-0-source-1",
+          "source_ticket": "source_ticket_1"
+        }
+      },
+      "response": {
+        "status": "rejected",
+        "data": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "play",
+          "binding": {
+            "expected": {
+              "scene": "scene-1",
+              "layout_revision": "layout-1",
+              "focus_revision": "focus-1",
+              "audio_revision": "audio-1"
+            },
+            "slot_id": 0,
+            "slot_generation": "slot-0-generation-1",
+            "source_revision": "slot-0-source-1",
+            "source_ticket": "source_ticket_1"
+          },
+          "reason": "limit_exceeded"
+        }
+      }
+    }
+  ]
 }

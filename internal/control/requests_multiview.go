@@ -48,7 +48,7 @@ func multiviewInteger(raw json.RawMessage, minimum, maximum int) bool {
 
 func multiviewText(raw json.RawMessage, nonempty bool) bool {
 	s, ok := inspectString(raw, 512)
-	if !ok || (nonempty && strings.TrimSpace(s) == "") || mediaTracksPrivateLabelPattern.MatchString(s) {
+	if !ok || (nonempty && strings.TrimSpace(s) == "") || multiviewPrivateText(s) {
 		return false
 	}
 	for _, r := range s {
@@ -57,6 +57,92 @@ func multiviewText(raw json.RawMessage, nonempty bool) bool {
 		}
 	}
 	return true
+}
+
+// Match native display::text plus its multi-view embedded-path guard. Keep this
+// local: other protocols retain their own existing label contracts.
+func multiviewASCIILower(value string) string {
+	b := []byte(value)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}
+
+func multiviewWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+}
+
+func multiviewKeywordPrivate(value string, display bool) bool {
+	keys := []string{"http:", "https:", "magnet:", "data:", "file:", "token", "apikey", "api_key", "api-key", "authorization", "password", "secret"}
+	if display {
+		keys = []string{"authorization", "bearer", "password", "token", "secret", "apikey", "api_key", "api-key", "api key"}
+	}
+	for _, key := range keys {
+		for offset := 0; offset < len(value); {
+			found := strings.Index(value[offset:], key)
+			if found < 0 {
+				break
+			}
+			start := offset + found
+			offset = start + len(key)
+			if start > 0 && multiviewWordByte(value[start-1]) {
+				continue
+			}
+			rest := value[offset:]
+			stripped := strings.TrimLeftFunc(rest, unicode.IsSpace)
+			if display && key == "bearer" {
+				if len(stripped) < len(rest) {
+					return true
+				}
+			} else if display && key == "authorization" {
+				if strings.HasPrefix(stripped, ":") {
+					return true
+				}
+			} else if strings.HasSuffix(key, ":") || strings.HasPrefix(stripped, ":") || strings.HasPrefix(stripped, "=") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func multiviewDisplayPrivate(value string) bool {
+	value = multiviewASCIILower(value)
+	drive := len(value) >= 3 && value[0] >= 'a' && value[0] <= 'z' && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
+	if strings.Contains(value, "://") || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "\\") ||
+		strings.HasPrefix(value, "~/") || strings.HasPrefix(value, "~\\") || strings.HasPrefix(value, "data:") ||
+		strings.HasPrefix(value, "blob:") || strings.HasPrefix(value, "file:") || drive {
+		return true
+	}
+	return multiviewKeywordPrivate(value, true)
+}
+
+func multiviewPrivateText(value string) bool {
+	var ascii strings.Builder
+	for _, c := range value {
+		if c <= unicode.MaxASCII {
+			ascii.WriteByte(byte(c))
+		}
+	}
+	if multiviewDisplayPrivate(strings.TrimSpace(value)) || multiviewDisplayPrivate(strings.TrimSpace(ascii.String())) {
+		return true
+	}
+	value = multiviewASCIILower(value)
+	space := func(c byte) bool { return c == ' ' || c >= '\t' && c <= '\r' }
+	for offset := 0; offset < len(value); offset++ {
+		if offset > 0 && !space(value[offset-1]) && !strings.ContainsRune("\"'(", rune(value[offset-1])) {
+			continue
+		}
+		rest := value[offset:]
+		drive := len(rest) >= 3 && rest[0] >= 'a' && rest[0] <= 'z' && rest[1] == ':' && (rest[2] == '/' || rest[2] == '\\')
+		if rest[0] == '/' && len(rest) > 1 && !space(rest[1]) || strings.HasPrefix(rest, "~/") || strings.HasPrefix(rest, "\\\\") || drive {
+			return true
+		}
+	}
+	return multiviewKeywordPrivate(value, false)
 }
 
 func validMultiviewContext(raw json.RawMessage) bool {

@@ -157,6 +157,50 @@ profile import/export formats do not accept this field. Binding writes require a
 single player; grouped reads remain available. Provision each player separately.
 Existing provider credentials in presets retain their existing behavior.
 
+### Synthetic endpoint qualification
+
+Run the isolated public-protocol check from the controller checkout:
+
+```sh
+python3 -B tests/test_multiview_endpoint_cli.py -v
+go test -race ./internal/control -run TestMultiview -count=1
+```
+
+The Python check runs the real CLI as a subprocess against an ephemeral loopback
+HTTP fixture with synthetic credentials. Its native adapter accepts an
+`action`/`params` request and returns `status`/`data`; this is the seam to replace
+with a compiled native handler during integration. The fixture advertises only
+synthetic support, reports empty windows and returns `outcome: requested` for
+mutations. It has no media, decoder, TV connection or playback-success evidence.
+The separate Go tests exercise controller admission and receipt validation.
+
+The shared contract includes `native_delivery_rejections`: exact original
+requests paired with typed `unavailable` and `limit_exceeded` replies. Native
+tests should compare generated replies with these vectors before adding the
+original request ID. `public_text_cases` fixes the common label/query domain,
+including credential syntax hidden by Unicode characters. Do not weaken the
+native display filter to accept a controller query.
+
+Before a native endpoint advertises usable operations, integration must prove:
+
+- The dispatcher consumes the original duplicate-checked request projection and
+  routes multi-view before generic error paths. Every correlated negative has
+  the original runtime, operation, binding and a closed reason. Missing original
+  correlation remains an unknown outcome, not a reconstructed receipt.
+- A dedicated adapter projects one consistent coordinator snapshot into the
+  closed wire schema. Internal slot/status names, source identity hashes and
+  pipeline-admission fields are not serialized into public replies.
+- Source tickets and cursors belong to the authorized player, scene and window.
+  Discovery intersects native saved-source authority with a qualified backend
+  binding; it does not switch the global provider or profile.
+- The effect driver retains the original invocation and deadline across async
+  work, rechecks generation, policy and revisions before effects, and connects
+  session lifecycle, source grants, output renewal, playback and cleanup.
+- Capability capacity and each operation reflect qualified backend support.
+  Frame progression, isolated source failure, audible-owner changes, cancellation
+  and teardown require their own native/backend tests. A synthetic command
+  receipt cannot substitute for those results or for LG hardware qualification.
+
 ### Troubleshooting
 
 - **Unsupported:** check both controller negotiation and the selected player's

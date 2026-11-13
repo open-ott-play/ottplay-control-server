@@ -28,10 +28,61 @@ LAYOUTS = frozenset(("single", "pip", "grid4", "grid9", "perimeter"))
 TOKEN = r"[A-Za-z0-9_-]{1,256}"
 BINDING = r"[A-Za-z0-9_.:-]{1,64}"
 PROVIDER = r"[a-z0-9][a-z0-9_.-]*(?:/[a-z0-9][a-z0-9_.-]*)?"
-PRIVATE_QUERY = re.compile(
-    r"""([a-z][a-z0-9+.-]*://|\b(https?|magnet|data|file):|(^|[\s"'(])(/\S|~/|[a-z]:[\\/]|\\\\)|\b(token|api[_-]?key|authorization|password|secret)\s*[=:])""",
-    re.IGNORECASE | re.ASCII,
-)
+ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+ASCII_SPACE = " \t\n\r\f\v"
+
+
+def _word_tails(value, key):
+    """Native privacy classification uses ASCII case and word boundaries."""
+    for match in re.finditer(re.escape(key), value):
+        start = match.start()
+        if start and (value[start - 1] == "_" or
+                      value[start - 1].isascii() and value[start - 1].isalnum()):
+            continue
+        yield value[match.end():]
+
+
+def _display_private(value):
+    """The native display guard, scoped here to multi-view text only."""
+    value = value.translate(ASCII_LOWER)
+    drive = (len(value) >= 3 and value[0] in "abcdefghijklmnopqrstuvwxyz"
+             and value[1] == ":" and value[2] in "/\\")
+    if ("://" in value or value.startswith(("/", "\\", "~/", "~\\", "data:", "blob:", "file:"))
+            or drive):
+        return True
+    for key in ("authorization", "bearer", "password", "token", "secret", "apikey",
+                "api_key", "api-key", "api key"):
+        for tail in _word_tails(value, key):
+            stripped = tail.lstrip()
+            if ((key == "bearer" and len(stripped) < len(tail))
+                    or (key == "authorization" and stripped.startswith(":"))
+                    or (key not in ("bearer", "authorization") and stripped.startswith((":", "=")))):
+                return True
+    return False
+
+
+def _private_text(value):
+    # Native display::text checks both the trimmed original and an ASCII-only
+    # classification. Neither projection replaces the original displayed text.
+    if (_display_private(value.strip())
+            or _display_private("".join(char for char in value if char.isascii()).strip())):
+        return True
+    value = value.translate(ASCII_LOWER)
+    for index, char in enumerate(value):
+        if index and value[index - 1] not in ASCII_SPACE + "\"'(":
+            continue
+        tail = value[index:]
+        drive = (len(tail) >= 3 and char in "abcdefghijklmnopqrstuvwxyz"
+                 and tail[1] == ":" and tail[2] in "/\\")
+        if ((char == "/" and len(tail) > 1 and tail[1] not in ASCII_SPACE)
+                or tail.startswith(("~/", "\\\\")) or drive):
+            return True
+    for key in ("http:", "https:", "magnet:", "data:", "file:", "token", "apikey",
+                "api_key", "api-key", "authorization", "password", "secret"):
+        for tail in _word_tails(value, key):
+            if key.endswith(":") or tail.lstrip().startswith((":", "=")):
+                return True
+    return False
 
 
 def token(value):
@@ -51,7 +102,7 @@ def search_text(value):
     try:
         return (len(value.encode("utf-8")) <= 512
                 and not any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in value)
-                and PRIVATE_QUERY.search(value) is None)
+                and not _private_text(value))
     except UnicodeError:
         return False
 
@@ -288,16 +339,19 @@ def snapshot_valid(value):
     return audio is not None
 
 
-def strict_values(value):
+def strict_values(value, *, capabilities=False, path=()):
     if type(value) is dict:
         for key, item in value.items():
-            if key in ("version", "slot_id", "satellites", "max_slots", "focus_slot", "audio_slot") and item is not None:
+            field_path = (*path, key)
+            if capabilities and field_path == ("data", "player", "version"):
+                require(type(item) is str)
+            elif key in ("version", "slot_id", "satellites", "max_slots", "focus_slot", "audio_slot") and item is not None:
                 require(type(item) is int)
             strict_values(key)
-            strict_values(item)
+            strict_values(item, capabilities=capabilities, path=field_path)
     elif type(value) is list:
-        for item in value:
-            strict_values(item)
+        for index, item in enumerate(value):
+            strict_values(item, capabilities=capabilities, path=(*path, index))
     elif type(value) is str:
         value.encode("utf-8", errors="strict")
     elif type(value) is float:
@@ -339,7 +393,7 @@ def metadata(raw, request, status="ok"):
         raise InvalidResponse(ERROR) from None
 
 
-def decode(raw):
+def decode(raw, *, capabilities=False):
     try:
         require(type(raw) is bytes and len(raw) <= MAX_RESPONSE)
         def pairs(values):
@@ -355,21 +409,21 @@ def decode(raw):
             raise InvalidResponse(ERROR)
         value = json.loads(raw.decode("utf-8", errors="strict"), object_pairs_hook=pairs,
                            parse_int=parse_int, parse_constant=invalid_constant)
-        strict_values(value)
+        strict_values(value, capabilities=capabilities)
         return value
     except (ValueError, TypeError, OverflowError, RecursionError):
         raise InvalidResponse(ERROR) from None
 
 
-def decode_response(api, raw):
+def decode_response(api, raw, *, capabilities=False):
     try:
-        return decode(raw)
+        return decode(raw, capabilities=capabilities)
     except InvalidResponse:
         raise api.Error(ERROR) from None
 
 
-def envelope(raw, request_id):
-    result = decode(raw)
+def envelope(raw, request_id, *, capabilities=False):
+    result = decode(raw, capabilities=capabilities)
     require(exact(result, ("id", "status", "data")) and result["id"] == request_id
             and type(result["id"]) is str and re.fullmatch(r"[0-9a-f]{32}", result["id"]) is not None
             and enum(result["status"], ("ok", "rejected", "unsupported")) and type(result["data"]) is dict)
@@ -387,7 +441,7 @@ def receipt(api, raw, params, request_id):
 
 def capabilities_receipt(api, raw, request_id):
     try:
-        result = envelope(raw, request_id)
+        result = envelope(raw, request_id, capabilities=True)
         if result["status"] == "ok" and "multiview" in result["data"]:
             capability(result["data"]["multiview"])
         return result
