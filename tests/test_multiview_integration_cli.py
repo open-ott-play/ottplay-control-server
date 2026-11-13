@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -124,17 +125,19 @@ class MultiviewIntegrationTest(unittest.TestCase):
             for source in (ROOT / "cli").glob("*.py"):
                 shutil.copy2(source, target / source.name)
             command = [sys.executable, "-B", str(target / "ott.py"), "-c", str(target / "missing.json")]
+            # Keep the copied CLI's Unicode help deterministic on Windows pipes.
+            environment = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             result = subprocess.run([*command, "fixture", "mv", "--help"], cwd=target,
-                                    capture_output=True, text=True, timeout=10)
+                                    capture_output=True, encoding="utf-8", env=environment, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Windows are numbered 1 through 9", result.stdout)
             (target / "multiview.py").unlink()
             result = subprocess.run([*command, "fixture", "mv", "--help"], cwd=target,
-                                    capture_output=True, text=True, timeout=10)
+                                    capture_output=True, encoding="utf-8", env=environment, timeout=10)
             self.assertEqual(result.returncode, 1)
             self.assertIn("Install multiview.py beside ott.py", result.stderr)
             result = subprocess.run([*command, "--help"], cwd=target,
-                                    capture_output=True, text=True, timeout=10)
+                                    capture_output=True, encoding="utf-8", env=environment, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
 
 
