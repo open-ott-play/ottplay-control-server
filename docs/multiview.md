@@ -136,6 +136,29 @@ ownership still apply. Responses are closed and bound to the original request;
 negative responses cannot mint fresh context or tickets. No raw media URLs,
 credentials, private filesystem paths or HLS lease secrets belong in this API.
 
+### Installation-specific service binding
+
+Native builds may advertise `nativeMultiviewService` through the existing typed
+settings API. It is a sensitive application string containing a service binding
+provisioned for that specific installation. Use the operator-provided, compact
+single-line JSON file; the current settings contract permits at most 4096 UTF-8
+bytes. The native player must validate the binding against its persisted device
+identity before using the service.
+
+```sh
+ott l setting nativeMultiviewService --value-file /path/to/private-binding.json
+ott l setting nativeMultiviewService
+ott l setting nativeMultiviewService ""
+```
+
+Reads and successful writes show a redacted value. The empty string disables the
+binding. A binding is not a portable provider profile: CLI presets and Local
+profile import/export formats do not accept this field. Binding writes require a
+single player; grouped reads remain available. Provision each player separately.
+Existing provider credentials in presets retain their existing behavior.
+
+### Troubleshooting
+
 - **Unsupported:** check both controller negotiation and the selected player's
   marker. Installing CLI code alone does not enable a media backend.
 - **Window not in the layout:** read status and choose an existing window.

@@ -8103,6 +8103,9 @@ def player_group_command(client, config, targets, args, argv):
         parsed = parse_preset_load(words)
         name, _ = validate_preset(config, parsed["preset"])
         require_preset_favorites_support(config, name, settings_only=parsed["settings_only"])
+    if (route == "player_settings" and len(targets) > 1 and len(words) > 2
+            and words[0].casefold() == "setting" and words[1] == "nativeMultiviewService"):
+        raise Error("Installation-specific service binding changes require one player; no setting value was read or sent")
     if route == "media_tracks":
         module = media_tracks_module()
         try:
