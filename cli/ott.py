@@ -394,7 +394,7 @@ RECEIPT_ACTIONS = frozenset((
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
     "vportal", "vportal_random", "vportal_search", "command", "provider_settings", "plex_queue", "plex_library", "plex_servers", "local_media", "local_browser", "categories", "favorites", "aspect",
     "favorites_transfer", "favorites_global", "favorites_global_items", "favorites_global_recovery",
-    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer", "media_tracks",
+    "settings_compare", "playback_handoff_export", "playback_handoff_import", "notifications", "player_settings", "plex_folders", "player_settings_patch", "perf_capture", "torrent_catalog", "torrent_indexer", "media_tracks", "multiview",
 ))
 PLEX_QUEUE_OPERATIONS = frozenset(("play", "preview", "status", "next", "previous", "stop"))
 PLEX_QUEUE_REPEAT_MODES = frozenset(("none", "all"))
@@ -1288,6 +1288,13 @@ class Client:
                     capture = native_playback_capture_module()
                     wait_options["response_validator"] = lambda raw, identity: capture.receipt(SimpleNamespace(**globals()), raw, params, identity)
                     wait_options["response_decoder"] = lambda raw: capture.decode_response(SimpleNamespace(**globals()), raw)
+                elif action == "multiview" or (action == "capabilities" and params.get("multiview") is True):
+                    views = multiview_module()
+                    if action == "multiview":
+                        wait_options["response_validator"] = lambda raw, identity: views.receipt(SimpleNamespace(**globals()), raw, params, identity)
+                    else:
+                        wait_options["response_validator"] = lambda raw, identity: views.capabilities_receipt(SimpleNamespace(**globals()), raw, identity)
+                    wait_options["response_decoder"] = lambda raw: views.decode_response(SimpleNamespace(**globals()), raw)
                 receipt = self._wait_receipt(query, request_id, deadline, **wait_options)
             except Error as exc:
                 exc.request_id = request_id
@@ -5442,9 +5449,16 @@ def capabilities_metadata(data):
             native_provider = native_provider_settings_module().capability(data["native_provider_settings"])
         except ValueError:
             raise Error(invalid) from None
+    multiview = None
+    if "multiview" in data:
+        try:
+            multiview = multiview_module().capability(data["multiview"])
+        except ValueError:
+            raise Error(invalid) from None
     player = data.get("player")
     patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}",
-                "runtime": (r"[A-Za-z0-9_.:-]{1,128}" if native_provider is not None else
+                "runtime": (r"[A-Za-z0-9_.:-]{1,64}" if multiview is not None else
+                            r"[A-Za-z0-9_.:-]{1,128}" if native_provider is not None else
                             r"[A-Za-z0-9_.-]{1,96}" if native_playback or native_capture is not None else r"[a-z0-9-]{1,64}")}
     if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
                                            for key, pattern in patterns.items()):
@@ -5464,6 +5478,8 @@ def capabilities_metadata(data):
         result["native_playback_capture"] = native_capture
     if native_provider is not None:
         result["native_provider_settings"] = native_provider
+    if multiview is not None:
+        result["multiview"] = multiview
     if "playback_failure_versions" in data:
         versions = data["playback_failure_versions"]
         if (type(versions) is not list or versions != [2, 3]
@@ -5996,6 +6012,13 @@ def print_player_help(data, name):
         "reboot_device": ("reboot", "reboot the device OS"),
     }
     print("Available controls now:")
+    if "multiview" in controls:
+        views = controls["multiview"]
+        print(f"  {prefix} mv status  — read the multi-view scene and per-window state")
+        if views["max_slots"] > 0 and "layout" in views["operations"]:
+            print(f"  {prefix} mv layout {'|'.join(views['layouts'])}  — choose a supported layout; windows start at 1")
+        if views["max_slots"] > 0:
+            print(f"  {prefix} mv --help  — source selection, focus and audio; operations depend on this player's capabilities")
     if "native_provider_settings" in controls:
         print(f"  {prefix} provider-config --schema [ID]  — list supported native provider fields")
         print(f"  {prefix} provider-config --check FILE / provider-config FILE  — compare/save a numbered native profile with source guards")
@@ -7810,6 +7833,16 @@ def television_module():
     return module
 
 
+def multiview_module():
+    path = Path(__file__).resolve().with_name("multiview.py")
+    if not path.is_file():
+        raise Error("Install multiview.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_multiview", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def device_power_module():
     path = Path(__file__).resolve().with_name("device_power.py")
     if not path.is_file():
@@ -7828,6 +7861,8 @@ def player_group_targets(client, selector):
 def player_command_route(words):
     """The single dispatch table for built-in and optional player commands."""
     verb = words[0].casefold() if words else ""
+    if verb in ("mv", "multiview", "view"):
+        return "multiview"
     if verb == "tracks":
         return "media_tracks"
     if verb == "tv":
@@ -8074,6 +8109,14 @@ def player_group_command(client, config, targets, args, argv):
             module.parse(words[1:])
         except ValueError:
             raise Error(module.USAGE) from None
+    if route == "multiview":
+        module = multiview_module()
+        try:
+            command = module.parse(words[1:])
+        except ValueError:
+            raise Error(module.USAGE) from None
+        if len(targets) > 1 and (command["op"] == "play" or "cursor" in command):
+            raise Error("Multi-view source tickets and cursors belong to one player; choose a single target. No request was sent")
     plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
     group_output_preflight(plans)
     json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))
@@ -8229,6 +8272,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     """Run the same resolved-player command for a single target or one group member."""
     words = args.words[1:]
     route = player_command_route(words)
+    if route == "multiview":
+        return multiview_module().run(SimpleNamespace(**globals()), client, device, words[1:],
+                                       args.timeout, args.json)
     if route == "media_tracks":
         return media_tracks_module().run(SimpleNamespace(**globals()), client, device, words[1:],
                                          args.timeout, args.json)
@@ -8684,6 +8730,16 @@ def main(argv=None):
         print(HELP)
         return 0
     try:
+        if (len(args.words) > 1 and args.words[0].casefold() not in TOP_LEVEL_COMMANDS
+                and player_command_route(args.words[1:]) == "multiview"):
+            views = multiview_module()
+            try:
+                command = views.parse(args.words[2:])
+            except ValueError:
+                raise Error(views.USAGE) from None
+            if command["op"] == "help":
+                print(views.HELP, end="")
+                return 0
         if (len(args.words) > 1 and args.words[0].casefold() not in TOP_LEVEL_COMMANDS
                 and command_verb(args.words[1:]) == "status"):
             parse_command(args.words[1:])

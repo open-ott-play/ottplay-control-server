@@ -52,6 +52,8 @@ type entry struct {
 	inspect                 *inspectRequest
 	aspect                  *aspectRequest
 	mediaTracks             *mediaTracksRequest
+	multiview               *multiviewRequest
+	multiviewProbe          bool
 	notificationSettings    *notificationsRequest
 	playerSettings          *playerSettingsRequest
 	plexFolders             *plexFoldersRequest
