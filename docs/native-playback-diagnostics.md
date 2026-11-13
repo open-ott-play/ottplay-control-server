@@ -98,6 +98,13 @@ evaluation, bounded to 24 hours. `prime_external_lease` and
 `prime_audio_expected` are booleans. Queued media is not the same as media
 accepted by the decoder. Once `prime_pending` is false, these numeric values
 remain the last priming snapshot rather than live buffer measurements.
+The required-runway field describes the observed acquisition window used for
+Fresh/Resume; internal rebuffer additionally checks its current recovery debt
+and completed acquisitions. `prime_external_lease` can also represent a completed
+Fresh feed whose evidence is owned by the held clock. During Fresh startup,
+validated access units still resident in that exact loader can cover runway
+beyond the bounded queues; the queue measurements themselves do not include
+those unpushed access units.
 The updated controller and CLI accept both legacy records and this complete
 extension; partial groups, unknown fields and free text remain rejected. Update
 both before capturing from a player that supplies the extension.
