@@ -10,12 +10,16 @@ Keep all files from the same `cli/` revision together: `ott.py`, `programme_sear
 `global_favorites_remote.py`, `global_favorites_recovery.py`, `global_favorites_operations.py`,
 `global_favorites_commands.py`, `global_favorites_items.py`, `global_favorites_items_commands.py`,
 `torrent_catalog.py`, `torrent_document.py`, `torrent_indexer.py`, `television.py`,
-`media_tracks.py` and `device_power.py`.
+`media_tracks.py`, `multiview.py` and `device_power.py`.
 Install the complete `cli/` directory from that revision. Python 3.12 is the version used by CI. Commands take a short
 player name followed by an action. Assign each player its own device ID
 (preferably the Device UUID shown in its settings) and device token.
 Do not share one token between active players: they would compete for the same
 command queue.
+
+For capability-gated layouts, per-window source selection, focus and audio,
+see [Multi-view control](multiview.md). These commands require a compatible
+player and an admitted backend; CLI installation alone does not enable them.
 
 For opt-in performance recording, bounded export and guarded notification A–B–A
 trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
