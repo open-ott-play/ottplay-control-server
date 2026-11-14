@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -199,4 +200,49 @@ func TestProgrammeRejectsChannelRace(t *testing.T) {
 	}
 	_, err := f.manager(t).Execute(context.Background(), "living", Command{Action: "channel_program"})
 	assertCode(t, err, "channel_changed", false)
+}
+
+// Channel reads have no HA fallback; reserving half the request budget for one
+// cuts a valid multi-call programme read short even while its caller can wait.
+func TestChannelProgrammeKeepsCallerBudgetWhenHAFallbackConfigured(t *testing.T) {
+	f := newTV(t, true)
+	key, err := readCredentials(f.config.ClientKeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHA(t, f)
+	key.TVChannels = true
+	if err := writeCredentials(f.config.ClientKeyFile, key); err != nil {
+		t.Fatal(err)
+	}
+	f.hook = func(conn *websocket.Conn, q tvRequest) bool {
+		switch q.URI {
+		case "ssap://tv/getCurrentChannel":
+			time.Sleep(400 * time.Millisecond)
+			respond(conn, q, map[string]any{"returnValue": true, "channelId": "opaque/42"})
+		case "ssap://tv/getChannelCurrentProgramInfo":
+			time.Sleep(400 * time.Millisecond)
+			respond(conn, q, map[string]any{"returnValue": true, "programName": "Current show"})
+		default:
+			return false
+		}
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := f.manager(t).Execute(ctx, "living", Command{Action: "channel_program"})
+	if err != nil || result.Program == nil || result.Program.Title != "Current show" {
+		t.Fatalf("valid programme read lost its caller budget: %+v %v", result, err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("programme exceeded caller deadline")
+	}
+	if f.count("tv/getCurrentChannel") != 2 || f.count("tv/getChannelCurrentProgramInfo") != 1 {
+		t.Fatal("programme read did not retain its channel-race verification")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.verified || len(h.posts) != 0 {
+		t.Fatal("channel read attempted unsupported HA fallback")
+	}
 }

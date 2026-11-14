@@ -238,7 +238,7 @@ func (m *Manager) Execute(ctx context.Context, id string, cmd Command) (Result, 
 		return m.wake(ctx, c, cmd, r)
 	}
 	nativeCtx, nativeCancel := context.WithCancel(ctx)
-	if cmd.Action != "pair" && c.Fallback != nil {
+	if cmd.Action != "pair" && !isChannelAction(cmd.Action) && c.Fallback != nil {
 		nativeCancel()
 		nativeCtx, nativeCancel = phaseContext(ctx, 6*time.Second, 2)
 	}
