@@ -719,3 +719,23 @@ func TestNativeNullReadingsCannotConfirmOrBecomeRelativeBaseline(t *testing.T) {
 		t.Fatalf("null surfaced as real status: %+v, %v", r, err)
 	}
 }
+
+func TestUnconfiguredBindingSerializesEmptyPermissionList(t *testing.T) {
+	for name, manager := range map[string]*Manager{"disabled": nil, "unknown-player": {devices: map[string]*boundTV{}}} {
+		t.Run(name, func(t *testing.T) {
+			binding := manager.Binding("unconfigured")
+			body, err := json.Marshal(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire map[string]any
+			if err := json.Unmarshal(body, &wire); err != nil {
+				t.Fatal(err)
+			}
+			permissions, ok := wire["pairing_permissions"].([]any)
+			if !ok || len(permissions) != 0 || wire["configured"] != false {
+				t.Fatalf("unconfigured binding violates CLI metadata contract: %s", body)
+			}
+		})
+	}
+}

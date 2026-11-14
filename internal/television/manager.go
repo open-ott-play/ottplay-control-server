@@ -153,7 +153,7 @@ func New(configs []config.Television) (*Manager, error) {
 }
 
 func (m *Manager) Binding(id string) Binding {
-	b := Binding{Version: 1, DeviceID: id, Capabilities: []string{}}
+	b := Binding{Version: 1, DeviceID: id, Capabilities: []string{}, PairingPermissions: []string{}}
 	if m == nil {
 		return b
 	}
