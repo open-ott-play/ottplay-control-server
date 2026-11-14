@@ -198,6 +198,24 @@ class MultiviewIntegrationTest(unittest.TestCase):
                                  not isinstance(reply, Exception))
                 self.assertEqual(supplied, before)
 
+    def test_recovery_help_never_passes_a_negative_remaining_timeout(self):
+        raw = {"version": 1, "player": {"version": "test", "platform": "webos-native",
+                                        "runtime": "native-runtime-1"},
+               "input": [], "lifecycle": [], "playback": [],
+               **copy.deepcopy(FIXTURE["capability"])}
+        controls = ott.capabilities_metadata(raw)
+        client = mock.Mock(timeout=45)
+        def call(*args):
+            self.assertGreater(client.timeout, 0)
+            return copy.deepcopy(raw)
+        client.call.side_effect = call
+        with mock.patch.object(ott.time, "monotonic", side_effect=[0, 0.9, 1.1, 1.2]):
+            data = ott.status_capabilities(client, "dev", {"player": raw["player"]}, 1,
+                                           controls=controls)
+        self.assertIsNone(data["capabilities"])
+        self.assertIn("within --timeout", data["capabilities_error"])
+        self.assertEqual(client.timeout, 45)
+
     def test_complete_cli_copy_loads_module_without_checkout_or_credentials(self):
         with tempfile.TemporaryDirectory(prefix="ott-multiview-cli-") as temporary:
             target = Path(temporary)

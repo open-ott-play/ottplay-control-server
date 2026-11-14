@@ -5936,8 +5936,8 @@ def status_capabilities(client, device, data, deadline, *, controls=None):
         # Recovery is visible only after this controller explicitly accepts
         # its probe, including when detailed status supplies existing controls.
         controls.pop("multiview_recovery", None)
-        if "multiview" in controls and time.monotonic() < deadline:
-            client.timeout = deadline - time.monotonic()
+        if "multiview" in controls and (remaining := deadline - time.monotonic()) > 0:
+            client.timeout = remaining
             try:
                 negotiated = capabilities_metadata(client.call(
                     device, "capabilities", {"multiview": True, "multiview_recovery_v1": True}))
