@@ -17,12 +17,13 @@ ott PLAYER mv window N play TICKET
 ott PLAYER mv focus N
 ott PLAYER mv audio N|off|follows-focus
 ott PLAYER mv window N stop
-ott PLAYER mv off [promote_active|restore_previous]
+ott PLAYER mv off [promote_active|restore_previous|close_only]
 
 Windows are numbered 1 through 9. Perimeter satellites range from 0 through 8 (default 8).
 Profile tokens identify saved sources; they are not profile slot numbers.
 Source tickets and cursors are opaque, case-sensitive values returned by the player.
 Commands require advertised support and do not switch the global provider or profile.
+Recovery stop and off close_only require separately advertised recovery support.
 """
 LAYOUTS = frozenset(("single", "pip", "grid4", "grid9", "perimeter"))
 TOKEN = r"[A-Za-z0-9_-]{1,256}"
@@ -122,7 +123,7 @@ def parse(words):
     verb = words[0].casefold()
     if verb == "off" and len(words) <= 2:
         mode = words[1].casefold() if len(words) == 2 else "promote_active"
-        if mode not in ("promote_active", "restore_previous"):
+        if mode not in ("promote_active", "restore_previous", "close_only"):
             raise ValueError(USAGE)
         return {"op": "off", "mode": mode}
     if verb == "focus" and len(words) == 2:
@@ -246,12 +247,33 @@ def capability(value):
         raise InvalidResponse("Invalid multi-view capability") from None
 
 
+def recovery_capability(value, runtime):
+    """Validate separately negotiated cleanup support, never admission capacity."""
+    try:
+        require(exact(value, ("version", "runtime", "operations", "off_modes")))
+        require(type(value["version"]) is int and value["version"] == 1
+                and binding_token(runtime) and value["runtime"] == runtime)
+        require(enum_list(value["operations"], {"status", "stop", "off"})
+                and "status" in value["operations"])
+        require(enum_list(value["off_modes"], {"close_only"})
+                and bool(value["off_modes"]) == ("off" in value["operations"]))
+        return copy.deepcopy(value)
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        raise InvalidResponse("Invalid multi-view recovery capability") from None
+
+
 def request_valid(request):
     if (type(request) is not dict or type(request.get("version")) is not int
             or request["version"] != 1 or not enum(request.get("op"), OPERATIONS)):
         return False
     op = request["op"]
     fields = {"version", "op"}
+    recovery = "recovery_version" in request
+    if recovery:
+        if (type(request["recovery_version"]) is not int or request["recovery_version"] != 1
+                or not (op == "stop" or op == "off" and request.get("mode") == "close_only")):
+            return False
+        fields.add("recovery_version")
     if op == "status":
         if "runtime" in request:
             fields.add("runtime")
@@ -292,7 +314,7 @@ def request_valid(request):
             return False
     elif op == "off":
         fields.add("mode")
-        if not enum(request.get("mode"), OFF_MODES):
+        if not enum(request.get("mode"), {"close_only"} if recovery else OFF_MODES):
             return False
     return set(request) == fields
 
@@ -345,7 +367,7 @@ def strict_values(value, *, capabilities=False, path=()):
             field_path = (*path, key)
             if capabilities and field_path == ("data", "player", "version"):
                 require(type(item) is str)
-            elif key in ("version", "slot_id", "satellites", "max_slots", "focus_slot", "audio_slot") and item is not None:
+            elif key in ("version", "recovery_version", "slot_id", "satellites", "max_slots", "focus_slot", "audio_slot") and item is not None:
                 require(type(item) is int)
             strict_values(key)
             strict_values(item, capabilities=capabilities, path=field_path)
@@ -442,8 +464,13 @@ def receipt(api, raw, params, request_id):
 def capabilities_receipt(api, raw, request_id):
     try:
         result = envelope(raw, request_id, capabilities=True)
-        if result["status"] == "ok" and "multiview" in result["data"]:
-            capability(result["data"]["multiview"])
+        if result["status"] == "ok":
+            data = result["data"]
+            if "multiview" in data:
+                capability(data["multiview"])
+            if "multiview_recovery" in data:
+                require("multiview" in data)
+                recovery_capability(data["multiview_recovery"], data["player"]["runtime"])
         return result
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
         raise api.Error("Invalid multi-view capability receipt") from None
@@ -516,15 +543,32 @@ def run(api, client, device, words, timeout, json_output):
     try:
         remaining()
         try:
-            raw_caps = client.call(device, "capabilities", {"multiview": True})
+            recovery_negotiated = True
+            try:
+                raw_caps = client.call(device, "capabilities", {"multiview": True, "multiview_recovery_v1": True})
+            except api.HTTPError as exc:
+                # Old controllers reject the opt-in at admission. This one read
+                # fallback cannot replay a multi-view operation or a mutation.
+                if getattr(exc, "code", None) != 400:
+                    raise
+                remaining()
+                recovery_negotiated = False
+                raw_caps = client.call(device, "capabilities", {"multiview": True})
+            require(recovery_negotiated or type(raw_caps) is dict and "multiview_recovery" not in raw_caps)
             caps = api.capabilities_metadata(raw_caps)
             marker = capability(caps.get("multiview"))
-            require(binding_token(caps["player"]["runtime"]))
+            runtime = caps["player"]["runtime"]
+            require(binding_token(runtime))
+            recovery = (recovery_capability(caps["multiview_recovery"], runtime)
+                        if "multiview_recovery" in caps else None)
         except (api.PlayerRejected, api.PlayerUnsupported, api.HTTPError, InvalidResponse, KeyError):
             raise api.Error("Multi-view requires a compatible player and controller. No multi-view request was sent") from None
-        if command["op"] not in marker["operations"]:
+        use_recovery = (recovery is not None and command["op"] in recovery["operations"]
+                        and (command["op"] == "stop"
+                             or command["op"] == "off" and command["mode"] == "close_only"))
+        if not use_recovery and command["op"] not in marker["operations"]:
             raise api.Error("This multi-view operation is not advertised. No multi-view request was sent")
-        if "slot_id" in command and command["slot_id"] >= marker["max_slots"]:
+        if not use_recovery and "slot_id" in command and command["slot_id"] >= marker["max_slots"]:
             raise api.Error("This window exceeds the advertised multi-view capacity. No multi-view request was sent")
         if command["op"] == "layout":
             count = command["satellites"] + 1 if command["layout"] == "perimeter" else FIXED_CAPACITY[command["layout"]]
@@ -532,13 +576,14 @@ def run(api, client, device, words, timeout, json_output):
                 raise api.Error("This layout exceeds advertised multi-view support. No multi-view request was sent")
         if command["op"] == "audio" and command["policy"] not in marker["audio_policies"]:
             raise api.Error("This audio policy is not advertised. No multi-view request was sent")
-        if command["op"] == "off" and command["mode"] not in marker["off_modes"]:
+        if command["op"] == "off" and not use_recovery and command["mode"] not in marker["off_modes"]:
             raise api.Error("This exit mode is not advertised. No multi-view request was sent")
-        runtime = caps["player"]["runtime"]
         data = call({"version": 1, "runtime": runtime, "op": "status"})
         if command["op"] != "status":
             snapshot = data["snapshot"]
             request = dict(command, version=1, runtime=runtime, expected=copy.deepcopy(snapshot["context"]))
+            if use_recovery:
+                request["recovery_version"] = 1
             if "slot_id" in command:
                 row = next((row for row in snapshot["slots"] if row["slot_id"] == command["slot_id"]), None)
                 if row is None:

@@ -22,6 +22,7 @@ type requestResult struct {
 	mediaTracks             *mediaTracksRequest
 	multiview               *multiviewRequest
 	multiviewProbe          bool
+	multiviewRecoveryProbe  bool
 	notificationSettings    *notificationsRequest
 	playerSettings          *playerSettingsRequest
 	plexFolders             *plexFoldersRequest
@@ -50,9 +51,12 @@ type requestResult struct {
 }
 
 func validCapabilityProbe(params map[string]json.RawMessage) bool {
+	if recovery, exists := params["multiview_recovery_v1"]; exists && (string(recovery) != "true" || string(params["multiview"]) != "true") {
+		return false
+	}
 	local := make(map[string]json.RawMessage, len(params))
 	for name, value := range params {
-		if name == "plex_queue_state_v2" || name == "plex_queue_repeat" || name == "native_playback_capture" || name == "native_provider_settings" || name == "multiview" {
+		if name == "plex_queue_state_v2" || name == "plex_queue_repeat" || name == "native_playback_capture" || name == "native_provider_settings" || name == "multiview" || name == "multiview_recovery_v1" {
 			if string(value) != "true" {
 				return false
 			}
@@ -172,6 +176,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = len(params) == 0
 	case "capabilities":
 		ok = validCapabilityProbe(params)
+		if _, recovery := params["multiview_recovery_v1"]; recovery {
+			ok = ok && validFavoritesTransferJSON(b)
+		}
 	case "screenshot":
 		ok = validScreenshotRequest(params)
 	case "aspect":
@@ -396,6 +403,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	e.mediaTracks = mediaTracksBound
 	e.multiview = multiviewBound
 	e.multiviewProbe = action == "capabilities" && string(params["multiview"]) == "true"
+	e.multiviewRecoveryProbe = action == "capabilities" && string(params["multiview_recovery_v1"]) == "true"
 	e.localBrowser = localBrowserBound
 	e.plexServers = plexServersBound
 	e.nativeProviderSettings = nativeProviderSettingsBound
@@ -581,6 +589,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var nativePlaybackCapture *nativePlaybackCaptureRequest
 	capabilitiesResult := d.results[id].permission == "capabilities"
 	multiviewProbe := d.results[id].multiviewProbe
+	multiviewRecoveryProbe := d.results[id].multiviewRecoveryProbe
 	var vportalSettings *vportalSettingsRequest
 	var nativeProviderSettings *nativeProviderSettingsRequest
 	var category *categoryRequest
@@ -618,6 +627,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			nativePlaybackCapture = pending.nativePlaybackCapture
 			capabilitiesResult = pending.permission == "capabilities"
 			multiviewProbe = pending.multiviewProbe
+			multiviewRecoveryProbe = pending.multiviewRecoveryProbe
 			vportalSettings = pending.vportalSettings
 			nativeProviderSettings = pending.nativeProviderSettings
 			category = pending.category
@@ -789,6 +799,27 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			if !validFavoritesTransferJSON(b) || !validMultiviewCapability(marker) || playerErr != nil || !multiviewPattern(player["runtime"], multiviewToken, 64) {
 				failure(w, 400, "invalid multiview capability")
 				return
+			}
+		}
+		if marker, exists := capabilities["multiview_recovery"]; exists {
+			player, playerErr := decodeObject(capabilities["player"])
+			if len(b) > maxMultiviewResultBytes || !validFavoritesTransferJSON(b) || playerErr != nil || !validMultiviewRecoveryCapability(marker, capabilities["multiview"], player["runtime"]) {
+				failure(w, 400, "invalid multiview recovery capability")
+				return
+			}
+			if !multiviewRecoveryProbe {
+				// A legacy consumer cannot safely interpret the additive marker.
+				// Project only after validating it; retain the request opt-in so
+				// duplicate device deliveries follow the identical policy.
+				delete(capabilities, "multiview_recovery")
+				m["data"], _ = json.Marshal(capabilities)
+				b, _ = json.Marshal(m)
+				// JSON escaping can expand otherwise bounded player metadata.
+				// Bound the actual retained envelope before duplicate handling.
+				if len(b) > maxMultiviewResultBytes {
+					failure(w, 400, "invalid multiview recovery capability")
+					return
+				}
 			}
 		}
 		if marker, exists := capabilities["torrent_indexer"]; exists && !validTorrentCatalogCapability(marker) {
@@ -996,7 +1027,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, multiview: e.multiview, multiviewProbe: e.multiviewProbe, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, nativePlaybackCapture: e.nativePlaybackCapture, vportalSettings: e.vportalSettings, nativeProviderSettings: e.nativeProviderSettings, category: e.category, randomPlay: e.randomPlay, plexQueue: e.plexQueue, plexLibrary: e.plexLibrary, plexServers: e.plexServers, localMedia: e.localMedia, localBrowser: e.localBrowser, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, multiview: e.multiview, multiviewProbe: e.multiviewProbe, multiviewRecoveryProbe: e.multiviewRecoveryProbe, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, nativePlaybackCapture: e.nativePlaybackCapture, vportalSettings: e.vportalSettings, nativeProviderSettings: e.nativeProviderSettings, category: e.category, randomPlay: e.randomPlay, plexQueue: e.plexQueue, plexLibrary: e.plexLibrary, plexServers: e.plexServers, localMedia: e.localMedia, localBrowser: e.localBrowser, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

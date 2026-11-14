@@ -179,6 +179,13 @@ func parseMultiviewRequest(raw json.RawMessage) *multiviewRequest {
 	}
 	required := []string{"version", "op"}
 	var optional []string
+	_, recovery := m["recovery_version"]
+	if recovery {
+		if (q.Op != "stop" && q.Op != "off") || !multiviewInteger(m["recovery_version"], 1, 1) {
+			return nil
+		}
+		required = append(required, "recovery_version")
+	}
 	if q.Op == "status" {
 		optional = []string{"runtime"}
 	} else {
@@ -238,7 +245,7 @@ func parseMultiviewRequest(raw json.RawMessage) *multiviewRequest {
 		slot = settingString(m["policy"]) == "slot"
 	case "off":
 		required = append(required, "mode")
-		if !inspectEnum(m["mode"], multiviewOffModes...) {
+		if (recovery && !inspectEnum(m["mode"], "close_only")) || (!recovery && !inspectEnum(m["mode"], multiviewOffModes...)) {
 			return nil
 		}
 	}
@@ -315,6 +322,21 @@ func validMultiviewCapability(raw json.RawMessage) bool {
 		}
 	}
 	return (!operations["layout"] || len(layouts) > 0) && (!(operations["sources"] || operations["play"]) || len(sources) > 0) && (!operations["audio"] || len(audio) > 0) && (!operations["off"] || len(off) > 0)
+}
+
+// Recovery is separate from new-decoder admission. Its marker names only
+// retained-scene operations and never raises the legacy max_slots limit.
+func validMultiviewRecoveryCapability(raw, legacy, runtime json.RawMessage) bool {
+	if !validFavoritesTransferJSON(raw) || !validMultiviewCapability(legacy) || !multiviewPattern(runtime, multiviewToken, 64) {
+		return false
+	}
+	m, ok := inspectObject(raw, "version", "runtime", "operations", "off_modes")
+	if !ok || !multiviewInteger(m["version"], 1, 1) || !multiviewPattern(m["runtime"], multiviewToken, 64) || settingString(m["runtime"]) != settingString(runtime) {
+		return false
+	}
+	ops, validOps := multiviewSet(m["operations"], []string{"status", "stop", "off"})
+	off, validOff := multiviewSet(m["off_modes"], []string{"close_only"})
+	return validOps && ops["status"] && validOff && ops["off"] == off["close_only"]
 }
 
 func validMultiviewSource(raw json.RawMessage, ticket bool) bool {

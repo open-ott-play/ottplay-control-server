@@ -21,7 +21,7 @@ ott --json l mv status
 
 `mv --help` works without a controller or credentials. Ordinary player help shows
 multi-view controls only when the player advertises them. A missing marker stops
-the command before a multi-view request. A zero-capacity marker permits status
+the command before a multi-view request. A zero-capacity legacy marker permits status
 only. The CLI first negotiates the controller's support with a capability probe;
 there is no fallback to global provider, profile or playback commands.
 
@@ -216,3 +216,70 @@ Before a native endpoint advertises usable operations, integration must prove:
   source must not be reported as a successful complete scene.
 - **Invalid metadata:** keep the matching controller, CLI and player contract
   versions together. The command is not repeated after a malformed reply.
+
+
+## Negotiated scene cleanup
+
+The recovery extension preserves the closed legacy multiview v1 marker. It does
+not enable a backend or grant playback capacity. A controller and CLI that
+support this extension must be deployed before a native build starts advertising
+it. Native implementation, backend qualification and device rollout remain
+separate gates; these protocol checks alone are not playback qualification.
+
+A new CLI requests `capabilities` with `multiview: true` and
+`multiview_recovery_v1: true`. The controller consumes these relay-negotiation
+flags and forwards the existing empty capability params to the player. It
+retains the request's opt-in for receipt validation and removes the additive
+`multiview_recovery` marker from replies to older probes. It never invents native
+support. The legacy `multiview` marker keeps its existing exact schema and
+truthful admission capacity; zero still means status only.
+
+The separate closed recovery marker contains version 1, the same runtime as the
+player capability, supported cleanup operations and off modes. It contains no
+admission capacity or retained-slot count. `status` is required; `stop` and `off`
+may be advertised only when executable. Recovery Off permits only `close_only`.
+An unknown version, malformed marker or runtime mismatch fails closed.
+
+```sh
+ott l mv status
+ott l mv window 9 stop
+ott l mv off close_only
+```
+
+These examples require the corresponding negotiated native support. A retained
+window can remain addressable when new admission is zero or has shrunk. The CLI
+reads a fresh scene snapshot and uses its actual slot identity, generation and
+source revision; it does not increase the advertised admission capacity. Stop
+and close-only Off carry `recovery_version: 1` plus the original runtime and full
+scene/layout/focus/audio CAS. Replies, including rejections and retained replies,
+must echo that complete binding. Legacy receipts cannot confirm recovery work.
+The exact existing `multiview.stop` and `multiview.off` permissions still apply.
+
+`mv off` retains its legacy default mode. `promote_active` and
+`restore_previous` are not recovery modes and are never silently substituted for
+close-only cleanup. They must not be advertised by a native implementation that
+only closes the backend. Recovery cannot create a scene, resolve or play a source,
+renew admission, switch an ordinary provider, promote playback or restore it.
+It addresses only the original retained session/client custody, with current
+policy checks; a newly configured backend must not receive another backend's
+cleanup operation.
+
+Only an explicit HTTP 400 rejection of the opt-in probe may trigger one read-only
+legacy probe. A recovery marker leaking through that unnegotiated fallback is
+rejected rather than used as authority. A timeout, malformed marker, uncertain mutation or stale CAS never
+causes a mutation retry, source fallback or automatic rebinding. Read fresh
+status to inspect current state. The same rules apply independently to each
+player in a group.
+
+Provisioning remains installation-specific: use a dedicated service bearer and
+the exact durable remote device identity through the sensitive setting API.
+Read redacted storage/application metadata after writing; a stored binding with
+`apply: next_stream` is not positive backend qualification. Do not rewrite or
+toggle credentials to refresh a cached zero/failed backend probe. Native must
+provide a bounded safe requalification mechanism.
+
+The additive fixture is [multiview-recovery-v1.json](../contracts/multiview-recovery-v1.json).
+Favorites remain separate: there is no multiview favorites command in this
+contract. A future favorite resolver must authorize the current provider/profile
+and issue a fresh ticket for the selected window; global `fav play` does not
+select a multiview window.

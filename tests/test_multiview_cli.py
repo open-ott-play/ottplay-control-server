@@ -430,7 +430,7 @@ class MultiviewRunTest(unittest.TestCase):
         code, result = self.execute()
         self.assertEqual(code, 0)
         self.assertEqual(result, FIXTURE["results"]["status_bound"])
-        self.assertEqual(self.operations(), [("capabilities", {"multiview": True}),
+        self.assertEqual(self.operations(), [("capabilities", {"multiview": True, "multiview_recovery_v1": True}),
                          ("multiview", FIXTURE["requests"]["status_bound"]["params"])])
 
     def test_each_operation_uses_fresh_context_and_one_request(self):
@@ -444,7 +444,7 @@ class MultiviewRunTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.client = Client()
                 self.assertEqual(self.execute(words)[0], 0)
-                self.assertEqual(self.operations(), [("capabilities", {"multiview": True}),
+                self.assertEqual(self.operations(), [("capabilities", {"multiview": True, "multiview_recovery_v1": True}),
                                  ("multiview", FIXTURE["requests"]["status_bound"]["params"]),
                                  ("multiview", FIXTURE["requests"][name]["params"])])
 
@@ -477,7 +477,7 @@ class MultiviewRunTest(unittest.TestCase):
             self.client.calls.clear()
             with self.assertRaises(Error):
                 self.execute(words)
-            self.assertEqual(self.operations(), [("capabilities", {"multiview": True})])
+            self.assertEqual(self.operations(), [("capabilities", {"multiview": True, "multiview_recovery_v1": True})])
         for marker in (None, {}, dict(FIXTURE["capability"]["multiview"], version=2)):
             self.client.marker = marker
             self.client.calls.clear()

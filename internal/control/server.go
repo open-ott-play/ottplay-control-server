@@ -54,6 +54,7 @@ type entry struct {
 	mediaTracks             *mediaTracksRequest
 	multiview               *multiviewRequest
 	multiviewProbe          bool
+	multiviewRecoveryProbe  bool
 	notificationSettings    *notificationsRequest
 	playerSettings          *playerSettingsRequest
 	plexFolders             *plexFoldersRequest

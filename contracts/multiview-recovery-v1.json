@@ -1,0 +1,1093 @@
+{
+  "contract": "multiview_recovery",
+  "version": 1,
+  "qualification": "Synthetic source contract; no runtime or production qualification is implied. Recovery never grants new decoder admission.",
+  "probe": {
+    "action": "capabilities",
+    "params": {
+      "multiview": true,
+      "multiview_recovery_v1": true
+    }
+  },
+  "legacy_probe": {
+    "action": "capabilities",
+    "params": {
+      "multiview": true
+    }
+  },
+  "binding_rule": "Echo original params except version/runtime/op, including recovery_version. All mutating calls retain the existing fresh scene/window CAS and exact multiview.stop/off permissions.",
+  "requests": {
+    "status": {
+      "action": "multiview",
+      "params": {
+        "version": 1,
+        "runtime": "native-runtime-1",
+        "op": "status"
+      }
+    },
+    "stop_slot8": {
+      "action": "multiview",
+      "params": {
+        "version": 1,
+        "runtime": "native-runtime-1",
+        "op": "stop",
+        "expected": {
+          "scene": "scene-1",
+          "layout_revision": "layout-1",
+          "focus_revision": "focus-1",
+          "audio_revision": "audio-1"
+        },
+        "slot_id": 8,
+        "slot_generation": "slot-8-generation-1",
+        "source_revision": "slot-8-source-1",
+        "recovery_version": 1
+      }
+    },
+    "off_close_only": {
+      "action": "multiview",
+      "params": {
+        "version": 1,
+        "runtime": "native-runtime-1",
+        "op": "off",
+        "expected": {
+          "scene": "scene-1",
+          "layout_revision": "layout-1",
+          "focus_revision": "focus-1",
+          "audio_revision": "audio-1"
+        },
+        "mode": "close_only",
+        "recovery_version": 1
+      }
+    }
+  },
+  "results": {
+    "status": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "op": "status",
+      "binding": {},
+      "snapshot": {
+        "context": {
+          "scene": "scene-1",
+          "layout_revision": "layout-1",
+          "focus_revision": "focus-1",
+          "audio_revision": "audio-1"
+        },
+        "layout": "grid9",
+        "satellites": 0,
+        "focus_slot": 8,
+        "audio_policy": "follows_focus",
+        "audio_slot": 8,
+        "slots": [
+          {
+            "slot_id": 0,
+            "slot_generation": "slot-0-generation-1",
+            "source_revision": "slot-0-source-1",
+            "state": "empty",
+            "source": null,
+            "error": null
+          },
+          {
+            "slot_id": 1,
+            "slot_generation": "slot-1-generation-1",
+            "source_revision": "slot-1-source-1",
+            "state": "empty",
+            "source": null,
+            "error": null
+          },
+          {
+            "slot_id": 2,
+            "slot_generation": "slot-2-generation-1",
+            "source_revision": "slot-2-source-1",
+            "state": "empty",
+            "source": null,
+            "error": null
+          },
+          {
+            "slot_id": 3,
+            "slot_generation": "slot-3-generation-1",
+            "source_revision": "slot-3-source-1",
+            "state": "empty",
+            "source": null,
+            "error": null
+          },
+          {
+            "slot_id": 4,
+            "slot_generation": "slot-4-generation-1",
+            "source_revision": "slot-4-source-1",
+            "state": "empty",
+            "source": null,
+            "error": null
+          },
+          {
+            "slot_id": 5,
+            "slot_generation": "slot-5-generation-1",
+            "source_revision": "slot-5-source-1",
+            "state": "empty",
+            "source": null,
+            "error": null
+          },
+          {
+            "slot_id": 6,
+            "slot_generation": "slot-6-generation-1",
+            "source_revision": "slot-6-source-1",
+            "state": "empty",
+            "source": null,
+            "error": null
+          },
+          {
+            "slot_id": 7,
+            "slot_generation": "slot-7-generation-1",
+            "source_revision": "slot-7-source-1",
+            "state": "empty",
+            "source": null,
+            "error": null
+          },
+          {
+            "slot_id": 8,
+            "slot_generation": "slot-8-generation-1",
+            "source_revision": "slot-8-source-1",
+            "state": "paused",
+            "source": {
+              "source_id": "source_1",
+              "label": "Fixture news",
+              "provider": "m3u",
+              "profile": "profile-home",
+              "kind": "live"
+            },
+            "error": null
+          }
+        ]
+      }
+    },
+    "stop_slot8": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "op": "stop",
+      "binding": {
+        "expected": {
+          "scene": "scene-1",
+          "layout_revision": "layout-1",
+          "focus_revision": "focus-1",
+          "audio_revision": "audio-1"
+        },
+        "slot_id": 8,
+        "slot_generation": "slot-8-generation-1",
+        "source_revision": "slot-8-source-1",
+        "recovery_version": 1
+      },
+      "accepted": true,
+      "outcome": "applied"
+    },
+    "off_close_only": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "op": "off",
+      "binding": {
+        "expected": {
+          "scene": "scene-1",
+          "layout_revision": "layout-1",
+          "focus_revision": "focus-1",
+          "audio_revision": "audio-1"
+        },
+        "mode": "close_only",
+        "recovery_version": 1
+      },
+      "accepted": true,
+      "outcome": "applied"
+    }
+  },
+  "rejections": {
+    "status": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "op": "status",
+      "binding": {},
+      "reason": "unavailable"
+    },
+    "stop_slot8": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "op": "stop",
+      "binding": {
+        "expected": {
+          "scene": "scene-1",
+          "layout_revision": "layout-1",
+          "focus_revision": "focus-1",
+          "audio_revision": "audio-1"
+        },
+        "slot_id": 8,
+        "slot_generation": "slot-8-generation-1",
+        "source_revision": "slot-8-source-1",
+        "recovery_version": 1
+      },
+      "reason": "scene_changed"
+    },
+    "off_close_only": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "op": "off",
+      "binding": {
+        "expected": {
+          "scene": "scene-1",
+          "layout_revision": "layout-1",
+          "focus_revision": "focus-1",
+          "audio_revision": "audio-1"
+        },
+        "mode": "close_only",
+        "recovery_version": 1
+      },
+      "reason": "scene_changed"
+    }
+  },
+  "recovery_markers": {
+    "status_only": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "operations": [
+        "status"
+      ],
+      "off_modes": []
+    },
+    "status_stop": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "operations": [
+        "status",
+        "stop"
+      ],
+      "off_modes": []
+    },
+    "status_off": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "operations": [
+        "status",
+        "off"
+      ],
+      "off_modes": [
+        "close_only"
+      ]
+    },
+    "all": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "operations": [
+        "status",
+        "stop",
+        "off"
+      ],
+      "off_modes": [
+        "close_only"
+      ]
+    }
+  },
+  "capabilities": {
+    "player": {
+      "version": "fixture-1",
+      "platform": "webos",
+      "runtime": "native-runtime-1"
+    },
+    "multiview": {
+      "version": 1,
+      "operations": [
+        "status"
+      ],
+      "layouts": [],
+      "max_slots": 0,
+      "source_kinds": [],
+      "audio_policies": [],
+      "off_modes": []
+    },
+    "multiview_recovery": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "operations": [
+        "status",
+        "stop",
+        "off"
+      ],
+      "off_modes": [
+        "close_only"
+      ]
+    }
+  },
+  "positive_capacity_capabilities": {
+    "player": {
+      "version": "fixture-1",
+      "platform": "webos",
+      "runtime": "native-runtime-1"
+    },
+    "multiview": {
+      "version": 1,
+      "operations": [
+        "status",
+        "sources",
+        "layout",
+        "play",
+        "focus",
+        "audio",
+        "stop",
+        "off"
+      ],
+      "layouts": [
+        "single",
+        "pip",
+        "grid4",
+        "grid9",
+        "perimeter"
+      ],
+      "max_slots": 9,
+      "source_kinds": [
+        "live",
+        "vod",
+        "file"
+      ],
+      "audio_policies": [
+        "follows_focus",
+        "muted",
+        "slot"
+      ],
+      "off_modes": [
+        "promote_active",
+        "restore_previous"
+      ]
+    },
+    "multiview_recovery": {
+      "version": 1,
+      "runtime": "native-runtime-1",
+      "operations": [
+        "status",
+        "stop",
+        "off"
+      ],
+      "off_modes": [
+        "close_only"
+      ]
+    }
+  },
+  "invalid_probes": [
+    {
+      "name": "missing_pair",
+      "params": {
+        "multiview_recovery_v1": true
+      }
+    },
+    {
+      "name": "false_pair",
+      "params": {
+        "multiview": false,
+        "multiview_recovery_v1": true
+      }
+    },
+    {
+      "name": "false_optin",
+      "params": {
+        "multiview": true,
+        "multiview_recovery_v1": false
+      }
+    },
+    {
+      "name": "numeric_optin",
+      "params": {
+        "multiview": true,
+        "multiview_recovery_v1": 1
+      }
+    },
+    {
+      "name": "string_optin",
+      "params": {
+        "multiview": true,
+        "multiview_recovery_v1": "true"
+      }
+    },
+    {
+      "name": "unknown_optin",
+      "params": {
+        "multiview": true,
+        "multiview_recovery_v2": true
+      }
+    }
+  ],
+  "invalid_capabilities": [
+    {
+      "name": "wrong_version",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 2,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "bool_version",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": true,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "float_version",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1.0,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "wrong_runtime",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-2",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "duplicate_ops",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "stop"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "no_status",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "new_admission",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "play"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "off_without_mode",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": []
+        }
+      }
+    },
+    {
+      "name": "legacy_off_mode",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "promote_active"
+          ]
+        }
+      }
+    },
+    {
+      "name": "capacity_field",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "close_only"
+          ],
+          "max_slots": 9
+        }
+      }
+    },
+    {
+      "name": "null_modes",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": null
+        }
+      }
+    },
+    {
+      "name": "mode_without_off",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "missing_legacy",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    },
+    {
+      "name": "invalid_zero_capacity_legacy",
+      "data": {
+        "player": {
+          "version": "fixture-1",
+          "platform": "webos",
+          "runtime": "native-runtime-1"
+        },
+        "multiview": {
+          "version": 1,
+          "operations": [
+            "status",
+            "stop"
+          ],
+          "layouts": [],
+          "max_slots": 0,
+          "source_kinds": [],
+          "audio_policies": [],
+          "off_modes": []
+        },
+        "multiview_recovery": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "operations": [
+            "status",
+            "stop",
+            "off"
+          ],
+          "off_modes": [
+            "close_only"
+          ]
+        }
+      }
+    }
+  ],
+  "invalid_requests": [
+    {
+      "name": "float_recovery",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "stop",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 8,
+          "slot_generation": "slot-8-generation-1",
+          "source_revision": "slot-8-source-1",
+          "recovery_version": 1.0
+        }
+      }
+    },
+    {
+      "name": "bool_recovery",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "stop",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 8,
+          "slot_generation": "slot-8-generation-1",
+          "source_revision": "slot-8-source-1",
+          "recovery_version": true
+        }
+      }
+    },
+    {
+      "name": "future_recovery",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "stop",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 8,
+          "slot_generation": "slot-8-generation-1",
+          "source_revision": "slot-8-source-1",
+          "recovery_version": 2
+        }
+      }
+    },
+    {
+      "name": "null_recovery",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "stop",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 8,
+          "slot_generation": "slot-8-generation-1",
+          "source_revision": "slot-8-source-1",
+          "recovery_version": null
+        }
+      }
+    },
+    {
+      "name": "missing_expected",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "stop",
+          "expected": null,
+          "slot_id": 8,
+          "slot_generation": "slot-8-generation-1",
+          "source_revision": "slot-8-source-1",
+          "recovery_version": 1
+        }
+      }
+    },
+    {
+      "name": "slot9",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "stop",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 9,
+          "slot_generation": "slot-8-generation-1",
+          "source_revision": "slot-8-source-1",
+          "recovery_version": 1
+        }
+      }
+    },
+    {
+      "name": "missing_window_token",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "stop",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 8,
+          "slot_generation": "slot-8-generation-1",
+          "source_revision": null,
+          "recovery_version": 1
+        }
+      }
+    },
+    {
+      "name": "extra_field",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "stop",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "slot_id": 8,
+          "slot_generation": "slot-8-generation-1",
+          "source_revision": "slot-8-source-1",
+          "recovery_version": 1,
+          "capacity": 9
+        }
+      }
+    },
+    {
+      "name": "recovery_status",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "status",
+          "recovery_version": 1
+        }
+      }
+    },
+    {
+      "name": "recovery_promote",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "off",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "mode": "promote_active",
+          "recovery_version": 1
+        }
+      }
+    },
+    {
+      "name": "recovery_restore",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "off",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "mode": "restore_previous",
+          "recovery_version": 1
+        }
+      }
+    },
+    {
+      "name": "unversioned_close_only",
+      "request": {
+        "action": "multiview",
+        "params": {
+          "version": 1,
+          "runtime": "native-runtime-1",
+          "op": "off",
+          "expected": {
+            "scene": "scene-1",
+            "layout_revision": "layout-1",
+            "focus_revision": "focus-1",
+            "audio_revision": "audio-1"
+          },
+          "mode": "close_only"
+        }
+      }
+    }
+  ]
+}

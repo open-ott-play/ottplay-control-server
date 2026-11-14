@@ -18,7 +18,7 @@ Do not share one token between active players: they would compete for the same
 command queue.
 
 For capability-gated layouts, per-window source selection, focus and audio,
-see [Multi-view control](multiview.md). These commands require a compatible
+see [Multi-view control](multiview.md). Negotiated scene cleanup uses `ott NAME mv window N stop` or `ott NAME mv off close_only` with fresh scene bindings; it does not grant new playback capacity. These commands require a compatible
 player and an admitted backend; CLI installation alone does not enable them.
 
 For opt-in performance recording, bounded export and guarded notification A–B–A

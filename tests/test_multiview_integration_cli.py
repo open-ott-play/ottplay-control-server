@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -86,7 +87,7 @@ class MultiviewIntegrationTest(unittest.TestCase):
         for device in ("dev-1", "dev-2"):
             calls = [(action, p) for d, action, p in client.calls if d == device]
             self.assertEqual([action for action, _ in calls], ["capabilities", "multiview", "multiview"])
-            self.assertEqual(calls[0][1], {"multiview": True})
+            self.assertEqual(calls[0][1], {"multiview": True, "multiview_recovery_v1": True})
             self.assertEqual(calls[1][1]["op"], "status")
             request = calls[2][1]
             self.assertEqual(request["runtime"], "runtime-" + device)
@@ -99,6 +100,8 @@ class MultiviewIntegrationTest(unittest.TestCase):
         for action, params, data in (
             ("multiview", FIXTURE["requests"]["status"]["params"], FIXTURE["results"]["status"]),
             ("capabilities", {"multiview": True}, {"version": 1, **FIXTURE["capability"]}),
+            ("capabilities", {"multiview": True, "multiview_recovery_v1": True},
+             {"version": 1, **FIXTURE["capability"]}),
         ):
             for corrupt in (False, True):
                 with self.subTest(action=action, corrupt=corrupt):
@@ -118,6 +121,82 @@ class MultiviewIntegrationTest(unittest.TestCase):
                         self.assertEqual(receipt["data"], data)
                     self.assertEqual(client.api.call_count, 1)
                     self.assertEqual(client.api_raw.call_count, 1)
+
+    def test_recovery_capability_is_runtime_bound_and_requires_legacy_protocol(self):
+        raw = {"version": 1, "player": {"version": "test", "platform": "webos-native",
+                                        "runtime": "native-runtime-1"},
+               "input": [], "lifecycle": [], "playback": [],
+               **copy.deepcopy(FIXTURE["capability"])}
+        recovery = {"version": 1, "runtime": raw["player"]["runtime"],
+                    "operations": ["status", "stop", "off"], "off_modes": ["close_only"]}
+        raw["multiview_recovery"] = recovery
+        self.assertEqual(ott.capabilities_metadata(raw)["multiview_recovery"], recovery)
+        for mutate in (lambda value: value.pop("multiview"),
+                       lambda value: value["multiview_recovery"].update(runtime="other-runtime"),
+                       lambda value: value["multiview_recovery"].update(version=True),
+                       lambda value: value["multiview_recovery"].update(private="untrusted")):
+            invalid = copy.deepcopy(raw)
+            mutate(invalid)
+            with self.assertRaises(ott.Error):
+                ott.capabilities_metadata(invalid)
+
+    def test_zero_admission_help_exposes_only_negotiated_recovery(self):
+        raw = {"version": 1, "player": {"version": "test", "platform": "webos-native",
+                                        "runtime": "native-runtime-1"},
+               "input": [], "lifecycle": [], "playback": [],
+               **copy.deepcopy(FIXTURE["capability"])}
+        raw["multiview"] = {"version": 1, "operations": ["status"], "max_slots": 0,
+                            "layouts": [], "source_kinds": [], "audio_policies": [], "off_modes": []}
+        def render(value):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                ott.print_player_help({"capabilities": ott.capabilities_metadata(value)}, "l")
+            return output.getvalue()
+        legacy = render(raw)
+        self.assertNotIn("mv off close_only", legacy)
+        self.assertNotIn("mv window N stop", legacy)
+        raw["multiview_recovery"] = {"version": 1, "runtime": raw["player"]["runtime"],
+                                     "operations": ["status", "stop", "off"], "off_modes": ["close_only"]}
+        recovered = render(raw)
+        self.assertIn("mv off close_only", recovered)
+        self.assertIn("mv window N stop", recovered)
+        self.assertNotIn("mv layout", recovered)
+
+    def test_plain_status_negotiates_recovery_help_without_mutation(self):
+        raw = {"version": 1, "player": {"version": "test", "platform": "webos-native",
+                                        "runtime": "native-runtime-1"},
+               "input": [], "lifecycle": [], "playback": [],
+               **copy.deepcopy(FIXTURE["capability"])}
+        raw["multiview"] = {"version": 1, "operations": ["status"], "max_slots": 0,
+                            "layouts": [], "source_kinds": [], "audio_policies": [], "off_modes": []}
+        recovery = {"version": 1, "runtime": "native-runtime-1",
+                    "operations": ["status", "stop", "off"], "off_modes": ["close_only"]}
+        negotiated = dict(copy.deepcopy(raw), multiview_recovery=recovery)
+        for reply in (negotiated, ott.HTTPError(400)):
+            with self.subTest(legacy_fallback=isinstance(reply, Exception)):
+                # Even an old relay leaking a native marker does not establish
+                # negotiation. The explicit second request decides visibility.
+                client = mock.Mock(timeout=45)
+                client.call.side_effect = [copy.deepcopy(negotiated), reply]
+                status = {"player": copy.deepcopy(raw["player"])}
+                data = ott.status_capabilities(client, "dev", status, time.monotonic() + 45)
+                self.assertEqual(client.call.call_args_list, [
+                    mock.call("dev", "capabilities", {}),
+                    mock.call("dev", "capabilities", {"multiview": True, "multiview_recovery_v1": True})])
+                self.assertEqual("multiview_recovery" in data["capabilities"], not isinstance(reply, Exception))
+                self.assertEqual(client.timeout, 45)
+                self.assertEqual(status, {"player": raw["player"]})
+                supplied = ott.capabilities_metadata(copy.deepcopy(negotiated))
+                before = copy.deepcopy(supplied)
+                client.call.reset_mock()
+                client.call.side_effect = [reply]
+                detailed = ott.status_capabilities(client, "dev", status, time.monotonic() + 45,
+                                                   controls=supplied)
+                self.assertEqual(client.call.call_args_list, [mock.call(
+                    "dev", "capabilities", {"multiview": True, "multiview_recovery_v1": True})])
+                self.assertEqual("multiview_recovery" in detailed["capabilities"],
+                                 not isinstance(reply, Exception))
+                self.assertEqual(supplied, before)
 
     def test_complete_cli_copy_loads_module_without_checkout_or_credentials(self):
         with tempfile.TemporaryDirectory(prefix="ott-multiview-cli-") as temporary:

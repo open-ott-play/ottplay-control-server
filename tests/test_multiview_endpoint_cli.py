@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = json.loads((ROOT / "contracts" / "multiview-v1.json").read_text(encoding="utf-8"))
+RECOVERY_PROBE = {"action": "capabilities", "params": {"multiview": True, "multiview_recovery_v1": True}}
 DEVICE = "synthetic-lg"
 AUTH = "synthetic-loopback-authentication-0001"
 PRIVATE_ERROR = "synthetic-private-native-error-do-not-print"
@@ -135,7 +136,7 @@ class LoopbackController:
                         assert set(original) == {"action", "params"}
                         projected = copy.deepcopy(original)
                         if original["action"] == "capabilities":
-                            assert canonical(original) == canonical(CONTRACT["probe"])
+                            assert canonical(original) in (canonical(CONTRACT["probe"]), canonical(RECOVERY_PROBE))
                             projected["params"] = {}
                         else:
                             assert original["action"] == CONTRACT["action"]
@@ -264,7 +265,7 @@ class MultiviewEndpointCliTest(unittest.TestCase):
             self.assertEqual(len(controller.posts), len(steps), "an operation was enqueued again")
             self.assertEqual(len(set(identity for identity, _ in controller.posts)), len(steps))
             self.assertEqual(set(controller.gets), {identity for identity, _ in controller.posts})
-            self.assertEqual(controller.posts[0][1], CONTRACT["probe"])
+            self.assertEqual(controller.posts[0][1], RECOVERY_PROBE)
             self.assertEqual(controller.native.calls[0], {"action": "capabilities", "params": {}})
             for index, ((identity, body), (expected, _response)) in enumerate(zip(controller.posts, steps)):
                 if index:

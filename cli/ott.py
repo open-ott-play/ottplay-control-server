@@ -5481,6 +5481,14 @@ def capabilities_metadata(data):
         result["native_provider_settings"] = native_provider
     if multiview is not None:
         result["multiview"] = multiview
+    if "multiview_recovery" in data:
+        if multiview is None:
+            raise Error(invalid)
+        try:
+            result["multiview_recovery"] = multiview_module().recovery_capability(
+                data["multiview_recovery"], player["runtime"])
+        except ValueError:
+            raise Error(invalid) from None
     if "playback_failure_versions" in data:
         versions = data["playback_failure_versions"]
         if (type(versions) is not list or versions != [2, 3]
@@ -5923,6 +5931,23 @@ def status_capabilities(client, device, data, deadline, *, controls=None):
         client.timeout = remaining
         if controls is None:
             controls = capabilities_metadata(client.call(device, "capabilities", {}))
+        else:
+            controls = dict(controls)
+        # Recovery is visible only after this controller explicitly accepts
+        # its probe, including when detailed status supplies existing controls.
+        controls.pop("multiview_recovery", None)
+        if "multiview" in controls and time.monotonic() < deadline:
+            client.timeout = deadline - time.monotonic()
+            try:
+                negotiated = capabilities_metadata(client.call(
+                    device, "capabilities", {"multiview": True, "multiview_recovery_v1": True}))
+            except HTTPError as exc:
+                if exc.code != 400:
+                    raise
+            else:
+                if negotiated["player"] != controls["player"] or "multiview" not in negotiated:
+                    raise Error("Multi-view capability identity changed")
+                controls = negotiated
         identity = data.get("player")
         if time.monotonic() >= deadline:
             result["capabilities_error"] = "Available controls did not arrive within --timeout; run status again."
@@ -6020,6 +6045,12 @@ def print_player_help(data, name):
             print(f"  {prefix} mv layout {'|'.join(views['layouts'])}  — choose a supported layout; windows start at 1")
         if views["max_slots"] > 0:
             print(f"  {prefix} mv --help  — source selection, focus and audio; operations depend on this player's capabilities")
+    if "multiview_recovery" in controls:
+        recovery = controls["multiview_recovery"]
+        if "stop" in recovery["operations"]:
+            print(f"  {prefix} mv window N stop  — close one retained window using its current scene binding")
+        if "off" in recovery["operations"]:
+            print(f"  {prefix} mv off close_only  — close the retained scene without starting ordinary playback")
     if "native_provider_settings" in controls:
         print(f"  {prefix} provider-config --schema [ID]  — list supported native provider fields")
         print(f"  {prefix} provider-config --check FILE / provider-config FILE  — compare/save a numbered native profile with source guards")
