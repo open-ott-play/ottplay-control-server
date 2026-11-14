@@ -64,7 +64,7 @@ func parseNativePlaybackCaptureRequest(m map[string]json.RawMessage) *nativePlay
 }
 
 func validNativePlaybackCaptureRecord(raw json.RawMessage) bool {
-	_, ok := perfObject(raw, map[string]perfRule{
+	fields := map[string]perfRule{
 		"t_ms":                  perfNumber(0, 60000, true, false),
 		"stage":                 perfEnum(false, "loading", "playing", "bound", "streaming"),
 		"load_state":            perfEnum(false, "pending", "complete", "failed"),
@@ -85,7 +85,33 @@ func validNativePlaybackCaptureRecord(raw json.RawMessage) bool {
 		"http_status":           perfNumber(100, 599, true, true),
 		"video_width":           perfNumber(0, 65535, true, false),
 		"video_height":          perfNumber(0, 65535, true, false),
-	})
+	}
+	object, err := decodeObject(raw)
+	if err != nil {
+		return false
+	}
+	priming := map[string]perfRule{
+		"prime_pending":            perfBoolean(false),
+		"prime_kind":               perfEnum(false, "none", "fresh", "rebuffer", "resume"),
+		"prime_required_runway_ms": perfNumber(0, 86400000, true, false),
+		"prime_accepted_video_ms":  perfNumber(0, 86400000, true, false),
+		"prime_accepted_audio_ms":  perfNumber(0, 86400000, true, false),
+		"prime_queued_video_ms":    perfNumber(0, 86400000, true, false),
+		"prime_queued_audio_ms":    perfNumber(0, 86400000, true, false),
+		"prime_external_lease":     perfBoolean(false),
+		"prime_audio_expected":     perfBoolean(false),
+	}
+	for key := range priming {
+		if _, present := object[key]; present {
+			// The extension is an all-or-none closed group. Older players keep
+			// their original record; partial or unbounded extensions are refused.
+			for name, rule := range priming {
+				fields[name] = rule
+			}
+			break
+		}
+	}
+	_, ok := perfObject(raw, fields)
 	return ok
 }
 

@@ -77,6 +77,32 @@ class CaptureClient(NativeClient):
 
 
 class NativePlaybackCaptureCLITest(unittest.TestCase):
+    def test_priming_extension_is_closed_bounded_and_legacy_compatible(self):
+        legacy = case('read_active')['data']['records'][0]
+        self.assertEqual(capture.record(legacy), legacy)
+        fields = {
+            'prime_pending': True, 'prime_kind': 'fresh',
+            'prime_required_runway_ms': 2000,
+            'prime_accepted_video_ms': 1000, 'prime_accepted_audio_ms': 1000,
+            'prime_queued_video_ms': 2700, 'prime_queued_audio_ms': 2700,
+            'prime_external_lease': True, 'prime_audio_expected': True,
+        }
+        contract = json.loads((ROOT / 'contracts/native-playback-priming-v1.json').read_text())
+        self.assertEqual(contract['parent_sha256'], hashlib.sha256(FIXTURE_PATH.read_bytes()).hexdigest())
+        self.assertEqual(set(contract['fields']), set(fields))
+        extended = dict(legacy, **fields)
+        self.assertEqual(capture.record(extended), extended)
+        for key in fields:
+            partial = dict(extended)
+            del partial[key]
+            with self.subTest(missing=key), self.assertRaises(capture.InvalidData):
+                capture.record(partial)
+        for key, bad in [('prime_kind', PRIVATE_URL), ('prime_pending', 1),
+                         ('prime_queued_video_ms', -1), ('prime_queued_audio_ms', 86400001),
+                         ('prime_required_runway_ms', True), ('private_url', PRIVATE_URL)]:
+            with self.subTest(field=key, bad=bad), self.assertRaises(capture.InvalidData):
+                capture.record(dict(extended, **{key: bad}))
+
     def setUp(self):
         self.clock = Clock()
         self.client = CaptureClient(self.clock)

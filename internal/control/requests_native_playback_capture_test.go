@@ -307,6 +307,48 @@ func TestNativePlaybackCaptureRecordContractBoundaries(t *testing.T) {
 	}
 }
 
+func TestNativePlaybackCapturePrimingExtension(t *testing.T) {
+	base := nativeCaptureFixture(t).row(t, "read_active").data(t)["records"].([]any)[0].(map[string]any)
+	if !validNativePlaybackCaptureRecord(transferJSON(t, base)) {
+		t.Fatal("legacy record refused")
+	}
+	fields := map[string]any{
+		"prime_pending": true, "prime_kind": "fresh", "prime_required_runway_ms": 2000,
+		"prime_accepted_video_ms": 1000, "prime_accepted_audio_ms": 1000,
+		"prime_queued_video_ms": 2700, "prime_queued_audio_ms": 2700,
+		"prime_external_lease": true, "prime_audio_expected": true,
+	}
+	for key, value := range fields {
+		base[key] = value
+	}
+	if !validNativePlaybackCaptureRecord(transferJSON(t, base)) {
+		t.Fatal("complete priming record refused")
+	}
+	for key, value := range fields {
+		delete(base, key)
+		if validNativePlaybackCaptureRecord(transferJSON(t, base)) {
+			t.Fatalf("partial extension accepted without %s", key)
+		}
+		base[key] = value
+	}
+	for key, bad := range map[string]any{
+		"prime_kind": "private-text", "prime_pending": 1,
+		"prime_queued_video_ms": -1, "prime_queued_audio_ms": 86400001,
+		"prime_required_runway_ms": true, "private_url": "private-text",
+	} {
+		before, existed := base[key]
+		base[key] = bad
+		if validNativePlaybackCaptureRecord(transferJSON(t, base)) {
+			t.Fatalf("invalid priming field accepted: %s", key)
+		}
+		if existed {
+			base[key] = before
+		} else {
+			delete(base, key)
+		}
+	}
+}
+
 func TestNativePlaybackCaptureRejectsPrivateAndInconsistentResponses(t *testing.T) {
 	row := nativeCaptureFixture(t).row(t, "read_active")
 	mutations := map[string]func(map[string]any){

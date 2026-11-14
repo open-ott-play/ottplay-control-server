@@ -11,6 +11,7 @@ import (
 )
 
 type credentials struct {
+	TVChannels        bool   `json:"tv_channels,omitempty"`
 	ClientKey         string `json:"client_key"`
 	CertificateSHA256 string `json:"certificate_sha256,omitempty"`
 }

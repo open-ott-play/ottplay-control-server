@@ -89,6 +89,29 @@ A zero counter does not establish successful playback. `callback_error_code` is
 the last reported numeric error code, not an error counter. Callback and frame-related counters do not by
 themselves prove a visible picture or audible sound on the television.
 
+Newer players include a closed, all-or-none priming extension. `prime_pending`
+and `prime_kind` (`none`, `fresh`, `rebuffer`, `resume`) distinguish a clock
+waiting for startup/recovery from ordinary feed throttling. The numeric
+`prime_required_runway_ms`, `prime_accepted_video_ms`, `prime_accepted_audio_ms`,
+`prime_queued_video_ms` and `prime_queued_audio_ms` report the latest priming
+evaluation, bounded to 24 hours. `prime_external_lease` and
+`prime_audio_expected` are booleans. Queued media is not the same as media
+accepted by the decoder. Once `prime_pending` is false, these numeric values
+remain the last priming snapshot rather than live buffer measurements.
+The required-runway field describes the observed acquisition window used for
+Fresh/Resume; internal rebuffer additionally checks its current recovery debt
+and completed acquisitions. `prime_external_lease` can also represent a completed
+Fresh feed whose evidence is owned by the held clock. During Fresh startup,
+validated access units still resident in that exact loader can cover runway
+beyond the bounded queues; the queue measurements themselves do not include
+those unpushed access units.
+The updated controller and CLI accept both legacy records and this complete
+extension; partial groups, unknown fields and free text remain rejected. Update
+both before capturing from a player that supplies the extension.
+The extension's closed fields and bounds are specified in
+[`native-playback-priming-v1.json`](../contracts/native-playback-priming-v1.json);
+the original version-1 capture fixture remains unchanged.
+
 The player keeps the ring in memory. The CLI prints a validated report and creates
 no output file automatically. The controller retains its ordinary bounded RPC
 result in memory; its durable journal records request identity and outcome, not

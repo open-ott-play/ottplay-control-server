@@ -76,6 +76,115 @@ class TelevisionCliTest(unittest.TestCase):
                                                    timeout=45, timeout_cap=120)
                 client.call.assert_not_called()
 
+    def test_system_channel_commands_and_receipts(self):
+        channel = {"id": "1_7_0_0_0_0_0", "name": "Regional news", "number": "7", "mode": "Terrestrial"}
+        cases = [(["channels"], {"action": "channels"}, {"channels": [channel]}),
+                 (["channel"], {"action": "channel_current"}, {"channel": channel}),
+                 (["current"], {"action": "channel_current"}, {"channel": channel}),
+                 (["program"], {"action": "channel_program"}, {"channel": channel, "program": {"title": "News"}}),
+                 (["program", channel["id"]], {"action": "channel_program", "channel_id": channel["id"]}, {"program": {}}),
+                 (["tune", channel["id"]], {"action": "channel_select", "channel_id": channel["id"]}, {"channel": channel}),
+                 (["tune-number", "7"], {"action": "channel_select", "channel_number": "7", "channel_mode": "Terrestrial"}, {"channel": channel})]
+        for words, params, evidence in cases:
+            with self.subTest(words=words):
+                client = self.client()
+                client.api.side_effect = None
+                client.api.return_value = 200, {"version": 1, "device_id": "living", "action": params["action"],
+                                               "outcome": "confirmed", "transport": "webos", **evidence}
+                code, out, err, _ = self.run_cli(["-j", "l", "tv", *words], client)
+                self.assertEqual((code, err), (0, ""))
+                self.assertEqual(json.loads(out)["action"], params["action"])
+                self.assertEqual(client.api.call_args.args[1], {"device_id": "living", "timeout_ms": 44000, **params})
+                client.call.assert_not_called()
+
+    def test_channel_input_limits_and_invalid_commands(self):
+        self.assertEqual(tv.parse(ott, ["tune", "ф" * 256])["channel_id"], "ф" * 256)
+        for words in (["tune"], ["tune", "x", "y"], ["tune", "ф" * 257], ["tune", "a\nb"], ["tune", "   "],
+                      ["channels", "extra"], ["channel", "7"], ["program", "x", "y"],
+                      ["tune-number", "-1"], ["tune-number", "1;off"], ["tune-number", "123456789"],
+                      ["tune-number", "7", "Cable"]):
+            with self.subTest(words=words):
+                code, out, _, client = self.run_cli(["l", "tv", *words])
+                self.assertEqual((code, out), (1, ""))
+                client.api.assert_not_called()
+
+    def test_channel_list_empty_and_unknown_metadata_projected_safely(self):
+        client = self.client()
+        client.api.side_effect = None
+        client.api.return_value = 200, {"version": 1, "device_id": "living", "action": "channels",
+                                       "outcome": "confirmed", "transport": "webos", "channels": []}
+        code, out, _, _ = self.run_cli(["-j", "l", "tv", "channels"], client)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["channels"], [])
+        client.api.return_value[1]["channels"] = [{"id": "7", "name": "", "number": "", "url": "SECRET"}]
+        code, out, _, _ = self.run_cli(["-j", "l", "tv", "channels"], client)
+        self.assertEqual(code, 0)
+        self.assertNotIn("SECRET", out)
+
+    def test_regional_catalogue_warnings_and_physical_identity_are_projected(self):
+        client = self.client()
+        client.api.side_effect = None
+        client.api.return_value = 200, {"version": 1, "device_id": "living", "action": "channels",
+                                       "outcome": "confirmed", "transport": "webos",
+                                       "channels": [{"id": "lgfast:US:120", "name": "News", "number": "120",
+                                                     "source": "lg_channels", "physical_id": "observed/physical"}],
+                                       "warnings": ["Regional catalogue is stale metadata"]}
+        code, out, err, _ = self.run_cli(["-j", "l", "tv", "channels"], client)
+        self.assertEqual((code, err), (0, ""))
+        receipt = json.loads(out)
+        self.assertEqual(receipt["channels"][0]["source"], "lg_channels")
+        self.assertEqual(receipt["warnings"], ["Regional catalogue is stale metadata"])
+        code, out, err, _ = self.run_cli(["l", "tv", "channels"], client)
+        self.assertIn("Warning: Regional catalogue is stale metadata", out)
+        client.api.return_value[1]["warnings"] = ["bad\nwarning"]
+        self.assertEqual(self.run_cli(["l", "tv", "channels"], client)[0], 1)
+
+    def test_confirmed_number_selection_requires_matching_mode(self):
+        client = self.client()
+        client.api.side_effect = None
+        client.api.return_value = 200, {"version": 1, "device_id": "living", "action": "channel_select",
+                                       "outcome": "confirmed", "transport": "webos",
+                                       "channel": {"id": "cable-7", "number": "7", "mode": "Cable"}}
+        code, out, err, _ = self.run_cli(["l", "tv", "tune-number", "7"], client)
+        self.assertEqual((code, out, client.api.call_count), (1, "", 1))
+        self.assertIn("may have executed", err)
+
+    def test_channel_permissions_projected_and_errors_are_actionable(self):
+        binding = {"version": 1, "device_id": "living", "configured": True,
+                   "capabilities": ["channels"], "player_channel_control": True,
+                   "channel_pairing_required": True, "pairing_permissions": ["CONTROL_INPUT_TV"]}
+        projected = tv.binding_metadata(ott, binding, "living")
+        self.assertTrue(projected["player_channel_control"])
+        self.assertTrue(projected["channel_pairing_required"])
+        for field in ("player_channel_control", "channel_pairing_required"):
+            with self.assertRaises(ott.Error):
+                tv.binding_metadata(ott, {**binding, field: "true"}, "living")
+        for code, expected in (("channel_pairing_required", "tv pair"), ("channel_changed", "tv channel")):
+            client = self.client()
+            client.api.side_effect = None
+            client.api.return_value = 200, {"version": 1, "device_id": "living", "action": "channels",
+                                           "code": code, "uncertain": False}
+            status, out, err, _ = self.run_cli(["l", "tv", "channels"], client)
+            self.assertEqual((status, out, client.api.call_count), (1, "", 1))
+            self.assertIn(expected, err)
+
+    def test_channel_mutation_never_retries_and_read_failure_not_uncertain(self):
+        for action, words in (("channel_select", ["tune", "7"]), ("channels", ["channels"]),
+                              ("channel_current", ["channel"]), ("channel_program", ["program"])):
+            client = self.client()
+            client.api.side_effect = ott.TransportError("private", "deadline")
+            code, out, err, _ = self.run_cli(["l", "tv", *words], client)
+            self.assertEqual((code, out, client.api.call_count), (1, "", 1))
+            self.assertEqual("may have executed" in err, action == "channel_select")
+            client.call.assert_not_called()
+        client = self.client()
+        client.api.side_effect = None
+        client.api.return_value = 200, {"version": 1, "device_id": "living", "action": "channel_select",
+                                       "outcome": "confirmed", "transport": "webos", "channel": {"id": "8"}}
+        code, out, err, _ = self.run_cli(["l", "tv", "tune", "7"], client)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("may have executed", err)
+
     def test_invalid_syntax_never_sends_any_request(self):
         invalid = [["volume", "-0"], ["volume", "+0"], ["volume", "101"], ["volume", "+101"],
                    ["volume", "1.5"], ["volume", "nan"], ["volume", "01"], ["mute"], ["mute", "toggle"],

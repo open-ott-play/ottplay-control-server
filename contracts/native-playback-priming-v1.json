@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "synthetic": true,
+  "extends": "native-playback-capture-v1.json",
+  "parent_sha256": "3f580425a16016b4b6201d996a644bc56705e4b7ea706bb6f68918969fa533fa",
+  "presence": "all_or_none",
+  "fields": {
+    "prime_required_runway_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400000,
+      "nullable": false
+    },
+    "prime_accepted_video_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400000,
+      "nullable": false
+    },
+    "prime_accepted_audio_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400000,
+      "nullable": false
+    },
+    "prime_queued_video_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400000,
+      "nullable": false
+    },
+    "prime_queued_audio_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400000,
+      "nullable": false
+    },
+    "prime_pending": {
+      "type": "boolean",
+      "nullable": false
+    },
+    "prime_external_lease": {
+      "type": "boolean",
+      "nullable": false
+    },
+    "prime_audio_expected": {
+      "type": "boolean",
+      "nullable": false
+    },
+    "prime_kind": {
+      "type": "enum",
+      "values": [
+        "none",
+        "fresh",
+        "rebuffer",
+        "resume"
+      ],
+      "nullable": false
+    }
+  }
+}

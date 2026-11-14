@@ -14,6 +14,13 @@ import (
 // Addresses and credentials come only from administrator-owned configuration,
 // never from remote command parameters.
 type Television struct {
+	LGChannelsCountry string `json:"lg_channels_country,omitempty"`
+	// PlayerChannelControl explicitly delegates only channel browsing/tuning to
+	// the paired player identity bound to this TV. It grants no power/app/pairing access.
+	PlayerChannelControl bool `json:"player_channel_control,omitempty"`
+	// ChannelPlayerIDs delegates only channel operations (plus administrator pairing)
+	// to additional player identities without duplicating this physical TV or key.
+	ChannelPlayerIDs  []string            `json:"channel_player_ids,omitempty"`
 	DeviceID          string              `json:"device_id"`
 	Host              string              `json:"host"`
 	Port              int                 `json:"port,omitempty"`
@@ -82,8 +89,21 @@ func televisionURL(value string, base bool) bool {
 }
 
 func (c Television) Validate() error {
+	if c.LGChannelsCountry != "" && c.LGChannelsCountry != "US" {
+		return errors.New("television lg_channels_country supports US only")
+	}
 	if !deviceID.MatchString(c.DeviceID) {
 		return errors.New("television requires a valid device_id")
+	}
+	if len(c.ChannelPlayerIDs) > 16 {
+		return errors.New("television channel_player_ids supports at most 16 identities")
+	}
+	seenChannels := map[string]bool{c.DeviceID: true}
+	for _, id := range c.ChannelPlayerIDs {
+		if !deviceID.MatchString(id) || seenChannels[id] {
+			return errors.New("television channel_player_ids requires valid unique additional player identities")
+		}
+		seenChannels[id] = true
 	}
 	if net.ParseIP(c.Host) == nil && (!televisionHost.MatchString(c.Host) || strings.Contains(c.Host, "..")) {
 		return errors.New("television host must be an IP address or hostname")
@@ -145,10 +165,15 @@ func ValidateTelevisions(items []Television) error {
 		if err := item.Validate(); err != nil {
 			return err
 		}
-		if seen[item.DeviceID] {
-			return errors.New("television device_id must be unique")
+		for _, id := range append([]string{item.DeviceID}, item.ChannelPlayerIDs...) {
+			if seen[id] {
+				return errors.New("television canonical and channel player identities must be unique")
+			}
+			seen[id] = true
 		}
-		seen[item.DeviceID] = true
+		if len(seen) > MaxDevices {
+			return errors.New("too many television player identities")
+		}
 	}
 	return nil
 }

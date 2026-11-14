@@ -15,13 +15,16 @@ type televisionControl interface {
 }
 
 type televisionRequest struct {
-	DeviceID  string `json:"device_id"`
-	Action    string `json:"action"`
-	App       string `json:"app,omitempty"`
-	Volume    *int   `json:"volume,omitempty"`
-	Delta     *int   `json:"delta,omitempty"`
-	Muted     *bool  `json:"muted,omitempty"`
-	TimeoutMS *int   `json:"timeout_ms,omitempty"`
+	DeviceID      string `json:"device_id"`
+	Action        string `json:"action"`
+	App           string `json:"app,omitempty"`
+	Volume        *int   `json:"volume,omitempty"`
+	Delta         *int   `json:"delta,omitempty"`
+	Muted         *bool  `json:"muted,omitempty"`
+	ChannelID     string `json:"channel_id,omitempty"`
+	ChannelNumber string `json:"channel_number,omitempty"`
+	ChannelMode   string `json:"channel_mode,omitempty"`
+	TimeoutMS     *int   `json:"timeout_ms,omitempty"`
 }
 
 // Physical TV control is an administrator-only lane. It does not depend on a
@@ -49,7 +52,7 @@ func (s *Server) serveTelevisions(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if !diagStrictJSON(data) || !diagDecode(data, &body, []string{"device_id", "action"}, "app", "volume", "delta", "muted", "timeout_ms") {
+		if !diagStrictJSON(data) || !diagDecode(data, &body, []string{"device_id", "action"}, "app", "volume", "delta", "muted", "timeout_ms", "channel_id", "channel_number", "channel_mode") {
 			failure(w, 400, "invalid television command")
 			return
 		}
@@ -73,7 +76,7 @@ func (s *Server) serveTelevisions(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, s.televisions.Binding(id))
 		return
 	}
-	command := television.Command{Action: body.Action, App: body.App, Volume: body.Volume, Delta: body.Delta, Muted: body.Muted}
+	command := television.Command{Action: body.Action, App: body.App, Volume: body.Volume, Delta: body.Delta, Muted: body.Muted, ChannelID: body.ChannelID, ChannelNumber: body.ChannelNumber, ChannelMode: body.ChannelMode}
 	if command.Validate() != nil || (body.TimeoutMS != nil && (*body.TimeoutMS < 1 || *body.TimeoutMS > 120000)) {
 		failure(w, 400, "invalid television command parameters")
 		return
@@ -97,7 +100,7 @@ func (s *Server) serveTelevisions(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	result, err := s.televisions.Execute(ctx, id, command)
 	if err != nil {
-		readOnly := command.Action == "status" || command.Action == "apps" || (command.Action == "volume" && command.Volume == nil && command.Delta == nil)
+		readOnly := command.Action == "status" || command.Action == "apps" || command.Action == "channels" || command.Action == "channel_current" || command.Action == "channel_program" || (command.Action == "volume" && command.Volume == nil && command.Delta == nil)
 		code, uncertain := "operation_failed", !readOnly
 		var tvError *television.Error
 		if errors.As(err, &tvError) {

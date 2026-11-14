@@ -103,7 +103,7 @@ func connect(ctx context.Context, c config.Television, pair bool) (*session, err
 		}
 		return nil, failure("connection_failed")
 	}
-	conn.SetReadLimit(256 * 1024)
+	conn.SetReadLimit(4 * 1024 * 1024)
 	s := &session{conn: conn, credentials: key}
 	success := false
 	defer func() {
@@ -127,7 +127,14 @@ func connect(ctx context.Context, c config.Television, pair bool) (*session, err
 		"forcePairing": false, "pairingType": "PROMPT",
 		"manifest": map[string]any{"manifestVersion": 1, "appVersion": "1.0", "permissions": []string{"CONTROL_AUDIO", "CONTROL_POWER", "LAUNCH", "LAUNCH_WEBAPP", "READ_APP_STATUS", "READ_INSTALLED_APPS", "READ_POWER_STATE", "READ_RUNNING_APPS"}},
 	}
-	if key.ClientKey != "" {
+	if pair || key.TVChannels {
+		manifest := payload["manifest"].(map[string]any)
+		manifest["permissions"] = append(manifest["permissions"].([]string), channelPermissions...)
+	}
+	if pair && !key.TVChannels {
+		// Consent to the expanded channel scope must be explicit on the TV.
+		payload["forcePairing"] = true
+	} else if key.ClientKey != "" {
 		payload["client-key"] = key.ClientKey
 	}
 	duration := 5 * time.Second
@@ -163,6 +170,9 @@ func connect(ctx context.Context, c config.Television, pair bool) (*session, err
 			}
 			if c.Secure() {
 				s.credentials.CertificateSHA256 = observedPin
+			}
+			if pair {
+				s.credentials.TVChannels = true
 			}
 			success = true
 			return s, nil
@@ -343,6 +353,8 @@ func (s *session) state(ctx context.Context) (*State, error) {
 
 func (s *session) execute(ctx context.Context, c config.Television, cmd Command, r *Result) error {
 	switch cmd.Action {
+	case "channels", "channel_current", "channel_program", "channel_select":
+		return s.executeChannels(ctx, cmd, r)
 	case "status":
 		state, err := s.state(ctx)
 		if err != nil {

@@ -40,6 +40,10 @@ RECORD_INTEGERS = {
 RECORD_ENUMS = {"stage": ("loading", "playing", "bound", "streaming"),
                 "load_state": ("pending", "complete", "failed"),
                 "feed_state": ("none", "accepting", "full", "refused", "holding", "empty")}
+PRIME_INTEGERS = ("prime_required_runway_ms", "prime_accepted_video_ms",
+                  "prime_accepted_audio_ms", "prime_queued_video_ms", "prime_queued_audio_ms")
+PRIME_BOOLEANS = ("prime_pending", "prime_external_lease", "prime_audio_expected")
+PRIME_FIELDS = frozenset((*PRIME_INTEGERS, *PRIME_BOOLEANS, "prime_kind"))
 
 
 class InvalidData(ValueError):
@@ -148,13 +152,21 @@ def request(params):
 
 
 def record(value):
-    exact(value, set(RECORD_INTEGERS) | set(RECORD_ENUMS))
+    check(type(value) is dict)
+    prime = bool(set(value) & PRIME_FIELDS)
+    exact(value, set(RECORD_INTEGERS) | set(RECORD_ENUMS) | (PRIME_FIELDS if prime else set()))
     for key, (minimum, maximum, nullable) in RECORD_INTEGERS.items():
         if nullable and value[key] is None:
             continue
         integer(value[key], minimum, maximum)
     for key, values in RECORD_ENUMS.items():
         check(isinstance(value[key], str) and value[key] in values)
+    if prime:
+        for key in PRIME_INTEGERS:
+            integer(value[key], 0, 86400000)
+        for key in PRIME_BOOLEANS:
+            check(type(value[key]) is bool)
+        check(value["prime_kind"] in ("none", "fresh", "rebuffer", "resume"))
     return dict(value)
 
 
