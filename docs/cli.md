@@ -3375,6 +3375,13 @@ slots selected by `ott PLAYER profile N`. Names are case-insensitive, contain
 1–32 ASCII letters, digits, underscores or hyphens, and start with a letter or
 digit. Use `ott PLAYER play load` to select a channel literally named `load`.
 
+A named setup applies its supported provider configuration; it is not a full
+application-settings backup. A successful `load` does not confirm transfer of
+arbitrary playback or interface preferences. Use `ott PLAYER settings schema`
+to discover application preferences and `ott PLAYER setting KEY VALUE` to save
+one supported preference. The schema lists descriptors, not saved values.
+Local `profile import/export` transfers portable media-source profiles instead.
+
 Add `presets` to the existing private `~/.config/ottplay-control/cli.json`, keeping
 its controller settings and player aliases. This example shows the object to add;
 replace the example addresses and credential placeholders before use:
