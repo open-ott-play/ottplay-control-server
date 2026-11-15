@@ -2101,6 +2101,14 @@ If a playback request times out, inspect `ott l plex status` before retrying:
 the request may already have been accepted. A new `plex shuffle` invocation
 creates a new order and starts a new queue.
 
+An HTTP 400 or 404 while reading player capabilities identifies a controller
+API failure before the Plex library request is sent. Check the configured
+controller address and reverse proxy routing; this response alone does not
+establish that the player needs an update. If the failure occurs on the library
+request instead, the CLI reports that stage and does not repeat it. A missing
+receipt after submission remains an uncertain outcome: inspect playback status
+before sending another change.
+
 `plex shuffle NAME` is short for `plex library --shuffle NAME`. Command tokens
 and options are case-insensitive. The player first matches an exact library
 title ignoring case, then a unique title substring. Ambiguous matches fail;

@@ -263,6 +263,38 @@ class PlexLibraryTest(unittest.TestCase):
             self.assertEqual((code, out, len(calls)), (1, '', 2))
             self.assertNotIn(SECRET, err)
 
+    def test_capability_http_failure_reports_api_stage_without_sending_library(self):
+        for status in (400, 404):
+            with self.subTest(status=status):
+                code, out, err, calls = self.run_cli(['plex', 'shuffle', 'Три кота'], [ott.HTTPError(status)])
+                self.assertEqual((code, out), (1, ''))
+                self.assertEqual(calls, [mock.call('dev_tv', 'capabilities', {})])
+                self.assertIn(f'HTTP {status} while reading player capabilities', err)
+                self.assertIn('reverse proxy routing', err)
+                self.assertIn('No Plex library request was sent', err)
+                self.assertNotIn('update it and the player', err)
+
+    def test_library_http_rejection_does_not_retry_or_claim_missing_player_support(self):
+        for status in (400, 404):
+            with self.subTest(status=status):
+                code, out, err, calls = self.run_cli(['plex', 'shuffle', 'Три кота'], [caps(), ott.HTTPError(status)])
+                self.assertEqual((code, out, len(calls)), (1, '', 2))
+                self.assertEqual(calls[-1].args[1], 'plex_library')
+                self.assertIn(f'HTTP {status} for the Plex library request', err)
+                self.assertIn('The request was not repeated', err)
+                self.assertNotIn('No Plex library request was sent', err)
+                self.assertNotIn('update it and the player', err)
+
+    def test_missing_receipt_keeps_uncertain_outcome_and_does_not_retry(self):
+        failure = ott.RequestError('receipt_missing', 'receipt',
+                                   'The request receipt has expired or is missing. '
+                                   'The request may have been executed; do not repeat the change blindly.', 'a' * 32)
+        code, out, err, calls = self.run_cli(['plex', 'shuffle', 'Три кота'], [caps(), failure])
+        self.assertEqual((code, out, len(calls)), (1, '', 2))
+        self.assertIn('may have been executed', err)
+        self.assertNotIn('No Plex library request was sent', err)
+        self.assertNotIn('update it and the player', err)
+
     def test_one_total_deadline_is_not_reset(self):
         client = mock.Mock(timeout=45)
         client.call.return_value = caps()

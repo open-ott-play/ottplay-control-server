@@ -5117,7 +5117,12 @@ def plex_library_command(client, device, params, timeout):
         raise Error("Plex library commands require an updated player and controller advertising plex_library. The request was not repeated") from None
     except HTTPError as exc:
         if exc.code in (400, 404):
-            raise Error("This controller does not accept Plex library requests; update it and the player. The request was not repeated") from None
+            if runtime is None:
+                raise Error(f"Controller API returned HTTP {exc.code} while reading player capabilities. "
+                            "Check the controller address, reverse proxy routing and request compatibility. "
+                            "No Plex library request was sent") from None
+            raise Error(f"Controller API returned HTTP {exc.code} for the Plex library request. "
+                        "Check controller routing and request compatibility. The request was not repeated") from None
         raise
     finally:
         client.timeout = previous_timeout
