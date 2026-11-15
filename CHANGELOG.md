@@ -147,6 +147,31 @@
   explicit uncertainty recovery. Source examples do not establish that matching
   CLI, controller and player components are installed.
 
+## [0.1.12]
+
+### Fixed
+
+- Keep process liveness independent of registry publication. Return readiness
+  503 immediately while publication is active or pending, retaining the existing
+  recovery check and ordinary API admission rules.
+- Report the actual controller HTTP status and distinguish failed capability
+  discovery from a rejected Plex library request. A routing failure no longer
+  implies the player needs an update; uncertain requests are not repeated.
+
+### Upgrade
+
+- Install the complete CLI directory from one reviewed package, preserving the
+  existing private configuration and saved profiles. No profile migration is
+  required. Check controller API availability separately from player playback;
+  this release does not establish recovery from a node-wide outage.
+
+### Security
+
+- Health probes retain their existing unauthenticated, closed status responses.
+  Authentication, device admission and revocation barriers for ordinary API
+  operations are unchanged. Readiness remains unavailable while the registry
+  requires recovery or publication admission is busy.
+
 ## [0.1.11] - 2026-11-04
 
 ### Added
