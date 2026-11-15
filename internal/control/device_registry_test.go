@@ -736,3 +736,72 @@ func TestDeviceRegistryRejectsActiveHistoricalCredentialReuse(t *testing.T) {
 		t.Fatal("offline validation did not identify historical credential reuse", err)
 	}
 }
+
+// Probe responses must stay bounded while registry admission is exclusively held.
+// Readiness reports temporary unavailability; liveness does not restart a healthy
+// HTTP process merely because an unrelated registry publication is pending.
+func TestDeviceRegistryProbesDuringPublication(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want int
+	}{{"/healthz", 200}, {"/readyz", 503}} {
+		t.Run(tc.path, func(t *testing.T) {
+			s := registryTestServer(t, registryTestConfig(t))
+			s.registryGate.Lock()
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() { done <- request(s, "GET", tc.path, "", "", nil) }()
+			select {
+			case w := <-done:
+				s.registryGate.Unlock()
+				expect(t, w, tc.want)
+			case <-time.After(2 * time.Second):
+				s.registryGate.Unlock()
+				<-done
+				t.Fatal("probe waited for registry publication instead of replying")
+			}
+			expect(t, request(s, "GET", "/readyz", "", "", nil), 200)
+		})
+	}
+}
+
+func TestDeviceRegistryProbesWhilePublicationWaitsForReader(t *testing.T) {
+	s := registryTestServer(t, registryTestConfig(t))
+	s.registryGate.RLock()
+	writerDone := make(chan struct{})
+	go func() {
+		s.registryGate.Lock()
+		s.registryGate.Unlock()
+		close(writerDone)
+	}()
+	defer func() {
+		s.registryGate.RUnlock()
+		select {
+		case <-writerDone:
+		case <-time.After(2 * time.Second):
+			t.Error("registry publication did not finish after releasing the reader")
+		}
+	}()
+	// A failed TryRLock while our reader holds admission proves a writer is
+	// pending, without assuming when the writer goroutine gets scheduled.
+	deadline := time.Now().Add(2 * time.Second)
+	for s.registryGate.TryRLock() {
+		s.registryGate.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("registry writer did not become pending")
+		}
+		runtime.Gosched()
+	}
+	for _, tc := range []struct {
+		path string
+		want int
+	}{{"/healthz", 200}, {"/readyz", 503}} {
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- request(s, "GET", tc.path, "", "", nil) }()
+		select {
+		case w := <-done:
+			expect(t, w, tc.want)
+		case <-time.After(2 * time.Second):
+			t.Fatal("probe waited for a pending registry writer")
+		}
+	}
+}

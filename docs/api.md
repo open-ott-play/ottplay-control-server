@@ -49,7 +49,7 @@ enqueuing a player command. See the [player-state API and retention contract](pl
 
 `GET /api/devices` requires the administrator token and returns device IDs, pending queue counts and last device activity. Tokens and command payloads are omitted. Last activity is not proof of successful playback.
 
-`GET /healthz` and `GET /readyz` require no token and expose only process readiness. They do not probe a TV or provider. `ottplay-control-server healthcheck --url http://127.0.0.1:8081/readyz` supplies the container probe without a shell or curl.
+`GET /healthz` and `GET /readyz` require no token and do not probe a TV or provider. Liveness (`/healthz`) does not wait for registry admission. Readiness (`/readyz`) returns 503 immediately while registry publication is pending or active, and also returns 503 when the registry requires recovery. Once admission is available and the registry is usable, readiness returns 200. `ottplay-control-server healthcheck --url http://127.0.0.1:8081/readyz` supplies the container probe without a shell or curl.
 
 ## Physical television control
 

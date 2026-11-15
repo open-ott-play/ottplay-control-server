@@ -66,7 +66,7 @@ In another terminal, probe the listener:
 ./ottplay-control-server serve --help
 ```
 
-The executable has exactly five subcommands: `init`, `validate`, `serve`, `version`, and `healthcheck`. Each accepts `--help`. `healthcheck` defaults to `http://127.0.0.1:8081/healthz`, uses a five-second timeout, and succeeds only on HTTP 200 without following redirects. `/healthz` and `/readyz` report that the server responds; they do not prove a player is connected or playing.
+The executable has exactly five subcommands: `init`, `validate`, `serve`, `version`, and `healthcheck`. Each accepts `--help`. `healthcheck` defaults to `http://127.0.0.1:8081/healthz`, uses a five-second timeout, and succeeds only on HTTP 200 without following redirects. `/healthz` reports that the server responds without waiting for registry admission. `/readyz` returns 503 while registry publication is pending or active, or registry recovery is required. These probes do not prove a player is connected or playing. Registry activity must not cause liveness to block; readiness reports that temporary unavailability instead of waiting for the publication lock.
 
 For direct TLS, pass both `--tls-cert /private/server.crt` and `--tls-key /private/server.key` to `serve`, or terminate TLS at a reverse proxy. HTTPS players and diagnostic clients need an HTTPS endpoint with a trusted certificate. Keep the proxy's externally visible base path in the CLI/player address and route it to the server API without dropping or duplicating the prefix.
 

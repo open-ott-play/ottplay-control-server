@@ -357,7 +357,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.serveDeviceRegistry(w, r, path)
 		return
 	}
-	if s.registry != nil && path != "/api/pairings" && path != "/api/pairings/approve" && !(path == playerStatePath && r.Method == http.MethodPost) {
+	if s.registry != nil && path != "/healthz" && path != "/readyz" && path != "/api/pairings" && path != "/api/pairings/approve" && !(path == playerStatePath && r.Method == http.MethodPost) {
 		s.registryGate.RLock()
 		defer s.registryGate.RUnlock()
 	}
@@ -419,6 +419,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/healthz" || path == "/readyz" {
+		// A registry publication must not stall liveness or a readiness reply.
+		// Readiness stays unavailable until publication admission is available.
+		if path == "/readyz" && s.registry != nil {
+			if !s.registryGate.TryRLock() {
+				failure(w, 503, "device registry update in progress")
+				return
+			}
+			defer s.registryGate.RUnlock()
+		}
 		if snapshot := s.registryView.Load(); path == "/readyz" && snapshot != nil && snapshot.unavailable {
 			failure(w, 503, "device registry requires recovery")
 			return
