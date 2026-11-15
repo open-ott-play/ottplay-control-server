@@ -1,10 +1,17 @@
 # Multi-view control
 
-The controller and CLI implement the version 1 multi-view control contract.
-Usable operations depend on the selected player's advertised capabilities and
-its backend admission checks. Source integration tests are separate from LG
-hardware qualification. A nine-window layout or a finite composition test does
-not establish nine simultaneous native decoders.
+The controller and CLI implement the backend-neutral version 1 multi-view
+control contract. Usable operations depend on the selected player's advertised
+capabilities and actual decoder/resource admission. Local on-device decoding
+requires no external compositor, external-service pairing, service bearer or
+enrolled service catalog.
+
+The merged LG native implementation selects local decoding by default. Publication,
+installation and sustained physical LG playback remain separate qualification
+steps. Hosted concurrent-decoder and graphics/audio checks do not establish nine
+simultaneous HD streams on a television. See the native
+[integration and qualification guide](https://github.com/open-ott-play/ottplay-lg/blob/main/docs/native-multiview.md)
+for source and transport limits.
 
 This change does not install a player, enable a backend or publish a capability.
 Older players continue using their existing single-player commands. The named
@@ -37,7 +44,7 @@ ott l mv layout perimeter --satellites 8
 ott l mv layout single
 
 ott l mv sources 1
-ott l mv sources 2 --provider m3u --profile profile-home --search News
+ott l mv sources 2 --provider m3u --profile PROFILE_TOKEN_FROM_PLAYER --search News
 ott l mv sources 2 --cursor CURSOR_FROM_THE_PREVIOUS_PAGE
 ott l mv window 2 play TICKET_FROM_THIS_WINDOWS_SOURCE_LIST
 ```
@@ -47,17 +54,34 @@ conversion happens once at the CLI boundary. Perimeter mode has window 1 in the
 center and 0–8 satellites, defaulting to eight. Native code owns the geometry;
 CLI requests cannot supply arbitrary rectangles.
 
-Source tickets identify choices in a player-authorized snapshot. Provider and
-profile filters only narrow that read. A profile is an opaque saved-authority ID,
-not a numbered global profile slot. The current contract does not imply support
-for every inactive provider catalog, arbitrary URLs, local paths or Plex rating
-keys. Native source discovery and its broker must authorize each choice.
+Source tickets identify choices in a player-authorized snapshot. Each window
+can select its own authorized M3U, VPortal, Plex or Local source when native
+discovery and admission support it. Provider and profile filters only narrow
+that read. A profile is an opaque saved-authority ID, not a numbered global
+profile slot. The current contract does not imply support for every inactive
+provider catalog, arbitrary URLs, local paths or Plex rating keys. The native
+source resolver must authorize each choice.
 
 A source ticket or cursor belongs to its player, scene and window. Refreshing
 status does not renew an expired ticket. Re-list the intended window after an
 explicit stale-source rejection; do not move its ticket to another window.
 Source lists are bounded to 128 choices per page and return a cursor when more
-choices remain.
+choices remain. Apply each selected ticket before refreshing discovery. Local LG
+choices combine the captured current catalog and saved Favorites with their
+original provider/profile authority, bounded to 1152 entries. This is not a
+browser for every inactive provider catalog.
+
+For example, after selecting an advertised layout, assign independent sources:
+
+```sh
+ott l mv sources 1 --provider m3u
+ott l mv window 1 play TICKET_FROM_WINDOW_1
+ott l mv sources 2 --provider plex
+ott l mv window 2 play TICKET_FROM_WINDOW_2
+```
+
+Use `--provider vportal` or `--provider local` for other authorized choices.
+Tickets are returned by the player; the uppercase names above are placeholders.
 
 ## Focus, audio and stopping
 
@@ -68,17 +92,20 @@ ott l mv audio 2
 ott l mv audio follows-focus
 ott l mv audio off
 ott l mv window 2 stop
-ott l mv off
 ott l mv off restore_previous
 ```
 
 Focus selects the input owner. Audio has an explicit fixed-window, follows-focus
 or muted policy. Audio ownership is not evidence that decoded sound is audible,
-and TV master volume remains device-wide.
+and TV master volume remains device-wide. Local LG player volume/mute applies
+to the software audio owner; it does not change the television hardware volume.
 
 Stopping a window and leaving multi-view are distinct operations. The default
 exit mode requests promotion of the active window; restoring the prior playback
-requires separate advertised support. A backend may refuse shrinking a layout
+requires separate advertised support. Use explicit `ott l mv off restore_previous`
+for the initial local LG implementation: it does not advertise the CLI default
+`promote_active`. Restoration reauthorizes the captured ordinary source after
+scene retirement. A backend may refuse shrinking a layout
 with occupied windows until it can preserve their playback state.
 
 Each mutation reads a fresh scene snapshot and carries runtime, scene, layout,
@@ -94,6 +121,26 @@ retaining the selected source; it is distinct from a stalled stream or a stopped
 window. Starting, playing, paused and stalled windows must identify their source.
 The configured audio owner can remain selected while paused; that selection does
 not establish audible sound.
+
+## Pause and seek in local LG scenes
+
+On a compatible build, ordinary playback commands target the focused window:
+
+```sh
+ott l mv focus 2
+ott l pause
+ott l +10s
+ott l -1m
+ott l seek 1m30s
+ott l resume
+```
+
+Seek requires the opened reader to advertise seek support. Authorized local files
+and eligible progressive HTTP responses with byte ranges can support it; HLS
+windows do not. A seek while paused publishes a landing picture and remains
+paused. These examples require current advertised playback operations and local
+policy permission; they do not add a new multi-view wire operation. Bare `+10`
+or `-10` remains channel navigation rather than a time offset.
 
 ## Groups and uncertain outcomes
 
@@ -134,16 +181,37 @@ multiview.off
 Observers need only the applicable read permissions. Device scope and result
 ownership still apply. Responses are closed and bound to the original request;
 negative responses cannot mint fresh context or tickets. No raw media URLs,
-credentials, private filesystem paths or HLS lease secrets belong in this API.
+credentials, private filesystem paths, favorite payloads or HLS lease secrets
+belong in this API.
 
-### Installation-specific service binding
+### Backend selection
 
-Native builds may advertise `nativeMultiviewService` through the existing typed
-settings API. It is a sensitive application string containing a service binding
-provisioned for that specific installation. Use the operator-provided, compact
-single-line JSON file; the current settings contract permits at most 4096 UTF-8
-bytes. The native player must validate the binding against its persisted device
-identity before using the service.
+The public v1 schema is unchanged and has no backend selector field. The CLI
+does not require service enrollment or fall back automatically to an external
+service when local admission is unavailable.
+
+Only if the player's typed settings schema advertises `nativeMultiviewBackend`
+with the corresponding values, select the implementation through that separate
+settings API:
+
+```sh
+ott l setting nativeMultiviewBackend local
+ott l setting nativeMultiviewBackend service
+```
+
+Change the backend only while all scene work is idle; busy requests are rejected.
+`service` selects the optional legacy external implementation. A saved setting
+does not establish playback support; use the player's current capabilities.
+
+### Optional legacy external-service binding
+
+For the external service only, native builds may advertise
+`nativeMultiviewService` through the existing typed settings API. Local decoding
+does not require this setting. It is a sensitive application string containing
+a service binding provisioned for that specific installation. Use the
+operator-provided, compact single-line JSON file; the current settings contract
+permits at most 4096 UTF-8 bytes. The native player must validate the binding
+against its persisted device identity before using the service.
 
 ```sh
 ott l setting nativeMultiviewService --value-file /path/to/private-binding.json
@@ -191,12 +259,16 @@ Before a native endpoint advertises usable operations, integration must prove:
   closed wire schema. Internal slot/status names, source identity hashes and
   pipeline-admission fields are not serialized into public replies.
 - Source tickets and cursors belong to the authorized player, scene and window.
-  Discovery intersects native saved-source authority with a qualified backend
-  binding; it does not switch the global provider or profile.
+  Local discovery uses authorized saved sources and native decoder/resource
+  admission. Service enrollment and a qualified service binding apply only to
+  the optional external implementation. Neither switches the global provider
+  or profile.
 - The effect driver retains the original invocation and deadline across async
   work, rechecks generation, policy and revisions before effects, and connects
-  session lifecycle, source grants, output renewal, playback and cleanup.
-- Capability capacity and each operation reflect qualified backend support.
+  session lifecycle, source grants, playback and cleanup. The optional external
+  service also manages its output renewal.
+- Capability capacity and each operation reflect the player's qualified decoder
+  and resource support for the selected implementation.
   Frame progression, isolated source failure, audible-owner changes, cancellation
   and teardown require their own native/backend tests. A synthetic command
   receipt cannot substitute for those results or for LG hardware qualification.
@@ -210,8 +282,9 @@ Before a native endpoint advertises usable operations, integration must prove:
   replacement can invalidate a prepared command. Read the current state before
   deliberately issuing another change.
 - **Source expired/unavailable:** re-list authorized choices for that window.
-  Native-only USB, protected streams or unresolved Plex sources may require a
-  broker the backend does not provide.
+  Local mode needs native access and resolution for that source. The optional
+  external service can use only sources its broker is authorized to resolve;
+  configuring it does not grant access to native-only USB or protected streams.
 - **Requested but not playing:** use per-window status. One failed or stalled
   source must not be reported as a successful complete scene.
 - **Invalid metadata:** keep the matching controller, CLI and player contract
@@ -271,12 +344,14 @@ causes a mutation retry, source fallback or automatic rebinding. Read fresh
 status to inspect current state. The same rules apply independently to each
 player in a group.
 
-Provisioning remains installation-specific: use a dedicated service bearer and
-the exact durable remote device identity through the sensitive setting API.
-Read redacted storage/application metadata after writing; a stored binding with
-`apply: next_stream` is not positive backend qualification. Do not rewrite or
-toggle credentials to refresh a cached zero/failed backend probe. Native must
-provide a bounded safe requalification mechanism.
+For the optional external service, provisioning remains installation-specific:
+use a dedicated service bearer and the exact durable remote device identity
+through the sensitive setting API. Read redacted storage/application metadata
+after writing; a stored binding with `apply: next_stream` is not positive
+qualification. Do not rewrite or toggle service credentials to refresh a cached
+zero/failed probe. Native must provide a bounded safe requalification mechanism.
+Local mode requires no such service provisioning; its capabilities must reflect
+the available native decoders and resources.
 
 The additive fixture is [multiview-recovery-v1.json](../contracts/multiview-recovery-v1.json).
 Favorites remain separate: there is no multiview favorites command in this
