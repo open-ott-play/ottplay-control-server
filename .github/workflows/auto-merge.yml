@@ -37,7 +37,7 @@ jobs:
       contains(fromJSON('["4alvit","californiantiramisu","dependabot[bot]","renovate[bot]"]'), github.event.pull_request.user.login) &&
       contains(github.event.pull_request.labels.*.name, 'automerge') &&
       !github.event.pull_request.draft
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-merge.yml@f6ef8c9c4e949a242a7999e3b3b1bc50e5ff3077 # main
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-merge.yml@d42735efe245c1fa7ceba945a34b77d9d6b8176b # main
     with:
       reviewed-merge: true
       reviewed-single-pass: true
@@ -57,7 +57,7 @@ jobs:
     concurrency:
       group: automerge-reviewed-recovery-${{ github.repository }}
       cancel-in-progress: false
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-merge.yml@f6ef8c9c4e949a242a7999e3b3b1bc50e5ff3077 # main
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-merge.yml@d42735efe245c1fa7ceba945a34b77d9d6b8176b # main
     with:
       reviewed-merge: true
       reviewed-single-pass: true
