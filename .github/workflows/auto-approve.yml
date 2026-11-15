@@ -30,7 +30,7 @@ jobs:
       !github.event.pull_request.draft
     # Metadata only; the pinned helper never checks out or executes PR code.
     # Include the existing owned Renovate account; keep the automerge opt-in.
-    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-approve-reusable.yml@4774181674f4a1a18488bfc918b4c5ed1df39163 # main
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-approve-reusable.yml@f6ef8c9c4e949a242a7999e3b3b1bc50e5ff3077 # main
     with:
       authors: '["4alvit","californiantiramisu","dependabot[bot]","renovate[bot]"]'
     secrets:
