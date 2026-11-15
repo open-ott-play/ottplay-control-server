@@ -18,8 +18,12 @@ Do not share one token between active players: they would compete for the same
 command queue.
 
 For capability-gated layouts, per-window source selection, focus and audio,
-see [Multi-view control](multiview.md). Negotiated scene cleanup uses `ott NAME mv window N stop` or `ott NAME mv off close_only` with fresh scene bindings; it does not grant new playback capacity. These commands require a compatible
-player and an admitted backend; CLI installation alone does not enable them.
+see [Multi-view control](multiview.md). Local on-device decoding needs no external
+compositor or service enrollment. Available operations still require a compatible
+player advertising its actual decoder/resource capacity; installing the CLI
+alone does not establish native playback support. Negotiated scene cleanup uses
+`ott NAME mv window N stop` or `ott NAME mv off close_only` with fresh scene
+bindings; it does not grant new playback capacity.
 
 For opt-in performance recording, bounded export and guarded notification A–B–A
 trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
