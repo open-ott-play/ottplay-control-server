@@ -6023,20 +6023,39 @@ def detailed_status(client, device, deadline):
         client.timeout = previous_timeout
 
 
+RESTART_HELP = {
+    "reload_player": ("restart", "reload the player (alias: restart player)"),
+    "restart_stream": ("restart stream", "restart only the current stream (alias: restart s)"),
+    "restart_app": ("restart app", "relaunch the native app"),
+}
+
+
+def print_restart_reference(controls, name):
+    missing = [row for operation, row in RESTART_HELP.items()
+               if controls is None or operation not in controls["lifecycle"]]
+    if not missing:
+        return
+    state = "support could not be checked" if controls is None else "not advertised now"
+    print(f"\nRestart command reference ({state}):")
+    prefix = "ott " + shlex.quote(clean(name))
+    for command, description in missing:
+        print(f"  {prefix} {command}  — {description} [{state}]")
+    print("  Reference only: availability depends on the platform and current playback; these commands may be rejected.")
+
+
 def print_player_help(data, name):
     quoted_name = shlex.quote(clean(name))
     prefix = "ott " + quoted_name
     controls = data["capabilities"]
     if controls is None:
         print(data["capabilities_error"])
+        print_restart_reference(None, name)
         print(f"Local diagnostic help: {prefix} test list")
         print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
         return
     native = controls.get("player", {}).get("platform") == "webos-native"
     lifecycle = {
-        "reload_player": ("restart", "reload the player (alias: restart player)"),
-        "restart_stream": ("restart stream", "restart only the current stream (alias: restart s)"),
-        "restart_app": ("restart app", "relaunch the native app"),
+        **RESTART_HELP,
         "standby": ("standby", "stop playback and enter standby; stay connected (alias: stop)"),
         "wake": ("go", "leave standby and start configured playback (aliases: start, wake)"),
         "exit_app": ("exit", "exit the app"),
@@ -6314,6 +6333,7 @@ def print_player_help(data, name):
             print(f"  {prefix} test run media-progress --report DIR  — observe decoder progress")
         if "operation" in sections:
             print(f"  {prefix} operation REQUEST_ID  — inspect a recent operation")
+    print_restart_reference(controls, name)
     print(f"Local diagnostic help: {prefix} test list")
     print(f"Request IDs: ott --receipt {quoted_name} COMMAND  — write RPC receipts to stderr")
     print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
