@@ -8485,6 +8485,9 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
                 raise Error("Player status exceeded --timeout")
             client.timeout = remaining
             data = client.call(device, action, params)
+        except Error:
+            print_restart_reference(None, args.words[0])
+            raise
         finally:
             client.timeout = previous_timeout
     else:

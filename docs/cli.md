@@ -785,7 +785,8 @@ Each reference line includes its availability label so filtering with `grep`
 keeps that context. The reference is not an availability claim. Platform, playback state and local
 policy still determine whether a request is accepted; it does not add operations
 to `--json` output or send a restart while reading status. If capability discovery
-fails, the reference explicitly says support could not be checked.
+or the status read fails, the reference explicitly says support could not be
+checked. A failed status read keeps its original error and nonzero exit code.
 
 For a supported native player's extended failure report:
 

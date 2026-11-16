@@ -493,8 +493,12 @@ class StatusCliTest(unittest.TestCase):
             self.assertEqual(out.count('ott tv ' + command + '  —'), 1)
 
     def test_status_failure_never_submits_capabilities_request(self):
-        code, _, _, client = self.run_cli([], ott.Error('offline'), self.capabilities())
+        code, out, err, client = self.run_cli([], ott.Error('offline'), self.capabilities())
         self.assertEqual(code, 1)
+        self.assertIn('Error: offline', err)
+        self.assertIn('Restart command reference (support could not be checked):', out)
+        self.assertIn('ott tv restart stream', out)
+        self.assertIn('[support could not be checked]', out)
         self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'status', {})])
 
     def test_secondary_call_uses_only_remaining_budget_and_restores_timeout(self):
