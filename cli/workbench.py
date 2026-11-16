@@ -142,19 +142,59 @@ def debug_native(value):
         "webviewVersion": nullable(version_label), "metrics": debug_metrics(NATIVE_NUMBERS, NATIVE_BOOLS)})}
 
 
+# Stable closed codes shared with performance capture's HLS policy vocabulary.
+DEBUG_ERROR_DETAILS = (
+    "manifest_load_error manifest_load_timeout level_load_error level_load_timeout level_empty_error "
+    "frag_load_error frag_load_timeout frag_parsing_error buffer_append_error buffer_stalled_error "
+    "buffer_nudge_on_stall buffer_seek_over_hole other buffer_full_error internal_exception "
+    "buffer_append_no_progress buffer_add_codec_error"
+).split()
+
+
+def strongest_debug_version(caps):
+    """Select once from validated capabilities; never retry a rejected version."""
+    if caps.get("debug_attempt_errors") == {"version": 4}:
+        return 4
+    if caps.get("debug_attempts") == {"version": 3}:
+        return 3
+    return 2 if caps.get("debug_versions") == [1, 2] else 1
+
+
+def debug_attempt_errors(value):
+    error = {"sequence": number(1, SAFE_INTEGER, True), "elapsedMs": nullable(number()),
+             "engine": enum(["hls.js", "html5", "shaka", "unknown"]),
+             "type": enum(["network", "media", "mux", "key_system", "manifest", "other"]),
+             "detail": enum(DEBUG_ERROR_DETAILS), "fatal": boolean,
+             "httpStatus": nullable(number(100, 599, True)), "mediaErrorCode": nullable(number(1, 4, True))}
+    result = exact(value, {"firstFatal": nullable(lambda row: exact(row, error)),
+                           "latest": nullable(lambda row: exact(row, error)),
+                           "observed": number(integral=True), "dropped": number(integral=True)})
+    first, latest = result["firstFatal"], result["latest"]
+    check(result["dropped"] <= result["observed"])
+    check(result["observed"] != 0 or first is None and latest is None)
+    check(first is None or first["fatal"] and latest is not None and first["sequence"] <= latest["sequence"])
+    if first is not None and first["sequence"] == latest["sequence"] < SAFE_INTEGER:
+        check(first == latest)
+    for row in (first, latest):
+        check(row is None or row["sequence"] <= result["observed"])
+    return result
+
+
 def debug_metadata(raw, runtime, version=1):
-    check(type(version) is int and version in (1, 2, 3))
+    check(type(version) is int and version in (1, 2, 3, 4))
     lane = {"lane": enum(["main", "pip"]), "generation": nullable(number(integral=True)),
             "handleId": nullable(number(integral=True)),
             "metrics": debug_metrics(MEDIA_NUMBERS, MEDIA_BOOLS, {"volume": 1, "readyState": 4, "networkState": 3, "mediaErrorCode": 4})}
     if version >= 2:
         lane["engine"] = nullable(enum(["hls.js", "shaka", "html5"]))
-    if version == 3:
+    if version >= 3:
         attempt = {key: number(integral=True) for key in
                    ("attachment", "engineStarts", "fatalErrors", "nativeFallbacks", "streamRetries")}
+        if version == 4:
+            attempt["errors"] = debug_attempt_errors
         lane["attempt"] = nullable(lambda value: exact(value, attempt))
         retired = dict(attempt, handleId=number(integral=True), generation=nullable(number(integral=True)),
-                       reason=enum(["ended", "disposed", "suspended"]))
+                       reason=enum(["ended", "disposed", "suspended"] + (["failed"] if version == 4 else [])))
         lane["lastAttempt"] = nullable(lambda value: exact(value, retired))
     result = exact(inspection_data(raw, runtime, "debug", version), {
         "version": number(version, version, True), "runtime": token, "capturedAt": number(integral=True),
@@ -200,7 +240,7 @@ SNAPSHOT = {
 
 
 def inspection_data(raw, runtime, section, version=1):
-    check(type(version) is int and (version == 1 or version in (2, 3) and section == "debug"))
+    check(type(version) is int and (version == 1 or version in (2, 3, 4) and section == "debug"))
     check(isinstance(raw, dict) and raw.get("version") == version and type(raw.get("version")) is int)
     check(set(raw) == {"version", "runtime", "section", "error" if "error" in raw else "data"})
     limit = 4096 if section == "native_playback" else 32768
@@ -640,16 +680,16 @@ class Workbench:
                              "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", []))
                 if not supported:
                     raise ObservationError("unsupported")
-                if section == "debug" and debug_version == "auto":
-                    # Bundles preserve the richest explicitly advertised evidence.
-                    # This is selection before dispatch, never a retry/downgrade.
-                    debug_version = 2 if caps.get("debug_versions") == [1, 2] else 1
-                if section == "debug" and debug_version == 2 and caps.get("debug_versions") != [1, 2]:
-                    raise ObservationError("unsupported")
-                if section == "debug" and debug_version == 2 and caps.get("debug_attempts") == {"version": 3}:
-                    debug_version = 3
-                if section == "debug" and debug_version == 3 and caps.get("debug_attempts") != {"version": 3}:
-                    raise ObservationError("unsupported")
+                if section == "debug":
+                    strongest = strongest_debug_version(caps)
+                    if debug_version == "auto":
+                        debug_version = strongest
+                    elif debug_version == 2:
+                        if strongest < 2:
+                            raise ObservationError("unsupported")
+                        debug_version = strongest
+                    elif debug_version > strongest:
+                        raise ObservationError("unsupported")
                 if section == "local_source":
                     raw = self.request(self.device, "status", {}, deadline, receipts)
                     data = local_source_metadata(raw, caps["player"]["runtime"])
@@ -910,7 +950,7 @@ def arguments(words, json_output):
         parser.add_argument("--provider", action="store_true", help="combine provider lookup evidence, media state and engine diagnostics")
         parser.add_argument("--out", help="save the provider diagnostic report in a new private directory")
     if command == "debug":
-        parser.add_argument("--engine", action="store_true", help="request attached-engine evidence, negotiated v3 attempt counters and cached companion evidence when advertised")
+        parser.add_argument("--engine", action="store_true", help="request attached-engine evidence, negotiated attempt counters and safe errors and cached companion evidence when advertised")
         parser.add_argument("--native-playback", action="store_true", help="read one passive native playback sample with measured counters and event ages")
         parser.add_argument("--local-source", action="store_true", help="read assigned and attached Local source identity without reading media")
         parser.add_argument("--preparation", action="store_true", help="read one passive playback preparation and pending retry snapshot without probing media")
@@ -1016,8 +1056,29 @@ def print_provider_summary(result):
         if row.get("status") != "observed":
             print("Engine evidence: unavailable (" + row.get("reason", "unavailable") + ").")
         else:
+            print_debug_error_summary(row["data"])
             for lane in row["data"]["media"]:
                 print("Engine / " + lane["lane"] + ": " + str(lane.get("engine") or "not reported") + ".")
+
+
+def print_debug_error_summary(data):
+    if data.get("version") != 4:
+        return
+    for lane in data["media"]:
+        for name in ("attempt", "lastAttempt"):
+            attempt = lane[name]
+            label = "  Error evidence / " + lane["lane"] + " / " + name
+            if attempt is None:
+                print(label + ": unavailable.")
+                continue
+            errors = attempt["errors"]
+            for slot in ("firstFatal", "latest"):
+                error = errors[slot]
+                if error is None:
+                    print(label + " / " + slot + ": unavailable.")
+                else:
+                    print(label + " / " + slot + ": " + error["engine"] + "; " + error["type"] +
+                          "; " + error["detail"] + "; fatal=" + str(error["fatal"]).lower() + ".")
 
 
 def run(api, client, device, words, timeout, json_output=False):
@@ -1156,6 +1217,8 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Reason: " + result["reason"])
         for row in result.get("observations", []):
             print("  " + row["lane"] + ": " + row["status"] + (" (" + row["reason"] + ")" if row.get("reason") else ""))
+            if command == "debug" and row["status"] == "observed" and not (native_playback_mode or preparation_mode or local_source_mode or provider_mode):
+                print_debug_error_summary(row["data"])
             if native_playback_mode and row["status"] == "observed":
                 print_native_playback_summary(row["data"], row["runtime"])
             if preparation_mode and row["status"] == "observed":

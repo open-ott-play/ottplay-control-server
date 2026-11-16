@@ -5951,6 +5951,13 @@ def capabilities_metadata(data):
                 or attempts["version"] != 3):
             raise Error(invalid)
         result["debug_attempts"] = {"version": 3}
+    if "debug_attempt_errors" in data:
+        errors = data["debug_attempt_errors"]
+        if (result.get("debug_attempts") != {"version": 3} or not isinstance(errors, dict)
+                or set(errors) != {"version"} or type(errors["version"]) is not int
+                or errors["version"] != 4):
+            raise Error(invalid)
+        result["debug_attempt_errors"] = {"version": 4}
     if "perf_capture" in data:
         capture = data["perf_capture"]
         expected = {"version": 1, "default_duration_seconds": 120, "max_duration_seconds": 600,
