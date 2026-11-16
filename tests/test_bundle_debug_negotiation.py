@@ -18,10 +18,12 @@ def versioned_debug(version):
     for lane in value["media"]:
         if version >= 2:
             lane["engine"] = "hls.js"
-        if version == 3:
+        if version >= 3:
             lane["attempt"] = {"attachment": 1, "engineStarts": 2, "fatalErrors": 1,
                                "nativeFallbacks": 0, "streamRetries": 1}
             lane["lastAttempt"] = None
+            if version == 4:
+                lane["attempt"]["errors"] = {"firstFatal": None, "latest": None, "observed": 0, "dropped": 0}
     return value
 
 
@@ -30,8 +32,10 @@ class NegotiatingClient(DebugClient):
         super().__init__(clock)
         if version >= 2:
             self.capabilities["debug_versions"] = [1, 2]
-        if version == 3:
+        if version >= 3:
             self.capabilities["debug_attempts"] = {"version": 3}
+        if version == 4:
+            self.capabilities["debug_attempt_errors"] = {"version": 4}
         self.debug_failure = None
         self.debug_override = None
 
@@ -66,7 +70,7 @@ class BundleDebugNegotiationTest(unittest.TestCase):
         return [call for call in client.calls if call[1] == "inspect" and call[2]["section"] == "debug"]
 
     def test_bundle_selects_strongest_exact_advertised_version_and_retains_capabilities(self):
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             with self.subTest(version=version):
                 client = NegotiatingClient(self.clock, version)
                 code, report = self.bundle(client)
@@ -83,7 +87,7 @@ class BundleDebugNegotiationTest(unittest.TestCase):
                 self.assertEqual(client.timeout, 20)
 
     def test_ordinary_debug_stays_v1_and_engine_keeps_explicit_negotiation(self):
-        for advertised in (1, 2, 3):
+        for advertised in (1, 2, 3, 4):
             client = NegotiatingClient(self.clock, advertised)
             code, report = self.execute(client, ["debug"])
             self.assertEqual((code, report["observations"][0]["data"]["version"]), (0, 1))
@@ -142,7 +146,7 @@ class BundleDebugNegotiationTest(unittest.TestCase):
         self.assertTrue(all(call[0] == "native" for call in client.calls))
 
     def test_negotiated_bundles_verify_offline_including_unknown_debug(self):
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             with self.subTest(version=version):
                 _, report = self.bundle(NegotiatingClient(self.clock, version))
                 checked = verify.evaluate_report(report, ott, wb)

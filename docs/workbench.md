@@ -223,8 +223,9 @@ capability. An older controller reports `unsupported_controller`, without retry
 or a fallback to playback commands. `ott a1 play debug` still searches that title.
 
 Use `ott a1 debug --engine --json` to request the attached playback engine with
-debug schema version 2, or version 3 when the player additionally advertises
-`debug_attempts: {"version":3}`. Both require an updated controller and the
+debug schema version 2, version 3 with `debug_attempts: {"version":3}`, or
+version 4 with the additional `debug_attempt_errors: {"version":4}` marker.
+These require an updated controller and the
 separate `debug_versions: [1, 2]` capability. Each HTML media lane
 then includes `engine`: `hls.js`, `shaka`, `html5`, or null when no current attached
 engine can be observed. This describes actual ownership, not the selected player
@@ -243,9 +244,48 @@ request is reported without retrying or silently downgrading. The legacy
 `debug_versions` array stays unchanged so older controllers/CLIs can keep using
 their supported schemas.
 
+### Retained playback errors (debug v4)
+
+```sh
+ott t2 debug --engine --json
+ott t2 bundle --out ./t2-diagnostics
+ott report verify ./t2-diagnostics --json
+```
+
+Version 4 adds a closed `errors` object to each available current and retired
+attempt: `firstFatal`, `latest`, `observed`, and `dropped`. The first fatal slot
+survives retries and engine fallback within that attachment; the latest slot
+can describe a later nonfatal error. Each slot identifies the engine at the
+error, a fixed error type/detail, fatality, a sequence, optional elapsed time,
+optional HTTP status, and optional HTML media error code. It never includes
+URLs, headers, response bodies, messages, stacks, or arbitrary engine objects.
+Unknown source strings become `other`; unavailable measurements remain null.
+V4 also preserves the retired reason `failed`; v3 continues to report that
+reason as `disposed` for compatibility.
+
+These observations help distinguish manifest, transport, demux and buffer
+failures. An error category alone does not establish the root cause or prove
+that frames were displayed. No saved error does not prove error-free playback.
+Compare evidence only within its runtime, lane, handle, generation and
+attachment. A new attachment can replace the retained attempt. The snapshot
+remains bounded to 16 KiB and two lanes; this read starts no continuous capture.
+The exact fields, codebook, limits and examples are in
+[`runtime-debug-v4.json`](../contracts/runtime-debug-v4.json).
+
+All previous capability markers and v1–v3 responses remain unchanged. V4 is
+requested only when the exact new marker and its v3 prerequisites are present.
+A rejected or timed-out request is reported without a lower-version retry.
+Older players keep their supported version; older clients can keep using v3.
+The separate native `playback_failure_versions` protocol is unchanged.
+For a controlled reproduction with a live HLS engine, the existing
+[HLS policy capture](performance-capture.md#hls-buffer-policy-and-retry-evidence)
+can collect safe error events before v4 is installed; it cannot recover past
+uncaptured errors.
+
 Bundles without provider diagnostics use evaluator `workbench-v4` and keep exactly `manifest.json` and
-`result.json`. They request debug v3 when both `debug_versions: [1, 2]` and
-`debug_attempts: {"version":3}` are advertised, otherwise v2 with
+`result.json`. They request debug v4 when `debug_attempt_errors: {"version":4}` and its
+v3 prerequisites are advertised, otherwise v3 with both
+`debug_versions: [1, 2]` and `debug_attempts: {"version":3}`, otherwise v2 with
 `debug_versions: [1, 2]`, or v1 with the base debug capability. A rejected request
 stays unknown; it is not retried with a lower version. The result contains
 separate `debug_observations`; a native-only bundle has an empty array.
@@ -495,7 +535,7 @@ well as the integrity field; intact files can still contain invalid evidence.
 
 Provider reports and provider-capable bundles use `workbench-v5`; other new
 bundle reports use `workbench-v4`. Bundles negotiate
-debug v3 (engine and attempts), v2 (engine) or v1 according to the player's
+debug v4 (retained safe errors), v3 (engine and attempts), v2 (engine) or v1 according to the player's
 advertised capabilities. This does not start a performance capture. Test reports
 use `workbench-v2`; older v2/v3/v4 bundles remain supported. Reports without that
 field use the supported legacy web evaluator; old native-only progress reports

@@ -1,0 +1,208 @@
+{
+  "version": 4,
+  "capabilities": {
+    "debug": {
+      "version": 1
+    },
+    "debug_versions": [
+      1,
+      2
+    ],
+    "debug_attempts": {
+      "version": 3
+    },
+    "debug_attempt_errors": {
+      "version": 4
+    }
+  },
+  "max_snapshot_bytes": 16384,
+  "max_lanes": 2,
+  "max_events": 32,
+  "safe_integer": 9007199254740991,
+  "attempt_fields": [
+    "attachment",
+    "engineStarts",
+    "fatalErrors",
+    "nativeFallbacks",
+    "streamRetries",
+    "errors"
+  ],
+  "last_attempt_fields": [
+    "attachment",
+    "engineStarts",
+    "fatalErrors",
+    "nativeFallbacks",
+    "streamRetries",
+    "handleId",
+    "generation",
+    "reason",
+    "errors"
+  ],
+  "retired_reasons": [
+    "ended",
+    "disposed",
+    "suspended",
+    "failed"
+  ],
+  "nullable_fields": [
+    "attempt",
+    "lastAttempt",
+    "generation"
+  ],
+  "request": {
+    "action": "inspect",
+    "params": {
+      "version": 4,
+      "runtime": "page-one",
+      "section": "debug"
+    }
+  },
+  "response": {
+    "version": 4,
+    "runtime": "page-one",
+    "section": "debug",
+    "data": {
+      "version": 4,
+      "runtime": "page-one",
+      "capturedAt": 1000000,
+      "platform": "browser",
+      "metrics": {
+        "visible": true
+      },
+      "media": [
+        {
+          "lane": "main",
+          "generation": 8,
+          "handleId": 10,
+          "metrics": {
+            "paused": false,
+            "totalFrames": 0
+          },
+          "engine": "hls.js",
+          "attempt": {
+            "attachment": 1,
+            "engineStarts": 3,
+            "fatalErrors": 2,
+            "nativeFallbacks": 1,
+            "streamRetries": 1,
+            "errors": {
+              "firstFatal": null,
+              "latest": null,
+              "observed": 0,
+              "dropped": 0
+            }
+          },
+          "lastAttempt": {
+            "attachment": 1,
+            "engineStarts": 3,
+            "fatalErrors": 2,
+            "nativeFallbacks": 1,
+            "streamRetries": 1,
+            "handleId": 9,
+            "generation": 7,
+            "reason": "failed",
+            "errors": {
+              "firstFatal": {
+                "sequence": 1,
+                "elapsedMs": 1200,
+                "engine": "hls.js",
+                "type": "media",
+                "detail": "buffer_append_error",
+                "fatal": true,
+                "httpStatus": null,
+                "mediaErrorCode": null
+              },
+              "latest": {
+                "sequence": 1,
+                "elapsedMs": 1200,
+                "engine": "hls.js",
+                "type": "media",
+                "detail": "buffer_append_error",
+                "fatal": true,
+                "httpStatus": null,
+                "mediaErrorCode": null
+              },
+              "observed": 1,
+              "dropped": 0
+            }
+          }
+        }
+      ],
+      "events": [],
+      "eventsDropped": 0,
+      "native": {
+        "state": "unsupported",
+        "data": null
+      }
+    }
+  },
+  "legacy_parser": {
+    "source_revision": "5166858e8a1c4e2cd6accad6ee53c7b59adab68a",
+    "path": "tests/fixtures/capabilities_metadata_5166858.txt",
+    "sha256": "0c71ca9b3e44872a344adaf542d08c99188a6f6832e6aa4447a1cca4ebabdfba"
+  },
+  "max_error_slots_per_attempt": 2,
+  "max_error_slots_per_snapshot": 8,
+  "error_summary_fields": [
+    "firstFatal",
+    "latest",
+    "observed",
+    "dropped"
+  ],
+  "error_fields": [
+    "sequence",
+    "elapsedMs",
+    "engine",
+    "type",
+    "detail",
+    "fatal",
+    "httpStatus",
+    "mediaErrorCode"
+  ],
+  "error_engines": [
+    "hls.js",
+    "html5",
+    "shaka",
+    "unknown"
+  ],
+  "error_types": [
+    "network",
+    "media",
+    "mux",
+    "key_system",
+    "manifest",
+    "other"
+  ],
+  "error_details": [
+    "manifest_load_error",
+    "manifest_load_timeout",
+    "level_load_error",
+    "level_load_timeout",
+    "level_empty_error",
+    "frag_load_error",
+    "frag_load_timeout",
+    "frag_parsing_error",
+    "buffer_append_error",
+    "buffer_stalled_error",
+    "buffer_nudge_on_stall",
+    "buffer_seek_over_hole",
+    "other",
+    "buffer_full_error",
+    "internal_exception",
+    "buffer_append_no_progress",
+    "buffer_add_codec_error"
+  ],
+  "error_nullable_fields": [
+    "elapsedMs",
+    "httpStatus",
+    "mediaErrorCode"
+  ],
+  "error_invariants": [
+    "dropped <= observed",
+    "non-null error sequence is in 1..observed",
+    "firstFatal.fatal is true",
+    "non-null firstFatal requires latest and firstFatal.sequence <= latest.sequence",
+    "null slots mean unavailable, not absence of errors",
+    "equal firstFatal/latest sequences below safe_integer require semantically identical error fields; at safe_integer distinct observations may share the saturated sequence"
+  ]
+}

@@ -88,7 +88,7 @@ func validDebugSnapshot(raw json.RawMessage, runtime string) bool {
 }
 
 func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int) bool {
-	if version != 1 && version != 2 && version != 3 {
+	if version != 1 && version != 2 && version != 3 && version != 4 {
 		return false
 	}
 	if len(raw) > maxDebugSnapshotBytes {
@@ -112,7 +112,7 @@ func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int)
 		if version >= 2 {
 			keys = append(keys, "engine")
 		}
-		if version == 3 {
+		if version >= 3 {
 			keys = append(keys, "attempt", "lastAttempt")
 		}
 		lane, valid := inspectObject(rawLane, keys...)
@@ -125,7 +125,7 @@ func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int)
 		if version >= 2 && !inspectNull(lane["engine"]) && !inspectEnum(lane["engine"], "hls.js", "shaka", "html5") {
 			return false
 		}
-		if version == 3 && (!validDebugAttempt(lane["attempt"], false) || !validDebugAttempt(lane["lastAttempt"], true)) {
+		if version >= 3 && (!validDebugAttemptVersion(lane["attempt"], false, version) || !validDebugAttemptVersion(lane["lastAttempt"], true, version)) {
 			return false
 		}
 		name, _ := inspectString(lane["lane"], 8)
@@ -156,10 +156,17 @@ func validDebugSnapshotVersion(raw json.RawMessage, runtime string, version int)
 }
 
 func validDebugAttempt(raw json.RawMessage, retired bool) bool {
+	return validDebugAttemptVersion(raw, retired, 3)
+}
+
+func validDebugAttemptVersion(raw json.RawMessage, retired bool, version int) bool {
 	if inspectNull(raw) {
 		return true
 	}
 	keys := []string{"attachment", "engineStarts", "fatalErrors", "nativeFallbacks", "streamRetries"}
+	if version == 4 {
+		keys = append(keys, "errors")
+	}
 	if retired {
 		keys = append(keys, "handleId", "generation", "reason")
 	}
@@ -172,7 +179,14 @@ func validDebugAttempt(raw json.RawMessage, retired bool) bool {
 			return false
 		}
 	}
+	if version == 4 && !validDebugAttemptErrors(m["errors"]) {
+		return false
+	}
+	reasons := []string{"ended", "disposed", "suspended"}
+	if version == 4 {
+		reasons = append(reasons, "failed")
+	}
 	return !retired || (inspectNumber(m["handleId"], 0, inspectMaxInteger, true, false) &&
 		inspectNumber(m["generation"], 0, inspectMaxInteger, true, true) &&
-		inspectEnum(m["reason"], "ended", "disposed", "suspended"))
+		inspectEnum(m["reason"], reasons...))
 }

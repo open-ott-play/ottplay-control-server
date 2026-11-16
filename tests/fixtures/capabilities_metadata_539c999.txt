@@ -1,0 +1,449 @@
+def capabilities_metadata(data):
+    invalid = "The player returned invalid capabilities metadata"
+    if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1:
+        raise Error(invalid)
+    native_playback = "native_playback_diagnostics" in data
+    if native_playback:
+        marker = data["native_playback_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+    preparation = "playback_preparation_diagnostics" in data
+    if preparation:
+        marker = data["playback_preparation_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+    command_activity = "command_activity_diagnostics" in data
+    if command_activity:
+        marker = data["command_activity_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 2:
+            raise Error(invalid)
+    native_capture = None
+    if "native_playback_capture" in data:
+        try:
+            native_capture = native_playback_capture_module().capability(data["native_playback_capture"])
+        except ValueError:
+            raise Error(invalid) from None
+    native_provider = None
+    if "native_provider_settings" in data:
+        try:
+            native_provider = native_provider_settings_module().capability(data["native_provider_settings"])
+        except ValueError:
+            raise Error(invalid) from None
+    multiview = None
+    if "multiview" in data:
+        try:
+            multiview = multiview_module().capability(data["multiview"])
+        except ValueError:
+            raise Error(invalid) from None
+    player = data.get("player")
+    patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}",
+                "runtime": (r"[A-Za-z0-9_.:-]{1,64}" if multiview is not None else
+                            r"[A-Za-z0-9_.:-]{1,128}" if native_provider is not None else
+                            r"[A-Za-z0-9_.-]{1,96}" if native_playback or preparation or command_activity or native_capture is not None else r"[a-z0-9-]{1,64}")}
+    if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
+                                           for key, pattern in patterns.items()):
+        raise Error(invalid)
+    result = {"version": 1, "player": {key: player[key] for key in patterns}}
+    if "build_sha" in player:
+        if not valid_player_build_sha(player["build_sha"]):
+            raise Error(invalid)
+        result["player"]["build_sha"] = player["build_sha"]
+    if "plex_servers" in data:
+        if not plex_servers_token(player["runtime"], r"[a-z0-9-]{1,64}"):
+            raise Error(invalid)
+        result["plex_servers"] = plex_servers_capability(data["plex_servers"])
+    if native_playback:
+        result["native_playback_diagnostics"] = {"version": 1}
+    if preparation:
+        result["playback_preparation_diagnostics"] = {"version": 1}
+    if command_activity:
+        result["command_activity_diagnostics"] = {"version": 2}
+    if native_capture is not None:
+        result["native_playback_capture"] = native_capture
+    if native_provider is not None:
+        result["native_provider_settings"] = native_provider
+    if multiview is not None:
+        result["multiview"] = multiview
+    if "multiview_recovery" in data:
+        if multiview is None:
+            raise Error(invalid)
+        try:
+            result["multiview_recovery"] = multiview_module().recovery_capability(
+                data["multiview_recovery"], player["runtime"])
+        except ValueError:
+            raise Error(invalid) from None
+    if "playback_failure_versions" in data:
+        versions = data["playback_failure_versions"]
+        if (type(versions) is not list or versions != [2, 3]
+                or any(type(value) is not int for value in versions)):
+            raise Error(invalid)
+        result["playback_failure_versions"] = list(versions)
+    if "media_tracks" in data:
+        marker = data["media_tracks"]
+        if (type(marker) is not dict or set(marker) != {"version"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["media_tracks"] = {"version": 1}
+    if "provider_diagnostics" in data:
+        marker = data["provider_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+        result["provider_diagnostics"] = {"version": 1}
+    marker = data.get("local_source_diagnostics")
+    if (type(marker) is dict and set(marker) == {"version"}
+            and type(marker["version"]) is int and marker["version"] == 1):
+        # Optional passive evidence cannot invalidate otherwise usable controls.
+        result["local_source_diagnostics"] = {"version": 1}
+    marker = data.get("companion_diagnostics")
+    if (type(marker) is dict and set(marker) == {"version"}
+            and type(marker["version"]) is int and marker["version"] == 1):
+        # Optional cached evidence cannot invalidate otherwise usable controls.
+        result["companion_diagnostics"] = {"version": 1}
+    if "torrent_catalog" in data:
+        marker = data["torrent_catalog"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+        result["torrent_catalog"] = {"version": 1}
+    if "torrent_indexer" in data:
+        marker = data["torrent_indexer"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
+        result["torrent_indexer"] = {"version": 1}
+    if "torrent_indexer_children" in data:
+        marker = data["torrent_indexer_children"]
+        if ("torrent_indexer" not in result or type(marker) is not dict
+                or set(marker) != {"version", "operations", "scopedOperations"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or marker["operations"] != ["indexers"]
+                or marker["scopedOperations"] not in (["caps", "search"], ["search", "caps"])):
+            raise Error(invalid)
+        result["torrent_indexer_children"] = {
+            "version": 1, "operations": ["indexers"], "scopedOperations": ["caps", "search"]}
+    for key in ("playback_seek_relative", "playback_seek_archive_relative"):
+        if key in data:
+            marker = data[key]
+            if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+                raise Error(invalid)
+            result[key] = {"version": 1}
+    if "favorites_global_items" in data:
+        try:
+            result["favorites_global_items"] = favorites_module("global_favorites_items").validate_capability(data["favorites_global_items"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - capability values must not enter diagnostics
+            raise Error(invalid) from None
+    if "favorites_global_recovery" in data:
+        try:
+            result["favorites_global_recovery"] = favorites_module("global_favorites_recovery").validate_recovery_capability(data["favorites_global_recovery"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - capability values must not enter diagnostics
+            raise Error(invalid) from None
+    if "favorites_global" in data:
+        try:
+            result["favorites_global"] = favorites_module("global_favorites_protocol").validate_capability(data["favorites_global"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - capability values must not enter diagnostics
+            raise Error(invalid) from None
+    if "favorites_transfer_recovery" in data:
+        try:
+            result["favorites_transfer_recovery"] = favorites_module("favorites_protocol").validate_recovery_capability(data["favorites_transfer_recovery"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - invalid capability text must never escape
+            raise Error(invalid) from None
+    if "favorites_transfer" in data:
+        try:
+            result["favorites_transfer"] = favorites_module("favorites_protocol").validate_capability(data["favorites_transfer"])
+        except Error:
+            raise
+        except Exception:  # noqa: BLE001 - rejected capability values must not appear in diagnostics
+            raise Error(invalid) from None
+    if "standby" in player:
+        if type(player["standby"]) is not bool:
+            raise Error(invalid)
+        result["player"]["standby"] = player["standby"]
+    if "background" in player:
+        background = player["background"]
+        if (not isinstance(background, dict) or set(background) != {"state", "pending"}
+                or background.get("state") not in ("running", "suspending", "suspended", "unsupported", "error")
+                or (background.get("pending") is not None and
+                    (type(background["pending"]) is not int or not 0 <= background["pending"] <= 2147483647))):
+            raise Error(invalid)
+        result["player"]["background"] = dict(background)
+    if "player_settings_patch" in data:
+        patch = data["player_settings_patch"]
+        if (not isinstance(patch, dict) or set(patch) != {"version", "groups", "max_fields"}
+                or type(patch["version"]) is not int or patch["version"] != 1
+                or patch["groups"] != ["command_server", "local_http"]
+                or type(patch["max_fields"]) is not int or patch["max_fields"] != 3):
+            raise Error(invalid)
+        result["player_settings_patch"] = patch
+    if "plex_folders" in data:
+        folders = data["plex_folders"]
+        if (not isinstance(folders, dict) or set(folders) != {"version", "setting_id", "operations", "max_page_size", "max_items"}
+                or type(folders["version"]) is not int or folders["version"] != 1
+                or folders["setting_id"] != "plexFolderPaths"
+                or folders["operations"] != ["list", "add", "remove", "clear"]
+                or type(folders["max_page_size"]) is not int or folders["max_page_size"] != 10
+                or type(folders["max_items"]) is not int or folders["max_items"] != 1000):
+            raise Error(invalid)
+        result["plex_folders"] = folders
+    if "player_settings" in data:
+        settings = data["player_settings"]
+        if (not isinstance(settings, dict) or set(settings) != {"version", "operations", "max_page_size"}
+                or type(settings["version"]) is not int or settings["version"] != 1
+                or type(settings["max_page_size"]) is not int or settings["max_page_size"] != 20
+                or settings["operations"] != ["schema", "get", "set"]):
+            raise Error(invalid)
+        result["player_settings"] = settings
+    if "vportal_settings" in data:
+        settings = data["vportal_settings"]
+        if not isinstance(settings, dict) or set(settings) != {"version"} or type(settings["version"]) is not int or settings["version"] != 1:
+            raise Error(invalid)
+        result["vportal_settings"] = {"version": 1}
+    for key, allowed in (("lifecycle", LIFECYCLE_OPERATIONS), ("input", INPUT_KEYS), ("playback", PLAYBACK_OPERATIONS)):
+        values = data.get(key)
+        if (not isinstance(values, list) or len(values) > len(allowed) or
+                any(not isinstance(value, str) or value not in allowed for value in values) or len(set(values)) != len(values)):
+            raise Error(invalid)
+        result[key] = list(values)
+    if "random" in data:
+        random = data["random"]
+        if not isinstance(random, dict) or set(random) != {"version"} or type(random["version"]) is not int or random["version"] != 1:
+            raise Error(invalid)
+        result["random"] = {"version": 1}
+    if "catalog_random" in data:
+        marker = data["catalog_random"]
+        if (not isinstance(marker, dict) or set(marker) != {"version", "scope", "request_field"}
+                or type(marker["version"]) is not int or marker["version"] != 2
+                or marker["scope"] != "receipt" or marker["request_field"] != "receipt_random"):
+            raise Error(invalid)
+        result["catalog_random"] = dict(marker)
+    if data.get("offline_profiles") is not None:
+        offline = data["offline_profiles"]
+        operations = offline.get("operations") if isinstance(offline, dict) else None
+        if (not isinstance(offline, dict) or set(offline) != {"version", "operations", "max_profiles", "max_sources"}
+                or type(offline.get("version")) is not int or offline["version"] != 1
+                or type(offline.get("max_profiles")) is not int or offline["max_profiles"] != 15
+                or type(offline.get("max_sources")) is not int or offline["max_sources"] != 32
+                or not isinstance(operations, list) or len(operations) > len(OFFLINE_PROFILE_OPERATIONS)
+                or any(not isinstance(op, str) or op not in OFFLINE_PROFILE_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["offline_profiles"] = dict(offline, operations=list(operations))
+    if "aspect" in data:
+        aspect = data["aspect"]
+        if (not isinstance(aspect, dict) or set(aspect) != {"version", "operations", "modes"}
+                or type(aspect.get("version")) is not int or aspect["version"] != 1):
+            raise Error(invalid)
+        for key, allowed in (("operations", ASPECT_OPERATIONS), ("modes", ASPECT_MODES)):
+            values = aspect[key]
+            if (not isinstance(values, list) or len(values) > len(allowed)
+                    or any(not isinstance(value, str) or value not in allowed for value in values)
+                    or len(set(values)) != len(values)):
+                raise Error(invalid)
+        if bool(aspect["operations"]) != bool(aspect["modes"]):
+            raise Error(invalid)
+        result["aspect"] = {"version": 1, "operations": list(aspect["operations"]), "modes": list(aspect["modes"])}
+    if "notifications" in data:
+        notifications = data["notifications"]
+        operations = notifications.get("operations") if isinstance(notifications, dict) else None
+        if (not isinstance(notifications, dict) or set(notifications) != {"version", "operations"}
+                or type(notifications.get("version")) is not int or notifications["version"] != 1
+                or not isinstance(operations, list) or len(operations) > len(NOTIFICATIONS_OPERATIONS)
+                or any(not isinstance(op, str) or op not in NOTIFICATIONS_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["notifications"] = {"version": 1, "operations": list(operations)}
+    if data.get("app_update") is not None:
+        update = data["app_update"]
+        if (not isinstance(update, dict) or set(update) != {"version", "operations"}
+                or type(update.get("version")) is not int or update["version"] != 1
+                or update.get("operations") != ["status", "prepare", "install"]):
+            raise Error(invalid)
+        result["app_update"] = {"version": 1, "operations": list(update["operations"])}
+    if "screenshot" in data:
+        shot = data["screenshot"]
+        if (not isinstance(shot, dict) or set(shot) != {"state", "source"}
+                or shot.get("state") not in ("ready", "permission_required", "unsupported")
+                or (shot.get("source") is not None and
+                    (not isinstance(shot["source"], str) or shot["source"] not in SCREENSHOT_SOURCES))
+                or (shot["state"] == "ready" and shot["source"] is None)):
+            raise Error(invalid)
+        result["screenshot"] = dict(shot)
+    if "plex_queue" in data:
+        queue = data["plex_queue"]
+        operations = queue.get("operations") if isinstance(queue, dict) else None
+        if (not isinstance(queue, dict) or set(queue) != {"version", "operations", "max_items"}
+                or type(queue.get("version")) is not int or queue["version"] != 1
+                or type(queue.get("max_items")) is not int or not 1 <= queue["max_items"] <= MAX_PLEX_QUEUE_ITEMS
+                or not isinstance(operations, list) or len(operations) > len(PLEX_QUEUE_OPERATIONS)
+                or any(not isinstance(op, str) or op not in PLEX_QUEUE_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["plex_queue"] = {"version": 1, "operations": list(operations), "max_items": queue["max_items"]}
+    if "plex_queue_repeat" in data:
+        marker = data["plex_queue_repeat"]
+        modes = marker.get("modes") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "modes"}
+                or type(marker.get("version")) is not int or marker["version"] != 1
+                or not isinstance(modes, list) or len(modes) != 2
+                or any(not isinstance(mode, str) or mode not in PLEX_QUEUE_REPEAT_MODES for mode in modes)
+                or len(set(modes)) != 2
+                or "status" not in result.get("plex_queue", {}).get("operations", [])
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["plex_queue_repeat"] = {"version": 1, "modes": sorted(modes)}
+    if "plex_queue_state_v2" in data:
+        state = data["plex_queue_state_v2"]
+        operations = state.get("operations") if isinstance(state, dict) else None
+        if (not isinstance(state, dict)
+                or set(state) != {"version", "operations", "max_write_items", "max_state_items", "max_state_bytes"}
+                or any(type(state.get(key)) is not int or state[key] != value for key, value in
+                       (("version", 2), ("max_write_items", MAX_PLEX_QUEUE_ITEMS),
+                        ("max_state_items", MAX_PLEX_QUEUE_STATE_ITEMS), ("max_state_bytes", MAX_PLEX_QUEUE_STATE_BYTES)))
+                or not isinstance(operations, list) or len(operations) != len(PLEX_QUEUE_STATE_OPERATIONS)
+                or any(not isinstance(op, str) or op not in PLEX_QUEUE_STATE_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)
+                or "plex_queue" not in result or result["plex_queue"]["max_items"] != MAX_PLEX_QUEUE_ITEMS
+                or not PLEX_QUEUE_STATE_OPERATIONS <= set(result["plex_queue"]["operations"])
+                or re.fullmatch(r"[a-z0-9-]{1,64}", player["runtime"]) is None):
+            raise Error(invalid)
+        result["plex_queue_state_v2"] = dict(state, operations=sorted(operations))
+    if "favorites" in data:
+        favorites = data["favorites"]
+        operations = favorites.get("operations") if isinstance(favorites, dict) else None
+        if (not isinstance(favorites, dict) or set(favorites) != {"version", "operations", "max_items"}
+                or type(favorites.get("version")) is not int or favorites["version"] != 1
+                or type(favorites.get("max_items")) is not int or not 1 <= favorites["max_items"] <= MAX_FAVORITES
+                or not isinstance(operations, list) or len(operations) > len(FAVORITES_OPERATIONS)
+                or any(not isinstance(op, str) or op not in FAVORITES_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["favorites"] = {"version": 1, "operations": list(operations), "max_items": favorites["max_items"]}
+    if "plex_library" in data:
+        library = data["plex_library"]
+        operations = library.get("operations") if isinstance(library, dict) else None
+        if (not isinstance(library, dict) or set(library) != {"version", "operations", "max_items"}
+                or type(library.get("version")) is not int or library["version"] != 1
+                or type(library.get("max_items")) is not int or not 1 <= library["max_items"] <= MAX_PLEX_QUEUE_ITEMS
+                or not isinstance(operations, list) or len(operations) > len(PLEX_LIBRARY_OPERATIONS)
+                or any(not isinstance(op, str) or op not in PLEX_LIBRARY_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["plex_library"] = {"version": 1, "operations": list(operations), "max_items": library["max_items"]}
+    if "local_media" in data:
+        local = data["local_media"]
+        operations = local.get("operations") if isinstance(local, dict) else None
+        if (not isinstance(local, dict) or set(local) != {"version", "operations", "absolute_paths", "max_sources", "max_items"}
+                or type(local.get("version")) is not int or local["version"] != 1
+                or type(local.get("absolute_paths")) is not bool
+                or type(local.get("max_sources")) is not int or not 1 <= local["max_sources"] <= MAX_LOCAL_MEDIA_SOURCES
+                or type(local.get("max_items")) is not int or not 1 <= local["max_items"] <= MAX_LOCAL_MEDIA_ITEMS
+                or not isinstance(operations, list) or len(operations) > len(LOCAL_MEDIA_OPERATIONS)
+                or any(not isinstance(op, str) or op not in LOCAL_MEDIA_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["local_media"] = dict(local, operations=list(operations))
+    for key in ("local_media_progressive", "local_media_session"):
+        if key in data:
+            marker = data[key]
+            if ("local_media" not in result or not isinstance(marker, dict)
+                    or set(marker) != {"version"} or type(marker.get("version")) is not int
+                    or marker["version"] != 1):
+                raise Error(invalid)
+            result[key] = {"version": 1}
+    if "local_browser" in data:
+        marker = data["local_browser"]
+        operations = marker.get("operations") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "operations", "max_entries"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or type(marker["max_entries"]) is not int or marker["max_entries"] != MAX_LOCAL_BROWSER_ENTRIES
+                or not isinstance(operations, list) or len(operations) != len(LOCAL_BROWSER_OPERATIONS)
+                or any(not isinstance(op, str) for op in operations) or set(operations) != LOCAL_BROWSER_OPERATIONS):
+            raise Error(invalid)
+        result["local_browser"] = dict(marker, operations=list(operations))
+    if "local_media_handles" in data:
+        marker = data["local_media_handles"]
+        operations = marker.get("operations") if isinstance(marker, dict) else None
+        if (not isinstance(marker, dict) or set(marker) != {"version", "operations"}
+                or type(marker["version"]) is not int or marker["version"] != 1
+                or not isinstance(operations, list) or len(operations) != len(LOCAL_MEDIA_HANDLE_OPERATIONS)
+                or any(not isinstance(op, str) for op in operations) or set(operations) != LOCAL_MEDIA_HANDLE_OPERATIONS
+                or not LOCAL_MEDIA_HANDLE_OPERATIONS <= set(result.get("local_media", {}).get("operations", []))):
+            raise Error(invalid)
+        result["local_media_handles"] = dict(marker, operations=list(operations))
+    if "plex_library_truncation" in data:
+        truncation = data["plex_library_truncation"]
+        if ("plex_library" not in result or result["plex_library"]["max_items"] != MAX_PLEX_QUEUE_ITEMS
+                or not isinstance(truncation, dict)
+                or set(truncation) != {"version"} or type(truncation.get("version")) is not int
+                or truncation["version"] != 1):
+            raise Error(invalid)
+        result["plex_library_truncation"] = {"version": 1}
+    if "categories" in data:
+        categories = data["categories"]
+        operations = categories.get("operations") if isinstance(categories, dict) else None
+        if (not isinstance(categories, dict) or set(categories) != {"version", "operations", "maxPageSize"}
+                or type(categories.get("version")) is not int or categories["version"] != 1
+                or type(categories.get("maxPageSize")) is not int
+                or not 1 <= categories["maxPageSize"] <= MAX_CATEGORY_PAGE_SIZE
+                or not isinstance(operations, list) or len(operations) > len(CATEGORIES_OPERATIONS)
+                or any(not isinstance(op, str) or op not in CATEGORIES_OPERATIONS for op in operations)
+                or len(set(operations)) != len(operations)):
+            raise Error(invalid)
+        result["categories"] = dict(categories, operations=list(operations))
+    if "inspect" in data:
+        inspection = data["inspect"]
+        sections = inspection.get("sections") if isinstance(inspection, dict) else None
+        if (not isinstance(inspection, dict) or set(inspection) != {"version", "sections"}
+                or type(inspection.get("version")) is not int or inspection["version"] != 1
+                or not isinstance(sections, list) or not 1 <= len(sections) <= 3
+                or any(not isinstance(section, str) or section not in ("doctor", "snapshot", "operation") for section in sections)
+                or len(set(sections)) != len(sections)):
+            raise Error(invalid)
+        result["inspect"] = {"version": 1, "sections": list(sections)}
+    if "debug" in data:
+        debug = data["debug"]
+        if (not isinstance(debug, dict) or set(debug) != {"version"}
+                or type(debug.get("version")) is not int or debug["version"] != 1):
+            raise Error(invalid)
+        result["debug"] = {"version": 1}
+    if "debug_versions" in data:
+        versions = data["debug_versions"]
+        if ("debug" not in result or not isinstance(versions, list)
+                or any(type(value) is not int for value in versions)
+                or versions != [1, 2]):
+            raise Error(invalid)
+        result["debug_versions"] = list(versions)
+    if "debug_attempts" in data:
+        attempts = data["debug_attempts"]
+        if (result.get("debug_versions") != [1, 2] or not isinstance(attempts, dict)
+                or set(attempts) != {"version"} or type(attempts["version"]) is not int
+                or attempts["version"] != 3):
+            raise Error(invalid)
+        result["debug_attempts"] = {"version": 3}
+    if "perf_capture" in data:
+        capture = data["perf_capture"]
+        expected = {"version": 1, "default_duration_seconds": 120, "max_duration_seconds": 600,
+                    "max_events": 1024, "max_bytes": 524288, "max_read_events": 64}
+        if (not isinstance(capture, dict) or set(capture) != set(expected)
+                or any(type(capture[key]) is not int or capture[key] != value for key, value in expected.items())):
+            raise Error(invalid)
+        result["perf_capture"] = dict(expected)
+    if "perf_capture_hls" in data:
+        capture = data["perf_capture_hls"]
+        if ("perf_capture" not in result or not isinstance(capture, dict) or set(capture) != {"version"}
+                or type(capture["version"]) is not int or capture["version"] != 2):
+            raise Error(invalid)
+        result["perf_capture_hls"] = {"version": 2}
+    if "perf_capture_hls_policy" in data:
+        capture = data["perf_capture_hls_policy"]
+        if ("perf_capture" not in result or not isinstance(capture, dict) or set(capture) != {"version"}
+                or type(capture["version"]) is not int or capture["version"] != 3):
+            raise Error(invalid)
+        result["perf_capture_hls_policy"] = {"version": 3}
+    return result

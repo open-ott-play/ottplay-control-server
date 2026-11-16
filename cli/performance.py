@@ -642,7 +642,7 @@ class Trial:
         params = {"version": 1, "runtime": self.capture.runtime, "section": "snapshot"}
         data = self.capture.rpc("inspect", params,
                                 lambda raw: self.workbench.snapshot_metadata(raw, self.capture.runtime, "snapshot"))
-        version = 3 if "debug_attempts" in self.capture.caps else 2
+        version = self.workbench.strongest_debug_version(self.capture.caps)
         params = {"version": version, "runtime": self.capture.runtime, "section": "debug"}
         debug = self.capture.rpc("inspect", params,
                                  lambda raw: self.workbench.debug_metadata(raw, self.capture.runtime, version))

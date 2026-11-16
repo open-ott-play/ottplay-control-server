@@ -319,8 +319,7 @@ def _observations(rows, api, workbench, bundle, ids, section="snapshot", stronge
                         and ("debug" in caps if section == "debug" else "snapshot" in caps.get("inspect", {}).get("sections", [])))
                 require([item["action"] for item in requests] == ["capabilities", "inspect"]
                         and all(item["status"] == "ok" for item in requests))
-                version = (3 if caps.get("debug_attempts") == {"version": 3} else 2) if (
-                    strongest_debug and section == "debug" and caps.get("debug_versions") == [1, 2]) else 1
+                version = workbench.strongest_debug_version(caps) if strongest_debug and section == "debug" else 1
                 envelope = {"version": version, "runtime": runtime, "section": section, "data": raw.get("data")}
                 data = (workbench.debug_metadata(envelope, runtime, version) if section == "debug"
                         else workbench.snapshot_metadata(envelope, runtime, "snapshot"))
