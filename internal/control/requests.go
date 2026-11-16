@@ -433,6 +433,7 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	}
 	if action == "command_activity_diagnostics" {
 		e.commandActivity = parseCommandActivityRequest(params)
+		e.commandActivity.Owner, e.commandActivity.Device = e.owner, d.id
 	}
 	if action == "playback_preparation_diagnostics" {
 		e.playbackPreparation = parsePlaybackPreparationRequest(params)
@@ -1060,6 +1061,15 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	for i, e := range d.queue {
 		if !e.rpc || e.id != id {
 			continue
+		}
+		if e.commandActivity != nil && status == "ok" {
+			var filtered bool
+			b, filtered = s.filterCommandActivityResponse(b, e.commandActivity, now)
+			if !filtered {
+				s.mu.Unlock()
+				failure(w, 400, "invalid command activity diagnostics result")
+				return
+			}
 		}
 		if s.resultBytes+len(b) > maxResultBytes || len(d.results) >= 50 {
 			s.mu.Unlock()

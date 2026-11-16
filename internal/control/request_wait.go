@@ -13,6 +13,7 @@ func (s *Server) readRequestReceipt(w http.ResponseWriter, r *http.Request, d *d
 		s.mu.Lock()
 		s.expire(s.now())
 		result, found := d.results[id]
+		filtered := true
 		pending := false
 		permitted := !found || ownResult(r, result.owner, result.permission)
 		for _, e := range d.queue {
@@ -44,11 +45,17 @@ func (s *Server) readRequestReceipt(w http.ResponseWriter, r *http.Request, d *d
 			wait = 0
 			continue
 		}
+		if found && permitted && result.commandActivity != nil {
+			result.data, filtered = s.filterCommandActivityResponse(result.data, result.commandActivity, s.now())
+		}
 		s.mu.Unlock()
-		if !permitted {
+		if !filtered {
+			failure(w, 503, "request result unavailable")
+		} else if !permitted {
 			failure(w, 403, "request scope is not allowed")
 		} else if found {
-			// Preserve the already validated, bounded wire bytes exactly.
+			// Other receipts preserve validated wire bytes exactly. Scoped
+			// activity receipts can only lose rows under the current grants.
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(result.data)

@@ -16,7 +16,7 @@ func TestCommandActivityRelayBoundAndStrict(t *testing.T) {
 	s := newTestServer(t)
 	defer s.Close()
 	id := rpcID(t, s, activityRequest)
-	expected := &commandActivityRequest{Runtime: "native_123"}
+	expected := &commandActivityRequest{Runtime: "native_123", Owner: "admin", Device: "first"}
 	if bound := s.devices[0].queue[0].commandActivity; bound == nil || *bound != *expected {
 		t.Fatal("lost binding")
 	}

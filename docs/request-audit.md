@@ -97,6 +97,15 @@ its current device and action authorization. Request IDs are not authorization:
 knowing an ID never grants access to another operator's history. Device
 credentials cannot read the controller audit API.
 
+The raw native activity ring belongs to the current control authority, not an
+individual command operator. The controller narrows an operator-origin v2
+response before retaining it and again on receipt reads. It keeps only canonical
+IDs that still map to that operator's retained, same-device request and currently
+permitted exact action, with a matching action family. Null, foreign, stale and
+unmapped IDs are omitted. Reads never widen a previously filtered response.
+Administrator-origin responses retain the bounded device-wide view. A filtered
+or empty operator view is partial evidence, not proof that no other command ran.
+
 The view exports no command parameters, media titles, URLs, source paths,
 authorization headers, tokens, credential hashes, idempotency keys, IP addresses
 or session payloads. It stores transport metadata only. `responded/ok` means a

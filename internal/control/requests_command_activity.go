@@ -1,10 +1,15 @@
 package control
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
 
 const maxCommandActivityBytes = 8192
 
-type commandActivityRequest struct{ Runtime string }
+// Owner and device are trusted admission metadata, never client parameters.
+type commandActivityRequest struct{ Runtime, Owner, Device string }
 
 func validCommandActivityCapability(raw json.RawMessage) bool {
 	m, ok := inspectObject(raw, "version")
@@ -53,4 +58,77 @@ func validCommandActivityResult(raw json.RawMessage, status string, expected *co
 		}
 	}
 	return true
+}
+
+// Called under s.mu, after validating the complete unfiltered response. A
+// scoped observer receives only entries joinable to its own retained ingress
+// metadata and current original action grants. Missing evidence stays omitted;
+// the result is a subset, never a claim of complete device history.
+func (s *Server) filterCommandActivityResponse(raw []byte, expected *commandActivityRequest, now time.Time) ([]byte, bool) {
+	if expected == nil {
+		return nil, false
+	}
+	if expected.Owner == "admin" {
+		return raw, true
+	}
+	if !strings.HasPrefix(expected.Owner, "operator:") || expected.Device == "" {
+		return nil, false
+	}
+	outer, err := decodeObject(raw)
+	if err != nil {
+		return nil, false
+	}
+	if !inspectEnum(outer["status"], "ok") {
+		return raw, true
+	}
+	data, ok := inspectObject(outer["data"], "version", "runtime", "scope", "entries")
+	if !ok {
+		return nil, false
+	}
+	rows, ok := inspectArray(data["entries"], 8)
+	if !ok {
+		return nil, false
+	}
+	var observer *commandOperator
+	for _, candidate := range s.operators {
+		if "operator:"+candidate.id == expected.Owner {
+			observer = candidate
+			break
+		}
+	}
+	allowed := map[string]string{}
+	if observer != nil && observer.devices[expected.Device] {
+		for _, audit := range s.requestAudit {
+			if audit.device != expected.Device || audit.owner != expected.Owner || now.Sub(audit.accepted) > requestAuditAgeMS*time.Millisecond || !observer.actions[audit.action] {
+				continue
+			}
+			family, _, _ := strings.Cut(audit.action, ".")
+			allowed[audit.id] = family
+		}
+	}
+	kept := make([]json.RawMessage, 0, len(rows))
+	for _, rawRow := range rows {
+		row, err := decodeObject(rawRow)
+		if err != nil {
+			return nil, false
+		}
+		if inspectNull(row["request_id"]) {
+			continue
+		}
+		id, valid := inspectString(row["request_id"], 32)
+		family, found := allowed[id]
+		if valid && commandID.MatchString(id) && found && inspectEnum(row["action"], family) {
+			kept = append(kept, rawRow)
+		}
+	}
+	data["entries"], err = json.Marshal(kept)
+	if err != nil {
+		return nil, false
+	}
+	outer["data"], err = json.Marshal(data)
+	if err != nil {
+		return nil, false
+	}
+	filtered, err := json.Marshal(outer)
+	return filtered, err == nil && len(filtered) <= maxCommandActivityBytes
 }
