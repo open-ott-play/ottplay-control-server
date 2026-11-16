@@ -62,6 +62,7 @@ type entry struct {
 	perfCapture             *perfCaptureRequest
 	nativePlaybackCapture   *nativePlaybackCaptureRequest
 	playbackPreparation     *playbackPreparationRequest
+	commandActivity         *commandActivityRequest
 	vportalSettings         *vportalSettingsRequest
 	nativeProviderSettings  *nativeProviderSettingsRequest
 	category                *categoryRequest
@@ -115,6 +116,7 @@ type Server struct {
 	ttl                    time.Duration
 	maxPending, bytes      int
 	resultBytes            int
+	requestAudit           []requestAuditEntry
 	lastTS                 float64
 	globalRate, adminRate  bucket
 	transportRate          bucket
@@ -383,7 +385,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if path == "/api/pairings/approve" {
 			methods = "POST"
 		}
-	case "/healthz", "/readyz", "/api/devices", "/api/debug", "/api/operations", "/api/notifications", "/api/notifications/media", "/api/home-assistant/status", wire.LegacyPollPath:
+	case "/healthz", "/readyz", "/api/devices", "/api/debug", "/api/operations", requestAuditPath, "/api/notifications", "/api/notifications/media", "/api/home-assistant/status", wire.LegacyPollPath:
 		methods = "GET"
 	case wire.CommandPath:
 		methods = "GET,POST"
@@ -467,8 +469,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 401, "valid Bearer credentials are required")
 		return
 	}
-	requiresAdmin := (path == playerStatePath && r.Method == http.MethodGet) || path == "/api/televisions" || path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses" && path != playerStatePath && path != televisionChannelsPath)
-	operatorRoute := operator != nil && ((path == playerStatePath && r.Method == http.MethodGet) || path == "/api/home-assistant/status" || path == "/api/requests" || path == "/api/operations" || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
+	requiresAdmin := (path == playerStatePath && r.Method == http.MethodGet) || path == "/api/televisions" || path == "/api/home-assistant/status" || path == "/api/debug" || path == "/api/devices" || path == "/api/requests" || path == "/api/operations" || path == requestAuditPath || (r.Method == "POST" && path != wire.AckPath && path != "/api/responses" && path != playerStatePath && path != televisionChannelsPath)
+	operatorRoute := operator != nil && ((path == playerStatePath && r.Method == http.MethodGet) || path == "/api/home-assistant/status" || path == "/api/requests" || path == "/api/operations" || path == requestAuditPath || (r.Method == "POST" && (path == wire.CommandPath || path == wire.LegacyNotifyPath)))
 	if (!operatorRoute && requiresAdmin != admin) || (operator != nil && !operatorRoute) {
 		failure(w, 403, "credential role is not allowed")
 		return
@@ -492,6 +494,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == playerStatePath {
 		s.servePlayerState(w, r, d)
+		return
+	}
+	if path == requestAuditPath {
+		s.serveRequestAudit(w, r, now)
 		return
 	}
 	if path == "/api/operations" {

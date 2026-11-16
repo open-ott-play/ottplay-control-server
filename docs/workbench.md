@@ -1,5 +1,10 @@
 # Read-only diagnostic workbench
 
+For [controller request correlation and authenticated credential roles](request-audit.md),
+use the separately versioned `audit` feature. Its controller-only mode sends no
+player RPC; optional `--activity` requires a new native producer and is not
+available in Native0.4.30.
+
 The workbench collects one player's web observations and, when bound, its separate
 Android maintenance agent. It does not start playback, reload a player, change
 settings, capture the screen, or run arbitrary commands. Install the
