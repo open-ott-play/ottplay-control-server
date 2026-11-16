@@ -218,6 +218,8 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME perf --help               opt-in bounded performance capture and safe notification trials
   ott NAME inspect --view ui,media    observe the interface and media without changing playback
   ott NAME operation REQUEST_ID      read a web operation receipt without repeating its effect
+  ott NAME audit [REQUEST_ID] [-j]    read bounded controller ingress metadata; no player RPC
+  ott NAME audit --activity [-j]      opt in to advertised native request-ID correlation
   ott NAME bundle --out DIRECTORY    save private, bounded diagnostic evidence
   ott server debug [-j]               read controller process and queue counters
   ott NAME test list                 list fixed read-only diagnostic scenarios
@@ -388,7 +390,7 @@ ASPECT_MODES = {"fit": "Fit to screen", "fill": "Fill screen"}
 SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
 MAX_SCREENSHOT_BYTES = 1024 * 1024
 RECEIPT_ACTIONS = frozenset((
-    "status", "capabilities", "screenshot", "inspect", "native_playback_diagnostics", "playback_preparation_diagnostics", "providers", "profiles",
+    "status", "capabilities", "screenshot", "inspect", "native_playback_diagnostics", "playback_preparation_diagnostics", "command_activity_diagnostics", "providers", "profiles",
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
@@ -1249,6 +1251,11 @@ class Client:
         """Submit once and retain the request identity, including read failures."""
         if action == "playback_preparation_diagnostics":
             preparation_request(params)
+        elif action == "command_activity_diagnostics":
+            try:
+                request_audit_module().activity_request(params)
+            except ValueError:
+                raise Error("Invalid command activity diagnostic request") from None
         group_cancelled = getattr(self, "group_cancelled", None)
         if group_cancelled is not None and group_cancelled.is_set():
             raise KeyboardInterrupt
@@ -1286,6 +1293,10 @@ class Client:
                     # This protocol bounds the entire original reply, not its
                     # compacted data subtree after the generic projection.
                     wait_options["response_validator"] = lambda raw, identity: plex_servers_receipt(raw, params, identity)
+                elif action == "command_activity_diagnostics":
+                    audit = request_audit_module()
+                    wait_options["response_validator"] = lambda raw, identity: audit.activity_receipt(SimpleNamespace(**globals()), raw, params, identity)
+                    wait_options["response_decoder"] = lambda raw: audit.activity_decode(SimpleNamespace(**globals()), raw)
                 elif action == "playback_preparation_diagnostics":
                     wait_options["response_validator"] = lambda raw, identity: preparation_receipt(raw, params, identity)
                     wait_options["response_decoder"] = preparation_decode
@@ -5526,6 +5537,11 @@ def capabilities_metadata(data):
         marker = data["playback_preparation_diagnostics"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
             raise Error(invalid)
+    command_activity = "command_activity_diagnostics" in data
+    if command_activity:
+        marker = data["command_activity_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 2:
+            raise Error(invalid)
     native_capture = None
     if "native_playback_capture" in data:
         try:
@@ -5548,7 +5564,7 @@ def capabilities_metadata(data):
     patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}",
                 "runtime": (r"[A-Za-z0-9_.:-]{1,64}" if multiview is not None else
                             r"[A-Za-z0-9_.:-]{1,128}" if native_provider is not None else
-                            r"[A-Za-z0-9_.-]{1,96}" if native_playback or preparation or native_capture is not None else r"[a-z0-9-]{1,64}")}
+                            r"[A-Za-z0-9_.-]{1,96}" if native_playback or preparation or command_activity or native_capture is not None else r"[a-z0-9-]{1,64}")}
     if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
@@ -5565,6 +5581,8 @@ def capabilities_metadata(data):
         result["native_playback_diagnostics"] = {"version": 1}
     if preparation:
         result["playback_preparation_diagnostics"] = {"version": 1}
+    if command_activity:
+        result["command_activity_diagnostics"] = {"version": 2}
     if native_capture is not None:
         result["native_playback_capture"] = native_capture
     if native_provider is not None:
@@ -6422,6 +6440,9 @@ def print_player_help(data, name):
             print(f"  {prefix} operation REQUEST_ID  — inspect a recent operation")
     print_restart_reference(controls, name)
     print(f"Local diagnostic help: {prefix} test list")
+    print(f"Request audit: {prefix} audit [REQUEST_ID] [-j]  — read bounded controller ingress metadata (requires updated controller)")
+    if "command_activity_diagnostics" in controls:
+        print(f"  {prefix} audit --activity [-j]  — correlate native activity by exact request ID")
     print(f"Request IDs: ott --receipt {quoted_name} COMMAND  — write RPC receipts to stderr")
     print(f"Retained controller reports: {prefix} state / history [--limit 1..64] (not a live player read)")
 
@@ -7997,6 +8018,16 @@ def device_power_module():
     return module
 
 
+def request_audit_module():
+    path = Path(__file__).resolve().with_name("request_audit.py")
+    if not path.is_file():
+        raise Error("Install request_audit.py beside ott.py from the same release")
+    spec = importlib.util.spec_from_file_location("ott_request_audit", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def player_group_targets(client, selector):
     """Resolve saved groups and comma lists before any per-player request."""
     return player_groups_module().targets(SimpleNamespace(**globals()), client, selector)
@@ -8005,6 +8036,8 @@ def player_group_targets(client, selector):
 def player_command_route(words):
     """The single dispatch table for built-in and optional player commands."""
     verb = words[0].casefold() if words else ""
+    if verb == "audit":
+        return "request_audit"
     if verb in ("mv", "multiview", "view"):
         return "multiview"
     if verb == "tracks":
@@ -8256,6 +8289,12 @@ def player_group_command(client, config, targets, args, argv):
             module.parse(words[1:])
         except ValueError:
             raise Error(module.USAGE) from None
+    if route == "request_audit":
+        module = request_audit_module()
+        try:
+            module.parse(words[1:])
+        except module.Failure:
+            raise Error("Use audit [REQUEST_ID] [-j] or audit --activity [-j]") from None
     if route == "multiview":
         module = multiview_module()
         try:
@@ -8266,7 +8305,7 @@ def player_group_command(client, config, targets, args, argv):
             raise Error("Multi-view source tickets and cursors belong to one player; choose a single target. No request was sent")
     plans = [group_output_arguments(words, route, prepared, suffix) for suffix in group_output_suffixes(targets)]
     group_output_preflight(plans)
-    json_output = args.json or (route in ("performance", "workbench") and any(word in ("-j", "--json") for word in words[1:]))
+    json_output = args.json or (route in ("performance", "workbench", "request_audit") and any(word in ("-j", "--json") for word in words[1:]))
     outcomes = [None] * len(targets)
     reported = set()
     on_receipt = client.on_receipt
@@ -8419,6 +8458,8 @@ def execute_player_command(client, config, args, argv, device, *, prepared=None,
     """Run the same resolved-player command for a single target or one group member."""
     words = args.words[1:]
     route = player_command_route(words)
+    if route == "request_audit":
+        return request_audit_module().run(SimpleNamespace(**globals()), client, device, words[1:], args.timeout, args.json)
     if route == "multiview":
         return multiview_module().run(SimpleNamespace(**globals()), client, device, words[1:],
                                        args.timeout, args.json)
@@ -8953,6 +8994,9 @@ def main(argv=None):
             television_module().parse(SimpleNamespace(**globals()), args.words[2:])
         if len(args.words) >= 2 and args.words[1].casefold() == "watch" and args.words[-1] in ("--help", "-h"):
             fleet_module().arguments(args.words[2:], args.json)
+            return 0
+        if len(args.words) >= 2 and args.words[1].casefold() == "audit" and args.words[2:] in (["--help"], ["-h"]):
+            print(request_audit_module().HELP, end="")
             return 0
         config = read_json(args.config)
         if args.words[0].casefold() == "unalias":

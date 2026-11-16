@@ -168,6 +168,11 @@ runtime and key-strength checks. Plain HTTP does not provide these protections.
 
 ### Choose the CLI source revision
 
+The [request-audit source feature](request-audit.md) requires a later revision
+than the pin below, its additional `request_audit.py` module and a matching
+updated controller. Its optional activity join also requires a separate native
+producer. It is not part of the deployed beta.6 or the installation pin below.
+
 Install CPython 3.12 or newer and Git first. The native server release archives
 contain the Go server, **not** the Python CLI. The examples below install reviewed
 source commit
