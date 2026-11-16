@@ -29,6 +29,7 @@ type requestResult struct {
 	settingsPatch           *settingsPatchRequest
 	perfCapture             *perfCaptureRequest
 	nativePlaybackCapture   *nativePlaybackCaptureRequest
+	playbackPreparation     *playbackPreparationRequest
 	vportalSettings         *vportalSettingsRequest
 	nativeProviderSettings  *nativeProviderSettingsRequest
 	category                *categoryRequest
@@ -201,6 +202,8 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 		ok = parsePerfCaptureRequest(params) != nil
 	case "native_playback_diagnostics":
 		ok = parseNativePlaybackCaptureRequest(params) != nil
+	case "playback_preparation_diagnostics":
+		ok = parsePlaybackPreparationRequest(params) != nil && len(b) <= maxPlaybackPreparationOuterBytes && validFavoritesTransferJSON(b)
 	case "categories":
 		ok = parseCategoryRequest(action, params) != nil
 	case "inspect":
@@ -425,6 +428,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request, d *device, now
 	if action == "native_playback_diagnostics" {
 		e.nativePlaybackCapture = parseNativePlaybackCaptureRequest(params)
 	}
+	if action == "playback_preparation_diagnostics" {
+		e.playbackPreparation = parsePlaybackPreparationRequest(params)
+	}
 	if (action == "provider_settings" || action == "settings_compare") && settingString(params["provider"]) == "vportal" {
 		e.vportalSettings = parseVPortalSettingsRequest(action, params)
 	}
@@ -587,6 +593,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	var settingsPatch *settingsPatchRequest
 	var perfCapture *perfCaptureRequest
 	var nativePlaybackCapture *nativePlaybackCaptureRequest
+	var playbackPreparation *playbackPreparationRequest
 	capabilitiesResult := d.results[id].permission == "capabilities"
 	multiviewProbe := d.results[id].multiviewProbe
 	multiviewRecoveryProbe := d.results[id].multiviewRecoveryProbe
@@ -625,6 +632,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 			settingsPatch = pending.settingsPatch
 			perfCapture = pending.perfCapture
 			nativePlaybackCapture = pending.nativePlaybackCapture
+			playbackPreparation = pending.playbackPreparation
 			capabilitiesResult = pending.permission == "capabilities"
 			multiviewProbe = pending.multiviewProbe
 			multiviewRecoveryProbe = pending.multiviewRecoveryProbe
@@ -670,6 +678,9 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 	}
 	if nativePlaybackCapture == nil {
 		nativePlaybackCapture = d.results[id].nativePlaybackCapture
+	}
+	if playbackPreparation == nil {
+		playbackPreparation = d.results[id].playbackPreparation
 	}
 	if vportalSettings == nil {
 		vportalSettings = d.results[id].vportalSettings
@@ -735,6 +746,10 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		failure(w, 400, "invalid native playback capture result")
 		return
 	}
+	if playbackPreparation != nil && (len(b) > maxPlaybackPreparationOuterBytes || !validFavoritesTransferJSON(b) || !validPlaybackPreparationResult(m["data"], status, playbackPreparation)) {
+		failure(w, 400, "invalid playback preparation diagnostics result")
+		return
+	}
 	if multiview != nil && (len(b) > maxMultiviewResultBytes || !validFavoritesTransferJSON(b) || !validMultiviewResult(m["data"], status, multiview)) {
 		failure(w, 400, "invalid multiview result")
 		return
@@ -773,6 +788,14 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if marker, exists := capabilities["native_playback_diagnostics"]; exists && !validNativePlaybackCapability(marker) {
 			failure(w, 400, "invalid native playback diagnostics capability")
 			return
+		}
+		if marker, exists := capabilities["playback_preparation_diagnostics"]; exists {
+			player, playerErr := decodeObject(capabilities["player"])
+			_, runtimeOK := inspectToken(player["runtime"], 96)
+			if !validPlaybackPreparationCapability(marker) || playerErr != nil || !runtimeOK || !validFavoritesTransferJSON(b) {
+				failure(w, 400, "invalid playback preparation diagnostics capability")
+				return
+			}
 		}
 		if marker, exists := capabilities["native_playback_capture"]; exists && !validNativePlaybackCaptureCapability(marker) {
 			failure(w, 400, "invalid native playback capture capability")
@@ -1027,7 +1050,7 @@ func (s *Server) receiveResult(w http.ResponseWriter, r *http.Request, d *device
 		if d.results == nil {
 			d.results = make(map[string]requestResult)
 		}
-		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, multiview: e.multiview, multiviewProbe: e.multiviewProbe, multiviewRecoveryProbe: e.multiviewRecoveryProbe, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, nativePlaybackCapture: e.nativePlaybackCapture, vportalSettings: e.vportalSettings, nativeProviderSettings: e.nativeProviderSettings, category: e.category, randomPlay: e.randomPlay, plexQueue: e.plexQueue, plexLibrary: e.plexLibrary, plexServers: e.plexServers, localMedia: e.localMedia, localBrowser: e.localBrowser, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
+		d.results[id] = requestResult{owner: e.owner, permission: e.permission, data: b, expires: now.Add(60 * time.Second), inspect: e.inspect, aspect: e.aspect, mediaTracks: e.mediaTracks, multiview: e.multiview, multiviewProbe: e.multiviewProbe, multiviewRecoveryProbe: e.multiviewRecoveryProbe, notificationSettings: e.notificationSettings, playerSettings: e.playerSettings, plexFolders: e.plexFolders, settingsPatch: e.settingsPatch, perfCapture: e.perfCapture, nativePlaybackCapture: e.nativePlaybackCapture, playbackPreparation: e.playbackPreparation, vportalSettings: e.vportalSettings, nativeProviderSettings: e.nativeProviderSettings, category: e.category, randomPlay: e.randomPlay, plexQueue: e.plexQueue, plexLibrary: e.plexLibrary, plexServers: e.plexServers, localMedia: e.localMedia, localBrowser: e.localBrowser, favorites: e.favorites, favoritesTransfer: e.favoritesTransfer, favoritesGlobal: e.favoritesGlobal, favoritesGlobalRecovery: e.favoritesGlobalRecovery, favoritesGlobalItems: e.favoritesGlobalItems, torrentCatalog: e.torrentCatalog, torrentIndexer: e.torrentIndexer, handoff: e.handoff, offlineProfile: e.offlineProfile, relativeSeek: e.relativeSeek}
 		s.resultBytes += len(b)
 		s.bytes -= len(e.data)
 		copy(d.queue[i:], d.queue[i+1:])

@@ -239,6 +239,19 @@ def native_playback_metadata(raw, runtime):
     return result
 
 
+def print_preparation_summary(data):
+    def observed(value):
+        return "not reported" if value is None else str(value)
+
+    print("Playback preparation: " + data["phase"] + "; attempt generation: " + observed(data["attempt_generation"]))
+    print("  Last failure: " + observed(data["last_failure"]) + "; cause: " + observed(data["cause"]))
+    retry = data["retry"]
+    if retry["pending"]:
+        print("  Retry: pending; failures: " + str(retry["failures"]) + "; retry after: " + str(retry["retry_after_ms"]) + " ms")
+    else:
+        print("  Retry: no pending retry reported; stop reason is not reported.")
+
+
 def print_native_playback_summary(data, runtime):
     def measured(value, unit=""):
         return "NOT OBSERVED" if value is None else str(value) + (" " + unit if unit else "")
@@ -555,6 +568,13 @@ class Workbench:
             request_id = getattr(exc, "request_id", None)
             if isinstance(request_id, str) and REQUEST.fullmatch(request_id):
                 receipts.append({"request_id": request_id, "action": action, "status": "unconfirmed"})
+            if action == "playback_preparation_diagnostics" and isinstance(exc, (self.api.PlayerRejected, self.api.PlayerUnsupported)):
+                try:
+                    checked = self.api.preparation_metadata(getattr(exc, "data", None), params,
+                                                            "rejected" if isinstance(exc, self.api.PlayerRejected) else "unsupported")
+                except self.api.Error:
+                    raise InvalidData() from None
+                raise ObservationError(checked["error"]) from None
             if action == "inspect" and isinstance(exc, (self.api.PlayerRejected, self.api.PlayerUnsupported)):
                 # Even negative observations need the runtime/section fence.
                 # Unbound legacy errors must not be attributed to this page.
@@ -613,7 +633,8 @@ class Workbench:
                 raw = self.request(self.device, "capabilities", {}, deadline, receipts)
                 caps = self.api.capabilities_metadata(raw)
                 observation["capabilities"] = caps
-                supported = (caps.get("local_source_diagnostics") == {"version": 1} if section == "local_source" else
+                supported = (caps.get("playback_preparation_diagnostics") == {"version": 1} if section == "preparation" else
+                             caps.get("local_source_diagnostics") == {"version": 1} if section == "local_source" else
                              caps.get("native_playback_diagnostics") == {"version": 1} if section == "native_playback" else
                              "provider_diagnostics" in caps if section == "provider" else
                              "debug" in caps if section == "debug" else section in caps.get("inspect", {}).get("sections", []))
@@ -632,6 +653,13 @@ class Workbench:
                 if section == "local_source":
                     raw = self.request(self.device, "status", {}, deadline, receipts)
                     data = local_source_metadata(raw, caps["player"]["runtime"])
+                elif section == "preparation":
+                    params = {"version": 1, "runtime": caps["player"]["runtime"]}
+                    raw = self.request(self.device, "playback_preparation_diagnostics", params, deadline, receipts)
+                    try:
+                        data = self.api.preparation_metadata(raw, params)
+                    except self.api.Error:
+                        raise InvalidData() from None
                 elif section == "provider":
                     raw = self.request(self.device, "status", {}, deadline, receipts)
                     data = provider_status_metadata(raw, caps)
@@ -885,6 +913,7 @@ def arguments(words, json_output):
         parser.add_argument("--engine", action="store_true", help="request attached-engine evidence, negotiated v3 attempt counters and cached companion evidence when advertised")
         parser.add_argument("--native-playback", action="store_true", help="read one passive native playback sample with measured counters and event ages")
         parser.add_argument("--local-source", action="store_true", help="read assigned and attached Local source identity without reading media")
+        parser.add_argument("--preparation", action="store_true", help="read one passive playback preparation and pending retry snapshot without probing media")
     if command == "inspect":
         parser.add_argument("--view", default="ui,media")
     elif command == "operation":
@@ -900,6 +929,8 @@ def arguments(words, json_output):
     if command == "debug" and parsed.native_playback and (parsed.engine or parsed.provider):
         raise ObservationError("invalid_arguments")
     if command == "debug" and parsed.local_source and (parsed.engine or parsed.provider or parsed.native_playback):
+        raise ObservationError("invalid_arguments")
+    if command == "debug" and parsed.preparation and (parsed.engine or parsed.provider or parsed.native_playback or parsed.local_source):
         raise ObservationError("invalid_arguments")
     if command in ("doctor", "debug") and ((parsed.out and not parsed.provider) or (parsed.provider and parsed.lane == "native")):
         raise ObservationError("invalid_arguments")
@@ -1001,12 +1032,16 @@ def run(api, client, device, words, timeout, json_output=False):
     provider_mode = False
     native_playback_mode = False
     local_source_mode = False
+    preparation_mode = False
     try:
         args = arguments([command, *words[1:]], json_output)
         json_output = args.json
         provider_mode = getattr(args, "provider", False)
         native_playback_mode = getattr(args, "native_playback", False)
         local_source_mode = getattr(args, "local_source", False)
+        preparation_mode = getattr(args, "preparation", False)
+        if preparation_mode:
+            result["evaluator"] = "preparation-v1"
         if local_source_mode:
             result["evaluator"] = "local-source-v1"
         result["tooling"] = {"workbench_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -1060,7 +1095,7 @@ def run(api, client, device, words, timeout, json_output=False):
                 final_deadline = bench.deadline
                 if command == "bundle" and args.lane != "native":
                     bench.deadline = time.monotonic() + max(0, final_deadline - time.monotonic()) * 0.75
-                observations = bench.observe(args.lane, "local_source" if local_source_mode else "native_playback" if native_playback_mode else "debug" if command == "debug" else "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
+                observations = bench.observe(args.lane, "preparation" if preparation_mode else "local_source" if local_source_mode else "native_playback" if native_playback_mode else "debug" if command == "debug" else "doctor" if command == "doctor" else "operation" if command == "operation" else "snapshot",
                                              logs=command == "bundle", operation_id=args.operation_id if command == "operation" else None,
                                              debug_version=2 if command == "debug" and args.engine else 1)
                 bench.deadline = final_deadline
@@ -1123,6 +1158,8 @@ def run(api, client, device, words, timeout, json_output=False):
             print("  " + row["lane"] + ": " + row["status"] + (" (" + row["reason"] + ")" if row.get("reason") else ""))
             if native_playback_mode and row["status"] == "observed":
                 print_native_playback_summary(row["data"], row["runtime"])
+            if preparation_mode and row["status"] == "observed":
+                print_preparation_summary(row["data"])
             if local_source_mode and row["status"] == "observed":
                 print_local_source_summary(row["data"])
         if "provider_observations" in result and (provider_mode or command == "bundle"):
@@ -1145,6 +1182,6 @@ def run(api, client, device, words, timeout, json_output=False):
             print("Report: " + result["report_directory"])
         if result.get("report_error"):
             print("Report error: " + result["report_error"]["reason"])
-        if command in ("doctor", "inspect", "operation", "debug") and not provider_mode and not native_playback_mode and not local_source_mode:
+        if command in ("doctor", "inspect", "operation", "debug") and not provider_mode and not native_playback_mode and not local_source_mode and not preparation_mode:
             print(encoded(result).decode("utf-8"), end="")
     return 1 if result.get("report_error") else {"observed": 0, "pass": 0, "fail": 2, "unknown": 3, "error": 1}[result["verdict"]]

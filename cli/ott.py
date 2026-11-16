@@ -388,7 +388,7 @@ ASPECT_MODES = {"fit": "Fit to screen", "fill": "Fill screen"}
 SCREENSHOT_SOURCES = frozenset(("player-view", "player-window", "browser-tab", "window", "display"))
 MAX_SCREENSHOT_BYTES = 1024 * 1024
 RECEIPT_ACTIONS = frozenset((
-    "status", "capabilities", "screenshot", "inspect", "native_playback_diagnostics", "providers", "profiles",
+    "status", "capabilities", "screenshot", "inspect", "native_playback_diagnostics", "playback_preparation_diagnostics", "providers", "profiles",
     "channels", "programs", "epg_catalog", "resolve_archive", "play_archive_catalog",
     "play_catalog", "kiosk", "maintenance", "vportal_queue", "lifecycle", "input",
     "playback", "profile", "profile_settings", "profile_save", "profile_export", "profile_import", "restart", "play", "provider", "app_update",
@@ -1247,6 +1247,8 @@ class Client:
 
     def call_receipt(self, device, action, params, idempotency_key=None):
         """Submit once and retain the request identity, including read failures."""
+        if action == "playback_preparation_diagnostics":
+            preparation_request(params)
         group_cancelled = getattr(self, "group_cancelled", None)
         if group_cancelled is not None and group_cancelled.is_set():
             raise KeyboardInterrupt
@@ -1284,6 +1286,9 @@ class Client:
                     # This protocol bounds the entire original reply, not its
                     # compacted data subtree after the generic projection.
                     wait_options["response_validator"] = lambda raw, identity: plex_servers_receipt(raw, params, identity)
+                elif action == "playback_preparation_diagnostics":
+                    wait_options["response_validator"] = lambda raw, identity: preparation_receipt(raw, params, identity)
+                    wait_options["response_decoder"] = preparation_decode
                 elif action == "native_playback_diagnostics":
                     capture = native_playback_capture_module()
                     wait_options["response_validator"] = lambda raw, identity: capture.receipt(SimpleNamespace(**globals()), raw, params, identity)
@@ -4858,6 +4863,79 @@ def plex_servers_request(params):
     return dict(params)
 
 
+PREPARATION_PHASES = frozenset("idle resolving inspecting awaiting_quality admitting admitted failed cancelled".split())
+PREPARATION_FAILURES = frozenset("resolve_failed inspect_failed worker_unavailable admission_failed quality_save_failed".split())
+PREPARATION_CAUSES = frozenset((
+    "unknown", "timeout", "transport", "http_401", "http_403", "http_404", "http_429", "http_server",
+    "hls_invalid_header", "hls_invalid_utf8", "media_open_refused", "media_read_failed",
+    "media_container_unavailable", "media_stream_probe_failed", "media_no_video", "inspection_stopped",
+    "inspection_cancelled", "inspection_unavailable", "resource_limit", "track_identity", "codec_unsupported",
+))
+PREPARATION_ERRORS = frozenset(("invalid_request", "runtime_mismatch", "unavailable", "unsupported", "policy_denied"))
+MAX_PREPARATION_BYTES = 4096
+
+
+def preparation_request(params):
+    if (type(params) is not dict or set(params) != {"version", "runtime"}
+            or type(params["version"]) is not int or params["version"] != 1
+            or not isinstance(params["runtime"], str) or re.fullmatch(r"[A-Za-z0-9_.-]{1,96}", params["runtime"]) is None):
+        raise Error("Invalid playback preparation diagnostic request")
+    return dict(params)
+
+
+def preparation_metadata(data, params, status="ok"):
+    """Validate a bounded passive DTO; never export arbitrary error text or source identity."""
+    invalid = "The player returned invalid playback preparation diagnostics"
+    preparation_request(params)
+    if (type(data) is not dict or type(data.get("version")) is not int or data["version"] != 1
+            or not isinstance(data.get("runtime"), str)
+            or re.fullmatch(r"[A-Za-z0-9_.-]{1,96}", data["runtime"]) is None):
+        raise Error(invalid)
+    if status == "rejected":
+        if (set(data) != {"version", "runtime", "error"} or not isinstance(data["error"], str)
+                or data["error"] not in PREPARATION_ERRORS
+                or (data["error"] != "runtime_mismatch" and data["runtime"] != params["runtime"])):
+            raise Error(invalid)
+        return dict(data)
+    if (status != "ok" or set(data) != {"version", "runtime", "phase", "attempt_generation", "last_failure", "cause", "retry"}
+            or data["runtime"] != params["runtime"]
+            or not isinstance(data["phase"], str) or data["phase"] not in PREPARATION_PHASES
+            or (data["last_failure"] is not None and (not isinstance(data["last_failure"], str) or data["last_failure"] not in PREPARATION_FAILURES))
+            or (data["cause"] is not None and (not isinstance(data["cause"], str) or data["cause"] not in PREPARATION_CAUSES))
+            or (data["attempt_generation"] is not None and (type(data["attempt_generation"]) is not int
+                                                         or not 0 <= data["attempt_generation"] <= 9007199254740991))):
+        raise Error(invalid)
+    retry = data["retry"]
+    if type(retry) is not dict or set(retry) != {"pending", "failures", "retry_after_ms"} or type(retry["pending"]) is not bool:
+        raise Error(invalid)
+    if retry["pending"]:
+        if (type(retry["failures"]) is not int or not 0 <= retry["failures"] <= 4294967295
+                or type(retry["retry_after_ms"]) is not int or not 0 <= retry["retry_after_ms"] <= 30000):
+            raise Error(invalid)
+    elif retry["failures"] is not None or retry["retry_after_ms"] is not None:
+        raise Error(invalid)
+    return copy.deepcopy(data)
+
+
+def preparation_decode(raw):
+    try:
+        if not isinstance(raw, (bytes, str)) or len(raw.encode("utf-8") if isinstance(raw, str) else raw) > MAX_PREPARATION_BYTES:
+            raise ValueError()
+        return decode_response_json(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+    except (ValueError, RecursionError, UnicodeError):
+        raise Error("The player returned invalid playback preparation diagnostic JSON") from None
+
+
+def preparation_receipt(raw, params, request_id):
+    result = preparation_decode(raw)
+    if (type(result) is not dict or set(result) != {"id", "status", "data"}
+            or not isinstance(request_id, str) or re.fullmatch(r"[a-f0-9]{32}", request_id) is None
+            or result["id"] != request_id):
+        raise Error("The player returned an invalid playback preparation diagnostic receipt")
+    preparation_metadata(result["data"], params, result["status"])
+    return result
+
+
 def plex_servers_decode(raw, maximum=65536):
     try:
         if not isinstance(raw, (bytes, str)) or len(raw.encode("utf-8") if isinstance(raw, str) else raw) > maximum:
@@ -5443,6 +5521,11 @@ def capabilities_metadata(data):
         marker = data["native_playback_diagnostics"]
         if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
             raise Error(invalid)
+    preparation = "playback_preparation_diagnostics" in data
+    if preparation:
+        marker = data["playback_preparation_diagnostics"]
+        if type(marker) is not dict or set(marker) != {"version"} or type(marker["version"]) is not int or marker["version"] != 1:
+            raise Error(invalid)
     native_capture = None
     if "native_playback_capture" in data:
         try:
@@ -5465,7 +5548,7 @@ def capabilities_metadata(data):
     patterns = {"version": r"[A-Za-z0-9_.+\-]{1,64}", "platform": r"[a-z0-9_-]{1,32}",
                 "runtime": (r"[A-Za-z0-9_.:-]{1,64}" if multiview is not None else
                             r"[A-Za-z0-9_.:-]{1,128}" if native_provider is not None else
-                            r"[A-Za-z0-9_.-]{1,96}" if native_playback or native_capture is not None else r"[a-z0-9-]{1,64}")}
+                            r"[A-Za-z0-9_.-]{1,96}" if native_playback or preparation or native_capture is not None else r"[a-z0-9-]{1,64}")}
     if not isinstance(player, dict) or any(not isinstance(player.get(key), str) or not re.fullmatch(pattern, player[key])
                                            for key, pattern in patterns.items()):
         raise Error(invalid)
@@ -5480,6 +5563,8 @@ def capabilities_metadata(data):
         result["plex_servers"] = plex_servers_capability(data["plex_servers"])
     if native_playback:
         result["native_playback_diagnostics"] = {"version": 1}
+    if preparation:
+        result["playback_preparation_diagnostics"] = {"version": 1}
     if native_capture is not None:
         result["native_playback_capture"] = native_capture
     if native_provider is not None:
@@ -6310,7 +6395,7 @@ def print_player_help(data, name):
             and not any(key in controls for key in ("media_tracks", "playback_seek_relative", "playback_seek_archive_relative", "favorites_transfer", "favorites_transfer_recovery", "favorites_global", "favorites_global_recovery", "favorites_global_items"))):
         print("  No controls are currently advertised by the player.")
     sections = controls.get("inspect", {}).get("sections", [])
-    if sections or any(key in controls for key in ("debug", "provider_diagnostics", "native_playback_diagnostics", "native_playback_capture", "local_source_diagnostics")):
+    if sections or any(key in controls for key in ("debug", "provider_diagnostics", "native_playback_diagnostics", "native_playback_capture", "local_source_diagnostics", "playback_preparation_diagnostics")):
         print("\nAvailable diagnostics now:")
         if "provider_diagnostics" in controls:
             print(f"  {prefix} doctor --provider [--out DIR]  — explain provider lookup and correlate runtime evidence")
@@ -6318,6 +6403,8 @@ def print_player_help(data, name):
             print(f"  {prefix} debug  — read bounded runtime and native diagnostics")
         if "native_playback_diagnostics" in controls:
             print(f"  {prefix} debug --native-playback  — read native playback counters and event ages")
+        if "playback_preparation_diagnostics" in controls:
+            print(f"  {prefix} debug --preparation  — read preparation failure and pending retry evidence without probing media")
         if "native_playback_capture" in controls:
             print(f"  {prefix} debug capture start [--duration 30]  — record native playback diagnostics for 5–60 seconds")
             print(f"  {prefix} debug capture status / read / stop  — inspect or stop the current native capture")
