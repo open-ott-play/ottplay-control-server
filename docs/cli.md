@@ -771,6 +771,23 @@ capabilities fields; scripts should consume that JSON instead of parsing the
 human summary. Update the CLI installation to obtain this output format;
 updating only the controller or player does not replace the CLI.
 
+Restart syntax remains discoverable even when a player omits it from its current
+capabilities. `ott l_ | grep restart` includes a separate **Restart command
+reference (not advertised now)** for unavailable operations:
+
+```sh
+ott l_ restart stream   # reopen only the current stream; alias: restart s
+ott l_ restart          # reload the player; alias: restart player
+ott l_ restart app      # relaunch the native app on platforms that support it
+```
+
+Each reference line includes its availability label so filtering with `grep`
+keeps that context. The reference is not an availability claim. Platform, playback state and local
+policy still determine whether a request is accepted; it does not add operations
+to `--json` output or send a restart while reading status. If capability discovery
+or the status read fails, the reference explicitly says support could not be
+checked. A failed status read keeps its original error and nonzero exit code.
+
 For a supported native player's extended failure report:
 
 ```sh

@@ -32,7 +32,7 @@ class StatusCliTest(unittest.TestCase):
         self.assertEqual(client.call.call_args_list, expected)
         return code, output.getvalue(), errors.getvalue(), client
 
-    def test_default_and_explicit_status_include_only_advertised_commands(self):
+    def test_default_and_explicit_status_separate_advertised_commands_from_reference(self):
         for words in ([], ['status'], ['ST']):
             caps = self.capabilities()
             status = {'ready': True, 'volume': 100, 'player': caps['player']}
@@ -50,7 +50,7 @@ class StatusCliTest(unittest.TestCase):
             self.assertIn('alias: restart player', out)
             self.assertIn('ott tv key KEY  — up, ok', out)
             for unsupported in ('restart stream', 'restart app', 'reboot', 'exit', 'seek', '+N', '-N'):
-                self.assertNotIn(unsupported, out)
+                self.assertNotIn(unsupported, out.split("\nRestart command reference")[0])
             self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'status', {}),
                                                          mock.call('dev_tv', 'capabilities', {})])
             self.assertEqual(client.timeout, 45)
@@ -340,7 +340,11 @@ class StatusCliTest(unittest.TestCase):
                     code, out, err, client = self.run_cli([], {'ready': True}, failure, machine)
                     self.assertEqual((code, err, len(client.call.call_args_list)), (0, '', 2))
                     self.assertNotIn('private-token', out)
-                    self.assertNotIn('ott tv restart', out)
+                    if machine:
+                        self.assertNotIn('ott tv restart', out)
+                    else:
+                        self.assertIn('Restart command reference (support could not be checked):', out)
+                        self.assertIn('ott tv restart stream', out)
                     if machine:
                         self.assertIn('"ready": true', out)
                         value = json.loads(out)
@@ -456,12 +460,45 @@ class StatusCliTest(unittest.TestCase):
         self.assertNotIn('previous_channel', out)
         self.assertNotIn('next_channel', out)
         self.assertNotIn('step_channel', out)
-        self.assertNotIn("ott 'Living room' restart  — reload", out)
+        self.assertNotIn("ott 'Living room' restart  — reload", out.split("\nRestart command reference")[0])
         self.assertIn('restart only the current stream (alias: restart s)', out)
 
+    def test_native_restart_reference_is_discoverable_without_inventing_support(self):
+        caps = self.capabilities()
+        caps['player']['platform'] = 'webos-native'
+        caps['lifecycle'] = ['standby', 'wake', 'exit_app']
+        before = copy.deepcopy(caps)
+        code, out, err, _ = self.run_cli([], {'ready': True, 'player': caps['player']}, caps, alias='l_')
+        self.assertEqual((code, err), (0, ''))
+        available, reference = out.split('\nRestart command reference (not advertised now):')
+        for command in ('restart stream', 'restart', 'restart app'):
+            line = 'ott l_ ' + command + '  —'
+            self.assertNotIn(line, available)
+            self.assertIn(line, reference)
+        self.assertIn('these commands may be rejected', reference)
+        grep_lines = [line for line in out.splitlines() if 'restart' in line]
+        self.assertEqual(len(grep_lines), 3)
+        self.assertTrue(all(line.endswith('[not advertised now]') for line in grep_lines))
+        self.assertEqual(caps, before)
+        code, raw, _, _ = self.run_cli([], {'ready': True}, caps, machine=True, alias='l_')
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(raw)['capabilities']['lifecycle'], caps['lifecycle'])
+
+    def test_advertised_restarts_are_not_duplicated_in_reference(self):
+        caps = self.capabilities()
+        caps['lifecycle'] = list(ott.RESTART_HELP)
+        _, out, _, _ = self.run_cli([], {'ready': True}, caps)
+        self.assertNotIn('Restart command reference', out)
+        for command, _ in ott.RESTART_HELP.values():
+            self.assertEqual(out.count('ott tv ' + command + '  —'), 1)
+
     def test_status_failure_never_submits_capabilities_request(self):
-        code, _, _, client = self.run_cli([], ott.Error('offline'), self.capabilities())
+        code, out, err, client = self.run_cli([], ott.Error('offline'), self.capabilities())
         self.assertEqual(code, 1)
+        self.assertIn('Error: offline', err)
+        self.assertIn('Restart command reference (support could not be checked):', out)
+        self.assertIn('ott tv restart stream', out)
+        self.assertIn('[support could not be checked]', out)
         self.assertEqual(client.call.call_args_list, [mock.call('dev_tv', 'status', {})])
 
     def test_secondary_call_uses_only_remaining_budget_and_restores_timeout(self):
