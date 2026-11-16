@@ -25,6 +25,8 @@ exist. These examples leave playback unchanged and can be run individually:
 ott a1 doctor --json                                   # identity, capabilities and readiness
 ott a1 debug --json                                    # runtime, events and native metrics; alias dbg
 ott l debug --native-playback                          # supported native backend: phase, measured counters, event ages
+ott l_ debug --preparation                             # advertised preparation cause and retry state; no media work
+ott l_ debug --preparation -j                          # the same passive observation as validated JSON
 ott t3 debug --local-source                            # assigned/attached Local identity and endpoint match
 ott --json tt debug --local-source                     # independent passive observations for the group
 ott --json a1 inspect --view ui,media
@@ -67,6 +69,49 @@ and new transfers still require an awake, unlocked player. See the
 before treating a missing capability as a transport failure.
 
 ## Runtime debug snapshots
+
+### Playback preparation and retries
+
+`ott PLAYER debug --preparation` reads one existing preparation snapshot from a
+player advertising `playback_preparation_diagnostics: {"version": 1}`. It helps
+explain a failure before playback starts or a retry after a live stream ends:
+
+```sh
+ott -t 20 l_ debug --preparation
+ott -j l_ debug --preparation
+ott -j t1,t2 debug --preparation
+```
+
+The report contains the preparation phase, attempt generation, last preparation
+failure, a closed cause code, and retry state. `retry.pending: true` includes the
+observed failure count and remaining delay in milliseconds (0–30000); zero means
+the delay has elapsed, not that another attempt has started. With no pending
+retry, both numbers are `null`. A missing cause or generation remains unknown.
+`pending: false` does not explain why retrying stopped, and an admitted attempt
+does not prove a visible picture or audible sound.
+
+The CLI first reads fresh capabilities, then sends exactly
+`playback_preparation_diagnostics` with version 1 and that player runtime. Both
+reads share the original timeout. It validates the closed response before
+printing it, including runtime identity and numeric bounds. It does not probe
+media, re-inspect a source, replay a request, start a retry, reload a player, or
+change playback. No title, URL, source identifier or free-form error is exported.
+Normal `debug`, status and bundle commands do not request this snapshot.
+The [synthetic v1 contract](../contracts/playback-preparation-diagnostics-v1.json)
+lists every permitted phase, cause and error code. Scoped command operators need
+both `capabilities` and `playback_preparation_diagnostics` permissions for the
+target player; the latter permission grants this passive action only.
+
+This command requires a matching updated CLI, controller and player. Installing
+the CLI alone does not add the player capability or update a running controller.
+An older player produces an unsupported observation after capabilities only.
+An older controller may reject the action; update the controller through the
+normal deployment process. A `runtime_mismatch` result means the page changed:
+no snapshot is attributed to the old runtime. `policy_denied` means the player's
+current local policy rejected the observation. Neither case triggers a retry or
+a fallback command. Unknown/unavailable observations return exit code 3; invalid
+arguments return 1. `--preparation` is exclusive with `--engine`, `--provider`,
+`--native-playback`, `--local-source` and `--out`.
 
 ### Local source identity
 

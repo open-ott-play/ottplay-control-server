@@ -61,6 +61,7 @@ type entry struct {
 	settingsPatch           *settingsPatchRequest
 	perfCapture             *perfCaptureRequest
 	nativePlaybackCapture   *nativePlaybackCaptureRequest
+	playbackPreparation     *playbackPreparationRequest
 	vportalSettings         *vportalSettingsRequest
 	nativeProviderSettings  *nativeProviderSettingsRequest
 	category                *categoryRequest

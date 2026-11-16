@@ -214,6 +214,10 @@ advertised native playback phases, per-load measured counters and event ages.
 Unknown measurements remain `NOT OBSERVED`; neither submission nor a position
 update is treated as a displayed frame. It requires matching controller and
 player support and does not change existing debug or bundle requests.
+[`debug --preparation`](workbench.md#playback-preparation-and-retries) separately
+reads an advertised preparation failure cause and pending retry delay. It needs
+the matching controller action and player capability, sends no media request,
+and supports JSON and player groups.
 It also includes [local Torrent indexers](torrent-indexer.md) for Torznab,
 Jackett and Prowlarr, with private key input and opaque prepared sources.
 It also includes [saved player groups](#saved-player-groups), including offline
