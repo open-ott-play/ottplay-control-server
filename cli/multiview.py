@@ -9,11 +9,14 @@ import unicodedata
 
 USAGE = ("Use mv [status], mv sources WINDOW [--provider ID] [--profile TOKEN] [--search TEXT] "
          "[--cursor TOKEN], mv layout LAYOUT [--satellites N], mv window N play TICKET, "
+         "mv [window] N m3u|local NAME [--profile TOKEN] [--source SOURCE_ID], "
          "mv focus N, mv audio N|off|follows-focus, mv window N stop, or mv off [MODE]")
 HELP = """ott PLAYER mv [status]
 ott PLAYER mv sources WINDOW [--provider ID] [--profile TOKEN] [--search TEXT] [--cursor TOKEN]
 ott PLAYER mv layout single|pip|grid4|grid9|perimeter [--satellites N]
 ott PLAYER mv window N play TICKET
+ott PLAYER mv window N m3u "Exact channel name" [--profile TOKEN] [--source SOURCE_ID]
+ott PLAYER mv N local "Exact file name.mp4" [--profile TOKEN] [--source SOURCE_ID]
 ott PLAYER mv focus N
 ott PLAYER mv audio N|off|follows-focus
 ott PLAYER mv window N stop
@@ -23,6 +26,10 @@ Windows are numbered 1 through 9. Perimeter satellites range from 0 through 8 (d
 Profile tokens identify saved sources; they are not profile slot numbers.
 Source tickets and cursors are opaque, case-sensitive values returned by the player.
 Commands require advertised support and do not switch the global provider or profile.
+Named selection compares complete labels exactly, including case and Unicode spelling.
+It reads all matching pages and obtains a fresh ticket for this window; duplicates require
+--profile and/or --source. Local accepts the player's local or legacy offline provider ID.
+Only already available source choices are searched; no saved profile is loaded implicitly.
 Recovery stop and off close_only require separately advertised recovery support.
 """
 LAYOUTS = frozenset(("single", "pip", "grid4", "grid9", "perimeter"))
@@ -113,6 +120,29 @@ def provider_id(value):
             and re.fullmatch(PROVIDER, value) is not None)
 
 
+def named_selection(words):
+    """CLI-only sugar; every wire operation remains the existing v1 protocol."""
+    if len(words) < 3 or words[1].casefold() not in ("m3u", "local"):
+        raise ValueError(USAGE)
+    result = {"op": "play_name", "slot_id": slot(words[0]), "provider": words[1].casefold()}
+    tail = words[2:]
+    boundary = next((index for index, word in enumerate(tail) if word.startswith("--")), len(tail))
+    name = " ".join(tail[:boundary])
+    if not name.strip() or not search_text(name):
+        raise ValueError(USAGE)
+    result["name"] = name
+    options = tail[boundary:]
+    if len(options) % 2:
+        raise ValueError(USAGE)
+    for index in range(0, len(options), 2):
+        option, value = options[index:index + 2]
+        key = {"--profile": "profile", "--source": "source_id"}.get(option)
+        if key is None or key in result or not binding_token(value):
+            raise ValueError(USAGE)
+        result[key] = value
+    return result
+
+
 def parse(words):
     if type(words) not in (list, tuple) or any(type(word) is not str for word in words):
         raise ValueError(USAGE)
@@ -121,6 +151,8 @@ def parse(words):
     if list(words) in (["--help"], ["-h"]):
         return {"op": "help"}
     verb = words[0].casefold()
+    if re.fullmatch(r"[1-9]", words[0]) is not None:
+        return named_selection(words)
     if verb == "off" and len(words) <= 2:
         mode = words[1].casefold() if len(words) == 2 else "promote_active"
         if mode not in ("promote_active", "restore_previous", "close_only"):
@@ -134,6 +166,8 @@ def parse(words):
                 else {"op": "audio", "policy": "slot", "slot_id": slot(words[1])})
     if verb == "window" and len(words) >= 3:
         target, operation = slot(words[1]), words[2].casefold()
+        if operation in ("m3u", "local"):
+            return named_selection(words[1:])
         if operation in ("focus", "stop") and len(words) == 3:
             return {"op": operation, "slot_id": target}
         if operation == "audio" and len(words) == 3:
@@ -187,6 +221,9 @@ REASONS = frozenset(("invalid_request", "unsupported", "runtime_changed", "scene
 MAX_RESPONSE = 256 * 1024
 FIXED_CAPACITY = {"off": 0, "single": 1, "pip": 2, "grid4": 4, "grid9": 9}
 ERROR = "The player returned invalid multi-view metadata"
+MAX_NAMED_PAGES = 200
+MAX_NAMED_ITEMS = 20000
+MAX_NAMED_CHOICES = 128
 
 
 class InvalidResponse(ValueError):
@@ -498,6 +535,96 @@ def render(data):
         print(f"Multi-view {data['op']}: {data['outcome']}. Visible playback has not been confirmed.")
 
 
+def named_source_request(api, command, runtime, snapshot, marker, call):
+    """Resolve a complete exact-name population before sending one window play."""
+    target = command["slot_id"]
+    row = next((item for item in snapshot["slots"] if item["slot_id"] == target), None)
+    if row is None:
+        raise api.Error("This window is not in the current layout. No change was sent")
+    bound = {"runtime": runtime, "expected": copy.deepcopy(snapshot["context"]),
+             **{key: row[key] for key in SLOT_BINDING}}
+    filters = {"query": command["name"]}
+    providers = {"m3u"} if command["provider"] == "m3u" else {"local", "offline"}
+    # Native uses local; older global FOSS providers used offline. Read the
+    # existing choices once and filter locally, rather than guessing an alias or
+    # changing the selected provider to discover its catalogue.
+    if command["provider"] == "m3u":
+        filters["provider"] = "m3u"
+    if "profile" in command:
+        filters["profile"] = command["profile"]
+    seen_sources, seen_tickets, seen_cursors = set(), set(), set()
+    candidates, candidate_pages, count, cursor = [], {}, 0, None
+    for _ in range(MAX_NAMED_PAGES):
+        request = dict(bound, version=1, op="sources", **filters)
+        if cursor is not None:
+            request["cursor"] = cursor
+        page = call(request)
+        count += len(page["items"])
+        if count > MAX_NAMED_ITEMS:
+            raise api.Error("Multi-view source search exceeds its item limit; narrow --profile. No change was sent")
+        for item in page["items"]:
+            if item["source_id"] in seen_sources or item["ticket"] in seen_tickets:
+                raise api.Error("Multi-view source pages repeat an identity or ticket. No change was sent")
+            seen_sources.add(item["source_id"])
+            seen_tickets.add(item["ticket"])
+            if "profile" in command and item["profile"] != command["profile"]:
+                raise api.Error("The player did not preserve the source profile filter. No change was sent")
+            if command["provider"] == "m3u" and item["provider"] != "m3u":
+                raise api.Error("The player did not preserve the source provider filter. No change was sent")
+            if item["provider"] in providers and item["label"] == command["name"]:
+                candidates.append(item)
+                candidate_pages[item["source_id"]] = (request, page)
+        if page["complete"]:
+            break
+        cursor = page["cursor"]
+        if cursor in seen_cursors:
+            raise api.Error("Multi-view source pages repeat a cursor. No change was sent")
+        seen_cursors.add(cursor)
+    else:
+        raise api.Error("Multi-view source search exceeds its page limit; narrow --profile. No change was sent")
+    if "source_id" in command:
+        candidates = [item for item in candidates if item["source_id"] == command["source_id"]]
+    if not candidates:
+        raise api.Error("No exact multi-view source name matches these filters. No change was sent")
+    if len(candidates) != 1:
+        choices = ["Several multi-view sources have this exact name; choose --profile and/or --source. No change was sent."]
+        for item in candidates[:MAX_NAMED_CHOICES]:
+            choices.append("  " + json.dumps(item["label"], ensure_ascii=False) + " (provider " + item["provider"]
+                           + "): --profile " + item["profile"] + " --source " + item["source_id"])
+        if len(candidates) > MAX_NAMED_CHOICES:
+            choices.append("  More matching choices are available; narrow --profile before selecting.")
+        raise api.Error("\n".join(choices))
+    chosen = candidates[0]
+    if chosen["kind"] not in marker["source_kinds"]:
+        raise api.Error("This source kind is not advertised for multi-view playback. No change was sent")
+    # A native producer retains only a bounded ticket ring. Completing a large
+    # search can evict an early match, so read that exact page again after the
+    # uniqueness decision. This is a read, never a replayed play operation.
+    selected_request, selected_page = candidate_pages[chosen["source_id"]]
+    fresh = call(selected_request)
+
+    def page_identity(page):
+        # Tickets and continuation cursors are opaque capabilities. The refresh
+        # may rotate either without changing the already scanned population;
+        # its cursor is validated by metadata but will not be followed.
+        return {"complete": page["complete"],
+                "items": sorted(({key: value for key, value in item.items() if key != "ticket"}
+                                 for item in page["items"]), key=lambda item: item["source_id"])}
+
+    if page_identity(fresh) != page_identity(selected_page):
+        raise api.Error("Multi-view source choices changed during selection. No change was sent")
+    chosen = next(item for item in fresh["items"] if item["source_id"] == chosen["source_id"])
+    # The ticket remains bound to the original read. A final read may refuse a
+    # race; it never refreshes the binding to make a stale ticket appear current.
+    latest = call({"version": 1, "runtime": runtime, "op": "status"})["snapshot"]
+    current = next((item for item in latest["slots"] if item["slot_id"] == target), None)
+    if (latest["context"] != snapshot["context"] or latest["layout"] != snapshot["layout"]
+            or latest["satellites"] != snapshot["satellites"] or current is None
+            or any(current[key] != row[key] for key in SLOT_BINDING)):
+        raise api.Error("The multi-view scene or window changed during source selection. No change was sent")
+    return dict(bound, version=1, op="play", source_ticket=chosen["ticket"])
+
+
 def run(api, client, device, words, timeout, json_output):
     try:
         command = parse(words)
@@ -563,11 +690,15 @@ def run(api, client, device, words, timeout, json_output):
                         if "multiview_recovery" in caps else None)
         except (api.PlayerRejected, api.PlayerUnsupported, api.HTTPError, InvalidResponse, KeyError):
             raise api.Error("Multi-view requires a compatible player and controller. No multi-view request was sent") from None
+        named = command["op"] == "play_name"
+        operation = "play" if named else command["op"]
         use_recovery = (recovery is not None and command["op"] in recovery["operations"]
                         and (command["op"] == "stop"
                              or command["op"] == "off" and command["mode"] == "close_only"))
-        if not use_recovery and command["op"] not in marker["operations"]:
+        if not use_recovery and operation not in marker["operations"]:
             raise api.Error("This multi-view operation is not advertised. No multi-view request was sent")
+        if named and "sources" not in marker["operations"]:
+            raise api.Error("Named multi-view playback requires source discovery support. No multi-view request was sent")
         if not use_recovery and "slot_id" in command and command["slot_id"] >= marker["max_slots"]:
             raise api.Error("This window exceeds the advertised multi-view capacity. No multi-view request was sent")
         if command["op"] == "layout":
@@ -579,7 +710,9 @@ def run(api, client, device, words, timeout, json_output):
         if command["op"] == "off" and not use_recovery and command["mode"] not in marker["off_modes"]:
             raise api.Error("This exit mode is not advertised. No multi-view request was sent")
         data = call({"version": 1, "runtime": runtime, "op": "status"})
-        if command["op"] != "status":
+        if named:
+            data = call(named_source_request(api, command, runtime, data["snapshot"], marker, call))
+        elif command["op"] != "status":
             snapshot = data["snapshot"]
             request = dict(command, version=1, runtime=runtime, expected=copy.deepcopy(snapshot["context"]))
             if use_recovery:

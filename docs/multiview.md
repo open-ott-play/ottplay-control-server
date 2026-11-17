@@ -62,6 +62,51 @@ profile slot. The current contract does not imply support for every inactive
 provider catalog, arbitrary URLs, local paths or Plex rating keys. The native
 source resolver must authorize each choice.
 
+### Select a channel or file by its exact name
+
+The CLI can obtain a fresh window-bound ticket for you. First choose an
+advertised layout, then address each window separately:
+
+```sh
+ott l_ mv layout grid4
+ott l_ mv 1 m3u "РЕН ТВ HD"
+ott l_ mv 2 m3u "СТС HD"
+ott l_ mv 3 local "Sample clip.mp4"
+ott l_ mv 4 local "Another clip.mkv"
+
+# The longer form has the same meaning.
+ott l_ mv window 2 m3u "СТС HD"
+ott l_ mv window 3 local "Sample clip.mp4"
+```
+
+Replace the example names with exact labels available from `mv sources WINDOW`.
+Matching is case-sensitive and preserves Unicode; there is no substring match,
+random choice or implicit first result. A file label is not a filesystem path.
+The window must already exist in the current layout, and the player must
+advertise both source discovery and playback.
+
+If several sources share a label, the command lists their provider, profile
+token and source ID without starting playback. Choose the intended source:
+
+```sh
+ott l_ mv 2 m3u "СТС HD" --profile PROFILE_TOKEN
+ott l_ mv 3 local "Sample clip.mp4" --profile PROFILE_TOKEN --source SOURCE_ID
+```
+
+Use the returned opaque values exactly. Profile tokens are not numbered global
+profile slots. The CLI reads all bounded result pages before choosing a unique
+match, refreshes its source ticket, checks the scene/window binding again, then
+sends one play request. An incomplete, changed, expired or rejected lookup does
+not trigger a playback retry. The original `mv window N play TICKET` form remains
+available.
+
+These shortcuts search only choices the player currently authorizes. Native LG
+discovery includes eligible Favorites and retained/current catalogue entries;
+it does not promise every saved inactive provider or folder. If a file is absent,
+make it available through the player's supported source/Favorites workflow and
+list the intended window again. The shortcut does not load a global profile or
+change the ordinary provider to manufacture a match.
+
 A source ticket or cursor belongs to its player, scene and window. Refreshing
 status does not renew an expired ticket. Re-list the intended window after an
 explicit stale-source rejection; do not move its ticket to another window.
@@ -99,6 +144,20 @@ Focus selects the input owner. Audio has an explicit fixed-window, follows-focus
 or muted policy. Audio ownership is not evidence that decoded sound is audible,
 and TV master volume remains device-wide. Local LG player volume/mute applies
 to the software audio owner; it does not change the television hardware volume.
+
+Players that advertise the integer setting `multiviewBackgroundVolume` accept
+background volume from 0 to 100 percent through the existing settings workflow:
+
+```sh
+ott l_ settings schema
+ott l_ setting multiviewBackgroundVolume
+ott l_ setting multiviewBackgroundVolume 15
+```
+
+The singular `setting KEY [VALUE]` reads or writes a value; `settings` lists the
+schema. The player supplies the allowed range and applies its existing policy.
+An older player that does not register this setting cannot gain it from a CLI
+update alone.
 
 Stopping a window and leaving multi-view are distinct operations. The default
 exit mode requests promotion of the active window; restoring the prior playback

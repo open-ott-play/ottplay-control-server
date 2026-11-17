@@ -24,6 +24,10 @@ player advertising its actual decoder/resource capacity; installing the CLI
 alone does not establish native playback support. Negotiated scene cleanup uses
 `ott NAME mv window N stop` or `ott NAME mv off close_only` with fresh scene
 bindings; it does not grant new playback capacity.
+For exact-name selection, use `ott NAME mv 1 m3u "Exact channel name"` or
+`ott NAME mv 2 local "Exact file label"`. The CLI resolves fresh window-bound
+tickets; duplicate labels require an explicit profile/source selection. See the
+[examples and source-discovery limits](multiview.md#select-a-channel-or-file-by-its-exact-name).
 
 For opt-in performance recording, bounded export and guarded notification A–B–A
 trials, see [Temporary performance capture](performance-capture.md). `ott PLAYER
