@@ -53,6 +53,17 @@ class Client(ott.Client):
 
 
 class MultiviewIntegrationTest(unittest.TestCase):
+    def test_one_window_help_uses_only_available_named_window(self):
+        views = copy.deepcopy(FIXTURE["capability"]["multiview"])
+        views.update(max_slots=1, layouts=["single"])
+        controls = {"multiview": views, "lifecycle": [], "input": [], "playback": []}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            ott.print_player_help({"capabilities": controls}, "fixture")
+        self.assertIn('mv 1 m3u "Exact channel name"', output.getvalue())
+        self.assertIn('mv 1 local "Exact file label"', output.getvalue())
+        self.assertNotIn('mv 2 local', output.getvalue())
+
     def run_cli(self, words, client=None):
         client = client or Client()
         out, err = io.StringIO(), io.StringIO()

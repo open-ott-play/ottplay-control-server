@@ -91,6 +91,9 @@ token and source ID without starting playback. Choose the intended source:
 ```sh
 ott l_ mv 2 m3u "СТС HD" --profile PROFILE_TOKEN
 ott l_ mv 3 local "Sample clip.mp4" --profile PROFILE_TOKEN --source SOURCE_ID
+
+# A literal label beginning with -- follows the delimiter; filters come first.
+ott l_ mv 3 local --profile PROFILE_TOKEN -- "--Clip.mp4"
 ```
 
 Use the returned opaque values exactly. Profile tokens are not numbered global

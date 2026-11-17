@@ -115,6 +115,29 @@ class NamedParseTest(unittest.TestCase):
         self.assertEqual(mv.parse(["window", "1", "play", "Ticket_A"]),
                          {"op": "play", "slot_id": 0, "source_ticket": "Ticket_A"})
 
+    def test_literal_delimiter_preserves_option_like_names_without_interpreting_them(self):
+        self.assertEqual(mv.parse(["3", "local", "--profile", "home", "--source", "s1", "--", "--Clip.mp4"]),
+                         {"op": "play_name", "slot_id": 2, "provider": "local", "name": "--Clip.mp4",
+                          "profile": "home", "source_id": "s1"})
+        self.assertEqual(mv.parse(["window", "1", "m3u", "--", "--profile", "News", "--", "HD"])["name"],
+                         "--profile News -- HD")
+        # Opaque profile/source values may themselves be --. A value is not a
+        # delimiter, and the legacy NAME-then-options form remains unchanged.
+        self.assertEqual(mv.parse(["1", "local", "Clip", "--profile", "--"])["profile"], "--")
+        self.assertEqual(mv.parse(["1", "local", "--profile", "--", "--", "--Clip"]),
+                         {"op": "play_name", "slot_id": 0, "provider": "local", "profile": "--", "name": "--Clip"})
+
+    def test_literal_empty_name_bad_options_and_private_text_still_reject(self):
+        for words in (["1", "local", "--"], ["1", "local", "--", ""],
+                      ["1", "local", "--", "   "], ["1", "local", "--bad", "x", "--", "Clip"],
+                      ["1", "local", "--profile", "--", "Clip"],
+                      ["1", "local", "--profile", "p1", "--profile", "p2", "--", "Clip"],
+                      ["1", "local", "Name before delimiter", "--", "Clip"],
+                      ["1", "local", "--", "/private/video.mp4"],
+                      ["1", "local", "--", "token=PRIVATE"], ["1", "local", "--", "Clip\nsecret"]):
+            with self.subTest(words=words), self.assertRaises(ValueError):
+                mv.parse(words)
+
     def test_invalid_named_input_is_rejected_offline(self):
         for words in (["0", "m3u", "News"], ["01", "m3u", "News"], ["1", "local"],
                       ["1", "local", ""], ["1", "local", "   "], ["1", "local", "/private/file.mp4"],
@@ -149,6 +172,16 @@ class NamedRunTest(unittest.TestCase):
             self.assertEqual(request["source_ticket"], "ticket-2")
             choices = [p for _, _, p in client.calls if p.get("op") == "sources"]
             self.assertTrue(all(p["provider"] == "m3u" and p["profile"] == "home" for p in choices))
+
+    def test_literal_name_uses_fresh_ticket_and_only_one_play(self):
+        client = Client([[source("s1", "--Clip.mp4", "local", "home", "file")]])
+        self.execute(client, ["3", "local", "--profile", "home", "--", "--Clip.mp4"])
+        self.assertEqual(len(client.played), 1)
+        self.assertEqual(client.played[0]["slot_id"], 2)
+        self.assertEqual(client.played[0]["source_ticket"], "ticket-2")
+        self.assertTrue(all(request["query"] == "--Clip.mp4" and request["profile"] == "home"
+                            for _, action, request in client.calls
+                            if action == "multiview" and request["op"] == "sources"))
 
     def test_local_accepts_native_and_legacy_ids_without_guessing_global_provider(self):
         for provider in ("local", "offline"):

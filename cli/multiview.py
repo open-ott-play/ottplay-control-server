@@ -17,6 +17,7 @@ ott PLAYER mv layout single|pip|grid4|grid9|perimeter [--satellites N]
 ott PLAYER mv window N play TICKET
 ott PLAYER mv window N m3u "Exact channel name" [--profile TOKEN] [--source SOURCE_ID]
 ott PLAYER mv N local "Exact file name.mp4" [--profile TOKEN] [--source SOURCE_ID]
+ott PLAYER mv N local [--profile TOKEN] [--source SOURCE_ID] -- "--Literal file.mp4"
 ott PLAYER mv focus N
 ott PLAYER mv audio N|off|follows-focus
 ott PLAYER mv window N stop
@@ -27,6 +28,7 @@ Profile tokens identify saved sources; they are not profile slot numbers.
 Source tickets and cursors are opaque, case-sensitive values returned by the player.
 Commands require advertised support and do not switch the global provider or profile.
 Named selection compares complete labels exactly, including case and Unicode spelling.
+For names beginning with --, put any filters first, then -- and the literal name.
 It reads all matching pages and obtains a fresh ticket for this window; duplicates require
 --profile and/or --source. Local accepts the player's local or legacy offline provider ID.
 Only already available source choices are searched; no saved profile is loaded implicitly.
@@ -126,12 +128,21 @@ def named_selection(words):
         raise ValueError(USAGE)
     result = {"op": "play_name", "slot_id": slot(words[0]), "provider": words[1].casefold()}
     tail = words[2:]
-    boundary = next((index for index, word in enumerate(tail) if word.startswith("--")), len(tail))
-    name = " ".join(tail[:boundary])
+    literal = None
+    if tail[0].startswith("--"):
+        for index in range(0, len(tail), 2):
+            if tail[index] == "--":
+                literal = index
+                break
+    if literal is not None:
+        options, name_words = tail[:literal], tail[literal + 1:]
+    else:
+        boundary = next((index for index, word in enumerate(tail) if word.startswith("--")), len(tail))
+        name_words, options = tail[:boundary], tail[boundary:]
+    name = " ".join(name_words)
     if not name.strip() or not search_text(name):
         raise ValueError(USAGE)
     result["name"] = name
-    options = tail[boundary:]
     if len(options) % 2:
         raise ValueError(USAGE)
     for index in range(0, len(options), 2):
