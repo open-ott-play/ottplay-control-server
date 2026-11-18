@@ -199,13 +199,11 @@ class GroupRequestDiagnosticsTest(unittest.TestCase):
                 self.assert_posts([('dev_1', 'capabilities'), ('dev_2', 'capabilities'), ('dev_2', 'local_media')],
                                   self.posts[before:])
 
-    def test_single_player_json_failure_behavior_is_unchanged(self):
+    def test_single_player_json_read_failure_has_no_mutation_warning(self):
         self.failures[('dev_1', 'capabilities')] = 'pending'
         code, out, err = self.run_cli('t1')
         self.assertEqual((code, out), (1, ''))
-        self.assertEqual(err, 'Error: No player response was received before the deadline. '
-                         'This does not establish that the player is offline. The request may still execute '
-                         'before its TTL expires; do not repeat the change blindly.\n')
+        self.assertEqual(err, 'Error: No player response was received for this read before the deadline.\n')
 
     def test_diagnostic_projection_rejects_untrusted_fields(self):
         error = ott.RequestError(PRIVATE, [PRIVATE], 'unchanged text', PRIVATE, transport_category=PRIVATE)

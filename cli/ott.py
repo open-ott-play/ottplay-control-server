@@ -102,6 +102,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott pending                        list pending player pairing requests
   ott approve NAME CODE              approve the code displayed by that player
   ott NAME                           show available controls, then a player summary
+  ott NAME --help                    show player command syntax without connecting
   ott NAME state                     read the controller's retained playback report
   ott NAME history [--limit 1..64]    read retained playback events (default 20)
                                      no live player request or physical-output proof
@@ -237,6 +238,7 @@ HELP = """ott [-c/--config FILE] [-t/--timeout SECONDS] [-j/--json] [--receipt] 
   ott NAME restart player            explicit form of restart
   ott NAME restart stream            restart only the current stream
   ott NAME restart app               relaunch a supported native app
+  ott NAME restart --help            show restart syntax without connecting
   ott NAME reload                    reload the player after acknowledgement
   ott NAME reboot [device]           reboot the device OS only when supported
   ott NAME shutdown [device]         power off a bound Android device or television
@@ -1259,6 +1261,9 @@ class Client:
         group_cancelled = getattr(self, "group_cancelled", None)
         if group_cancelled is not None and group_cancelled.is_set():
             raise KeyboardInterrupt
+        read_only = action in ("status", "capabilities") or (
+            action == "multiview" and isinstance(params, dict) and params.get("op") in ("status", "sources"))
+        enqueue_uncertainty = "" if read_only else " The request may have been accepted; do not repeat the change blindly."
         request_id = None
         status = "unknown"
         try:
@@ -1276,12 +1281,14 @@ class Client:
                     raise
                 reason = ("controller_unavailable" if isinstance(exc, TransportError) else
                           "controller_http_error" if isinstance(exc, HTTPError) else "invalid_response")
-                raise RequestError(reason, "enqueue", "The controller did not confirm the request. "
-                                   "The request may have been accepted; do not repeat the change blindly.",
+                message = ("The controller did not confirm the read request." if read_only else
+                           "The controller did not confirm the request.")
+                raise RequestError(reason, "enqueue", message + enqueue_uncertainty,
                                    transport_category=exc.category if isinstance(exc, TransportError) else None) from exc
             if not isinstance(queued, dict) or not isinstance(queued.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", queued["id"]):
-                raise RequestError("invalid_response", "enqueue", "The server did not return a request ID. "
-                                   "The request may have been accepted; do not repeat the change blindly.")
+                message = ("The server did not return an ID for the read request." if read_only else
+                           "The server did not return a request ID.")
+                raise RequestError("invalid_response", "enqueue", message + enqueue_uncertainty)
             request_id = queued["id"]
             advertised_wait = queued.get("receipt_wait_ms")
             if isinstance(advertised_wait, str) and re.fullmatch(r"[1-9][0-9]{0,3}", advertised_wait):
@@ -1312,7 +1319,7 @@ class Client:
                         wait_options["response_validator"] = lambda raw, identity: views.capabilities_receipt(SimpleNamespace(**globals()), raw, identity)
                     wait_options["response_decoder"] = lambda raw: views.decode_response(
                         SimpleNamespace(**globals()), raw, capabilities=(action == "capabilities"))
-                receipt = self._wait_receipt(query, request_id, deadline, **wait_options)
+                receipt = self._wait_receipt(query, request_id, deadline, read_only=read_only, **wait_options)
             except Error as exc:
                 exc.request_id = request_id
                 if isinstance(exc, PlayerRejected):
@@ -1338,11 +1345,16 @@ class Client:
                     # Output failure cannot replay or change a completed operation.
                     pass
 
-    def _wait_receipt(self, query, request_id, deadline, wait_ms=0, response_validator=None, response_decoder=None):
+    def _wait_receipt(self, query, request_id, deadline, wait_ms=0, response_validator=None, response_decoder=None,
+                      *, read_only=False):
         last_failure = None
         last_transport_category = None
         pending_confirmed = False
-        backoff = 0 if wait_ms else 0.8
+        receipt_uncertainty = "" if read_only else " The request may have been executed; do not repeat the change blindly."
+        timeout_uncertainty = "" if read_only else " The request may still execute before its TTL expires; do not repeat the change blindly."
+        # A slow enqueue can leave less time than the normal legacy delay. In
+        # that case let the first receipt read use the remaining budget.
+        backoff = 0 if wait_ms or deadline - time.monotonic() <= 0.8 else 0.8
         while True:
             group_cancelled = getattr(self, "group_cancelled", None)
             if group_cancelled is not None and group_cancelled.is_set():
@@ -1388,28 +1400,28 @@ class Client:
                     last_transport_category = None
                     continue
                 if exc.code == 404:
-                    raise RequestError("receipt_missing", "receipt", "The request receipt has expired or is missing. "
-                                       "The request may have been executed; do not repeat the change blindly.", request_id) from exc
+                    raise RequestError("receipt_missing", "receipt", "The request receipt has expired or is missing."
+                                       + receipt_uncertainty, request_id) from exc
                 reason = "unauthorized" if exc.code in (401, 403) else "rate_limited" if exc.code == 429 else "controller_http_error"
-                raise RequestError(reason, "receipt", f"The request receipt could not be read (HTTP {exc.code}). "
-                                   "The request may have been executed; do not repeat the change blindly.", request_id) from exc
+                raise RequestError(reason, "receipt", f"The request receipt could not be read (HTTP {exc.code})."
+                                   + receipt_uncertainty, request_id) from exc
             except Error as exc:
-                raise RequestError("invalid_response", "receipt", "The controller returned an invalid request receipt. "
-                                   "The request may have been executed; do not repeat the change blindly.", request_id) from exc
+                raise RequestError("invalid_response", "receipt", "The controller returned an invalid request receipt."
+                                   + receipt_uncertainty, request_id) from exc
             if time.monotonic() >= deadline:
                 break
             if status == 202:
                 if not isinstance(result, dict) or result.get("status") != "pending":
-                    raise RequestError("invalid_response", "receipt", "The server returned an invalid pending status. "
-                                       "The request may have been executed; do not repeat the change blindly.", request_id)
+                    raise RequestError("invalid_response", "receipt", "The server returned an invalid pending status."
+                                       + receipt_uncertainty, request_id)
                 last_failure = None
                 last_transport_category = None
                 pending_confirmed = True
                 backoff = 0 if wait_ms and time.monotonic() - poll_start >= 0.1 else 0.8
                 continue
             if status != 200 or not isinstance(result, dict) or result.get("id") != request_id or result.get("status") not in ("ok", "rejected", "unsupported") or not isinstance(result.get("data"), dict):
-                raise RequestError("invalid_response", "receipt", "The server returned an invalid player response. "
-                                   "The request may have been executed; do not repeat the change blindly.", request_id)
+                raise RequestError("invalid_response", "receipt", "The server returned an invalid player response."
+                                   + receipt_uncertainty, request_id)
             if result.get("status") != "ok":
                 data = result["data"]
                 matches = data.get("matches", [])
@@ -1423,12 +1435,14 @@ class Client:
             return {"request_id": request_id, "status": "ok", "data": result["data"]}
         if last_failure:
             message = "The controller could not be reached while waiting for the request receipt." if last_failure == "controller_unavailable" else "The controller returned HTTP errors while waiting for the request receipt."
-            raise RequestError(last_failure, "receipt", message + " The player's response is unknown. "
-                               "The request may still execute before its TTL expires; do not repeat the change blindly.", request_id,
+            if read_only and last_failure == "controller_unavailable":
+                message = "Could not read the controller response while waiting for the request receipt."
+            raise RequestError(last_failure, "receipt", message + " The player's response is unknown."
+                               + timeout_uncertainty, request_id,
                                transport_category=last_transport_category)
-        raise RequestError("request_pending_timeout", "receipt", "No player response was received before the deadline. "
-                           "This does not establish that the player is offline. The request may still execute before its TTL expires; "
-                           "do not repeat the change blindly.", request_id)
+        message = ("No player response was received for this read before the deadline." if read_only else
+                   "No player response was received before the deadline. This does not establish that the player is offline.")
+        raise RequestError("request_pending_timeout", "receipt", message + timeout_uncertainty, request_id)
 
 
 def clean(value):
@@ -6051,25 +6065,31 @@ def status_capabilities(client, device, data, deadline, *, controls=None):
         # Recovery is visible only after this controller explicitly accepts
         # its probe, including when detailed status supplies existing controls.
         controls.pop("multiview_recovery", None)
-        if "multiview" in controls and (remaining := deadline - time.monotonic()) > 0:
-            client.timeout = remaining
-            try:
-                negotiated = capabilities_metadata(client.call(
-                    device, "capabilities", {"multiview": True, "multiview_recovery_v1": True}))
-            except HTTPError as exc:
-                if exc.code != 400:
-                    raise
-            else:
-                if negotiated["player"] != controls["player"] or "multiview" not in negotiated:
-                    raise Error("Multi-view capability identity changed")
-                controls = negotiated
         identity = data.get("player")
-        if time.monotonic() >= deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             result["capabilities_error"] = "Available controls did not arrive within --timeout; run status again."
         elif identity is not None and (not isinstance(identity, dict) or any(
                 identity.get(key) != controls["player"][key] for key in ("version", "platform", "runtime"))):
             result["capabilities_error"] = "The player changed while reading status; run status again."
         else:
+            if "multiview" in controls:
+                client.timeout = remaining
+                try:
+                    negotiated = client.call(device, "capabilities",
+                                             {"multiview": True, "multiview_recovery_v1": True})
+                except (HTTPError, TransportError, PlayerRejected, PlayerUnsupported):
+                    # This optional probe did not establish any recovery support.
+                    pass
+                except RequestError as exc:
+                    if exc.reason == "invalid_response":
+                        raise
+                else:
+                    negotiated = capabilities_metadata(negotiated)
+                    if negotiated["player"] != controls["player"] or "multiview" not in negotiated:
+                        raise Error("Multi-view capability identity changed")
+                    if time.monotonic() < deadline:
+                        controls = negotiated
             result["capabilities"] = controls
     except PlayerUnsupported:
         result["capabilities_error"] = "Available controls are not reported by this player/controller."
@@ -6151,6 +6171,19 @@ def print_restart_reference(controls, name):
     for command, description in missing:
         print(f"  {prefix} {command}  — {description} [{state}]")
     print("  Reference only: availability depends on the platform and current playback; these commands may be rejected.")
+
+
+def print_offline_player_help(name, *, restart_only=False):
+    prefix = "ott " + shlex.quote(clean(name))
+    print("Player command reference (offline)")
+    print_restart_reference(None, name)
+    if not restart_only:
+        print(f"\n  {prefix} status  — show advertised controls and current playback")
+        print(f"  {prefix} state  — read the controller's last retained playback report")
+        print(f"  {prefix} mv --help  — show multi-view syntax")
+        print(f"  {prefix} tv --help  — show television controls")
+        print("  ott --help  — show the complete CLI command reference")
+    print(f"  {prefix} caps  — check current player capabilities")
 
 
 def print_player_help(data, name):
@@ -8934,6 +8967,14 @@ def main(argv=None):
         print(HELP)
         return 0
     try:
+        if args.words[0].casefold() not in TOP_LEVEL_COMMANDS:
+            player_words = args.words[1:]
+            if player_words in (["--help"], ["-h"]):
+                print_offline_player_help(args.words[0])
+                return 0
+            if player_words[-1:] in (["--help"], ["-h"]) and len(player_words) == 2 and command_verb(player_words) == "restart":
+                print_offline_player_help(args.words[0], restart_only=True)
+                return 0
         if (len(args.words) > 1 and args.words[0].casefold() not in TOP_LEVEL_COMMANDS
                 and player_command_route(args.words[1:]) == "multiview"):
             views = multiview_module()

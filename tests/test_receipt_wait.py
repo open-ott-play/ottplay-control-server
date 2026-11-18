@@ -1,6 +1,7 @@
 """Negotiated receipt waits remove polling latency without replaying commands."""
 import contextlib
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
@@ -23,7 +24,9 @@ class ReceiptWaitTest(unittest.TestCase):
         self.client.timeout = 3
         self.client.on_receipt = None
         self.client.api = Mock(side_effect=self.api)
+        self.client.api_raw = Mock(side_effect=self.api_raw)
         self.advertisement = '1000'
+        self.enqueue_delay = 0
         self.read = lambda query, timeout: (200, {'id': REQUEST_ID, 'status': 'ok', 'data': {'volume': 35}})
         self.stack.enter_context(patch.object(ott.time, 'monotonic', side_effect=lambda: self.now))
         self.stack.enter_context(patch.object(ott.time, 'sleep', side_effect=self.sleep))
@@ -38,6 +41,7 @@ class ReceiptWaitTest(unittest.TestCase):
         self.assertEqual(query['device_id'], ['fixture-tv'])
         if payload is not None:
             self.posts.append(payload)
+            self.now += self.enqueue_delay
             queued = {'id': REQUEST_ID, 'status': 'queued'}
             if self.advertisement is not MISSING:
                 queued['receipt_wait_ms'] = self.advertisement
@@ -48,6 +52,10 @@ class ReceiptWaitTest(unittest.TestCase):
         self.assertGreater(timeout, 0)
         self.assertLessEqual(timeout, self.client.timeout - self.now + 1e-9)
         return self.read(query, timeout)
+
+    def api_raw(self, path, timeout):
+        status, reply = self.api(path, timeout=timeout)
+        return status, json.dumps(reply).encode()
 
     def call(self):
         return self.client.call_receipt('fixture-tv', 'command', {'command': 'set_volume', 'volume_step': 5})
@@ -84,6 +92,17 @@ class ReceiptWaitTest(unittest.TestCase):
         self.assertLessEqual(int(query['wait_ms'][0]), int(timeout * 1000))
         self.assertGreater(int(query['wait_ms'][0]), 0)
         self.assertLessEqual(timeout, 0.2)
+
+    def test_slow_legacy_enqueue_leaves_one_immediate_receipt_read(self):
+        self.advertisement = MISSING
+        self.enqueue_delay = 2.6
+        result = self.call()
+        self.assertEqual(result['request_id'], REQUEST_ID)
+        self.assertEqual((len(self.posts), len(self.gets), self.sleeps), (1, 1, []))
+        query, budget, started = self.gets[0]
+        self.assertNotIn('wait_ms', query)
+        self.assertEqual(started, 2.6)
+        self.assertAlmostEqual(budget, 0.4)
 
     def test_network_retry_reuses_the_receipt_without_replaying_mutation(self):
         def read(query, timeout):
@@ -201,6 +220,54 @@ class ReceiptWaitTest(unittest.TestCase):
                 self.assertEqual(failure.exception.reason, reason)
                 self.assertEqual(failure.exception.request_id, REQUEST_ID)
                 self.assertEqual((len(self.posts), len(self.gets)), (1, 1))
+
+    def test_read_enqueue_error_keeps_typed_cause_without_mutation_warning(self):
+        self.client.api = Mock(side_effect=ott.TransportError('private controller address', 'dns'))
+        for action, params, read_only in (('status', {}, True), ('capabilities', {}, True),
+                                          ('multiview', {'op': 'sources'}, True),
+                                          ('multiview', {'op': 'play'}, False)):
+            with self.subTest(action=action, params=params):
+                self.client.api.reset_mock()
+                with self.assertRaises(ott.RequestError) as failure:
+                    self.client.call_receipt('fixture-tv', action, params)
+                self.assertEqual(ott.request_error_metadata(failure.exception), {
+                    'action': action, 'request_id': None, 'stage': 'enqueue',
+                    'reason': 'controller_unavailable', 'transport_category': 'dns',
+                })
+                self.assertEqual('confirm the read request' in str(failure.exception), read_only)
+                self.assertEqual('do not repeat the change blindly' in str(failure.exception), not read_only)
+                self.assertNotIn('private controller address', str(failure.exception))
+                self.client.api.assert_called_once()
+
+    def test_read_receipt_timeout_preserves_identity_without_mutation_warning(self):
+        self.client.timeout = 1
+        self.read = lambda query, timeout: (202, {'status': 'pending'})
+        for action, params, read_only in (('status', {}, True), ('capabilities', {}, True),
+                                          ('capabilities', {'multiview': True}, True),
+                                          ('multiview', {'op': 'status'}, True),
+                                          ('multiview', {'op': 'sources'}, True),
+                                          ('multiview', {'op': 'play'}, False)):
+            with self.subTest(action=action, params=params):
+                self.now, self.posts, self.gets, self.sleeps = 0, [], [], []
+                with self.assertRaises(ott.RequestError) as failure:
+                    self.client.call_receipt('fixture-tv', action, params)
+                self.assertEqual(ott.request_error_metadata(failure.exception), {
+                    'action': action, 'request_id': REQUEST_ID, 'stage': 'receipt', 'reason': 'request_pending_timeout',
+                })
+                self.assertEqual('for this read' in str(failure.exception), read_only)
+                self.assertEqual('may still execute' in str(failure.exception), not read_only)
+                self.assertEqual(len(self.posts), 1)
+                self.assertGreaterEqual(len(self.gets), 1)
+
+    def test_missing_read_receipt_does_not_claim_possible_mutation(self):
+        self.read = Mock(side_effect=ott.HTTPError(404))
+        with self.assertRaises(ott.RequestError) as failure:
+            self.client.call_receipt('fixture-tv', 'status', {})
+        self.assertEqual(ott.request_error_metadata(failure.exception), {
+            'action': 'status', 'request_id': REQUEST_ID, 'stage': 'receipt', 'reason': 'receipt_missing',
+        })
+        self.assertEqual(str(failure.exception), 'The request receipt has expired or is missing.')
+        self.assertEqual((len(self.posts), len(self.gets)), (1, 1))
 
     def test_long_poll_keeps_result_identity_and_player_rejection_checks(self):
         for result, expected in (({'id': 'b' * 32, 'status': 'ok', 'data': {}}, ott.RequestError),

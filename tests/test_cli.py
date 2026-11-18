@@ -525,7 +525,7 @@ class ReadbackTest(unittest.TestCase):
             self.advance(timeout)
             raise ott.TransportError('read timed out')
         self.client.api = mock.Mock(side_effect=api)
-        with self.assertRaisesRegex(ott.Error, 'do not repeat'):
+        with self.assertRaisesRegex(ott.Error, 'Could not read the controller response'):
             self.client.call('tv', 'status', {})
         self.assertAlmostEqual(self.now, 2)
         self.assertEqual(self.client.api.call_count, 2)
@@ -533,7 +533,7 @@ class ReadbackTest(unittest.TestCase):
     def test_no_poll_after_enqueue_consumes_budget(self):
         self.client.timeout = 1
         def api(*args, **kwargs):
-            self.advance(0.6)
+            self.advance(1)
             return 202, {'id': 'b' * 32}
         self.client.api = mock.Mock(side_effect=api)
         with self.assertRaises(ott.Error):
