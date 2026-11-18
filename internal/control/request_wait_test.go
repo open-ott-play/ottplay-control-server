@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/open-ott-play/ottplay-control-server/internal/config"
@@ -83,6 +84,52 @@ func TestReceiptWaitWakesOnResultAndPreservesLegacyEnvelope(t *testing.T) {
 	waitForReceiptWaiters(t, s, s.devices[0], 0)
 	// A ready result must not start a new wait.
 	expect(t, request(s, "GET", path+"&wait_ms=1000", adminToken, "", nil), 200)
+}
+
+func TestReceiptWaitIgnoresUnrelatedResults(t *testing.T) {
+	for _, name := range []string{"target_result", "original_deadline"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := newTestServer(t)
+				payload := `{"action":"status","params":{}}`
+				target := rpcID(t, s, payload)
+				other := rpcID(t, s, payload)
+				respond := func(id string) string {
+					body := `{"id":"` + id + `","status":"ok","data":{}}`
+					expect(t, request(s, "POST", "/api/responses", firstToken, body, nil), 200)
+					return body
+				}
+				started := time.Now()
+				cancel, done := asyncReceipt(s, "/api/requests?device_id=first&id="+target+"&wait_ms=1000", adminToken)
+				defer cancel()
+				synctest.Wait()
+				waitForReceiptWaiters(t, s, s.devices[0], 1)
+				time.Sleep(750 * time.Millisecond)
+				respond(other)
+				synctest.Wait()
+				select {
+				case w := <-done:
+					t.Fatalf("unrelated result ended the wait early: HTTP %d %s", w.Code, w.Body.String())
+				default:
+				}
+				waitForReceiptWaiters(t, s, s.devices[0], 1)
+				if name == "target_result" {
+					body := respond(target)
+					w := receiptWithin(t, done)
+					expect(t, w, 200)
+					if w.Body.String() != body {
+						t.Fatalf("receipt body = %s, want %s", w.Body.String(), body)
+					}
+				} else {
+					expect(t, receiptWithin(t, done), 202)
+					if elapsed := time.Since(started); elapsed != time.Second {
+						t.Fatalf("wait lasted %v, want original 1s deadline", elapsed)
+					}
+				}
+				waitForReceiptWaiters(t, s, s.devices[0], 0)
+			})
+		})
+	}
 }
 
 func TestReceiptWaitCancellationAndCapacity(t *testing.T) {

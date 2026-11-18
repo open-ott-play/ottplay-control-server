@@ -112,6 +112,13 @@
 
 ### Fixed
 
+- Make player and restart help available offline. Keep timely capabilities when
+  optional multi-view recovery cannot be verified, and distinguish status and
+  multi-view read failures from uncertain writes.
+- Let the CLI check for a legacy controller's receipt when a slow enqueue leaves
+  less time than the usual initial polling delay, without submitting again.
+- Keep a receipt GET waiting for its own result when another command completes
+  on the same player, within the original wait deadline.
 - Explain confirmed player standby before favorites transfers with an explicit
   wake command, without automatic wake or retry; recovery reads remain available.
 - Preserve bounded newer operation names when reading version-1 command journals,
@@ -138,7 +145,7 @@
 
 ### Upgrade
 
-- The current CLI contains 20 Python modules. Install the complete `cli/`
+- Install the complete `cli/`
   directory from one reviewed revision; keep the existing private configuration
   and recovery evidence. Use the reviewed signed source pinned in the
   [CLI installation guide](docs/cli.md#choose-the-cli-source-revision).

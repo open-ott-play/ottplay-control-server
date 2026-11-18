@@ -14,6 +14,19 @@ spec.loader.exec_module(ott)
 
 
 class StatusCliTest(unittest.TestCase):
+    def test_player_and_restart_help_work_without_configuration_or_client(self):
+        for words in (['--help'], ['-h'], ['restart', '--help'], ['RESTART', '-h']):
+            with self.subTest(words=words), mock.patch.object(ott, 'read_json') as read_config, \
+                    mock.patch.object(ott, 'Client') as client, contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(ott.main(['-c', '/no-config', 'Living room', *words]), 0)
+                read_config.assert_not_called()
+                client.assert_not_called()
+                rendered = out.getvalue()
+                self.assertIn("ott 'Living room' restart stream", rendered)
+                self.assertIn("ott 'Living room' caps", rendered)
+                self.assertIn('[support could not be checked]', rendered)
+                self.assertEqual("ott 'Living room' status" in rendered, len(words) == 1)
+
     def capabilities(self):
         return {'version': 1, 'player': {'version': '1.1.52-beta.48', 'platform': 'browser', 'runtime': 'page-one'},
                 'lifecycle': ['reload_player', 'standby', 'wake'], 'input': ['up', 'ok'], 'playback': []}

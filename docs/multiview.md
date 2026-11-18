@@ -45,7 +45,8 @@ ott l mv layout single
 
 ott l mv sources 1
 ott l mv sources 2 --provider m3u --profile PROFILE_TOKEN_FROM_PLAYER --search News
-ott l mv sources 2 --cursor CURSOR_FROM_THE_PREVIOUS_PAGE
+ott l mv sources 2 --provider m3u --profile PROFILE_TOKEN_FROM_PLAYER --search News \
+  --cursor CURSOR_FROM_THE_PREVIOUS_PAGE
 ott l mv window 2 play TICKET_FROM_THIS_WINDOWS_SOURCE_LIST
 ```
 
@@ -96,6 +97,15 @@ ott l_ mv 3 local "Sample clip.mp4" --profile PROFILE_TOKEN --source SOURCE_ID
 ott l_ mv 3 local --profile PROFILE_TOKEN -- "--Clip.mp4"
 ```
 
+To look up a source ID directly, read the source list as JSON:
+
+```sh
+ott --json l_ mv sources 3 --search "Sample clip.mp4"
+```
+
+Find the matching `label`, `provider` and `profile` in `items`, then copy its
+`source_id` into `--source`. Use the same row's `profile` for `--profile`.
+
 Use the returned opaque values exactly. Profile tokens are not numbered global
 profile slots. The CLI reads all bounded result pages before choosing a unique
 match, refreshes its source ticket, checks the scene/window binding again, then
@@ -114,7 +124,8 @@ A source ticket or cursor belongs to its player, scene and window. Refreshing
 status does not renew an expired ticket. Re-list the intended window after an
 explicit stale-source rejection; do not move its ticket to another window.
 Source lists are bounded to 128 choices per page and return a cursor when more
-choices remain. Apply each selected ticket before refreshing discovery. Local LG
+choices remain. Use the same player, window and filters when passing the cursor
+to the next request. Apply each selected ticket before refreshing discovery. Local LG
 choices combine the captured current catalog and saved Favorites with their
 original provider/profile authority, bounded to 1152 entries. This is not a
 browser for every inactive provider catalog.

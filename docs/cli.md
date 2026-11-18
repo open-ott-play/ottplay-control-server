@@ -772,7 +772,10 @@ diagnostic operator credentials are separate credentials.
 ## Help, options and output
 
 `ott`, `ott help` and `ott --help` print help without a configuration or network
-connection. There is no `ott --version` or built-in CLI update command; record
+connection. Use `ott l_ --help` for player-specific examples or
+`ott l_ restart --help` for restart syntax with the player disconnected.
+Both commands print a reference and skip capability checks.
+There is no `ott --version` or built-in CLI update command; record
 the source tag/commit used for installation. `ott PLAYER caps` reports the
 **player's** version, while the Go server has its own `version` subcommand.
 
@@ -799,7 +802,11 @@ keeps that context. The reference is not an availability claim. Platform, playba
 policy still determine whether a request is accepted; it does not add operations
 to `--json` output or send a restart while reading status. If capability discovery
 or the status read fails, the reference explicitly says support could not be
-checked. A failed status read keeps its original error and nonzero exit code.
+checked. A failed status read reports the error and exits nonzero.
+When the base capabilities were received in time, a timeout in the optional
+multi-view recovery probe leaves those controls visible and omits the unverified
+recovery commands. Read failures describe the missing response. Commands that
+change playback or settings keep their uncertainty warning when applicable.
 
 For a supported native player's extended failure report:
 
