@@ -6179,6 +6179,9 @@ def print_player_help(data, name):
             print(f"  {prefix} mv layout {'|'.join(views['layouts'])}  — choose a supported layout; windows start at 1")
         if views["max_slots"] > 0:
             print(f"  {prefix} mv --help  — source selection, focus and audio; operations depend on this player's capabilities")
+        if views["max_slots"] > 0 and all(op in views["operations"] for op in ("sources", "play")):
+            print(f'  {prefix} mv 1 m3u "Exact channel name"  — find a fresh ticket and play in window 1')
+            print(f'  {prefix} mv 1 local "Exact file label"  — play an authorized Local source; duplicates require selection')
     if "multiview_recovery" in controls:
         recovery = controls["multiview_recovery"]
         if "stop" in recovery["operations"]:
