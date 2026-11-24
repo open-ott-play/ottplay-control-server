@@ -7,7 +7,7 @@ toolchain go1.27.4
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/miekg/dns v1.1.73
-	golang.org/x/net v0.62.0
+	golang.org/x/net v0.63.0
 )
 
 require golang.org/x/sys v0.50.0
