@@ -1,4 +1,4 @@
-FROM python:3.15.2-slim-trixie@sha256:fd2aef5e0d8438208de9fe154ab5b331a2428fc0c9838d41611e611fd7a80d85
+FROM python:3.15.2-slim-trixie@sha256:3c5426211a36454d7a58b31e306cfefaac2c63b016e9f1a067b652ec602a4d15
 RUN nice -n 10 apt-get update && nice -n 10 apt-get upgrade -y \
     && nice -n 10 apt-get install -y --no-install-recommends adb ca-certificates \
     && rm -rf /var/lib/apt/lists/*
